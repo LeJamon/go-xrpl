@@ -11,12 +11,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestReplayDelta_Apply_Integration verifies end-to-end that
@@ -70,7 +73,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	txBlob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
 	pay.SetRawBytes(txBlob)
-	txHash, err := tx.ComputeTxHashTransaction(pay)
+	txHash, err := tx.ComputeTransactionHash(pay)
 	require.NoError(t, err)
 
 	// Build the successor manually: open a child of `parent`, run the
@@ -166,7 +169,7 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 	txBlob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
 	pay.SetRawBytes(txBlob)
-	txHash, err := tx.ComputeTxHashTransaction(pay)
+	txHash, err := tx.ComputeTransactionHash(pay)
 	require.NoError(t, err)
 
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -235,7 +238,7 @@ func buildClosedSuccessor(
 		parentCloseTime = uint32(parent.CloseTime().Unix() - protocol.RippleEpochUnix)
 	}
 
-	engine := tx.NewEngine(child, tx.EngineConfig{
+	engine := txengine.NewEngine(child, tx.EngineConfig{
 		BaseFee:                   10,
 		ReserveBase:               200_000_000,
 		ReserveIncrement:          50_000_000,

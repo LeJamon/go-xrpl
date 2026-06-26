@@ -201,6 +201,26 @@ func (a *ledgerAdapter) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return closed, nil
 }
 
+func (a *ledgerAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {
+	if closed := a.env.LastClosedLedger(); closed != nil && closed.Sequence() == seq {
+		return closed, &ledgerReaderAdapter{l: closed}, nil
+	}
+	if open := a.env.Ledger(); open != nil && open.Sequence() == seq {
+		return open, &ledgerReaderAdapter{l: open}, nil
+	}
+	return nil, nil, fmt.Errorf("rpcenv: ledger %d not available", seq)
+}
+
+func (a *ledgerAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateView, types.LedgerReader, error) {
+	if closed := a.env.LastClosedLedger(); closed != nil && closed.Hash() == hash {
+		return closed, &ledgerReaderAdapter{l: closed}, nil
+	}
+	if open := a.env.Ledger(); open != nil && open.Hash() == hash {
+		return open, &ledgerReaderAdapter{l: open}, nil
+	}
+	return nil, nil, fmt.Errorf("rpcenv: ledger %x not available", hash)
+}
+
 func (a *ledgerAdapter) IsAmendmentBlocked() bool { return false }
 
 func (a *ledgerAdapter) SubmitTransaction(_ []byte, _ ...string) (*types.SubmitResult, error) {
@@ -223,7 +243,7 @@ func (a *ledgerAdapter) GetTransactionHistory(_ context.Context, _ uint32) (*typ
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAutofillFee(_ []byte, _ bool) (uint64, error) {
+func (a *ledgerAdapter) GetAutofillFee(_ []byte, _ bool, _, _ int) (uint64, error) {
 	return 0, errNotImplemented
 }
 
@@ -265,7 +285,7 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 	if err != nil {
 		return nil, err
 	}
-	root, err := state.ParseAccountRootFromBytes(data)
+	root, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return nil, fmt.Errorf("rpcenv: parse AccountRoot: %w", err)
 	}
@@ -300,11 +320,11 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 // it, and convert to the result type. internal/rpc/ledger_adapter.go has
 // the canonical service→types conversions for reference.
 
-func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountLinesResult, error) {
+func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, _ uint32) (*types.AccountOffersResult, error) {
+func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -312,7 +332,7 @@ func (a *ledgerAdapter) GetAccountTransactions(_ context.Context, _ string, _, _
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountChannels(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountChannelsResult, error) {
+func (a *ledgerAdapter) GetAccountChannels(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -320,7 +340,7 @@ func (a *ledgerAdapter) GetAccountCurrencies(_ context.Context, _ string, _ stri
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errNotImplemented
 }
 

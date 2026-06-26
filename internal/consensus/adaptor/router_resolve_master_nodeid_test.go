@@ -1,7 +1,6 @@
 package adaptor
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -36,14 +35,13 @@ func TestRouter_ResolveMasterNodeID_Validation_RewritesToMaster(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	cache := manifest.NewCache()
 	master, ephemeral := installManifest(t, cache, 0x40, 0x41)
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	v := &consensus.Validation{
@@ -93,13 +91,12 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 	engine := &mockEngine{}
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	var signing [33]byte
@@ -149,7 +146,7 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 // so this guards against a regression in the helper itself even when
 // the wire seams above are correctly wiring it.
 func TestRouter_ResolveMasterNodeID_HelperContract(t *testing.T) {
-	router := NewRouter(&mockEngine{}, newTestAdaptor(t), nil, make(chan *peermanagement.InboundMessage, 1))
+	router := NewRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	cache := manifest.NewCache()
 	master, ephemeral := installManifest(t, cache, 0x60, 0x61)
 	router.SetManifestCache(cache, nil)
@@ -177,7 +174,7 @@ func TestRouter_ResolveMasterNodeID_HelperContract(t *testing.T) {
 	})
 
 	t.Run("nil cache is a no-op", func(t *testing.T) {
-		bare := NewRouter(&mockEngine{}, newTestAdaptor(t), nil, make(chan *peermanagement.InboundMessage, 1))
+		bare := NewRouter(&mockEngine{}, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 		nid := consensus.CalcNodeID(ephemeral)
 		want := nid
 		bare.resolveMasterNodeID(&nid, consensus.SigningPubKey(ephemeral))

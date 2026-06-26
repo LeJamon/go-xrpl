@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"time"
@@ -102,10 +103,10 @@ func (m *mockDepositAuthorizedLedgerService) GetTransaction(txHash [32]byte) (*t
 func (m *mockDepositAuthorizedLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
@@ -126,10 +127,10 @@ func (m *mockDepositAuthorizedLedgerService) GetLedgerEntry(_ context.Context, e
 func (m *mockDepositAuthorizedLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
@@ -170,7 +171,7 @@ func (m *mockDepositAuthorizedLedgerService) GetNFTSellOffers(_ context.Context,
 func (m *mockDepositAuthorizedLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	return 0, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
@@ -206,7 +207,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
@@ -214,43 +215,43 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 	}{
 		{
 			name:          "Missing source_account field",
-			params:        map[string]interface{}{"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+			params:        map[string]any{"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
 			expectError:   true,
 			expectedError: "Missing field 'source_account'.",
 		},
 		{
 			name:          "Missing destination_account field",
-			params:        map[string]interface{}{"source_account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params:        map[string]any{"source_account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			expectError:   true,
 			expectedError: "Missing field 'destination_account'.",
 		},
 		{
 			name: "Corrupt source_account field",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rG1QQv2nh2gr7RCZ!P8YYcBUKCCN633jCn",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			// No setupMock needed — handler-level ValidateAccount catches this
 			// before the service is called.
 			expectError:   true,
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Corrupt destination_account field",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rP6P9ypfAmc!pw8SZHNwM4nvZHFXDraQas",
 			},
 			// No setupMock needed — handler-level ValidateAccount catches this
 			// before the service is called.
 			expectError:   true,
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Source account not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
@@ -263,7 +264,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Destination account not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
@@ -330,7 +331,7 @@ func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 		Validated:          true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		"ledger_index":        "validated",
@@ -342,15 +343,86 @@ func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, true, respMap["deposit_authorized"])
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", respMap["source_account"])
 	assert.Equal(t, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK", respMap["destination_account"])
+	// A "validated" query targets a closed ledger, so lookupLedger emits
+	// ledger_hash + ledger_index and never ledger_current_index.
 	assert.Contains(t, respMap, "ledger_index")
 	assert.Contains(t, respMap, "ledger_hash")
+	assert.NotContains(t, respMap, "ledger_current_index")
 	assert.Contains(t, respMap, "validated")
+}
+
+// TestDepositAuthorizedLedgerShape verifies the lookupLedger response-shape
+// contract: an open ("current") query emits only ledger_current_index, while a
+// closed ("validated") query emits ledger_hash + ledger_index.
+func TestDepositAuthorizedLedgerShape(t *testing.T) {
+	mock := newMockDepositAuthorizedLedgerService()
+	services := newDepositAuthorizedTestServices(mock)
+
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	t.Run("current ledger emits ledger_current_index only", func(t *testing.T) {
+		mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
+			SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			DepositAuthorized:  true,
+			LedgerIndex:        7,
+			LedgerHash:         [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Validated:          false,
+		}
+
+		params := map[string]any{
+			"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"ledger_index":        "current",
+		}
+		paramsJSON, _ := json.Marshal(params)
+		resp, err := method.Handle(ctx, paramsJSON)
+		require.Nil(t, err)
+		respMap := resp.(map[string]any)
+
+		assert.Equal(t, uint32(7), respMap["ledger_current_index"])
+		assert.NotContains(t, respMap, "ledger_hash")
+		assert.NotContains(t, respMap, "ledger_index")
+		assert.Equal(t, false, respMap["validated"])
+	})
+
+	t.Run("validated ledger emits ledger_hash and ledger_index", func(t *testing.T) {
+		mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
+			SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			DepositAuthorized:  true,
+			LedgerIndex:        6,
+			LedgerHash:         [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Validated:          true,
+		}
+
+		params := map[string]any{
+			"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"ledger_index":        "validated",
+		}
+		paramsJSON, _ := json.Marshal(params)
+		resp, err := method.Handle(ctx, paramsJSON)
+		require.Nil(t, err)
+		respMap := resp.(map[string]any)
+
+		assert.Contains(t, respMap, "ledger_hash")
+		assert.Equal(t, uint32(6), respMap["ledger_index"])
+		assert.NotContains(t, respMap, "ledger_current_index")
+		assert.Equal(t, true, respMap["validated"])
+	})
 }
 
 // TestDepositAuthorizedSelfDeposit tests that self-deposit is always authorized
@@ -377,7 +449,7 @@ func TestDepositAuthorizedSelfDeposit(t *testing.T) {
 		Validated:          true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"source_account":      "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 	}
@@ -388,7 +460,7 @@ func TestDepositAuthorizedSelfDeposit(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, true, respMap["deposit_authorized"])
@@ -418,7 +490,7 @@ func TestDepositAuthorizedNotAuthorized(t *testing.T) {
 		Validated:          true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 	}
@@ -429,7 +501,7 @@ func TestDepositAuthorizedNotAuthorized(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, false, respMap["deposit_authorized"])
@@ -459,7 +531,7 @@ func TestDepositAuthorizedWithPreauth(t *testing.T) {
 		Validated:          true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 	}
@@ -470,7 +542,7 @@ func TestDepositAuthorizedWithPreauth(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, true, respMap["deposit_authorized"])
@@ -501,7 +573,7 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 		Validated:          true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"source_account":      "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 		"destination_account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
@@ -512,7 +584,7 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, true, respMap["deposit_authorized"])
@@ -530,7 +602,7 @@ func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 	}
@@ -580,62 +652,62 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		expectedError string
 		expectedCode  int
 	}{
 		{
 			name: "source_account with special characters",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rG1QQv2nh2gr7RCZ!P8YYcBUKCCN633jCn",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "destination_account with special characters",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rP6P9ypfAmc!pw8SZHNwM4nvZHFXDraQas",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "source_account too short",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "destination_account too short",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "r",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "source_account random string",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "not_a_valid_address",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "both accounts malformed — source caught first",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "INVALID",
 				"destination_account": "ALSO_INVALID",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
@@ -659,9 +731,9 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 
 // Credential Validation Tests
 
-// TestDepositAuthorizedCredentialValidation tests credential format and duplicate
-// detection at the handler level.
-// Reference: rippled DepositAuthorized.cpp — credential parsing loop + sorted.emplace()
+// TestDepositAuthorizedCredentialValidation tests handler-level credential format
+// checks and the mapping of service-level credential failures to rpcBAD_CREDENTIALS.
+// Reference: rippled DepositAuthorized.cpp — credential parsing loop
 func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
 	services := newDepositAuthorizedTestServices(mock)
@@ -679,66 +751,34 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
+		serviceErr    error
 		expectedError string
 		expectedCode  int
 	}{
 		{
-			name: "Duplicate credentials — exact same hash",
-			params: map[string]interface{}{
-				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"credentials":         []string{validCred1, validCred1},
-			},
-			expectedError: "duplicates in credentials.",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
-		},
-		{
-			name: "Duplicate credentials — case-insensitive match",
-			params: map[string]interface{}{
-				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"credentials": []string{
-					"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-					"A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2",
-				},
-			},
-			expectedError: "duplicates in credentials.",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
-		},
-		{
-			name: "Duplicate credentials — three entries with duplicate",
-			params: map[string]interface{}{
-				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"credentials":         []string{validCred1, validCred2, validCred1},
-			},
-			expectedError: "duplicates in credentials.",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
-		},
-		{
 			name: "Credential too short",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"credentials":         []string{"ABCD"},
 			},
-			expectedError: "Invalid field 'credentials', an array of CredentialID(hash256).",
+			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Credential not valid hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"credentials":         []string{"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"},
 			},
-			expectedError: "Invalid field 'credentials', an array of CredentialID(hash256).",
+			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Too many credentials",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"credentials": []string{
@@ -753,12 +793,42 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 					"0000000000000000000000000000000000000000000000000000000000000009",
 				},
 			},
-			expectedError: "Invalid field 'credentials', array too long.",
+			expectedError: "Invalid field 'credentials', not array too long.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			name: "Empty credentials array",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{},
+			},
+			expectedError: "Invalid field 'credentials', not is non-empty array of CredentialID(hash256).",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			name: "Non-array credentials",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         "not-an-array",
+			},
+			expectedError: "Invalid field 'credentials', not is non-empty array of CredentialID(hash256).",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			name: "Non-string credentials entry",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []any{1, 3},
+			},
+			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Valid credentials — no duplicates",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"credentials":         []string{validCred1, validCred2},
@@ -767,11 +837,70 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			expectedError: "",
 			expectedCode:  0,
 		},
+		// Ledger-side credential failures surface from the service as
+		// ErrBadCredentials wrappers; the handler maps each to
+		// rpcBAD_CREDENTIALS with rippled's exact detail message.
+		// Reference: rippled DepositAuthorized.cpp RPC::inject_error(rpcBAD_CREDENTIALS, ...)
+		{
+			name: "Credential does not exist on ledger",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials),
+			expectedError: "credentials don't exist",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Credential not accepted",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials aren't accepted", svcerr.ErrBadCredentials),
+			expectedError: "credentials aren't accepted",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Credential expired",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials are expired", svcerr.ErrBadCredentials),
+			expectedError: "credentials are expired",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Credential belongs to another account",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials doesn't belong to the root account", svcerr.ErrBadCredentials),
+			expectedError: "credentials doesn't belong to the root account",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Duplicate credentials by issuer and type",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1, validCred2},
+			},
+			serviceErr:    fmt.Errorf("%w: duplicates in credentials", svcerr.ErrBadCredentials),
+			expectedError: "duplicates in credentials",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock.depositAuthorizedErr = nil
+			mock.depositAuthorizedErr = tt.serviceErr
 			mock.depositAuthorizedResult = nil
 
 			paramsJSON, _ := json.Marshal(tt.params)

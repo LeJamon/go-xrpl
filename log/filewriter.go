@@ -47,6 +47,20 @@ func (w *FileWriter) Write(p []byte) (int, error) {
 	return w.f.Write(p)
 }
 
+// Sync flushes the underlying file descriptor to stable storage on a best-effort
+// basis. It is used on the abort path so the final records survive os.Exit, which
+// does not run deferred close hooks. A missing descriptor (post-failed-reopen) is
+// a no-op; the fsync result is returned for callers that care, but the abort path
+// ignores it.
+func (w *FileWriter) Sync() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f == nil {
+		return nil
+	}
+	return w.f.Sync()
+}
+
 // Rotate closes the current descriptor and reopens the configured path, so
 // writes continue against a freshly-created file after external rotation.
 // Like rippled's closeAndReopen (Log.cpp), the reopen is always attempted: the
@@ -80,4 +94,20 @@ func Rotate() error {
 		return ErrLogNotRotatable
 	}
 	return fw.Rotate()
+}
+
+// Sync flushes the root logger's file output to stable storage on a best-effort
+// basis, returning nil when logging is not file-backed (stdout/stderr writers
+// are flushed by syncing their own descriptors, not through here). It exists for
+// the abort path, where os.Exit skips deferred Close/Sync hooks.
+func Sync() error {
+	cfg := rootCfg.Load()
+	if cfg == nil {
+		return nil
+	}
+	fw, ok := cfg.Output.(*FileWriter)
+	if !ok {
+		return nil
+	}
+	return fw.Sync()
 }

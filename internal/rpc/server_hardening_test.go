@@ -17,15 +17,15 @@ import (
 
 type stubHandler struct {
 	role    types.Role
-	handle  func(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError)
+	handle  func(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError)
 	apiVers []int
 }
 
-func (s *stubHandler) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (s *stubHandler) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if s.handle != nil {
 		return s.handle(ctx, params)
 	}
-	return map[string]interface{}{"ok": true}, nil
+	return map[string]any{"ok": true}, nil
 }
 func (s *stubHandler) RequiredRole() types.Role           { return s.role }
 func (s *stubHandler) SupportedApiVersions() []int        { return s.apiVers }
@@ -42,13 +42,13 @@ func newHardeningServer(t *testing.T, timeout time.Duration, method string, h ty
 	return srv
 }
 
-func decodeEnvelope(t *testing.T, body []byte) map[string]interface{} {
+func decodeEnvelope(t *testing.T, body []byte) map[string]any {
 	t.Helper()
-	var env map[string]interface{}
+	var env map[string]any
 	if err := json.Unmarshal(body, &env); err != nil {
 		t.Fatalf("invalid response JSON: %v\nbody: %s", err, string(body))
 	}
-	result, ok := env["result"].(map[string]interface{})
+	result, ok := env["result"].(map[string]any)
 	if !ok {
 		t.Fatalf("response missing result object: %s", string(body))
 	}
@@ -80,9 +80,9 @@ func TestPostBodyLimit(t *testing.T) {
 func TestRoleNotElevatableByHeader(t *testing.T) {
 	var observedRole types.Role
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			observedRole = ctx.Role
-			return map[string]interface{}{"ok": true}, nil
+			return map[string]any{"ok": true}, nil
 		},
 	})
 
@@ -111,10 +111,10 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 	var observedRole types.Role
 	var observedClientIP string
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			observedRole = ctx.Role
 			observedClientIP = ctx.ClientIP
-			return map[string]interface{}{"ok": true}, nil
+			return map[string]any{"ok": true}, nil
 		},
 	})
 	_, gateway, _ := net.ParseCIDR("203.0.113.0/24")
@@ -145,7 +145,7 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 // original values never appear on the wire.
 func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "submit", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (interface{}, *types.RpcError) {
+		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
 			return nil, types.RpcErrorInvalidParams("bad")
 		},
 	})
@@ -171,12 +171,12 @@ func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 	}
 	// Decode the envelope and confirm each credential key is present and
 	// holds the literal "<masked>" placeholder (rippled ServerHandler.cpp).
-	var env map[string]interface{}
+	var env map[string]any
 	if err := json.Unmarshal(raw, &env); err != nil {
 		t.Fatalf("invalid response JSON: %v\nbody: %s", err, string(raw))
 	}
-	result, _ := env["result"].(map[string]interface{})
-	request, _ := result["request"].(map[string]interface{})
+	result, _ := env["result"].(map[string]any)
+	request, _ := result["request"].(map[string]any)
 	if request == nil {
 		t.Fatalf("response missing request echo: %s", string(raw))
 	}
@@ -189,7 +189,7 @@ func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 			t.Fatalf("credential key %q has value %v; want <masked>: %s", key, v, string(raw))
 		}
 	}
-	txJson, _ := request["tx_json"].(map[string]interface{})
+	txJson, _ := request["tx_json"].(map[string]any)
 	if txJson["Secret"] != "<masked>" || txJson["Seed"] != "<masked>" {
 		t.Fatalf("nested tx_json credentials not masked: %v", txJson)
 	}
@@ -202,7 +202,7 @@ func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 // envelope to the client instead of crashing the server goroutine.
 func TestHandlerPanicRecovered(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "panic", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (interface{}, *types.RpcError) {
+		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
 			panic("synthetic panic")
 		},
 	})
@@ -227,9 +227,9 @@ func TestHandlerPanicRecovered(t *testing.T) {
 func TestDispatchHasDeadline(t *testing.T) {
 	var observed context.Context
 	srv := newHardeningServer(t, 250*time.Millisecond, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			observed = ctx.Context
-			return map[string]interface{}{"ok": true}, nil
+			return map[string]any{"ok": true}, nil
 		},
 	})
 
@@ -253,9 +253,9 @@ func TestDispatchHasDeadline(t *testing.T) {
 func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	var observed *types.RpcContext
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			observed = ctx
-			return map[string]interface{}{"ok": true}, nil
+			return map[string]any{"ok": true}, nil
 		},
 	})
 
@@ -298,29 +298,39 @@ type heavyStub struct{ stubHandler }
 
 func (heavyStub) LoadKind() loadtrack.LoadKind { return loadtrack.LoadHeavy }
 
+// Once the per-IP balance crosses DropThreshold, the overload-admission gate
+// (gateLoad) rejects with rippled's canonical HTTP 503 "Server is overloaded"
+// bare-string body (ServerHandler.cpp:739), not the slowDown result envelope.
 func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
 	srv.loadTracker = loadtrack.New()
 
-	var lastResult map[string]interface{}
-	for i := 0; i < 12; i++ {
+	var lastBody string
+	for range 12 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
 		req.RemoteAddr = "198.51.100.7:5555"
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
-		lastResult = decodeEnvelope(t, rr.Body.Bytes())
-		if lastResult["error"] == "slowDown" {
+		lastBody = rr.Body.String()
+		if rr.Code == http.StatusServiceUnavailable {
+			if got := strings.TrimSpace(rr.Body.String()); got != "Server is overloaded" {
+				t.Fatalf("503 body = %q, want \"Server is overloaded\"", got)
+			}
+			// The denial must not ride the result envelope (the old slowDown-on-200 shape).
+			if strings.Contains(rr.Body.String(), "result") || strings.Contains(rr.Body.String(), "slowDown") {
+				t.Fatalf("overload denial leaked the result envelope: %s", rr.Body.String())
+			}
 			return
 		}
 	}
-	t.Fatalf("never received slowDown after 12 heavy invocations; last result %v", lastResult)
+	t.Fatalf("never received HTTP 503 after 12 heavy invocations; last body %s", lastBody)
 }
 
 func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
 	srv.loadTracker = loadtrack.New()
 
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
 		// 127.0.0.1 with no AdminNets → roleForRequest fallback → RoleAdmin → Unlimited.
 		req.RemoteAddr = "127.0.0.1:5555"

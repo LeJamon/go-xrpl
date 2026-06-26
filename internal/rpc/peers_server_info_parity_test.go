@@ -77,7 +77,7 @@ func TestPeersAndServerInfoBothEmptyWithoutSource(t *testing.T) {
 	assert.Equal(t, 0, len(peersList))
 }
 
-func serverInfoPeerCount(t *testing.T, infoRes interface{}) int {
+func serverInfoPeerCount(t *testing.T, infoRes any) int {
 	t.Helper()
 	raw, err := json.Marshal(infoRes)
 	require.NoError(t, err)

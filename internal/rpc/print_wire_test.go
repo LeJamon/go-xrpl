@@ -45,7 +45,7 @@ func printTestServer(t *testing.T) *Server {
 	return srv
 }
 
-func printOverWire(t *testing.T, srv *Server, body string) map[string]interface{} {
+func printOverWire(t *testing.T, srv *Server, body string) map[string]any {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
 	req.RemoteAddr = "127.0.0.1:1234" // loopback ⇒ admin
@@ -71,19 +71,19 @@ func TestPrintMethod_WireShape(t *testing.T) {
 		}
 
 		// JSON strings decode back to Go strings; JSON numbers to float64.
-		counters := res["counters"].(map[string]interface{})
+		counters := res["counters"].(map[string]any)
 		assert.Equal(t, "7", counters["peer_disconnects"])
 		assert.Equal(t, "3", counters["peer_disconnects_resources"])
 		assert.Equal(t, "9", counters["jq_trans_overflow"])
 
-		sa := res["state_accounting"].(map[string]interface{})
+		sa := res["state_accounting"].(map[string]any)
 		assert.Equal(t, "500", sa["current_duration_us"])
-		full := sa["states"].(map[string]interface{})["full"].(map[string]interface{})
+		full := sa["states"].(map[string]any)["full"].(map[string]any)
 		assert.Equal(t, "2", full["transitions"])
 		assert.Equal(t, "1000", full["duration_us"])
 
-		assert.IsType(t, float64(0), res["last_close"].(map[string]interface{})["proposers"])
-		assert.IsType(t, float64(0), res["overlay"].(map[string]interface{})["count"])
+		assert.IsType(t, float64(0), res["last_close"].(map[string]any)["proposers"])
+		assert.IsType(t, float64(0), res["overlay"].(map[string]any)["count"])
 	})
 
 	t.Run("subtree selector narrows output over the wire", func(t *testing.T) {

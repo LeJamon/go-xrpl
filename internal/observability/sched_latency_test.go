@@ -17,8 +17,7 @@ func TestSchedLatencyMs_ZeroBeforeFirstSample(t *testing.T) {
 
 func TestSchedLatencyMs_HealthyServerReportsNearZero(t *testing.T) {
 	resetForTest()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	StartSchedLatencySampler(ctx)
 
@@ -58,13 +57,12 @@ func TestSchedLatencyMs_RisesUnderCPUContention(t *testing.T) {
 		t.Skip("scheduler-latency magnitude is non-deterministic under -race; non-race CI covers this")
 	}
 	resetForTest()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	StartSchedLatencySampler(ctx)
 
 	stop := make(chan struct{})
 	workers := 8 * runtime.GOMAXPROCS(0)
-	for i := 0; i < workers; i++ {
+	for range workers {
 		go func() {
 			x := 0.0
 			for {
@@ -73,7 +71,7 @@ func TestSchedLatencyMs_RisesUnderCPUContention(t *testing.T) {
 					return
 				default:
 				}
-				for j := 0; j < 1000; j++ {
+				for j := range 1000 {
 					x += math.Sqrt(float64(j))
 				}
 				_ = x
@@ -103,8 +101,7 @@ func TestSchedLatencyMs_RisesUnderCPUContention(t *testing.T) {
 // which asserts a 99ms-period probe runs ~10 times in 1 second.
 func TestSchedLatencyMs_SamplesContinuously(t *testing.T) {
 	resetForTest()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	StartSchedLatencySampler(ctx)
 
@@ -181,8 +178,7 @@ func TestNextWait_AdaptsUnderLoad(t *testing.T) {
 
 func TestStartSchedLatencySampler_IdempotentStart(t *testing.T) {
 	resetForTest()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	StartSchedLatencySampler(ctx)
 	StartSchedLatencySampler(ctx)

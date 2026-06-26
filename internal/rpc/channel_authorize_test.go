@@ -228,7 +228,7 @@ func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 	assert.NotEmpty(t, signature)
@@ -252,7 +252,7 @@ func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 	assert.NotEmpty(t, signature)
@@ -274,7 +274,7 @@ func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 	assert.NotEmpty(t, signature)
@@ -297,7 +297,7 @@ func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 	assert.NotEmpty(t, signature)
@@ -320,7 +320,7 @@ func TestChannelAuthorize_ValidEd25519(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 	assert.NotEmpty(t, signature)
@@ -344,7 +344,7 @@ func TestChannelAuthorize_MaxAmount(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 	assert.NotEmpty(t, signature)
@@ -377,7 +377,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 	authorizeResult, authorizeErr := authorizeHandler.Handle(authorizeCtx, authorizeParams)
 	require.Nil(t, authorizeErr)
 
-	resultMap := authorizeResult.(map[string]interface{})
+	resultMap := authorizeResult.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 
@@ -397,7 +397,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 	verifyResult, verifyErr := verifyHandler.Handle(verifyCtx, verifyParams)
 	require.Nil(t, verifyErr)
 
-	verifyResultMap := verifyResult.(map[string]interface{})
+	verifyResultMap := verifyResult.(map[string]any)
 	verified, ok := verifyResultMap["signature_verified"].(bool)
 	require.True(t, ok)
 	assert.True(t, verified, "Signature should verify correctly")
@@ -429,7 +429,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 	authorizeResult, authorizeErr := authorizeHandler.Handle(authorizeCtx, authorizeParams)
 	require.Nil(t, authorizeErr)
 
-	resultMap := authorizeResult.(map[string]interface{})
+	resultMap := authorizeResult.(map[string]any)
 	signature, ok := resultMap["signature"].(string)
 	require.True(t, ok)
 
@@ -449,7 +449,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 	verifyResult, verifyErr := verifyHandler.Handle(verifyCtx, verifyParams)
 	require.Nil(t, verifyErr)
 
-	verifyResultMap := verifyResult.(map[string]interface{})
+	verifyResultMap := verifyResult.(map[string]any)
 	verified, ok := verifyResultMap["signature_verified"].(bool)
 	require.True(t, ok)
 	assert.True(t, verified, "Ed25519 signature should verify correctly")

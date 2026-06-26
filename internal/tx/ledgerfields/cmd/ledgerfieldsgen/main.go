@@ -40,10 +40,10 @@ func main() {
 		formatted, err := format.Source(content)
 		if err != nil {
 			// Write the un-formatted source so the user can debug.
-			_ = os.WriteFile(path+".broken", content, 0o644) //nolint:gosec // G306: generated dev source artifact, 0644 intentional
+			_ = os.WriteFile(path+".broken", content, 0o644) //nolint:gosec // G306: generated source artifact, world-readable by intent
 			log.Fatalf("gofmt %s: %v (wrote %s.broken)", path, err, path)
 		}
-		if err := os.WriteFile(path, formatted, 0o644); err != nil { //nolint:gosec // G306: generated source file, 0644 intentional
+		if err := os.WriteFile(path, formatted, 0o644); err != nil { //nolint:gosec // G306: generated source artifact, world-readable by intent
 			log.Fatalf("write %s: %v", path, err)
 		}
 		fmt.Printf("wrote %s (%d fields)\n", path, len(entry.Fields))
@@ -67,6 +67,12 @@ type fieldRender struct {
 	IsBaseTenUInt64 bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
 	ReadCall        string
 	DecodeKind      string
+	// DefaultExpr is a Go boolean expression (using the entry's receiver) that
+	// is true when the decoded field holds its rippled type-default. It mirrors
+	// STBase::isDefault() per type and gates CreatedNode.NewFields emission
+	// (rippled ApplyStateTable.cpp: `!obj.isDefault()`). Empty means the type
+	// has no default to filter.
+	DefaultExpr string
 }
 
 type entryRender struct {
@@ -120,7 +126,27 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		if err != nil {
 			return "", nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
-		fr, err := makeFieldRender(f, fi, entry.Name, er.BitPrefix)
+
+		// DecodeOnly fields are tolerated on the wire but never stored, emitted,
+		// or re-encoded. Add only a consume-and-discard decode arm (mirroring the
+		// synthetic LedgerEntryType arm: MetaNever + empty BitConst) so legacy
+		// blobs decode while Encode produces the canonical field set.
+		if f.DecodeOnly {
+			er.DecodeArms[int(fi.FieldHeader.TypeCode)] = append(
+				er.DecodeArms[int(fi.FieldHeader.TypeCode)],
+				decodeArm{
+					TypeCode:  int(fi.FieldHeader.TypeCode),
+					FieldCode: int(fi.Nth),
+					XRPLType:  fi.Type,
+					GoField:   f.Name,
+					BitConst:  "",
+					GoType:    "",
+					Meta:      spec.MetaNever,
+				})
+			continue
+		}
+
+		fr, err := makeFieldRender(f, fi, entry.Name, er.BitPrefix, er.Receiver)
 		if err != nil {
 			return "", nil, fmt.Errorf("render %s: %w", f.Name, err)
 		}
@@ -161,7 +187,7 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 	return path, []byte(buf.String()), nil
 }
 
-func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bitPrefix string) (fieldRender, error) {
+func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bitPrefix, receiver string) (fieldRender, error) {
 	fr := fieldRender{
 		Name:      f.Name,
 		GoField:   f.Name,
@@ -265,7 +291,47 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 	default:
 		return fr, fmt.Errorf("unsupported XRPL type %q for field %s", fi.Type, f.Name)
 	}
+
+	fr.DefaultExpr = defaultExprFor(fr, receiver)
 	return fr, nil
+}
+
+// defaultExprFor builds the per-field "is type-default" predicate used to gate
+// CreatedNode.NewFields. It mirrors rippled's STBase::isDefault() overrides
+// (STAmount: zero XRP; STIssue: xrpIssue; STNumber: zero; STBitString/UInt*:
+// zero; STBlob/STAccount: empty; STVector256/STArray/STObject/STXChainBridge:
+// empty/default) so a field present in the canonical SLE blob but equal to its
+// type default is dropped from NewFields, exactly as rippled does.
+func defaultExprFor(fr fieldRender, receiver string) string {
+	g := receiver + "." + fr.GoField
+	switch {
+	case fr.IsAmount:
+		// STAmount::isDefault(): zero XRP only (IOU/MPT decode to a map and are
+		// never default).
+		return "amountIsDefault(" + g + ")"
+	case fr.XRPLType == "Issue":
+		return "issueIsDefault(" + g + ")"
+	case fr.XRPLType == "Number":
+		return "numberIsDefault(" + g + ")"
+	case fr.XRPLType == "XChainBridge":
+		return "xchainBridgeIsDefault(" + g + ")"
+	case fr.GoType == "[]string" || fr.GoType == "[]any" || fr.GoType == "map[string]any":
+		// STVector256 / STArray / STObject: default == empty.
+		return "len(" + g + ") == 0"
+	case fr.GoType == "uint32" || fr.GoType == "int":
+		return g + " == 0"
+	case fr.XRPLType == "Blob":
+		return g + ` == ""`
+	case fr.IsHash:
+		// Hash128/160/192/256, UInt64 (hex or sMD_BaseTen decimal), Currency:
+		// default == all-zero, which canonicalizes to "0" or an all-'0' string.
+		return "isZeroHexString(" + g + ")"
+	case fr.GoType == "string":
+		// AccountID: a default (zero) account serializes as a 0-length VL and
+		// decodes to "".
+		return g + ` == ""`
+	}
+	return ""
 }
 
 func bitPrefixFor(entryName string) string {
@@ -366,7 +432,11 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 				if _, err := sr.readUint64Raw(); err != nil {
 					return err
 				}
-				// {{ $arm.GoField }} is synthetic LedgerEntryType; discard
+{{- if eq $arm.GoField "LedgerEntryType" }}
+				// {{ $arm.GoField }} is synthetic; discard
+{{- else }}
+				// {{ $arm.GoField }} decoded for tolerance only; discard
+{{- end }}
 {{- else if $arm.IsBaseTenUInt64 }}
 				val, err := sr.readUint64Decimal()
 				if err != nil {
@@ -483,7 +553,11 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 {{- range $arm := $arms }}
 			case {{ $arm.FieldCode }}:
 {{- if and (eq $arm.Meta 3) (isZero $arm.BitConst) }}
+{{- if eq $arm.GoField "LedgerEntryType" }}
 				_ = val // synthetic LedgerEntryType; discard
+{{- else }}
+				_ = val // {{ $arm.GoField }} decoded for tolerance only; discard
+{{- end }}
 {{- else if and (eq $arm.XRPLType "Amount") $arm.XRPOnly }}
 				if s, ok := val.(string); ok {
 					{{ $.Receiver }}.{{ $arm.GoField }} = s
@@ -511,12 +585,12 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 // defaulted fields from NewFields.
 func ({{ .Receiver }} *{{ .StructName }}) emitAll(out map[string]any, skipDefault bool) {
 {{- range .Fields }}{{ if eq .Meta 0 }}
-	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {{ if eq .GoType "uint32" }}&& !(skipDefault && {{ $.Receiver }}.{{ .GoField }} == 0){{ else if eq .GoType "int" }}&& !(skipDefault && {{ $.Receiver }}.{{ .GoField }} == 0){{ else if .IsHash }}&& !(skipDefault && {{ if eq .XRPLType "Blob" }}{{ $.Receiver }}.{{ .GoField }} == ""{{ else }}isZeroHexString({{ $.Receiver }}.{{ .GoField }}){{ end }}){{ else if eq .GoType "string" }}&& !(skipDefault && {{ $.Receiver }}.{{ .GoField }} == ""){{ end }}{{ "" }} {
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0{{ if .DefaultExpr }} && !(skipDefault && {{ .DefaultExpr }}){{ end }} {
 		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
 	}
 {{- end }}{{ end }}
 {{- range .Fields }}{{ if eq .Meta 1 }}
-	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0{{ if .DefaultExpr }} && !(skipDefault && {{ .DefaultExpr }}){{ end }} {
 		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
 	}
 {{- end }}{{ end }}
@@ -537,12 +611,12 @@ func ({{ .Receiver }} *{{ .StructName }}) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func ({{ .Receiver }} *{{ .StructName }}) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*{{ .StructName }})
-	if !ok || p == nil {
+	prv, ok := prev.(*{{ .StructName }})
+	if !ok || prv == nil {
 		return
 	}
 {{- range .Fields }}{{ if eq .Meta 0 }}
-	emitIfChanged{{ .Comparer }}(out, {{ printf "%q" .Name }}, p.{{ .GoField }}, {{ $.Receiver }}.{{ .GoField }}, p.present&{{ .BitConst }}, {{ $.Receiver }}.present&{{ .BitConst }})
+	emitIfChanged{{ .Comparer }}(out, {{ printf "%q" .Name }}, prv.{{ .GoField }}, {{ $.Receiver }}.{{ .GoField }}, prv.present&{{ .BitConst }}, {{ $.Receiver }}.present&{{ .BitConst }})
 {{- end }}{{ end }}
 }
 

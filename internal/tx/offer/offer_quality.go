@@ -6,7 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -15,10 +14,16 @@ const (
 	maxTickSize uint8 = 15
 )
 
-// offerDivRound divides num by den using rippled's divRound (non-strict) algorithm
-// with native-aware canonicalization. When native=true, uses canonicalizeRound for
-// XRP drops; when native=false, uses IOU canonicalize.
-// Reference: rippled STAmount.cpp divRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
+// offerNativeDrops finalizes a muldiv-round magnitude as an XRP-drops Amount,
+// delegating to the shared state native-round tail.
+func offerNativeDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) tx.Amount {
+	return tx.NewXRPAmount(state.NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, strict))
+}
+
+// offerDivRound divides num by den using rippled's divRound (non-strict)
+// algorithm with native-aware canonicalization. The muldiv and IOU-overflow
+// canonicalize core is shared with the state package; the native (XRP-drops)
+// path and the zero-returns-zero contract are offer-layer specifics.
 func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
 	if den.IsZero() || num.IsZero() {
 		if native {
@@ -26,111 +31,24 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
-
-	numVal := num.Mantissa()
-	numOff := num.Exponent()
-	denVal := den.Mantissa()
-	denOff := den.Exponent()
-
-	if num.IsNative() {
-		if numVal < 0 {
-			numVal = -numVal
-		}
-		for numVal < state.MinMantissa {
-			numVal *= 10
-			numOff--
-		}
-	}
-	if den.IsNative() {
-		if denVal < 0 {
-			denVal = -denVal
-		}
-		for denVal < state.MinMantissa {
-			denVal *= 10
-			denOff--
-		}
-	}
-
+	numVal, numOff := state.PrepareMulDivOperand(num)
+	denVal, denOff := state.PrepareMulDivOperand(den)
 	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	if numVal < 0 {
-		numVal = -numVal
-	}
-	if denVal < 0 {
-		denVal = -denVal
-	}
-
-	// muldiv_round: (numVal * 10^17 + rounding) / denVal
-	tenTo17 := new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
-	numerator := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
-	if resultNegative != roundUp {
-		numerator.Add(numerator, new(big.Int).Sub(big.NewInt(denVal), big.NewInt(1)))
-	}
-	quotient := new(big.Int).Div(numerator, big.NewInt(denVal))
-	amount := quotient.Uint64()
+	amount := state.DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
-
-	if resultNegative != roundUp {
-		if native {
-			// canonicalizeRound for native (XRP drops)
-			drops := payment.CanonicalizeDrops(int64(amount), offset)
-			// Fallback: if rounding up produced zero, return minimum positive (1 drop).
-			// Reference: rippled STAmount.cpp divRoundImpl lines 1720-1726
-			if drops == 0 && roundUp && !resultNegative {
-				drops = 1
-			}
-			if resultNegative {
-				drops = -drops
-			}
-			return tx.NewXRPAmount(drops)
-		}
-		// canonicalizeRound for IOU
-		if amount > uint64(state.MaxMantissa) {
-			for amount > 10*uint64(state.MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
-	} else if native {
-		// No canonicalize needed, but still need to convert to drops
-		drops := int64(amount)
-		for offset > 0 {
-			drops *= 10
-			offset--
-		}
-		for offset < 0 {
-			drops /= 10
-			offset++
-		}
-		if resultNegative {
-			drops = -drops
-		}
-		return tx.NewXRPAmount(drops)
+	if native {
+		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 	}
-
-	// DontAffectNumberRoundMode: NO guard
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
+	if addSlop {
+		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	result := state.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-
-	if roundUp && !resultNegative && result.IsZero() {
-		if native {
-			return tx.NewXRPAmount(1)
-		}
-		return state.NewIssuedAmountFromValue(state.MinMantissa, state.MinExponent, currency, issuer)
-	}
-
-	return result
+	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
 }
 
-// offerDivRoundStrict divides num by den using rippled's divRoundStrict algorithm
-// with native-aware canonicalization.
-// Reference: rippled STAmount.cpp divRoundImpl with canonicalizeRoundStrict + NumberRoundModeGuard
+// offerDivRoundStrict divides num by den using rippled's divRoundStrict
+// algorithm with native-aware canonicalization.
 func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
 	if den.IsZero() || num.IsZero() {
 		if native {
@@ -138,118 +56,28 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
-
-	numVal := num.Mantissa()
-	numOff := num.Exponent()
-	denVal := den.Mantissa()
-	denOff := den.Exponent()
-
-	if num.IsNative() {
-		if numVal < 0 {
-			numVal = -numVal
-		}
-		for numVal < state.MinMantissa {
-			numVal *= 10
-			numOff--
-		}
-	}
-	if den.IsNative() {
-		if denVal < 0 {
-			denVal = -denVal
-		}
-		for denVal < state.MinMantissa {
-			denVal *= 10
-			denOff--
-		}
-	}
-
+	numVal, numOff := state.PrepareMulDivOperand(num)
+	denVal, denOff := state.PrepareMulDivOperand(den)
 	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	if numVal < 0 {
-		numVal = -numVal
-	}
-	if denVal < 0 {
-		denVal = -denVal
-	}
-
-	// muldiv_round: (numVal * 10^17 + rounding) / denVal
-	tenTo17 := new(big.Int).SetUint64(100_000_000_000_000_000) // 10^17
-	bigNum := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
-	bigDen := new(big.Int).SetInt64(denVal)
-	if resultNegative != roundUp {
-		bigNum.Add(bigNum, new(big.Int).Sub(bigDen, big.NewInt(1)))
-	}
-	bigResult := new(big.Int).Div(bigNum, bigDen)
-
-	amount := bigResult.Uint64()
+	amount := state.DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
-
-	if resultNegative != roundUp {
-		if native {
-			// canonicalizeRoundStrict for native (XRP drops)
-			drops := payment.CanonicalizeDropsStrict(int64(amount), offset, roundUp)
-			// Fallback: if rounding up produced zero, return minimum positive (1 drop).
-			// Reference: rippled STAmount.cpp divRoundImpl lines 1720-1726
-			if drops == 0 && roundUp && !resultNegative {
-				drops = 1
-			}
-			if resultNegative {
-				drops = -drops
-			}
-			return tx.NewXRPAmount(drops)
-		}
-		// canonicalizeRoundStrict for IOU
-		if amount > uint64(state.MaxMantissa) {
-			for amount > 10*uint64(state.MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
-	} else if native {
-		// No canonicalize needed (resultNegative == roundUp), just convert to drops
-		drops := int64(amount)
-		for offset > 0 {
-			drops *= 10
-			offset--
-		}
-		for offset < 0 {
-			drops /= 10
-			offset++
-		}
-		if resultNegative {
-			drops = -drops
-		}
-		return tx.NewXRPAmount(drops)
+	if native {
+		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, true)
 	}
-
-	var mode state.RoundingMode
+	if addSlop {
+		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
+	}
+	mode := state.RoundDownward
 	if roundUp != resultNegative {
 		mode = state.RoundUpward
-	} else {
-		mode = state.RoundDownward
 	}
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
-	}
-	result := state.NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, mode)
-
-	if roundUp && !resultNegative && result.IsZero() {
-		if native {
-			return tx.NewXRPAmount(1)
-		}
-		return state.NewIssuedAmountFromValue(state.MinMantissa, state.MinExponent, currency, issuer)
-	}
-
-	return result
+	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, mode, true)
 }
 
-// offerMulRound multiplies v1 by v2 using rippled's mulRound (non-strict) algorithm
-// with native-aware canonicalization.
-// Reference: rippled STAmount.cpp mulRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
+// offerMulRound multiplies v1 by v2 using rippled's mulRound (non-strict)
+// algorithm with native-aware canonicalization.
 func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, roundUp bool) tx.Amount {
 	if v1.IsZero() || v2.IsZero() {
 		if native {
@@ -257,109 +85,20 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
-
-	value1 := v1.Mantissa()
-	offset1 := v1.Exponent()
-	value2 := v2.Mantissa()
-	offset2 := v2.Exponent()
-
-	if v1.IsNative() {
-		if value1 < 0 {
-			value1 = -value1
-		}
-		for value1 < state.MinMantissa {
-			value1 *= 10
-			offset1--
-		}
-	}
-	if v2.IsNative() {
-		if value2 < 0 {
-			value2 = -value2
-		}
-		for value2 < state.MinMantissa {
-			value2 *= 10
-			offset2--
-		}
-	}
-
+	value1, offset1 := state.PrepareMulDivOperand(v1)
+	value2, offset2 := state.PrepareMulDivOperand(v2)
 	resultNegative := v1.IsNegative() != v2.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	if value1 < 0 {
-		value1 = -value1
-	}
-	if value2 < 0 {
-		value2 = -value2
-	}
-
-	// muldiv_round: (value1 * value2 + rounding) / 10^14
-	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)
-	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999)
-	product := new(big.Int).Mul(big.NewInt(value1), big.NewInt(value2))
-	if resultNegative != roundUp {
-		product.Add(product, tenTo14m1)
-	}
-	product.Div(product, tenTo14)
-
-	amount := product.Uint64()
+	amount := state.MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-
-	if resultNegative != roundUp {
-		if native {
-			// canonicalizeRound for native (XRP drops)
-			drops := payment.CanonicalizeDrops(int64(amount), offset)
-			// Fallback: if rounding up produced zero, return minimum positive (1 drop).
-			// Reference: rippled STAmount.cpp mulRoundImpl lines 1624-1630:
-			//   if (roundUp && !resultNegative && !result) { amount = 1; offset = 0; }
-			if drops == 0 && roundUp && !resultNegative {
-				drops = 1
-			}
-			if resultNegative {
-				drops = -drops
-			}
-			return tx.NewXRPAmount(drops)
-		}
-		// canonicalizeRound for IOU
-		if amount > uint64(state.MaxMantissa) {
-			for amount > 10*uint64(state.MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
-	} else if native {
-		// No canonicalize needed (resultNegative == roundUp), just convert to drops
-		drops := int64(amount)
-		for offset > 0 {
-			drops *= 10
-			offset--
-		}
-		for offset < 0 {
-			drops /= 10
-			offset++
-		}
-		if resultNegative {
-			drops = -drops
-		}
-		return tx.NewXRPAmount(drops)
+	if native {
+		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 	}
-
-	// DontAffectNumberRoundMode: NO guard
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
+	if addSlop {
+		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-	result := state.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-
-	if roundUp && !resultNegative && result.IsZero() {
-		if native {
-			return tx.NewXRPAmount(1)
-		}
-		return state.NewIssuedAmountFromValue(state.MinMantissa, state.MinExponent, currency, issuer)
-	}
-
-	return result
+	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
 }
 
 // applyTickSize applies tick size rounding to offer amounts.
@@ -502,95 +241,89 @@ func qualityToRate(quality uint64) *big.Rat {
 	return rat
 }
 
-// multiplyByQuality multiplies an amount by a quality rate.
-// Reference: rippled uses mulRound to multiply amount by quality rate.
-// The result type is determined by currency/issuer parameters.
+// rateAmountFromQuality decodes a quality code (exponent<<56 | mantissa) into the
+// IOU rate Amount rippled's Quality::rate() yields: an issue-less value carrying the
+// rate magnitude. Used as the divisor/multiplicand for tick-size amount rounding.
+func rateAmountFromQuality(quality uint64) tx.Amount {
+	mantissa := int64(quality & 0x00ffffffffffffff)
+	exponent := int(quality>>56) - 100
+	return tx.NewIssuedAmount(mantissa, exponent, "", "")
+}
+
+// multiplyByQuality multiplies an amount by a quality rate, reproducing rippled's
+// multiply(amount, rate, asset). The result type is determined by currency/issuer
+// parameters.
 func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
+	native := currency == "" || currency == "XRP"
 	if quality == 0 || amount.IsZero() {
-		if currency == "" || currency == "XRP" {
+		if native {
 			return tx.NewXRPAmount(0)
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
 
+	if native {
+		// rippled multiply() with a native result asset (post-fixUniversalNumber)
+		// rounds in two stages: the product is first rounded to a 16-significant-
+		// digit Number, then that Number is converted to drops. Reproducing it
+		// with a single exact round can round a tied-up product down at the 17th
+		// digit the opposite way (the placed offer's XRP leg ends up one drop
+		// high). Compute it as Number{amount} * Number{rate} → drops.
+		rate := rateAmountFromQuality(quality)
+		prod := state.NewXRPLNumber(amount.Mantissa(), amount.Exponent()).
+			Mul(state.NewXRPLNumber(rate.Mantissa(), rate.Exponent()))
+		return tx.NewXRPAmount(prod.ToInt64WithMode(state.RoundToNearest))
+	}
+
 	// Convert amount to big.Rat
-	var amtRat *big.Rat
-	if amount.IsNative() {
-		amtRat = new(big.Rat).SetInt64(amount.Drops())
-	} else {
-		mantissa := amount.Mantissa()
-		exponent := amount.Exponent()
-		amtRat = new(big.Rat).SetInt64(mantissa)
-		if exponent > 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)
-			amtRat.Mul(amtRat, new(big.Rat).SetInt(scale))
-		} else if exponent < 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil)
-			amtRat.Quo(amtRat, new(big.Rat).SetInt(scale))
-		}
+	mantissa := amount.Mantissa()
+	exponent := amount.Exponent()
+	amtRat := new(big.Rat).SetInt64(mantissa)
+	if exponent > 0 {
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)
+		amtRat.Mul(amtRat, new(big.Rat).SetInt(scale))
+	} else if exponent < 0 {
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil)
+		amtRat.Quo(amtRat, new(big.Rat).SetInt(scale))
 	}
 
 	rateRat := qualityToRate(quality)
 	result := new(big.Rat).Mul(amtRat, rateRat)
 
-	if currency == "" || currency == "XRP" {
-		f, _ := result.Float64()
-		return tx.NewXRPAmount(int64(f + 0.5)) // Round
-	}
-
-	return ratToIssuedAmount(result, currency, issuer, true)
+	return ratToIssuedAmount(result, currency, issuer)
 }
 
-// divideByQuality divides an amount by a quality rate.
-// Reference: rippled uses divRound to divide amount by quality rate.
+// divideByQuality divides an amount by a quality rate, reproducing rippled's
+// divide(amount, rate, asset): muldiv(amount, 10^17, rate) + 5 canonicalized to
+// nearest (ties to even). This is the same core GetRate uses, so the offer's
+// tick-rounded amount and the quality recomputed from it stay consistent.
 // The result type is determined by currency/issuer parameters.
 func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
-	if quality == 0 {
-		// Division by zero - return zero
-		if currency == "" || currency == "XRP" {
+	native := currency == "" || currency == "XRP"
+	if quality == 0 || amount.IsZero() {
+		if native {
 			return tx.NewXRPAmount(0)
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
 
-	if amount.IsZero() {
-		if currency == "" || currency == "XRP" {
-			return tx.NewXRPAmount(0)
-		}
-		return tx.NewIssuedAmount(0, -100, currency, issuer)
+	rate := rateAmountFromQuality(quality)
+	numVal, numOff := state.PrepareMulDivOperand(amount)
+	denVal, denOff := state.PrepareMulDivOperand(rate)
+	resultNegative := amount.IsNegative() != rate.IsNegative()
+
+	mantissa := state.DivMantissas(numVal, denVal, false) + 5
+	offset := numOff - denOff - 17
+	if native {
+		return offerNativeDrops(mantissa, offset, resultNegative, false, false, false)
 	}
-
-	// Convert amount to big.Rat
-	var amtRat *big.Rat
-	if amount.IsNative() {
-		amtRat = new(big.Rat).SetInt64(amount.Drops())
-	} else {
-		mantissa := amount.Mantissa()
-		exponent := amount.Exponent()
-		amtRat = new(big.Rat).SetInt64(mantissa)
-		if exponent > 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)
-			amtRat.Mul(amtRat, new(big.Rat).SetInt(scale))
-		} else if exponent < 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil)
-			amtRat.Quo(amtRat, new(big.Rat).SetInt(scale))
-		}
-	}
-
-	rateRat := qualityToRate(quality)
-	result := new(big.Rat).Quo(amtRat, rateRat)
-
-	if currency == "" || currency == "XRP" {
-		f, _ := result.Float64()
-		return tx.NewXRPAmount(int64(f + 0.5)) // Round
-	}
-
-	return ratToIssuedAmount(result, currency, issuer, true)
+	return state.FinalizeRoundIOU(mantissa, offset, resultNegative, false, currency, issuer, state.RoundToNearest, true)
 }
 
-// ratToIssuedAmount converts a big.Rat to an IOU Amount with the given currency and issuer.
-// The roundUp parameter controls rounding direction.
-func ratToIssuedAmount(rat *big.Rat, currency, issuer string, roundUp bool) tx.Amount {
+// ratToIssuedAmount converts a big.Rat to an IOU Amount with the given currency and
+// issuer, rounding the mantissa to nearest (ties to even) — the rounding rippled's
+// multiply()/divide() apply through Number under fixUniversalNumber.
+func ratToIssuedAmount(rat *big.Rat, currency, issuer string) tx.Amount {
 	if rat.Sign() == 0 {
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
@@ -633,8 +366,14 @@ func ratToIssuedAmount(rat *big.Rat, currency, issuer string, roundUp bool) tx.A
 	intPart := new(big.Int).Quo(scaled.Num(), scaled.Denom())
 	remainder := new(big.Int).Mod(scaled.Num(), scaled.Denom())
 
-	if roundUp && remainder.Sign() != 0 {
+	// Round half to even on the discarded fraction.
+	twice := new(big.Int).Lsh(remainder, 1)
+	if cmp := twice.Cmp(scaled.Denom()); cmp > 0 || (cmp == 0 && intPart.Bit(0) == 1) {
 		intPart.Add(intPart, big.NewInt(1))
+		if intPart.Cmp(maxMant) >= 0 {
+			intPart.Quo(intPart, big.NewInt(10))
+			exponent++
+		}
 	}
 
 	mantissa := intPart.Int64()

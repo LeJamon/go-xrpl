@@ -6,44 +6,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetTypeNameByFieldName(t *testing.T) {
-	tt := []struct {
-		description   string
-		input         string
-		expected      string
-		expectedError error
-	}{
-		{
-			description:   "test that `TransferRate` gives `UInt32`",
-			input:         "TransferRate",
-			expected:      "UInt32",
-			expectedError: nil,
-		},
-		{
-			description: "test that invalid value gives an error",
-			input:       "yurt",
-			expected:    "",
-			expectedError: &NotFoundError{
-				Instance: "FieldName",
-				Input:    "yurt",
-			},
-		},
-	}
-
-	for _, test := range tt {
-		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTypeNameByFieldName(test.input)
-			if test.expectedError != nil {
-				require.EqualError(t, err, test.expectedError.Error())
-				require.Zero(t, got)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, test.expected, got)
-			}
-		})
-	}
-}
-
 func TestGetTypeCodeByTypeName(t *testing.T) {
 	tt := []struct {
 		description   string
@@ -77,88 +39,6 @@ func TestGetTypeCodeByTypeName(t *testing.T) {
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
 			got, err := definitions.GetTypeCodeByTypeName(test.input)
-			if test.expectedError != nil {
-				require.EqualError(t, err, test.expectedError.Error())
-				require.Zero(t, got)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, test.expected, got)
-			}
-		})
-	}
-}
-
-func TestGetTypeCodeByFieldName(t *testing.T) {
-	tt := []struct {
-		description   string
-		input         string
-		expected      int32
-		expectedError error
-	}{
-		{
-			description:   "test that `TransferRate` gives 2",
-			input:         "TransferRate",
-			expected:      2,
-			expectedError: nil,
-		},
-		{
-			description:   "test that `OwnerNode` gives 3",
-			input:         "OwnerNode",
-			expected:      3,
-			expectedError: nil,
-		},
-		{
-			description: "test that non-existent value gives error",
-			input:       "yurt",
-			expected:    0,
-			expectedError: &NotFoundError{
-				Instance: "FieldName",
-				Input:    "yurt",
-			},
-		},
-	}
-
-	for _, test := range tt {
-		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTypeCodeByFieldName(test.input)
-			if test.expectedError != nil {
-				require.EqualError(t, err, test.expectedError.Error())
-				require.Zero(t, got)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, test.expected, got)
-			}
-		})
-	}
-}
-
-func TestGetFieldCodeByFieldName(t *testing.T) {
-	tt := []struct {
-		description   string
-		input         string
-		expected      int32
-		expectedError error
-	}{
-		{
-			description:   "correct FieldCode",
-			input:         "TransferRate",
-			expected:      11,
-			expectedError: nil,
-		},
-		{
-			description: "Invalid FieldName",
-			input:       "yurt",
-			expected:    0,
-			expectedError: &NotFoundError{
-				Instance: "FieldName",
-				Input:    "yurt",
-			},
-		},
-	}
-
-	for _, test := range tt {
-		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetFieldCodeByFieldName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -259,50 +139,6 @@ func TestGetFieldNameByFieldHeader(t *testing.T) {
 			if test.expectedError != nil {
 				require.Error(t, err, test.expectedError.Error())
 				require.Zero(t, got)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, test.expected, got)
-			}
-		})
-	}
-}
-
-func TestGetFieldInfoByFieldName(t *testing.T) {
-	tt := []struct {
-		description   string
-		input         string
-		expected      *FieldInfo
-		expectedError error
-	}{
-		{
-			description: "correct FieldInfo",
-			input:       "TransferRate",
-			expected: &FieldInfo{
-				Nth:            11,
-				IsVLEncoded:    false,
-				IsSerialized:   true,
-				IsSigningField: true,
-				Type:           "UInt32",
-			},
-			expectedError: nil,
-		},
-		{
-			description: "invalid FieldInfo",
-			input:       "yurt",
-			expected:    nil,
-			expectedError: &NotFoundError{
-				Instance: "FieldName",
-				Input:    "yurt",
-			},
-		},
-	}
-
-	for _, test := range tt {
-		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetFieldInfoByFieldName(test.input)
-			if test.expectedError != nil {
-				require.EqualError(t, err, test.expectedError.Error())
-				require.Nil(t, got)
 			} else {
 				require.NoError(t, err)
 				require.Equal(t, test.expected, got)

@@ -103,7 +103,7 @@ func TestOrdering_IncorrectOrderMultipleIntermediaries(t *testing.T) {
 
 	// Build 5 transactions at sequences N, N+1, N+2, N+3, N+4
 	txns := make([]*account.AccountSet, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		txns[i] = account.NewAccountSet(alice.Address)
 		txns[i].Fee = fee
 		seq := aliceSeq + uint32(i)

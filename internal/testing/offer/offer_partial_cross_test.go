@@ -69,10 +69,7 @@ func testPartialCross(t *testing.T, disabledFeatures []string) {
 	hyeXrp := uint64(jtx.XRP(1000)) - Reserve(env, 0)
 
 	// kim: available = XRP(900) + R(2) - R(0) = XRP(900) + 2*ownerRes, capped by bookAmount
-	kimXrp := uint64(jtx.XRP(900)) + 2*ownerRes
-	if kimXrp > uint64(jtx.XRP(999)) {
-		kimXrp = uint64(jtx.XRP(999))
-	}
+	kimXrp := min(uint64(jtx.XRP(900))+2*ownerRes, uint64(jtx.XRP(999)))
 
 	tests := []testData{
 		// No pre-established trust lines

@@ -13,10 +13,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountTxMethod handles the account_tx RPC method
+// AccountTxMethod handles account_tx: it pages through the transactions that
+// affected the account over a validated-ledger range, oldest- or newest-first.
 type AccountTxMethod struct{ BaseHandler }
 
-func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		LedgerIndexMin *json.RawMessage `json:"ledger_index_min,omitempty"`
@@ -28,15 +29,17 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		types.PaginationParams
 	}
 
+	// notEnabled takes precedence over any parameter validation, matching
+	// rippled's useTxTables() gate as the first statement of doAccountTxJson.
+	if err := RequireTxTables(ctx.Services); err != nil {
+		return nil, err
+	}
+
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
 
 	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
@@ -65,17 +68,37 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("invalidParams")
 	}
 
+	// When a single ledger is named via ledger_hash/ledger_index and no
+	// ledger_index_min/max range was given, the query is constrained to that one
+	// ledger: resolve it and collapse the range to [seq, seq] instead of scanning
+	// the whole validated range (AccountTx.cpp parseLedgerArgs:52-130).
+	if !hasMinMax && hasLedgerSpec {
+		targetLedger, _, lerr := LookupLedger(ctx, types.LedgerSpecifier{
+			LedgerHash:  request.LedgerHash,
+			LedgerIndex: types.LedgerIndex(request.LedgerIndex),
+		})
+		if lerr != nil {
+			return nil, lerr
+		}
+		seq := int32(targetLedger.Sequence())
+		ledgerIndexMin = seq
+		ledgerIndexMax = seq
+	}
+
 	// Parse marker if provided
 	var marker *types.AccountTxMarker
 	if request.Marker != nil {
-		if markerMap, ok := request.Marker.(map[string]interface{}); ok {
+		if markerMap, ok := request.Marker.(map[string]any); ok {
 			marker = &types.AccountTxMarker{}
 			if ledger, ok := markerMap["ledger"]; ok {
 				switch v := ledger.(type) {
 				case float64:
 					marker.LedgerSeq = uint32(v)
 				case json.Number:
-					n, _ := v.Int64()
+					n, convErr := v.Int64()
+					if convErr != nil {
+						return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+					}
 					marker.LedgerSeq = uint32(n)
 				default:
 					return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
@@ -86,7 +109,10 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				case float64:
 					marker.TxnSeq = uint32(v)
 				case json.Number:
-					n, _ := v.Int64()
+					n, convErr := v.Int64()
+					if convErr != nil {
+						return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+					}
 					marker.TxnSeq = uint32(n)
 				default:
 					return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
@@ -107,17 +133,11 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		request.Forward,
 	)
 	if err != nil {
-		if err.Error() == "transaction history not available (no database configured)" {
-			return nil, &types.RpcError{
-				Code:    73,
-				Message: "Transaction history not available. Database not configured.",
-			}
+		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
+			return nil, types.RpcErrorNotEnabled("")
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
 	}
@@ -152,9 +172,9 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	isV2 := ctx.ApiVersion > 1
 
 	// Build transactions array
-	transactions := make([]map[string]interface{}, len(result.Transactions))
+	transactions := make([]map[string]any, len(result.Transactions))
 	for i, txn := range result.Transactions {
-		txEntry := map[string]interface{}{
+		txEntry := map[string]any{
 			"validated": true,
 		}
 
@@ -216,7 +236,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				txEntry["meta"] = strings.ToUpper(metaHex)
 			} else {
 				// Inject DeliveredAmount into metadata if this is a Payment
-				if txJSONMap, ok := txEntry[txKey].(map[string]interface{}); ok {
+				if txJSONMap, ok := txEntry[txKey].(map[string]any); ok {
 					InjectDeliveredAmount(txJSONMap, metaJSON)
 				}
 				txEntry["meta"] = metaJSON
@@ -245,7 +265,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		transactions[i] = txEntry
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":          result.Account,
 		"ledger_index_min": result.LedgerMin,
 		"ledger_index_max": result.LedgerMax,
@@ -255,7 +275,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	if result.Marker != nil {
-		response["marker"] = map[string]interface{}{
+		response["marker"] = map[string]any{
 			"ledger": result.Marker.LedgerSeq,
 			"seq":    result.Marker.TxnSeq,
 		}
@@ -268,7 +288,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // For API v1: adds DeliverMax = Amount (keeps Amount).
 // For API v2+: adds DeliverMax = Amount, then removes Amount.
 // This matches rippled's RPC::insertDeliverMax in DeliverMax.cpp.
-func injectDeliverMax(txJSON map[string]interface{}, apiVersion int) {
+func injectDeliverMax(txJSON map[string]any, apiVersion int) {
 	amount, hasAmount := txJSON["Amount"]
 	if !hasAmount {
 		return

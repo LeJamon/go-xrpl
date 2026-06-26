@@ -31,10 +31,7 @@ func (q *TxQ) ProcessClosedLedger(ctx ClosedLedgerContext, timeLeap bool) uint32
 	// Reference: rippled sets maxSize_ = max(txnsExpected * ledgersInQueue, queueSizeMin)
 	if !timeLeap {
 		snapshot := q.feeMetrics.GetSnapshot()
-		newMaxSize := snapshot.TxnsExpected * q.config.LedgersInQueue
-		if newMaxSize < q.config.QueueSizeMin {
-			newMaxSize = q.config.QueueSizeMin
-		}
+		newMaxSize := max(snapshot.TxnsExpected*q.config.LedgersInQueue, q.config.QueueSizeMin)
 		q.maxSize = &newMaxSize
 	}
 
@@ -89,11 +86,6 @@ func (q *TxQ) ResetMaxSize() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.maxSize = nil
-}
-
-// GetConfig returns the queue configuration.
-func (q *TxQ) GetConfig() Config {
-	return q.config
 }
 
 // NextQueuableSeq returns the next sequence number that can be queued for an account.

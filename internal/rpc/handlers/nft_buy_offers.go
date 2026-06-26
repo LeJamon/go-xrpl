@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,18 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
 type NftBuyOffersMethod struct{ BaseHandler }
 
-func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	if err := RequireLedgerService(ctx.Services); err != nil {
+		return nil, err
+	}
+	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTBuyOffers)
+}
+
+// handleNFTOffers is the shared nft_buy_offers / nft_sell_offers flow; the only
+// difference between buy and sell is the fetch function. The caller guards the
+// ledger service before binding fetch.
+// Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
+func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
 	var request struct {
 		NFTokenID string `json:"nft_id"`
 		types.LedgerSpecifier
@@ -46,14 +58,9 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	var nftID [32]byte
 	copy(nftID[:], nftIDBytes)
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
@@ -75,17 +82,18 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetNFTBuyOffers(ctx.Context, nftID, ledgerIndex, limit, marker)
+	result, err := fetch(ctx.Context, nftID, ledgerIndex, limit, marker)
 	if err != nil {
+		if lgrErr := mapLedgerLookupErr(err); lgrErr != nil {
+			return nil, lgrErr
+		}
 		switch {
-		case errors.Is(err, svcerr.ErrLedgerNotFound):
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
 		case errors.Is(err, svcerr.ErrObjectNotFound):
 			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
 		case errors.Is(err, svcerr.ErrInvalidMarker):
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT buy offers: %v", err))
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT offers: %v", err))
 	}
 
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil
@@ -94,10 +102,10 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 // buildNFTOffersResponse builds the JSON response for NFT offer queries.
 // Shared between nft_buy_offers and nft_sell_offers.
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers + appendNftOfferJson
-func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limit uint32) map[string]interface{} {
-	offers := make([]map[string]interface{}, len(result.Offers))
+func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limit uint32) map[string]any {
+	offers := make([]map[string]any, len(result.Offers))
 	for i, offer := range result.Offers {
-		offerObj := map[string]interface{}{
+		offerObj := map[string]any{
 			"nft_offer_index": offer.NFTOfferIndex,
 			"flags":           offer.Flags,
 			"owner":           offer.Owner,
@@ -114,7 +122,7 @@ func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limi
 		offers[i] = offerObj
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"nft_id":       nftIDHex,
 		"offers":       offers,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

@@ -4,15 +4,16 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfOneOwnerCount is the flag indicating that this SignerList only costs
-// 1 OwnerCount (set when featureMultiSignReserve is enabled).
-// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00010000
-const LsfOneOwnerCount uint32 = 0x00010000
+// LsfOneOwnerCount indicates this SignerList only costs 1 OwnerCount (set when
+// featureMultiSignReserve is enabled).
+const LsfOneOwnerCount = entry.LsfOneOwnerCount
 
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
@@ -39,79 +40,75 @@ type SignerEntry struct {
 
 // ParseSignerList parses a SignerList ledger entry from binary data.
 func ParseSignerList(data []byte) (*SignerListInfo, error) {
-	hexStr := hex.EncodeToString(data)
-	decoded, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode SignerList: %w", err)
-	}
-
 	signerList := &SignerListInfo{
 		SignerListID: 0,
 	}
 
-	if flags, ok := decoded["Flags"]; ok {
-		switch v := flags.(type) {
-		case float64:
-			signerList.Flags = uint32(v)
-		case int:
-			signerList.Flags = uint32(v)
-		case uint32:
-			signerList.Flags = v
-		}
-	}
-
-	if quorum, ok := decoded["SignerQuorum"]; ok {
-		switch v := quorum.(type) {
-		case float64:
-			signerList.SignerQuorum = uint32(v)
-		case int:
-			signerList.SignerQuorum = uint32(v)
-		case uint32:
-			signerList.SignerQuorum = v
-		}
-	}
-
-	if ownerNode, ok := decoded["OwnerNode"].(string); ok {
-		signerList.OwnerNode = parseUint64Hex(ownerNode)
-	}
-
-	if entries, ok := decoded["SignerEntries"]; ok {
-		if entriesArray, ok := entries.([]interface{}); ok {
-			for _, entryWrapper := range entriesArray {
-				if entryMap, ok := entryWrapper.(map[string]interface{}); ok {
-					var signerEntry map[string]interface{}
-					if se, ok := entryMap["SignerEntry"]; ok {
-						signerEntry, _ = se.(map[string]interface{})
-					} else {
-						signerEntry = entryMap
-					}
-
-					if signerEntry != nil {
-						entry := AccountSignerEntry{}
-						if account, ok := signerEntry["Account"].(string); ok {
-							entry.Account = account
-						}
-						if weight, ok := signerEntry["SignerWeight"]; ok {
-							switch v := weight.(type) {
-							case float64:
-								entry.SignerWeight = uint16(v)
-							case int:
-								entry.SignerWeight = uint16(v)
-							case uint16:
-								entry.SignerWeight = v
-							}
-						}
-						if walletLocator, ok := signerEntry["WalletLocator"].(string); ok {
-							entry.WalletLocator = walletLocator
-						}
-						signerList.SignerEntries = append(signerList.SignerEntries, entry)
-					}
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
+			case 2: // Flags
+				signerList.Flags = f.UInt32()
+			case 35: // SignerQuorum
+				signerList.SignerQuorum = f.UInt32()
+			}
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				signerList.OwnerNode = f.UInt64()
+			}
+		case stArray:
+			if f.FieldCode == 4 { // SignerEntries
+				entries, err := parseSignerEntries(f.Value)
+				if err != nil {
+					return err
 				}
+				signerList.SignerEntries = entries
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode SignerList: %w", err)
 	}
 
 	return signerList, nil
+}
+
+// parseSignerEntries decodes the SignerEntries STArray content; each element is
+// a SignerEntry STObject.
+func parseSignerEntries(content []byte) ([]AccountSignerEntry, error) {
+	var entries []AccountSignerEntry
+	err := WalkFields(content, func(elem Field) error {
+		if elem.TypeCode != stObject || elem.FieldCode != 11 { // SignerEntry
+			return nil
+		}
+		e := AccountSignerEntry{}
+		if err := WalkFields(elem.Value, func(inner Field) error {
+			switch inner.TypeCode {
+			case stAccountID:
+				if inner.FieldCode == 1 { // Account
+					if id, ok := inner.AccountID(); ok {
+						e.Account, _ = EncodeAccountID(id)
+					}
+				}
+			case stUInt16:
+				if inner.FieldCode == 3 { // SignerWeight
+					e.SignerWeight = inner.UInt16()
+				}
+			case stHash256:
+				if inner.FieldCode == 7 { // WalletLocator
+					e.WalletLocator = strings.ToUpper(hex.EncodeToString(inner.Value))
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		entries = append(entries, e)
+		return nil
+	})
+	return entries, err
 }
 
 // SerializeSignerList serializes a SignerList ledger entry.
@@ -119,24 +116,33 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 // expandedSignerList gates emission of WalletLocator, mirroring rippled's
 // defensive check (a tag is never written when featureExpandedSignerList is off).
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool, ownerNode uint64) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
-	}
-
+func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, expandedSignerList bool, ownerNode uint64) ([]byte, error) {
+	// rippled's ltSIGNER_LIST has no sfAccount (ledger_entries.macro:122-129);
+	// emitting one diverges the SLE bytes (account_hash fork) and leaks an
+	// "Account" entry into the metadata FinalFields.
 	jsonObj := map[string]any{
 		"LedgerEntryType": "SignerList",
-		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
 		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
+		// rippled hardcodes sfSignerListID = 0 on every signer list and
+		// always writes it (SetSignerList.cpp:428 writeSignersToSLE). Omitting
+		// it diverges the SLE bytes (account_hash fork) and, when replacing a
+		// rippled-created list, surfaces a spurious "SignerListID: 0" in the
+		// ModifiedNode PreviousFields. A zero SignerListID is value-default
+		// (STInteger::isDefault), so the CreatedNode NewFields filter drops
+		// it automatically.
+		"SignerListID": uint32(0),
 	}
 
-	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.
-	// Reference: rippled SetSignerList.cpp:429 - if (flags) ledgerEntry->setFieldU32(sfFlags, flags);
-	if flags != 0 {
-		jsonObj["Flags"] = flags
-	}
+	// sfFlags is a soeREQUIRED common field (LedgerFormats.cpp commonFields), so
+	// rippled serializes it on every SignerList — present at its default 0 from
+	// the SLE template. writeSignersToSLE's `if (flags) setFieldU32(sfFlags,...)`
+	// (SetSignerList.cpp:429-430) only *overwrites* the template default; when
+	// flags==0 (the MultiSignReserve-disabled path) the field stays present at 0.
+	// Omitting it when zero diverges the SLE state (account_hash fork). The
+	// CreatedNode NewFields still excludes Flags=0 (default-filtered by the typed
+	// metadata path); a ModifiedNode's FinalFields correctly carries Flags:0.
+	jsonObj["Flags"] = flags
 
 	if len(entries) > 0 {
 		signerEntries := make([]map[string]any, len(entries))
@@ -188,7 +194,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]by
 }
 
 // SerializeDepositPreauth serializes a DepositPreauth ledger entry.
-func SerializeDepositPreauth(ownerID, authorizedID [20]byte) ([]byte, error) {
+func SerializeDepositPreauth(ownerID, authorizedID [20]byte, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -203,7 +209,7 @@ func SerializeDepositPreauth(ownerID, authorizedID [20]byte) ([]byte, error) {
 		"LedgerEntryType": "DepositPreauth",
 		"Account":         ownerAddress,
 		"Authorize":       authorizedAddress,
-		"OwnerNode":       "0",
+		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 		"Flags":           uint32(0),
 	}
 
@@ -224,7 +230,7 @@ type DepositPreauthCredential struct {
 // SerializeDepositPreauthCredentials serializes a credential-based DepositPreauth ledger entry.
 // The credentials should already be sorted.
 // Reference: rippled DepositPreauth.cpp doApply() sfAuthorizeCredentials branch
-func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositPreauthCredential) ([]byte, error) {
+func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositPreauthCredential, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -245,7 +251,7 @@ func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositP
 		"LedgerEntryType":      "DepositPreauth",
 		"Account":              ownerAddress,
 		"AuthorizeCredentials": credArray,
-		"OwnerNode":            "0",
+		"OwnerNode":            strconv.FormatUint(ownerNode, 16),
 		"Flags":                uint32(0),
 	}
 
@@ -266,24 +272,25 @@ type DepositPreauthEntry struct {
 // ParseDepositPreauth parses a DepositPreauth ledger entry from binary data.
 // Extracts Account and OwnerNode needed for removeFromLedger.
 func ParseDepositPreauth(data []byte) (*DepositPreauthEntry, error) {
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode DepositPreauth: %w", err)
-	}
-
 	entry := &DepositPreauthEntry{}
 
-	if account, ok := jsonObj["Account"].(string); ok {
-		accountID, err := DecodeAccountID(account)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Account: %w", err)
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				entry.OwnerNode = f.UInt64()
+			}
+		case stAccountID:
+			if f.FieldCode == 1 { // Account
+				if id, ok := f.AccountID(); ok {
+					entry.Account = id
+				}
+			}
 		}
-		entry.Account = accountID
-	}
-
-	if ownerNode, ok := jsonObj["OwnerNode"].(string); ok {
-		entry.OwnerNode = parseUint64Hex(ownerNode)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: %w", err)
 	}
 
 	return entry, nil

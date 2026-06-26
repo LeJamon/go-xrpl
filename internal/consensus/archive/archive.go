@@ -342,11 +342,7 @@ func (a *Archive) run() {
 
 	for {
 		select {
-		case v, ok := <-a.ch:
-			if !ok {
-				flush("channel closed")
-				return
-			}
+		case v := <-a.ch:
 			if v == nil {
 				continue
 			}
@@ -363,15 +359,16 @@ func (a *Archive) run() {
 		case <-ticker.C:
 			flush("tick")
 		case <-a.stop:
+			// Commit everything already enqueued BEFORE acking any
+			// pending flush requests: Flush's contract (data committed on
+			// return) must hold even when a Flush races Close.
 			drainPending()
-			// Service any pending flush requests so Close-then-Flush
-			// callers aren't left hanging.
+			flush("close")
 			for {
 				select {
 				case ack := <-a.flushReq:
 					close(ack)
 				default:
-					flush("close")
 					return
 				}
 			}

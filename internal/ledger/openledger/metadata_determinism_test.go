@@ -52,7 +52,7 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 		// taker pays 10 XRP, gets 10 USD → owner gives USD, gets XRP.
 		return offer.OfferCreate(acct, tx.NewXRPAmount(10_000_000), usd(10)).Sequence(seq).Build()
 	}
-	specs := []spec{ //nolint:prealloc
+	specs := []spec{ //nolint:prealloc // prealloc: static composite literal extended by fixed appends
 		{trustset.TrustSet(a, usd(1000)).Sequence(aSeq).Build(), a},
 		{trustset.TrustSet(b, usd(1000)).Sequence(bSeq).Build(), b},
 		{trustset.TrustSet(d, usd(1000)).Sequence(dSeq).Build(), d},

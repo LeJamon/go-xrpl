@@ -300,9 +300,8 @@ func TestHasXRPFeesAmendment(t *testing.T) {
 // TestGenesisHashConformance verifies that the genesis hash matches what rippled
 // would produce for the same configuration. This catches serialization regressions.
 //
-// DefaultConfig() now includes all VoteDefaultYes amendments, matching rippled's
-// genesis behavior of enabling non-vetoed amendments via getDesired().
-// Reference: rippled Application.cpp:1707-1712, Ledger.cpp:168-229.
+// DefaultConfig() includes all VoteDefaultYes amendments, matching rippled's
+// genesis behaviour of enabling non-vetoed amendments.
 func TestGenesisHashConformance(t *testing.T) {
 	t.Parallel()
 	t.Run("StandardDefaults_WithAmendments", func(t *testing.T) {

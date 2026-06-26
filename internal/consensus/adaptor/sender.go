@@ -20,10 +20,9 @@ func NewOverlaySender(overlay *peermanagement.Overlay) *OverlaySender {
 }
 
 // BroadcastProposal sends OUR OWN proposal to every connected peer
-// WITHOUT applying the squelch filter. Rippled skips the filter for
-// self-originated broadcasts (OverlayImpl.cpp:1133-1137); a peer that
-// squelches our own pubkey should NOT cause our own proposals to
-// disappear from the network.
+// WITHOUT applying the squelch filter: a peer that squelches our own
+// pubkey should NOT cause our own proposals to disappear from the
+// network.
 func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 	msg := ProposalToMessage(proposal)
 	frame, err := encodeFrame(message.TypeProposeLedger, msg)
@@ -49,14 +48,14 @@ func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) er
 // honoring the per-peer squelch filter on the ORIGINATING validator's
 // pubkey (so peers that have signaled they no longer need that
 // validator's gossip are skipped) and excluding the originating peer
-// itself. Mirrors rippled's OverlayImpl::relay for TMProposeSet.
+// itself.
 //
 // proposal.SuppressionHash is the router-level dedup key (populated
 // by the consensus router from the canonical proposalUniqueId hash at
 // parse time). The overlay registers each recipient against that key
 // in its reverse index; the index is queried by the consensus router
 // on a later duplicate arrival so the slot is fed with the full set
-// of known-havers (B3, PeerImp.cpp:3010-3017).
+// of known-havers.
 func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	msg := ProposalToMessage(proposal)
 	frame, err := encodeFrame(message.TypeProposeLedger, msg)
@@ -79,15 +78,12 @@ func (s *OverlaySender) RelayValidation(validation *consensus.Validation, except
 }
 
 // UpdateRelaySlot feeds the overlay's reduce-relay state machine with
-// an inbound validator message. Mirrors rippled's
-// PeerImp::updateSlotAndSquelch call in onMessage(TMProposeSet/TMValidation).
+// an inbound validator message.
 //
 // seenPeers is the set of peers already known to have this message
-// (from Overlay.PeersThatHave). Rippled's overlay_.relay returns that
-// set as haveMessage and PeerImp passes it whole to
-// updateSlotAndSquelch (PeerImp.cpp:3013-3017) so multi-path delivery
-// evidence is counted — not just the current duplicate's origin. We
-// dedupe originPeer out of seenPeers so no peer is double-counted.
+// (from Overlay.PeersThatHave); feeding it whole counts multi-path
+// delivery evidence, not just the current duplicate's origin. We dedupe
+// originPeer out of seenPeers so no peer is double-counted.
 func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
 	s.overlay.OnValidatorMessage(validatorKey, peermanagement.PeerID(originPeer))
 	for _, p := range seenPeers {
@@ -98,12 +94,11 @@ func (s *OverlaySender) UpdateRelaySlot(validatorKey []byte, originPeer uint64, 
 	}
 }
 
-// RequestTxSet asks peers for a known-hash tx-set we don't hold. Mirrors
-// TransactionAcquire::trigger initial request (TransactionAcquire.cpp:
-// 128-137): TMGetLedger{itype=liTS_CANDIDATE, ledger_hash=txSetID,
-// query_depth=3, node_ids=[SHAMapNodeID root]}. node_ids is required for
-// itype != liBASE — PeerImp.cpp:1435-1438 rejects without it. SHAMap root
-// encoding is 33 zero bytes (zero path + depth=0). Issue #401.
+// RequestTxSet asks peers for a known-hash tx-set we don't hold via
+// TMGetLedger{itype=liTS_CANDIDATE, ledger_hash=txSetID, query_depth=3,
+// node_ids=[SHAMapNodeID root]}. node_ids is required for itype != liBASE
+// or peers reject the request. SHAMap root encoding is 33 zero bytes
+// (zero path + depth=0). Issue #401.
 func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 	rootNodeID := make([]byte, 33) // 32 zeros + 1 depth byte (0)
 	msg := &message.GetLedger{
@@ -120,13 +115,13 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 }
 
 // RequestTxSetMissingNodes requests specific SHAMap nodes after a partial
-// tree. Mirrors TransactionAcquire::trigger second branch
-// (TransactionAcquire.cpp:144-171). Each nodeID is 33 bytes (32 path +
-// 1 depth) per shamap.NodeID.Bytes. excluded carries peer IDs to skip
-// (router-supplied list of peers that have repeatedly returned
-// non-progressing TMLedgerData replies for this acquisition); a nil or
-// empty map falls through to a plain broadcast. Issue #420.
-func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+// tree. Each nodeID is 33 bytes (32 path + 1 depth) per shamap.NodeID.Bytes.
+// excluded carries peer IDs to skip (router-supplied list of peers that
+// have repeatedly returned non-progressing TMLedgerData replies for this
+// acquisition); a nil or empty map falls through to a plain broadcast.
+// When indirect is set, query_type=qtINDIRECT marks the request relayable
+// by intermediary peers (see indirectQueryType). Issue #420.
+func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
 	if len(nodeIDs) == 0 {
 		return fmt.Errorf("RequestTxSetMissingNodes: nodeIDs must be non-empty")
 	}
@@ -135,6 +130,7 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 		LedgerHash: id[:],
 		QueryDepth: 3,
 		NodeIDs:    nodeIDs,
+		QueryType:  indirectQueryType(indirect),
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
@@ -247,6 +243,44 @@ func (s *OverlaySender) ReplayCapablePeersExcluding(excluded []uint64, max int) 
 	return out
 }
 
+// PeerWithLedger forwards to Overlay.PeerWithLedger: selects a peer that
+// can serve ledger (target, seq) (excluding `exclude`) to relay an
+// unsatisfiable GetLedger to.
+func (s *OverlaySender) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool) {
+	id, ok := s.overlay.PeerWithLedger(target, seq, peermanagement.PeerID(exclude))
+	return uint64(id), ok
+}
+
+// PeersWithLedger forwards to Overlay.PeersWithLedger: selects up to max
+// peers that can serve ledger (target, seq), excluding `excluded`, to
+// broaden a stalled acquisition's source set.
+func (s *OverlaySender) PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
+	ex := make([]peermanagement.PeerID, len(excluded))
+	for i, id := range excluded {
+		ex[i] = peermanagement.PeerID(id)
+	}
+	ids := s.overlay.PeersWithLedger(target, seq, ex, max)
+	out := make([]uint64, len(ids))
+	for i, id := range ids {
+		out[i] = uint64(id)
+	}
+	return out
+}
+
+// PeerWithTxSet forwards to Overlay.PeerWithTxSet: selects a peer that
+// advertised tx-set root target (excluding `exclude`) to relay an
+// unsatisfiable liTS_CANDIDATE GetLedger to.
+func (s *OverlaySender) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool) {
+	id, ok := s.overlay.PeerWithTxSet(target, peermanagement.PeerID(exclude))
+	return uint64(id), ok
+}
+
+// NotePeerHasTxSet forwards to Overlay.NotePeerHasTxSet, recording a
+// peer's tsHAVE tx-set advertisement for later relay selection.
+func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
+	s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
+}
+
 // IncPeerBadData forwards to Overlay.IncPeerBadData. Called by the
 // consensus router via Adaptor.IncPeerBadData when it detects malformed
 // or invalid data from a peer (e.g., replay-delta verification
@@ -260,8 +294,7 @@ func (s *OverlaySender) IncPeerBadData(peerID uint64, reason string) {
 // message with this suppression hash. Populated by the overlay as
 // messages are relayed outward (see Overlay.RelayFromValidator); the
 // consensus router queries this on duplicate arrivals so the
-// reduce-relay slot gets fed with every known-haver (B3,
-// PeerImp.cpp:3010-3017).
+// reduce-relay slot gets fed with every known-haver.
 func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	raw := s.overlay.PeersThatHave(suppressionHash)
 	if len(raw) == 0 {
@@ -275,10 +308,8 @@ func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
 }
 
 // RequestReplayDelta asks a specific peer for a fast-catchup replay delta
-// (header + every tx blob, in tx-map order) for the given ledger hash.
-// Mirrors rippled's LedgerDeltaAcquire::trigger which sends a
-// TMReplayDeltaRequest via PeerSet::sendRequest
-// (rippled/src/xrpld/app/ledger/detail/LedgerDeltaAcquire.cpp:124-156).
+// (header + every tx blob, in tx-map order) for the given ledger hash via
+// a TMReplayDeltaRequest.
 func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	msg := &message.ReplayDeltaRequest{LedgerHash: hash[:]}
 	frame, err := encodeFrame(message.TypeReplayDeltaReq, msg)
@@ -288,30 +319,15 @@ func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }
 
-// RequestProofPath asks a specific peer for the SHAMap merkle proof of
-// (key, mapType) under ledgerHash. Mirrors rippled's
-// SkipListAcquire::trigger
-// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92).
-func (s *OverlaySender) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
-	msg := &message.ProofPathRequest{
-		LedgerHash: ledgerHash[:],
-		Key:        key[:],
-		MapType:    mapType,
-	}
-	frame, err := encodeFrame(message.TypeProofPathReq, msg)
-	if err != nil {
-		return fmt.Errorf("encode proof path request: %w", err)
-	}
-	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
-}
-
 // RequestStateNodes sends a GetLedger request for account state SHAMap nodes.
-func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+// indirect sets query_type=qtINDIRECT (see indirectQueryType).
+func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoAsNode,
 		LedgerHash: ledgerHash[:],
 		NodeIDs:    nodeIDs,
 		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
+		QueryType:  indirectQueryType(indirect),
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
@@ -321,19 +337,35 @@ func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, no
 }
 
 // RequestTransactionNodes sends a GetLedger request for transaction SHAMap
-// nodes (rippled InboundLedger::trigger liTX_NODE branch, InboundLedger.cpp:696).
-func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+// nodes. indirect sets query_type=qtINDIRECT (see indirectQueryType).
+func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoTxNode,
 		LedgerHash: ledgerHash[:],
 		NodeIDs:    nodeIDs,
 		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
+		QueryType:  indirectQueryType(indirect),
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (tx nodes): %w", err)
 	}
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
+// indirectQueryType returns the GetLedger query_type for an acquisition
+// request: a presence-aware pointer to qtINDIRECT when indirect is set, nil
+// otherwise. A relayer only forwards GetLedger requests that carry a
+// query_type, so setting it lets peers fetch on our behalf. Mirrors rippled's
+// InboundLedger::trigger / TransactionAcquire::trigger, which escalate to
+// qtINDIRECT once an acquisition has timed out at least once (timeouts_ != 0)
+// rather than on the first, directly-routed attempt.
+func indirectQueryType(indirect bool) *message.LedgerQueryType {
+	if !indirect {
+		return nil
+	}
+	qt := message.QueryTypeIndirect
+	return &qt
 }
 
 // encodeFrame serializes a message and wraps it with the wire protocol header.

@@ -3,11 +3,9 @@ package types
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 func TestBlob_FromJson(t *testing.T) {
@@ -58,7 +56,6 @@ func TestBlob_ToJson(t *testing.T) {
 		expected    any
 		opts        []int
 		expectedErr error
-		setup       func(t *testing.T) (*Blob, *testutil.MockBinaryParser)
 	}{
 		{
 			name:        "Valid Blob",
@@ -66,44 +63,27 @@ func TestBlob_ToJson(t *testing.T) {
 			expected:    "000102030405060708090A0B0C0D0E0F",
 			opts:        []int{16},
 			expectedErr: nil,
-			setup: func(t *testing.T) (*Blob, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(16).Return([]byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f}, nil)
-				return &Blob{}, mock
-			},
 		},
 		{
-			name:        "ReadBytes error",
-			input:       []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f},
+			name:        "ReadBytes error - truncated data",
+			input:       []byte{0x00, 0x01},
 			expected:    nil,
 			opts:        []int{16},
-			expectedErr: errors.New("errReadBytes"),
-			setup: func(t *testing.T) (*Blob, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(16).Return([]byte{}, errors.New("errReadBytes"))
-				return &Blob{}, mock
-			},
+			expectedErr: serdes.ErrParserOutOfBound,
 		},
 		{
 			name:        "No length prefix",
-			input:       []byte{0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f},
+			input:       []byte{0x00, 0x01, 0x02, 0x03},
 			expected:    nil,
 			opts:        nil,
 			expectedErr: ErrNoLengthPrefix,
-			setup: func(t *testing.T) (*Blob, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				return &Blob{}, mock
-			},
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			blob, parser := tc.setup(t)
-			actual, err := blob.ToJSON(parser, tc.opts...)
+			blob := &Blob{}
+			actual, err := blob.ToJSON(testParser(tc.input), tc.opts...)
 			if err != nil && err.Error() != tc.expectedErr.Error() {
 				t.Errorf("Expected error %v, got %v", tc.expectedErr, err)
 			}

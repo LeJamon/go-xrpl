@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/offer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,16 +96,9 @@ func TestManualClock(t *testing.T) {
 	assert.Equal(t, newTime, clock.Now())
 }
 
-func TestManualClockAt(t *testing.T) {
-	startTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewManualClockAt(startTime)
-
-	assert.Equal(t, startTime, clock.Now())
-}
-
 func TestTxResult(t *testing.T) {
 	// Success
-	success := ResultSuccess()
+	success := TxResult{Code: "tesSUCCESS", Success: true}
 	assert.True(t, success.IsSuccess())
 	assert.False(t, success.IsClaimed())
 	assert.False(t, success.IsRetry())
@@ -112,23 +106,23 @@ func TestTxResult(t *testing.T) {
 	assert.False(t, success.IsFailed())
 
 	// Claimed (tec)
-	claimed := ResultWithCode("tecUNFUNDED_PAYMENT", false, "insufficient funds")
+	claimed := TxResult{Code: "tecUNFUNDED_PAYMENT"}
 	assert.False(t, claimed.IsSuccess())
 	assert.True(t, claimed.IsClaimed())
 	assert.False(t, claimed.IsRetry())
 
 	// Retry (ter)
-	retry := ResultWithCode("terPRE_SEQ", false, "pre-sequence")
+	retry := TxResult{Code: "terPRE_SEQ"}
 	assert.False(t, retry.IsSuccess())
 	assert.True(t, retry.IsRetry())
 
 	// Malformed (tem)
-	malformed := ResultWithCode("temMALFORMED", false, "malformed")
+	malformed := TxResult{Code: "temMALFORMED"}
 	assert.False(t, malformed.IsSuccess())
 	assert.True(t, malformed.IsMalformed())
 
 	// Failed (tef)
-	failed := ResultWithCode("tefPAST_SEQ", false, "past sequence")
+	failed := TxResult{Code: "tefPAST_SEQ"}
 	assert.False(t, failed.IsSuccess())
 	assert.True(t, failed.IsFailed())
 }
@@ -141,15 +135,6 @@ func TestResultCodeCategory(t *testing.T) {
 	assert.Equal(t, "malformed", ResultCodeCategory("temMALFORMED"))
 	assert.Equal(t, "unknown", ResultCodeCategory("xyz"))
 	assert.Equal(t, "unknown", ResultCodeCategory("ab"))
-}
-
-func TestFormatBalance(t *testing.T) {
-	formatted := FormatBalance(1_000_000)
-	assert.Contains(t, formatted, "1.000000 XRP")
-	assert.Contains(t, formatted, "1000000 drops")
-
-	formatted2 := FormatBalance(100_500_000)
-	assert.Contains(t, formatted2, "100.500000 XRP")
 }
 
 func TestIssuedCurrencyHelpers(t *testing.T) {
@@ -187,6 +172,40 @@ func TestXRPTxAmountFromXRP(t *testing.T) {
 	amount := XRPTxAmountFromXRP(100.0)
 	assert.True(t, amount.IsNative())
 	assert.Equal(t, int64(100000000), amount.Drops())
+}
+
+// TestRequireLinesCountsRippleStateOnly verifies that RequireLines counts
+// RippleState entries in the owner directory rather than approximating with
+// OwnerCount: an offer raises OwnerCount but must not count as a trust line,
+// and both sides of a line see it through their respective directories.
+func TestRequireLinesCountsRippleStateOnly(t *testing.T) {
+	env := NewTestEnv(t)
+	gw := NewAccount("gateway")
+	alice := NewAccount("alice")
+	env.Fund(gw)
+	env.Fund(alice)
+
+	RequireLines(t, env, alice, 0)
+	RequireOffers(t, env, alice, 0)
+
+	env.Trust(alice, USD(gw, 100))
+	RequireLines(t, env, alice, 1)
+	// The gateway's owner directory references the same RippleState entry.
+	RequireLines(t, env, gw, 1)
+
+	oc := offer.NewOfferCreate(alice.Address, XRPTxAmount(XRP(10)), USD(gw, 10))
+	oc.Fee = formatUint64(env.BaseFee())
+	seq := env.Seq(alice)
+	oc.Sequence = &seq
+	if alice.PublicKey != nil {
+		env.SignWith(oc, alice)
+	}
+	RequireTxSuccess(t, env.Submit(oc))
+
+	// Alice now owns a trust line and an offer: OwnerCount is 2 but the
+	// per-type counts must stay distinct.
+	RequireLines(t, env, alice, 1)
+	RequireOffers(t, env, alice, 1)
 }
 
 // TestNewTestEnv tests the basic TestEnv creation

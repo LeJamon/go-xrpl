@@ -213,10 +213,17 @@ func (l *AMMLiquidity) safeMaxOffer(poolIn, poolOut tx.Amount) (result *AMMOffer
 // generateFibSeqOffer generates an offer sized by Fibonacci sequence.
 // Reference: rippled AMMLiquidity.cpp generateFibSeqOffer()
 func (l *AMMLiquidity) generateFibSeqOffer(poolIn, poolOut tx.Amount) (tx.Amount, tx.Amount, bool) {
-	// Initial offer: InitialFibSeqPct * initialPoolIn
-	// Use toNumber to handle XRP*IOU multiplication, then convert back
+	// Initial offer: InitialFibSeqPct * initialPoolIn.
+	// rippled computes the product under the ambient (round-to-nearest) mode and
+	// then converts to the input asset with Number::upward. For an XRP input that
+	// rounds the resulting drops UP (ceil); for an IOU input the upward mode is a
+	// no-op on the already-normalized Number. fromNumber would instead truncate
+	// the XRP drops, which under-sizes the whole Fibonacci offer chain and skews
+	// the offer quality.
+	// Reference: rippled AMMLiquidity.cpp generateFibSeqOffer() lines 64-67
+	//   toAmount<TIn>(getIssue(balances.in), InitialFibSeqPct * initialBalances_.in, Number::upward)
 	nInitPoolIn := toNumber(l.initialPoolIn)
-	curIn := fromNumber(nInitPoolIn.Mul(ammInitialFibSeqPct, true), l.initialPoolIn) // round up
+	curIn := fromNumberRoundUp(nInitPoolIn.Mul(ammInitialFibSeqPct, false), l.initialPoolIn)
 	curOut := SwapAssetIn(l.initialPoolIn, l.initialPoolOut, curIn, l.tradingFee, l.fixAMMv1_1)
 
 	if l.ammContext.CurIters() == 0 {
@@ -331,7 +338,7 @@ func isTrustLineFrozenForAMM(view *PaymentSandbox, ammAccountID, issuerID [20]by
 	// The issuer's freeze flag is on their side of the trust line.
 	// Reference: rippled View.cpp isFrozen():
 	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, ammAccountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, ammAccountID) > 0
 	if issuerIsHigh {
 		return (trustLine.Flags & state.LsfHighFreeze) != 0
 	}

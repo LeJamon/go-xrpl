@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
 
 // signCredentials holds the signing credential parameters common to both
@@ -139,8 +141,8 @@ func parsePositiveIntParam(raw json.RawMessage, fieldName string, strictPositive
 
 // signResult holds the output of the signing operation.
 type signResult struct {
-	TxMap  map[string]interface{} // The transaction JSON map with SigningPubKey, TxnSignature, and hash
-	TxBlob string                 // The hex-encoded signed transaction blob
+	TxMap  map[string]any // The transaction JSON map with SigningPubKey, TxnSignature, and hash
+	TxBlob string         // The hex-encoded signed transaction blob
 }
 
 // signTransactionJSON takes a raw tx_json and signing credentials, derives the
@@ -148,10 +150,11 @@ type signResult struct {
 // and returns the signed tx map + blob. This is the shared logic used by both
 // the "sign" and "submit" RPC methods.
 //
-// The feeOpts parameter controls auto-fee behavior: if Fee is not present in
-// tx_json and auto-fill is active, the network fee is computed and checked
-// against the limit baseFee * feeOpts.Mult / feeOpts.Div.
-func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, apiVersion int, feeOpts feeOptions) (*signResult, *types.RpcError) {
+// rawParams carries the caller's request so fee_mult_max / fee_div_max are
+// read only when Fee is actually autofilled — rippled's checkFee returns
+// before inspecting them when Fee is present or offline. unlimited mirrors
+// rippled's isUnlimited(role) load-scaling carve-out.
+func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, types.RpcErrorInternal("Ledger service not available")
@@ -177,13 +180,18 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	}
 
 	// Parse the transaction JSON
-	var txMap map[string]interface{}
+	var txMap map[string]any
 	if err := json.Unmarshal(txJSON, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
-	// Verify the account matches the signing key
+	// A supplied Account must be a parseable address before anything else
+	// (rippled checkTxJsonFields → rpcSRC_ACT_MALFORMED), then match the
+	// signing key.
 	if txAccount, ok := txMap["Account"].(string); ok {
+		if !types.IsValidClassicAddress(txAccount) {
+			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+		}
 		if txAccount != address {
 			return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
 		}
@@ -191,38 +199,31 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		txMap["Account"] = address
 	}
 
-	// Fill in missing fields if not offline
+	// Fill in missing fields if not offline. Order matches rippled's
+	// transactionPreProcessImpl (TransactionSign.cpp:454-505): source
+	// account existence, then Sequence, NetworkID, and Fee.
 	if !offline {
-		// Auto-fill Fee if not present, with fee_mult_max/fee_div_max limit check.
-		// This matches rippled's checkFee() in TransactionSign.cpp.
-		if _, ok := txMap["Fee"]; !ok {
-			baseFee, _, _ := services.Ledger.GetCurrentFees()
-
-			// In a full implementation, networkFee would incorporate load-based
-			// fee escalation. For now, networkFee == baseFee.
-			networkFee := baseFee
-
-			// Compute the fee limit: baseFee * mult / div
-			// This matches rippled's mulDiv(feeDefault, mult, div).
-			limit := baseFee * uint64(feeOpts.Mult) / uint64(feeOpts.Div)
-
-			if networkFee > limit {
-				return nil, types.RpcErrorHighFee(
-					fmt.Sprintf("Fee of %d exceeds the requested tx limit of %d",
-						networkFee, limit))
+		// The source account must exist in the current ledger, whether or
+		// not Sequence is supplied (rpcSRC_ACT_NOT_FOUND).
+		if _, err := services.Ledger.GetAccountInfo(ctx, address, "current"); err != nil {
+			if errors.Is(err, svcerr.ErrAccountNotFound) {
+				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			}
-
-			txMap["Fee"] = formatUint64AsString(networkFee)
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to read source account: %v", err))
 		}
 
+		// Auto-fill Sequence from the open ledger / TxQ; a present
+		// TicketSequence supplies the sequence instead (Sequence = 0).
 		if _, ok := txMap["Sequence"]; !ok {
-			// TODO: When ledger lookup is available, auto-fill from account state.
-			// For now, attempt to get account info.
-			info, err := services.Ledger.GetAccountInfo(ctx, address, "current")
+			_, hasTicket := txMap["TicketSequence"]
+			seq, err := services.Ledger.GetAutofillSequence(address, hasTicket)
 			if err != nil {
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account sequence: %v", err))
+				if errors.Is(err, svcerr.ErrAccountNotFound) {
+					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+				}
+				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", err))
 			}
-			txMap["Sequence"] = info.Sequence
+			txMap["Sequence"] = seq
 		}
 
 		// Do NOT auto-fill LastLedgerSequence. Rippled's
@@ -242,6 +243,39 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 				txMap["NetworkID"] = serverInfo.NetworkID
 			}
 		}
+
+		// Auto-fill Fee if not present: load-scaled, escalation-aware
+		// network fee with a feeDefault * fee_mult_max / fee_div_max
+		// ceiling. Matches rippled checkFee() → getCurrentNetworkFee().
+		if _, ok := txMap["Fee"]; !ok {
+			feeOpts, rpcErr := parseFeeOptions(rawParams)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			probe, mErr := json.Marshal(txMap)
+			if mErr != nil {
+				return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
+			}
+			fee, feeErr := services.Ledger.GetAutofillFee(probe, unlimited, feeOpts.Mult, feeOpts.Div)
+			if feeErr != nil {
+				var hfe *svcerr.HighFeeError
+				if errors.As(feeErr, &hfe) {
+					return nil, types.RpcErrorHighFee(hfe.Error())
+				}
+				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
+			}
+			txMap["Fee"] = formatUint64AsString(fee)
+		}
+	} else {
+		// Offline callers must supply Sequence and Fee themselves
+		// (rippled TransactionSign.cpp:451-452 and checkFee with
+		// doAutoFill == false).
+		if _, ok := txMap["Sequence"]; !ok {
+			return nil, types.RpcErrorMissingField("tx_json.Sequence")
+		}
+		if _, ok := txMap["Fee"]; !ok {
+			return nil, types.RpcErrorMissingField("tx_json.Fee")
+		}
 	}
 
 	txMap["SigningPubKey"] = publicKey
@@ -259,7 +293,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	txCommon := transaction.GetCommon()
 	txCommon.SigningPubKey = publicKey
 
-	signature, err := tx.SignTransaction(transaction, privateKey)
+	signature, err := sign.SignTransaction(transaction, privateKey)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
@@ -271,8 +305,8 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 
-	txHash, _ := protocol.ComputeTxHashString(txBlob)
-	txMap["hash"] = txHash.Hex()
+	txHash := CalculateTxHash(txBlob)
+	txMap["hash"] = txHash
 
 	return &signResult{
 		TxMap:  txMap,

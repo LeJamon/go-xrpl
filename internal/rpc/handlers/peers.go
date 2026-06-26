@@ -15,7 +15,7 @@ import (
 // an object — empty when no [cluster_nodes] are configured.
 type PeersMethod struct{ AdminHandler }
 
-func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var (
 		peers   []map[string]any
 		cluster map[string]any
@@ -42,7 +42,7 @@ func (m *PeersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 // (if any) under "previous". Empty result when no overlay is wired.
 type PeerReservationsAddMethod struct{ AdminHandler }
 
-func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, rpcErr := objectParams(params)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -62,7 +62,7 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 		return nil, rpcErr
 	}
 
-	result := map[string]interface{}{}
+	result := map[string]any{}
 	if ctx.Services != nil && ctx.Services.PeerReservationAdd != nil {
 		prevDesc, replaced, err := ctx.Services.PeerReservationAdd(key, desc)
 		if err != nil {
@@ -80,7 +80,7 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 // NodePublic key, returning the erased reservation (if any) under "previous".
 type PeerReservationsDelMethod struct{ AdminHandler }
 
-func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, rpcErr := objectParams(params)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -96,7 +96,7 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 		return nil, rpcErr
 	}
 
-	result := map[string]interface{}{}
+	result := map[string]any{}
 	if ctx.Services != nil && ctx.Services.PeerReservationDel != nil {
 		prevDesc, existed, err := ctx.Services.PeerReservationDel(key)
 		if err != nil {
@@ -114,8 +114,8 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 // "reservations". Empty when no overlay is wired.
 type PeerReservationsListMethod struct{ AdminHandler }
 
-func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	reservations := make([]interface{}, 0)
+func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	reservations := make([]any, 0)
 	if ctx.Services != nil && ctx.Services.PeerReservationList != nil {
 		entries := ctx.Services.PeerReservationList()
 		// Rippled's PeerReservationTable::list() sorts ascending by nodeId
@@ -127,7 +127,7 @@ func (m *PeerReservationsListMethod) Handle(ctx *types.RpcContext, params json.R
 			reservations = append(reservations, reservationJSON(r.NodePublic, r.Description))
 		}
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"reservations": reservations,
 	}, nil
 }
@@ -201,8 +201,8 @@ func validPublicKeyType(raw []byte) bool {
 
 // reservationJSON renders a reservation the way rippled's PeerReservation::toJson
 // does: a "node" key plus an optional "description".
-func reservationJSON(nodePublic, description string) map[string]interface{} {
-	entry := map[string]interface{}{"node": nodePublic}
+func reservationJSON(nodePublic, description string) map[string]any {
+	entry := map[string]any{"node": nodePublic}
 	if description != "" {
 		entry["description"] = description
 	}

@@ -177,9 +177,7 @@ func TestReplayer_HandleResponse_RoutesByHash(t *testing.T) {
 	assert.Equal(t, StateComplete, rd.State())
 
 	// The untouched acquisition must still be in StateWantBase.
-	rep.mu.Lock()
-	otherRD := rep.inFlight[otherHash]
-	rep.mu.Unlock()
+	otherRD, _ := rep.delta.get(otherHash)
 	require.NotNil(t, otherRD)
 	assert.Equal(t, StateWantBase, otherRD.State())
 
@@ -306,7 +304,7 @@ func TestReplayer_Concurrent_Acquires(t *testing.T) {
 		other     int64
 	)
 	wg.Add(total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		go func(i int) {
 			defer wg.Done()
 			_, err := rep.Acquire(hashN(i), uint64(i), parent)

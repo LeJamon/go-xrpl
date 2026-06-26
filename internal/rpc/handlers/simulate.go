@@ -21,7 +21,7 @@ import (
 // Reference: rippled Simulate.cpp
 type SimulateMethod struct{}
 
-func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var rawParams map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawParams); err != nil {
@@ -62,7 +62,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	var txJsonMap map[string]interface{}
+	var txJsonMap map[string]any
 
 	if hasTxBlobRaw {
 		var txBlobStr string
@@ -78,7 +78,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 		txJsonMap = decoded
 	} else {
-		var txObj map[string]interface{}
+		var txObj map[string]any
 		if err := json.Unmarshal(rawParams["tx_json"], &txObj); err != nil {
 			return nil, types.RpcErrorExpectedField("tx_json", "object")
 		}
@@ -108,7 +108,10 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if marshalErr != nil {
 			return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
 		}
-		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.IsAdmin)
+		// rippled's simulate autofill uses the default fee_mult_max /
+		// fee_div_max (getCurrentNetworkFee default arguments).
+		feeOpts := defaultFeeOptions()
+		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.Unlimited, feeOpts.Mult, feeOpts.Div)
 		if feeErr != nil {
 			var hfe *svcerr.HighFeeError
 			if errors.As(feeErr, &hfe) {
@@ -241,7 +244,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		engineMessage = "The simulated transaction would have been applied."
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": engineMessage,
@@ -289,17 +292,17 @@ func (m *SimulateMethod) RequiredCondition() types.Condition {
 // signer TxnSignature. The inline ordering is observable: a signed
 // TxnSignature on signers[0] returns rpcTX_SIGNED even when signers[2] is
 // structurally malformed.
-func processSigners(txJsonMap map[string]interface{}) *types.RpcError {
+func processSigners(txJsonMap map[string]any) *types.RpcError {
 	signersRaw, ok := txJsonMap["Signers"]
 	if !ok {
 		return nil
 	}
-	signers, ok := signersRaw.([]interface{})
+	signers, ok := signersRaw.([]any)
 	if !ok {
 		return types.RpcErrorInvalidField("tx.Signers")
 	}
 	for i, entry := range signers {
-		entryObj, ok := entry.(map[string]interface{})
+		entryObj, ok := entry.(map[string]any)
 		if !ok {
 			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
@@ -307,7 +310,7 @@ func processSigners(txJsonMap map[string]interface{}) *types.RpcError {
 		if !ok {
 			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
-		signerObj, ok := signerInner.(map[string]interface{})
+		signerObj, ok := signerInner.(map[string]any)
 		if !ok {
 			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
@@ -328,7 +331,7 @@ func processSigners(txJsonMap map[string]interface{}) *types.RpcError {
 // map[string]interface{}, but downstream consumers expect an integer
 // type). Values outside [0, math.MaxUint32] are rejected to mirror
 // rippled's STParsedJSONObject behaviour on UInt32 fields.
-func normalizeSequenceFields(txJsonMap map[string]interface{}) *types.RpcError {
+func normalizeSequenceFields(txJsonMap map[string]any) *types.RpcError {
 	for _, k := range [...]string{"Sequence", "TicketSequence"} {
 		v, ok := txJsonMap[k]
 		if !ok {

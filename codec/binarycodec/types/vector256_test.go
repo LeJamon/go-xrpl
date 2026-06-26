@@ -1,15 +1,11 @@
 package types
 
 import (
-	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,22 +49,27 @@ func TestVector256_ToJson(t *testing.T) {
 
 	testcases := []struct {
 		name     string
-		malleate func(t *testing.T) (interfaces.BinaryParser, []int)
+		malleate func(t *testing.T) (*serdes.BinaryParser, []int)
 		output   any
 		err      error
 	}{
 		{
 			name: "fail - binary parser read bytes",
-			malleate: func(t *testing.T) (interfaces.BinaryParser, []int) {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().ReadBytes(100).AnyTimes().Return(nil, errors.New("read bytes error"))
-				return parser, []int{100}
+			malleate: func(t *testing.T) (*serdes.BinaryParser, []int) {
+				return serdes.NewBinaryParser([]byte{0x73, 0x73}, defs), []int{100}
 			},
-			err: errors.New("read bytes error"),
+			err: serdes.ErrParserOutOfBound,
+		},
+		{
+			name: "fail - no length option",
+			malleate: func(t *testing.T) (*serdes.BinaryParser, []int) {
+				return serdes.NewBinaryParser([]byte{0x73, 0x73}, defs), nil
+			},
+			err: ErrNoLengthPrefix,
 		},
 		{
 			name: "pass - valid vector256",
-			malleate: func(t *testing.T) (interfaces.BinaryParser, []int) {
+			malleate: func(t *testing.T) (*serdes.BinaryParser, []int) {
 				return serdes.NewBinaryParser([]byte{0x73, 0x73, 0x4B, 0x61, 0x1D, 0xDA, 0x23, 0xD3, 0xF5, 0xF6, 0x2E, 0x20, 0xA1, 0x73, 0xB7, 0x8A, 0xB8, 0x40, 0x6A, 0xC5, 0x01, 0x50, 0x94, 0xDA, 0x53, 0xF5, 0x3D, 0x39, 0xB9, 0xED, 0xB0, 0x6C, 0x73, 0x73, 0x4B}, defs), []int{32}
 			},
 			output: []string{"73734B611DDA23D3F5F62E20A173B78AB8406AC5015094DA53F53D39B9EDB06C"},

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	oracletest "github.com/LeJamon/go-xrpl/internal/testing/oracle"
@@ -36,6 +37,36 @@ func defaultLUT(env *jtx.TestEnv) uint32 {
 
 // baseFee returns the base fee used in the test env.
 const baseFee = uint64(10)
+
+// oracleQuoteAssets reads the oracle SLE and returns the QuoteAsset of each
+// PriceData entry in on-ledger array order.
+func oracleQuoteAssets(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) []string {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Oracle(owner.ID, docID))
+	require.NoError(t, err)
+	oracle, err := state.ParseOracle(data)
+	require.NoError(t, err)
+	assets := make([]string, len(oracle.PriceDataSeries))
+	for i, pd := range oracle.PriceDataSeries {
+		assets[i] = pd.QuoteAsset
+	}
+	return assets
+}
+
+// oraclePairs reads the oracle SLE and returns each PriceData entry as a
+// "BASE/QUOTE" string in on-ledger array order.
+func oraclePairs(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) []string {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Oracle(owner.ID, docID))
+	require.NoError(t, err)
+	oracle, err := state.ParseOracle(data)
+	require.NoError(t, err)
+	pairs := make([]string, len(oracle.PriceDataSeries))
+	for i, pd := range oracle.PriceDataSeries {
+		pairs[i] = pd.BaseAsset + "/" + pd.QuoteAsset
+	}
+	return pairs
+}
 
 // oracleExists checks if an oracle ledger entry exists.
 func oracleExists(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) bool {
@@ -553,7 +584,7 @@ func TestInvalidSet(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 
 		// Close several times to advance time (rippled closes with 400s)
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			env.Close() // each close = +10s, total 400s
 		}
 
@@ -585,7 +616,7 @@ func TestInvalidSet(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			env.Close()
 		}
 
@@ -615,7 +646,7 @@ func TestInvalidSet(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			env.Close()
 		}
 
@@ -749,10 +780,29 @@ func TestInvalidSet(t *testing.T) {
 		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
 			ProviderHex(32).
 			AssetClassHex(8).
-			AddPrice("USD", "BTC", 740, 9). // scale 9 > max 8
+			AddPrice("USD", "BTC", 740, 21). // scale 21 > max 20
 			Fee(baseFee).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scale == maxPriceScale (20) is accepted; mainnet applies Scale=10
+	// -------------------------------------------------------------------------
+	t.Run("ScaleAtMax", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			ProviderHex(32).
+			AssetClassHex(8).
+			AddPrice("USD", "BTC", 740, 20).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
 	})
 
 	// -------------------------------------------------------------------------
@@ -1206,6 +1256,86 @@ func TestUpdate(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
+	// Provider/AssetClass that differ only in hex case must still match the
+	// immutable stored values on update. The tx-decode path yields upper-case
+	// hex while the stored SLE re-parses to lower-case hex; the bytes are
+	// identical, so the immutability check must not reject. Regression for #1011.
+	// -------------------------------------------------------------------------
+	t.Run("ProviderAssetClassHexCaseInsensitive", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		// Create with upper-case hex Provider/AssetClass.
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			Provider("70726F7669646572").   // "provider"
+			AssetClass("63757272656E6379"). // "currency"
+			AddPrice("XRP", "USD", 740, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+		require.True(t, oracleExists(t, env, owner, 1))
+
+		// Update re-supplies the same Provider/AssetClass in the original
+		// upper-case hex; the stored values are lower-case but byte-identical,
+		// so the update must succeed.
+		lut2 := lut + 1
+		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
+			Provider("70726F7669646572").
+			AssetClass("63757272656E6379").
+			AddPrice("XRP", "USD", 741, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+	})
+
+	// -------------------------------------------------------------------------
+	// A token pair using a non-standard 160-bit hex currency must match its
+	// stored counterpart on update. The tx-decode path renders such a currency
+	// as upper-case hex while the SLE parse renders the same bytes; the pair key
+	// must compare equal across both paths, so an update of an existing pair
+	// updates it in place rather than appending a duplicate. Regression for the
+	// currency-side of #1011 (rippled keys pairs on the raw Currency value).
+	// -------------------------------------------------------------------------
+	t.Run("HexCurrencyPairUpdateInPlace", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		const hexCurrency = "0158415500000000C1F76FF6ECB0BAC600000000"
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			Provider("70726F7669646572").
+			AssetClass("63757272656E6379").
+			AddPrice(hexCurrency, "USD", 740, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		lut2 := lut + 1
+		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
+			AddPrice(hexCurrency, "USD", 741, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		// The existing pair must be updated in place — exactly one entry, with
+		// the new price — not duplicated under a case-mismatched key.
+		data, err := env.LedgerEntry(keylet.Oracle(owner.ID, 1))
+		require.NoError(t, err)
+		oracle, err := state.ParseOracle(data)
+		require.NoError(t, err)
+		require.Len(t, oracle.PriceDataSeries, 1)
+		require.Equal(t, "USD", oracle.PriceDataSeries[0].QuoteAsset)
+		require.True(t, oracle.PriceDataSeries[0].HasPrice)
+		require.Equal(t, uint64(741), oracle.PriceDataSeries[0].AssetPrice)
+	})
+
+	// -------------------------------------------------------------------------
 	// Add new pairs, non-included pair resets — rippled lines 619-625
 	// -------------------------------------------------------------------------
 	t.Run("AddNewPairs", func(t *testing.T) {
@@ -1408,8 +1538,12 @@ func TestUpdate(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
 
-		// Update with same pairs — without fix, pair order should change
-		// (pairs get sorted by currency during map iteration)
+		// Without the fix, create stores the series in transaction order.
+		before := oracleQuoteAssets(t, env, owner, 1)
+		require.Equal(t, []string{"USD", "EUR"}, before)
+
+		// Update with same pairs — without fix, pair order changes because
+		// the update path always rebuilds the series sorted by token pair.
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
@@ -1418,8 +1552,10 @@ func TestUpdate(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// TODO: Verify pair ordering changed (requires SLE parsing)
-		// Without fix, afterQuoteAsset[0] != beforeQuoteAsset[0]
+		after := oracleQuoteAssets(t, env, owner, 1)
+		require.NotEqual(t, before[0], after[0])
+		require.NotEqual(t, before[1], after[1])
+		require.Equal(t, []string{"EUR", "USD"}, after)
 	})
 
 	t.Run("FixPriceOracleOrder_Enabled", func(t *testing.T) {
@@ -1441,7 +1577,11 @@ func TestUpdate(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
 
-		// Update with same pairs — with fix, pair order should be preserved
+		// With the fix, create already stores the series sorted by token
+		// pair, so the always-sorted update preserves the order.
+		before := oracleQuoteAssets(t, env, owner, 1)
+		require.Equal(t, []string{"EUR", "USD"}, before)
+
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
@@ -1450,8 +1590,62 @@ func TestUpdate(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// TODO: Verify pair ordering preserved (requires SLE parsing)
-		// With fix, afterQuoteAsset[0] == beforeQuoteAsset[0]
+		after := oracleQuoteAssets(t, env, owner, 1)
+		require.Equal(t, before, after)
+	})
+
+	// The always-sorted update path must order by canonical Currency bytes, where
+	// XRP is the all-zero currency and sorts before any token. Ordering by the
+	// asset strings instead places XRP-based pairs ("XRP" = 0x585250…) last.
+	t.Run("UpdateOrdersByCurrencyXRPFirst", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			ProviderHex(32).
+			AssetClassHex(8).
+			AddPrice("USD", "EUR", 1, 0).
+			AddPrice("USD", "GBP", 1, 0).
+			AddPrice("XRP", "USD", 1, 0).
+			AddPrice("XRP", "EUR", 1, 0).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		lut2 := lut + 1
+		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
+			AddPrice("XRP", "USD", 2, 0).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		require.Equal(t, []string{
+			"XRP/EUR", "XRP/USD", "USD/EUR", "USD/GBP",
+		}, oraclePairs(t, env, owner, 1))
+	})
+
+	// With fixPriceOracleOrder enabled, the create path sorts the same way.
+	t.Run("CreateOrdersByCurrencyXRPFirst", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("fixPriceOracleOrder")
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			ProviderHex(32).
+			AssetClassHex(8).
+			AddPrice("USD", "EUR", 1, 0).
+			AddPrice("XRP", "USD", 1, 0).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		require.Equal(t, []string{"XRP/USD", "USD/EUR"}, oraclePairs(t, env, owner, 1))
 	})
 }
 
@@ -1470,6 +1664,7 @@ func TestAmendment(t *testing.T) {
 		env.Close()
 
 		env.DisableFeature("PriceOracle")
+		env.Close()
 
 		lut := defaultLUT(env)
 		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
@@ -1491,6 +1686,7 @@ func TestAmendment(t *testing.T) {
 		env.Close()
 
 		env.DisableFeature("PriceOracle")
+		env.Close()
 
 		result := env.Submit(oracletest.OracleDelete(owner, 1).
 			Fee(baseFee).

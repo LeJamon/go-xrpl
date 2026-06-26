@@ -3,7 +3,6 @@ package types
 
 import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // SerializedType is an interface representing any type that can be serialized
@@ -13,7 +12,7 @@ import (
 // the serialized byte data back to a JSON value.
 type SerializedType interface {
 	FromJSON(json any) ([]byte, error)
-	ToJSON(parser interfaces.BinaryParser, opts ...int) (any, error)
+	ToJSON(parser *serdes.BinaryParser, opts ...int) (any, error)
 }
 
 // GetSerializedType is a function that returns the correct SerializedType instance

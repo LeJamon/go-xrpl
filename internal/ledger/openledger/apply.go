@@ -7,6 +7,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
@@ -127,7 +129,7 @@ type ApplyConfig struct {
 //
 // Shared by ApplyTxs's per-pass inner loop and OpenLedger.Submit so the
 // success/tec/retry classification lives in exactly one place.
-func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode, logger xrpllog.Logger) Result {
+func applyAndClassify(view *ledger.Ledger, bp *txengine.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode, logger xrpllog.Logger) Result {
 	result, applyErr := bp.ApplyTransaction(transaction, blob)
 	if applyErr != nil {
 		// Surface the error rather than swallowing it. A non-nil applyErr
@@ -177,28 +179,32 @@ func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx
 // committing).
 func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte, retry bool, cfg ApplyConfig) Result {
 	engineConfig := tx.EngineConfig{
-		BaseFee:                   cfg.BaseFee,
-		ReserveBase:               cfg.ReserveBase,
-		ReserveIncrement:          cfg.ReserveIncrement,
-		LedgerSequence:            cfg.LedgerSequence,
-		NetworkID:                 cfg.NetworkID,
-		ParentCloseTime:           cfg.ParentCloseTime,
+		BaseFee:          cfg.BaseFee,
+		ReserveBase:      cfg.ReserveBase,
+		ReserveIncrement: cfg.ReserveIncrement,
+		LedgerSequence:   cfg.LedgerSequence,
+		NetworkID:        cfg.NetworkID,
+		ParentCloseTime:  cfg.ParentCloseTime,
+		// Real parent hash drives pseudo-account derivation (AMMCreate);
+		// the zero value forks the derived account ID from the network.
+		ParentHash:                view.ParentHash(),
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
 		FeeTrack:                  cfg.FeeTrack,
+		ViewOpen:                  cfg.Mode == OpenLedgerMode,
 	}
 	if retry {
 		engineConfig.ApplyFlags |= tx.TapRETRY
 	}
-	engine := tx.NewEngine(view, engineConfig)
+	engine := txengine.NewEngine(view, engineConfig)
 	// Seed the engine's txCount from the view so the TransactionIndex assigned
 	// to this tx reflects all txs already in the open view — mirrors rippled's
 	// OpenView::txCount() = baseTxCount_ + txs_.size(). Without this seed, a
 	// non-TxQ Submit path hitting applyOneSingle twice in a row on the same
 	// view would assign TransactionIndex=0 to both txs.
 	engine.SetBaseTxCount(view.TxCount())
-	bp := tx.NewBlockProcessor(engine)
+	bp := txengine.NewBlockProcessor(engine)
 	logger := cfg.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()
@@ -233,23 +239,27 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 	// the previous pass) or has already been settled (Success/Failure).
 	retrySet := make([]int, 0, len(txs))
 
-	buildEngine := func(certainRetry, skipSig bool) *tx.BlockProcessor {
+	buildEngine := func(certainRetry, skipSig bool) *txengine.BlockProcessor {
 		engineConfig := tx.EngineConfig{
-			BaseFee:                   cfg.BaseFee,
-			ReserveBase:               cfg.ReserveBase,
-			ReserveIncrement:          cfg.ReserveIncrement,
-			LedgerSequence:            cfg.LedgerSequence,
-			NetworkID:                 cfg.NetworkID,
-			ParentCloseTime:           cfg.ParentCloseTime,
+			BaseFee:          cfg.BaseFee,
+			ReserveBase:      cfg.ReserveBase,
+			ReserveIncrement: cfg.ReserveIncrement,
+			LedgerSequence:   cfg.LedgerSequence,
+			NetworkID:        cfg.NetworkID,
+			ParentCloseTime:  cfg.ParentCloseTime,
+			// Real parent hash drives pseudo-account derivation (AMMCreate);
+			// the zero value forks the derived account ID from the network.
+			ParentHash:                view.ParentHash(),
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
 			FeeTrack:                  cfg.FeeTrack,
+			ViewOpen:                  cfg.Mode == OpenLedgerMode,
 		}
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY
 		}
-		engine := tx.NewEngine(view, engineConfig)
+		engine := txengine.NewEngine(view, engineConfig)
 		// Issue #470: the per-pass engine's txCount starts at 0. Without
 		// re-seeding from the view's current tx count, txs committed on a
 		// retry pass would re-use TxIndex values already assigned to txs
@@ -260,7 +270,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 		// = baseTxCount_ + txs_.size() where baseTxCount_ accumulates
 		// across the build's apply passes.
 		engine.SetBaseTxCount(view.TxCount())
-		return tx.NewBlockProcessor(engine)
+		return txengine.NewBlockProcessor(engine)
 	}
 
 	// Initial single pass over txs (OpenLedger.h:220-238). retry=true on

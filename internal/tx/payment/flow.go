@@ -1,12 +1,37 @@
 package payment
 
 import (
+	"maps"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// flowOpts carries the offer-crossing FillOrKill context that only affects the
+// final result-code decision (rippled StrandFlow.h:827-893). Payments and
+// non-FillOrKill crossings leave these at their zero values.
+type flowOpts struct {
+	// fillOrKillEnabled mirrors rippled's fixFillOrKill amendment state.
+	fillOrKillEnabled bool
+	// offerCrossingSell is true when offerCrossing == OfferCrossing::sell.
+	offerCrossingSell bool
+}
+
+// FlowOption configures the FillOrKill termination behavior of Flow.
+type FlowOption func(*flowOpts)
+
+// WithFillOrKill threads the FillOrKill sell/amendment context into Flow so the
+// under-delivery termination matches rippled's flowCross. It is only meaningful
+// when Flow is called with partialPayment=false (a FillOrKill offer crossing).
+func WithFillOrKill(fillOrKillEnabled, offerCrossingSell bool) FlowOption {
+	return func(o *flowOpts) {
+		o.fillOrKillEnabled = fillOrKillEnabled
+		o.offerCrossingSell = offerCrossingSell
+	}
+}
 
 // Flow executes payment across multiple strands, selecting the best quality paths.
 //
@@ -31,6 +56,7 @@ import (
 //   - limitQuality: Optional quality limit (nil means no limit)
 //   - sendMax: Optional maximum input amount
 //   - flowSortStrands: Whether the FlowSortStrands amendment is enabled
+//   - offerCrossing: Whether this is an offer-crossing flow (vs a payment)
 //
 // Returns: FlowResult with actual amounts and state changes
 func Flow(
@@ -41,24 +67,41 @@ func Flow(
 	limitQuality *Quality,
 	sendMax *EitherAmount,
 	ammCtx *AMMContext,
-	flowSortStrands ...bool,
+	flowSortStrands bool,
+	offerCrossing bool,
+	opts ...FlowOption,
 ) FlowResult {
-	sortStrands := false
-	if len(flowSortStrands) > 0 {
-		sortStrands = flowSortStrands[0]
+	var fo flowOpts
+	for _, opt := range opts {
+		opt(&fo)
 	}
+	sortStrands := flowSortStrands
 	if len(strands) == 0 {
 		return FlowResult{
 			In:              ZeroXRPEitherAmount(),
 			Out:             ZeroXRPEitherAmount(),
 			Sandbox:         nil,
 			RemovableOffers: nil,
-			Result:          tx.TecPATH_DRY,
+			Result:          ter.TecPATH_DRY,
 		}
 	}
 
 	// Create the main sandbox that accumulates all changes
 	accumSandbox := NewChildSandbox(baseView)
+
+	// afBaseView is the "all funds" baseline used to tell a FOUND removal (an
+	// offer already unfunded/tiny before this flow ran) from a BECAME removal
+	// (an offer the flow's own crossing drained). It is a child of the pristine
+	// pre-flow baseView, taken ONCE and never mutated by the per-pass applies
+	// that accumulate into accumSandbox. rippled re-derives its cancelView_ from
+	// the per-pass accumulator, which makes a multi-pass crossing misread an
+	// offer this tx drained in an earlier pass as "found-unfunded": both the
+	// working view and the (accumulator-rooted) cancel view see the drained
+	// balance, so original_funds == ownerFunds and the became-removal is wrongly
+	// promoted to permToRemove and survives a FillOrKill kill. Anchoring the
+	// baseline to the pre-flow state keeps the found-vs-became test honest across
+	// passes, so a became-unfunded offer stays a conditional, rolled-back removal.
+	afBaseView := NewChildSandbox(baseView)
 	allOfrsToRm := make(map[[32]byte]bool)
 
 	// Initialize result accumulators
@@ -105,12 +148,45 @@ func Flow(
 	var savedIns []EitherAmount
 	var savedOuts []EitherAmount
 
-	for curTry := uint32(0); curTry < maxTries; curTry++ {
-		if remainingOut.IsZero() {
+	// curTry mirrors rippled's loop counter. rippled increments it at the top of
+	// each pass and bails with telFAILED_PROCESSING once it reaches maxTries while
+	// the strand still owes output — the engine couldn't converge in time.
+	// Reference: rippled StrandFlow.h lines 643-650.
+	var curTry uint32
+	// anyStrandApplied records whether any iteration committed a crossing (applied
+	// a best strand's sandbox). "Became unfunded"/"became tiny" removals are only
+	// real once some cross has actually drained an owner; before any cross commits,
+	// a strand that reads an offer unfunded did so only via its own discardable
+	// over-walk (e.g. a tfPassive taker whose sole strand — an autobridge leg — is
+	// rejected by limitQuality). rippled keeps such became-unfunded deletes in the
+	// per-strand sandbox and only the best strand's are committed (best->sb.apply),
+	// so gate the best strand's conditional removals on a committed crossing here.
+	// Perm removals (rippled permToRemove) are unaffected and always applied.
+	// Reference: rippled StrandFlow.h flow()/OfferStream::step.
+	var anyStrandApplied bool
+	for {
+		// Mirror rippled's while-guard: continue only while remainingOut > 0 and
+		// (no sendMax or remainingIn > 0). A non-positive remainingOut (zero OR
+		// negative) stops the loop — we must not treat a negative remainder as
+		// "more to deliver". Over-delivery (negative remainder) is surfaced by the
+		// final actualOut > outReq → tefEXCEPTION check.
+		// Reference: rippled StrandFlow.h line 643.
+		if remainingOut.IsZero() || remainingOut.IsNegative() {
 			break
 		}
 		if remainingIn != nil && (remainingIn.IsNegative() || remainingIn.IsZero()) {
 			break
+		}
+
+		curTry++
+		if curTry >= maxTries {
+			return FlowResult{
+				In:              ZeroXRPEitherAmount(),
+				Out:             ZeroXRPEitherAmount(),
+				Sandbox:         nil,
+				RemovableOffers: allOfrsToRm,
+				Result:          ter.TelFAILED_PROCESSING,
+			}
 		}
 		// activateNext: move next -> cur, optionally re-sorting by quality
 		// Reference: rippled ActiveStrands::activateNext()
@@ -169,7 +245,12 @@ func Flow(
 		}
 		adjustedRemOut := limitRemainingOut.Compare(remainingOut) != 0
 
-		// Collect offers to remove from ALL strands in this iteration
+		// iterOfrsToRm collects the PERM removals from every strand this iteration
+		// (rippled permToRemove: found-unfunded/tiny, expired, deep-frozen,
+		// self-crossed, unauthorized, out-of-domain) — deleted unconditionally even
+		// when a strand fails. The CONDITIONAL ("became unfunded"/"became tiny")
+		// removals are kept per strand on bestStrand and only the best (applied)
+		// strand's are folded in once a crossing commits — see the fold below.
 		iterOfrsToRm := make(map[[32]byte]bool)
 
 		type bestStrand struct {
@@ -177,6 +258,11 @@ func Flow(
 			out     EitherAmount
 			sandbox *PaymentSandbox
 			quality Quality
+			// condOfrsToRm is this strand's CONDITIONAL (became-unfunded/tiny)
+			// removal set. Only the best strand's sandbox is applied (rippled
+			// best->sb.apply), so only its conditional removals reach the ledger;
+			// non-best strands' became-unfunded reads live in discarded sandboxes.
+			condOfrsToRm map[[32]byte]bool
 		}
 		var best *bestStrand
 		var markInactiveOnUse int = -1
@@ -187,29 +273,47 @@ func Flow(
 				continue
 			}
 
-			// For offer crossing with quality limit (without FlowSortStrands),
-			// check strand quality upper bound
-			// Reference: rippled StrandFlow.h lines 688-692
-			if !sortStrands && limitQuality != nil {
-				strandQ := GetStrandQuality(*strand, accumSandbox)
-				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
-					continue
-				}
-			}
-
 			// Clear AMM liquidity used flag before each strand attempt.
 			// Reference: rippled StrandFlow.h line 687: ammContext.clear()
 			if ammCtx != nil {
 				ammCtx.Clear()
 			}
 
+			// During offer crossing with a quality limit, skip any strand whose
+			// quality upper bound (the best the strand could deliver — the book
+			// tip or AMM) is worse than the taker's limit. This is the gate that
+			// prevents the strand's forEachOffer/OfferStream from ever running on
+			// a book whose tip is beyond the limit, so a beyond-limit found-
+			// unfunded tip is only groomed away when the strand actually executes
+			// (its upper bound meets the limit). rippled applies this on EVERY
+			// offer-crossing strand regardless of FlowSortStrands; the
+			// activateNext sort-filter above only fires for >1 strand, so this is
+			// the catch-all for the single-strand case.
+			// Reference: rippled StrandFlow.h lines 688-692 (if (offerCrossing &&
+			// limitQuality) { qualityUpperBound < limitQuality -> continue }).
+			if offerCrossing && limitQuality != nil {
+				strandQ := GetStrandQuality(*strand, accumSandbox)
+				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
+					continue
+				}
+			}
+
 			// Execute this strand with the potentially limited output.
 			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
-			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
+			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut, afBaseView)
 
-			// Collect offers to remove from ALL strands (even failed ones)
-			for k, v := range result.OffsToRm {
-				iterOfrsToRm[k] = v
+			// Split the strand's removals: perm (rippled permToRemove, deleted even
+			// when the strand fails) into iterOfrsToRm; the remaining conditional
+			// (became unfunded/tiny) into a per-strand set carried on bestStrand,
+			// so only the applied strand's conditional removals reach the ledger.
+			strandPerm := make(map[[32]byte]bool)
+			strandPermRemovals(*strand, strandPerm)
+			maps.Copy(iterOfrsToRm, strandPerm)
+			strandCond := make(map[[32]byte]bool)
+			for k := range result.OffsToRm {
+				if !strandPerm[k] {
+					strandCond[k] = true
+				}
 			}
 
 			// Track total offers considered across ALL strands
@@ -239,10 +343,11 @@ func Flow(
 					next = append(next, strand)
 				}
 				best = &bestStrand{
-					in:      result.In,
-					out:     result.Out,
-					sandbox: result.Sandbox,
-					quality: q,
+					in:           result.In,
+					out:          result.Out,
+					sandbox:      result.Sandbox,
+					quality:      q,
+					condOfrsToRm: strandCond,
 				}
 				// Push remaining strands to next
 				for ri := strandIndex + 1; ri < len(cur); ri++ {
@@ -258,16 +363,25 @@ func Flow(
 			if best == nil || q.BetterThan(best.quality) ||
 				(q.Value == best.quality.Value && result.Out.Compare(best.out) > 0) {
 				if result.Inactive {
-					// Mark for removal if this ends up being best
-					markInactiveOnUse = len(next) - 1
+					// Mark for removal if this ends up being best. rippled
+					// records activeStrands.size()-1 here — the size of the
+					// strands being iterated this pass (cur), not the partly
+					// built next list. The comment in rippled notes this
+					// "should be nextSize, not size" and that the issue is
+					// fixed under featureFlowSortStrands; this branch only runs
+					// with FlowSortStrands disabled, so reproduce the historical
+					// behaviour exactly for mainnet-replay fidelity.
+					// Reference: rippled StrandFlow.h:753-758
+					markInactiveOnUse = len(cur) - 1
 				} else {
 					markInactiveOnUse = -1
 				}
 				best = &bestStrand{
-					in:      result.In,
-					out:     result.Out,
-					sandbox: result.Sandbox,
-					quality: q,
+					in:           result.In,
+					out:          result.Out,
+					sandbox:      result.Sandbox,
+					quality:      q,
+					condOfrsToRm: strandCond,
 				}
 			}
 		}
@@ -288,18 +402,14 @@ func Flow(
 			savedIns = append(savedIns, best.in)
 			savedOuts = append(savedOuts, best.out)
 
-			// Recalculate remaining from totals for precision
-			// Reference: rippled uses sum(savedOuts) and sum(savedIns)
+			// Recalculate remaining from totals for precision.
+			// rippled does NOT clamp a negative remainder; it lets the while-guard
+			// terminate the loop and surfaces over-delivery via the final
+			// actualOut > outReq → tefEXCEPTION check.
+			// Reference: rippled StrandFlow.h lines 783-785.
 			totalOut = sumAmounts(savedOuts)
 			totalIn = sumAmounts(savedIns)
 			remainingOut = outReq.Sub(totalOut)
-			if remainingOut.IsNegative() {
-				if outReq.IsNative {
-					remainingOut = ZeroXRPEitherAmount()
-				} else {
-					remainingOut = ZeroIOUEitherAmount(outReq.IOU.Currency, outReq.IOU.Issuer)
-				}
-			}
 			if sendMax != nil {
 				ri := sendMax.Sub(totalIn)
 				remainingIn = &ri
@@ -313,15 +423,28 @@ func Flow(
 						Out:             totalOut,
 						Sandbox:         accumSandbox,
 						RemovableOffers: allOfrsToRm,
-						Result:          tx.TefINTERNAL,
+						Result:          ter.TefINTERNAL,
 					}
 				}
 			}
+			// A crossing committed this iteration: from here on, became-unfunded
+			// grooming reflects real drains, so the conditional removals are real.
+			anyStrandApplied = true
 			// Update AMM iteration counter
 			// Reference: rippled StrandFlow.h line 798: ammContext.update()
 			if ammCtx != nil {
 				ammCtx.Update()
 			}
+		}
+
+		// Fold the applied (best) strand's conditional ("became unfunded"/"became
+		// tiny") removals into the deletion set, once a crossing has committed.
+		// rippled reaches the ledger only through best->sb.apply, so a non-best or
+		// no-cross strand's became-unfunded reads — discardable over-walk phantoms
+		// (e.g. a tfPassive taker whose only strand, an autobridge leg, is rejected
+		// by limitQuality) — never erase the offer. Perm removals are unaffected.
+		if anyStrandApplied && best != nil && best.condOfrsToRm != nil {
+			maps.Copy(iterOfrsToRm, best.condOfrsToRm)
 		}
 
 		// Delete removable offers from the accumulating sandbox
@@ -339,18 +462,75 @@ func Flow(
 		}
 	}
 
-	// Determine final result code
-	// Reference: rippled StrandFlow.h lines 853-872:
-	//   if (!partialPayment) → tecPATH_PARTIAL (couldn't deliver full amount)
-	//   if (partialPayment && actualOut == 0) → tecPATH_DRY (delivered nothing)
-	//   if (partialPayment && actualOut > 0) → success (partial delivery)
-	resultCode := tx.TesSUCCESS
+	// An XRP-movement guard tripping during crossing aborts the flow with
+	// FAILED_PROCESSING, mirroring rippled's Throw<FlowException>(dr) from
+	// BookStep::consumeOffer — the whole flow is discarded, no state applied.
+	// Defensive: amounts are capped at sender funds, so this never trips in
+	// normal operation.
+	if accumSandbox.HasFundsFailure() {
+		return FlowResult{
+			In:              ZeroXRPEitherAmount(),
+			Out:             ZeroXRPEitherAmount(),
+			Sandbox:         nil,
+			RemovableOffers: nil,
+			Result:          accumSandbox.failedProcessingResult(),
+		}
+	}
 
-	if totalOut.Compare(outReq) < 0 {
-		if !partialPayment {
-			resultCode = tx.TecPATH_PARTIAL
-		} else if totalOut.IsZero() {
-			resultCode = tx.TecPATH_DRY
+	// Determine final result code.
+	// Reference: rippled StrandFlow.h lines 840-895. The FillOrKill comment block
+	// there explains the offer-crossing nuance: under partialPayment=false an
+	// offer-crossing flow is a FillOrKill, and whether an under-delivery kills the
+	// offer depends on tfSell and the fixFillOrKill amendment.
+	//   if (actualOut != outReq) {
+	//     if (actualOut > outReq) → tefEXCEPTION (over-delivery; rounding bug)
+	//     if (!partialPayment && (!offerCrossing ||
+	//          (fixFillOrKill && offerCrossing != sell))) → tecPATH_PARTIAL
+	//     else if (actualOut == 0) → tecPATH_DRY
+	//   }
+	//   if (offerCrossing && !partialPayment &&
+	//        (!fixFillOrKill || offerCrossing == sell) && remainingIn != 0)
+	//     → tecPATH_PARTIAL  (FillOrKill: all input must be consumed)
+	//   otherwise tesSUCCESS.
+	resultCode := ter.TesSUCCESS
+
+	if cmp := totalOut.Compare(outReq); cmp != 0 {
+		if cmp > 0 {
+			// Delivered more than requested. rippled treats this as an
+			// engine rounding error and aborts the whole flow with tefEXCEPTION,
+			// discarding any state. We do NOT clamp it away (which would hide the
+			// condition) — we surface it exactly as rippled does.
+			return FlowResult{
+				In:              ZeroXRPEitherAmount(),
+				Out:             ZeroXRPEitherAmount(),
+				Sandbox:         nil,
+				RemovableOffers: allOfrsToRm,
+				Result:          ter.TefEXCEPTION,
+			}
+		}
+		// cmp < 0: under-delivery.
+		// Reference: rippled StrandFlow.h:853-873. For a non-FillOrKill payment
+		// (!offerCrossing) partialPayment is true here, so this collapses to the
+		// tecPATH_DRY branch. For a FillOrKill offer crossing (partialPayment
+		// false) this kills the offer with tecPATH_PARTIAL unless tfSell, whose
+		// "spend the whole TakerGets" rule is enforced by the remainingIn check
+		// below instead.
+		if !partialPayment &&
+			(!offerCrossing || (fo.fillOrKillEnabled && !fo.offerCrossingSell)) {
+			resultCode = ter.TecPATH_PARTIAL
+		} else if partialPayment && totalOut.IsZero() {
+			resultCode = ter.TecPATH_DRY
+		}
+	}
+
+	// FillOrKill sell rule: when offer crossing with partialPayment disabled and
+	// either the fixFillOrKill amendment is off or this is a tfSell, the taker
+	// must consume the entire input (remainingIn == 0) or the offer is killed.
+	// Reference: rippled StrandFlow.h:875-893.
+	if resultCode == ter.TesSUCCESS && offerCrossing && !partialPayment &&
+		(!fo.fillOrKillEnabled || fo.offerCrossingSell) {
+		if remainingIn != nil && !remainingIn.IsZero() {
+			resultCode = ter.TecPATH_PARTIAL
 		}
 	}
 
@@ -508,14 +688,20 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 	if err == nil && data != nil {
 		if acct, pErr := state.ParseAccountRoot(data); pErr == nil {
 			curOC := acct.OwnerCount
-			newOC := int(curOC) + delta
-			if newOC < 0 {
-				newOC = 0
-			}
+			newOC := max(int(curOC)+delta, 0)
 			sb.AdjustOwnerCount(account, curOC, uint32(newOC))
 		}
 	}
 	_ = tx.AdjustOwnerCountWithTx(sb, account, delta, txHash, ledgerSeq)
+}
+
+// RippleCalculateResult bundles the outputs of a RippleCalculate run.
+type RippleCalculateResult struct {
+	ActualIn        EitherAmount
+	ActualOut       EitherAmount
+	RemovableOffers map[[32]byte]bool
+	Sandbox         *PaymentSandbox
+	Result          ter.Result
 }
 
 // RippleCalculate is the main entry point for path-based payments.
@@ -532,12 +718,8 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 //   - partialPayment: Whether partial delivery is allowed
 //   - limitQuality: Whether to limit exchange quality
 //
-// Returns:
-//   - actualIn: Actual amount sent
-//   - actualOut: Actual amount delivered
-//   - removableOffers: Offers that should be removed
-//   - sandbox: The PaymentSandbox containing all state changes
-//   - result: Transaction result code
+// Returns a RippleCalculateResult bundling the actual amounts, removable
+// offers, accumulated sandbox, and result code.
 func RippleCalculate(
 	view tx.LedgerView,
 	srcAccount, dstAccount [20]byte,
@@ -550,7 +732,7 @@ func RippleCalculate(
 	txHash [32]byte,
 	ledgerSeq uint32,
 	opts ...RippleCalculateOption,
-) (EitherAmount, EitherAmount, map[[32]byte]bool, *PaymentSandbox, tx.Result) {
+) RippleCalculateResult {
 	// Apply options
 	var rcOpts rippleCalculateOpts
 	for _, opt := range opts {
@@ -560,15 +742,22 @@ func RippleCalculate(
 	// Create PaymentSandbox from view
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
+	// Mirror rippled view.open(): the XRP-movement balance guards select the
+	// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
+	sandbox.SetOpenLedger(rcOpts.openLedger)
 
 	// Convert paths to strands
 	// opts: [0]=offerCrossing (false for payments), [1]=fix1781
 	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false, rcOpts.fix1781)
-	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
-		if strandResult == tx.TesSUCCESS {
-			strandResult = tx.TecPATH_DRY
+	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
+		if strandResult == ter.TesSUCCESS {
+			strandResult = ter.TecPATH_DRY
 		}
-		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, strandResult
+		return RippleCalculateResult{
+			ActualIn:  ZeroXRPEitherAmount(),
+			ActualOut: ZeroXRPEitherAmount(),
+			Result:    strandResult,
+		}
 	}
 
 	// Create AMMContext for this payment
@@ -608,19 +797,36 @@ func RippleCalculate(
 		qualityLimit = &q
 	}
 
-	// Execute flow with FlowSortStrands amendment flag
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands)
+	// Execute flow with FlowSortStrands amendment flag. This is the payment
+	// (RippleCalculate) entry, never offer crossing.
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands, false)
 
-	// Apply flow sandbox changes back to the main sandbox
-	if result.Result == tx.TesSUCCESS || result.Result == tx.TecPATH_PARTIAL {
+	// Apply flow sandbox changes back to the main sandbox only on success.
+	// rippled's finishFlow (Flow.cpp) applies the flow sandbox solely on
+	// tesSUCCESS; on tecPATH_PARTIAL (returned only when partial payment is not
+	// allowed) it keeps the result code and discards the sandbox, so no partial
+	// liquidity is committed. Applying it here would fold partial offer
+	// consumption and grooming into the view for a payment that ultimately
+	// fails — a state divergence from rippled.
+	if result.Result == ter.TesSUCCESS {
 		if result.Sandbox != nil {
 			if err := result.Sandbox.Apply(sandbox); err != nil {
-				return ZeroXRPEitherAmount(), ZeroXRPEitherAmount(), nil, nil, tx.TefINTERNAL
+				return RippleCalculateResult{
+					ActualIn:  ZeroXRPEitherAmount(),
+					ActualOut: ZeroXRPEitherAmount(),
+					Result:    ter.TefINTERNAL,
+				}
 			}
 		}
 	}
 
-	return result.In, result.Out, result.RemovableOffers, sandbox, result.Result
+	return RippleCalculateResult{
+		ActualIn:        result.In,
+		ActualOut:       result.Out,
+		RemovableOffers: result.RemovableOffers,
+		Sandbox:         sandbox,
+		Result:          result.Result,
+	}
 }
 
 // RippleCalculateOption is a functional option for RippleCalculate
@@ -640,19 +846,22 @@ type rippleCalculateOpts struct {
 	// fix1781 gates XRP endpoint loop detection in strand building.
 	// Reference: rippled XRPEndpointStep.cpp check(): ctx.view.rules().enabled(fix1781)
 	fix1781 bool
+
+	// openLedger mirrors rippled's view.open() (Payment.cpp: rcInput.isLedgerOpen
+	// = view().open()). It selects the FAILED_PROCESSING TER variant in the
+	// XRP-movement balance guards: tel (open) vs tec (closed).
+	openLedger bool
 }
 
 // WithAmendments passes amendment flags and ledger timing to RippleCalculate,
 // which configures BookSteps with the appropriate behavior flags.
-func WithAmendments(parentCloseTime uint32, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers bool, flowSortStrands ...bool) RippleCalculateOption {
+func WithAmendments(parentCloseTime uint32, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers, flowSortStrands bool) RippleCalculateOption {
 	return func(o *rippleCalculateOpts) {
 		o.parentCloseTime = parentCloseTime
 		o.fixReducedOffersV1 = fixReducedOffersV1
 		o.fixReducedOffersV2 = fixReducedOffersV2
 		o.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
-		if len(flowSortStrands) > 0 {
-			o.flowSortStrands = flowSortStrands[0]
-		}
+		o.flowSortStrands = flowSortStrands
 	}
 }
 
@@ -672,6 +881,16 @@ func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool) RippleC
 func WithFix1781(enabled bool) RippleCalculateOption {
 	return func(o *rippleCalculateOpts) {
 		o.fix1781 = enabled
+	}
+}
+
+// WithOpenLedger threads the view-openness signal (EngineConfig.IsViewOpen)
+// into the flow sandbox. When true, an XRP-movement balance guard that trips
+// yields telFAILED_PROCESSING (local hold); when false, tecFAILED_PROCESSING.
+// Reference: rippled Payment.cpp: rcInput.isLedgerOpen = view().open().
+func WithOpenLedger(open bool) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.openLedger = open
 	}
 }
 
@@ -736,18 +955,4 @@ func configureAMMOnBookSteps(
 				fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer)
 		}
 	}
-}
-
-// FlowV2 is an alternative flow implementation that matches rippled's FlowV2.
-// It uses a slightly different iteration strategy.
-func FlowV2(
-	baseView *PaymentSandbox,
-	strands []Strand,
-	outReq EitherAmount,
-	partialPayment bool,
-	limitQuality *Quality,
-	sendMax *EitherAmount,
-) FlowResult {
-	// For now, delegate to Flow
-	return Flow(baseView, strands, outReq, partialPayment, limitQuality, sendMax, nil)
 }

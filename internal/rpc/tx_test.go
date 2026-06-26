@@ -89,14 +89,14 @@ func TestTxMethodErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing transaction field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: transaction",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -108,7 +108,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - too short",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "ABC123",
 			},
 			expectedError: "Not implemented.",
@@ -116,7 +116,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - too long (68 chars)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4",
 			},
 			expectedError: "Not implemented.",
@@ -124,7 +124,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - 63 chars (1 short)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C",
 			},
 			expectedError: "Not implemented.",
@@ -132,7 +132,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - 65 chars (1 extra)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C70",
 			},
 			expectedError: "Not implemented.",
@@ -140,7 +140,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - not hex (contains G)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "G08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 			},
 			expectedError: "Not implemented.",
@@ -148,7 +148,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - not hex (contains Z)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
 			},
 			expectedError: "Not implemented.",
@@ -156,7 +156,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - special characters",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6!@#$",
 			},
 			expectedError: "Not implemented.",
@@ -164,7 +164,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - contains spaces",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD169 C7",
 			},
 			expectedError: "Not implemented.",
@@ -172,7 +172,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid hash format - empty string",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "",
 			},
 			expectedError: "Missing required parameter: transaction",
@@ -180,7 +180,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Transaction not found - valid hash format (txnNotFound)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 			},
 			expectedError: "Transaction not found",
@@ -190,8 +190,17 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "Ambiguous - both transaction and ctid specified",
+			params: map[string]any{
+				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
+				"ctid":        "C000002D00000000",
+			},
+			expectedError: "Invalid parameters.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
 			name: "Invalid transaction type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": 12345,
 			},
 			expectedError: "Invalid parameters",
@@ -199,7 +208,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid transaction type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": true,
 			},
 			expectedError: "Invalid parameters",
@@ -207,7 +216,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid transaction type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": []string{"hash1", "hash2"},
 			},
 			expectedError: "Invalid parameters",
@@ -215,15 +224,15 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid transaction type - object",
-			params: map[string]interface{}{
-				"transaction": map[string]interface{}{"hash": "value"},
+			params: map[string]any{
+				"transaction": map[string]any{"hash": "value"},
 			},
 			expectedError: "Invalid parameters",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid transaction type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": 123.456,
 			},
 			expectedError: "Invalid parameters",
@@ -231,7 +240,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid transaction type - null",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": nil,
 			},
 			expectedError: "Missing required parameter: transaction",
@@ -289,7 +298,7 @@ func TestTxMethodLookupByHash(t *testing.T) {
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
 
 	// Create mock transaction data
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -299,7 +308,7 @@ func TestTxMethodLookupByHash(t *testing.T) {
 	}
 	storedTx := handlers.StoredTransaction{
 		TxJSON: txJSON,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"TransactionIndex":  0,
 		},
@@ -316,15 +325,15 @@ func TestTxMethodLookupByHash(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
-		validateResp func(t *testing.T, resp map[string]interface{})
+		params       map[string]any
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Lookup by lowercase hash",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": strings.ToLower(validHash),
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Hash is uppercased in the response (matching rippled)
 				assert.Equal(t, strings.ToUpper(validHash), resp["hash"])
 				assert.Equal(t, float64(100), resp["ledger_index"])
@@ -333,29 +342,29 @@ func TestTxMethodLookupByHash(t *testing.T) {
 		},
 		{
 			name: "Lookup by uppercase hash",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": strings.ToUpper(validHash),
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, strings.ToUpper(validHash), resp["hash"])
 				assert.Equal(t, float64(100), resp["ledger_index"])
 			},
 		},
 		{
 			name: "Lookup by mixed case hash",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "e08D6E9754025ba2534A78707605E0601f03ACE063687A0ca1BDDACFCD1698c7",
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, float64(100), resp["ledger_index"])
 			},
 		},
 		{
 			name: "Lookup returns all required fields",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Required fields per rippled
 				assert.Contains(t, resp, "hash")
 				assert.Contains(t, resp, "ledger_index")
@@ -378,7 +387,7 @@ func TestTxMethodLookupByHash(t *testing.T) {
 			// Convert result to map
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var respMap map[string]interface{}
+			var respMap map[string]any
 			err = json.Unmarshal(resultJSON, &respMap)
 			require.NoError(t, err)
 
@@ -403,7 +412,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
 
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -413,7 +422,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 	}
 	storedTx := handlers.StoredTransaction{
 		TxJSON: txJSON,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"TransactionIndex":  0,
 		},
@@ -430,20 +439,20 @@ func TestTxMethodBinaryOption(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		binary       interface{}
-		validateResp func(t *testing.T, resp map[string]interface{})
+		binary       any
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name:   "binary=false returns JSON fields",
 			binary: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Should have JSON fields from transaction
 				assert.Equal(t, "Payment", resp["TransactionType"])
 				assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", resp["Account"])
 				assert.Equal(t, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK", resp["Destination"])
 				// Should have meta as JSON object
 				assert.NotNil(t, resp["meta"])
-				if meta, ok := resp["meta"].(map[string]interface{}); ok {
+				if meta, ok := resp["meta"].(map[string]any); ok {
 					assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
 				}
 			},
@@ -451,7 +460,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 		{
 			name:   "binary=true returns tx_blob as hex string",
 			binary: true,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Should have tx_blob (hex encoded binary)
 				if txBlob, ok := resp["tx_blob"].(string); ok {
 					assert.NotEmpty(t, txBlob)
@@ -468,7 +477,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 		{
 			name:   "Default (no binary param) returns JSON",
 			binary: nil,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Should have JSON fields
 				assert.Equal(t, "Payment", resp["TransactionType"])
 			},
@@ -477,7 +486,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"transaction": validHash,
 			}
 			if tc.binary != nil {
@@ -492,7 +501,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var respMap map[string]interface{}
+			var respMap map[string]any
 			err = json.Unmarshal(resultJSON, &respMap)
 			require.NoError(t, err)
 
@@ -1036,7 +1045,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
 
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
@@ -1052,13 +1061,13 @@ func TestTxMethodLedgerRange(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		params      map[string]interface{}
+		params      map[string]any
 		expectError bool
 		errorMsg    string
 	}{
 		{
 			name: "Valid ledger range - transaction within range",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 				"min_ledger":  50,
 				"max_ledger":  150,
@@ -1067,7 +1076,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 		},
 		{
 			name: "Ledger range with binary=true",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 				"binary":      true,
 				"min_ledger":  1,
@@ -1077,7 +1086,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 		},
 		{
 			name: "Min ledger only (partial range)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 				"min_ledger":  50,
 			},
@@ -1085,7 +1094,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 		},
 		{
 			name: "Max ledger only (partial range)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 				"max_ledger":  150,
 			},
@@ -1093,7 +1102,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 		},
 		{
 			name: "Exact ledger match",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 				"min_ledger":  100,
 				"max_ledger":  100,
@@ -1102,7 +1111,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 		},
 		{
 			name: "Wide range (exactly 1000 ledgers)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": validHash,
 				"min_ledger":  1,
 				"max_ledger":  1000,
@@ -1129,85 +1138,68 @@ func TestTxMethodLedgerRange(t *testing.T) {
 	}
 }
 
-// TestTxMethodInvalidLedgerRange tests invalid ledger range parameters
-// Based on rippled Transaction_test.cpp testRangeRequest invalid range tests
+// TestTxMethodInvalidLedgerRange exercises the min_ledger/max_ledger range
+// rules: a range is formed only when BOTH bounds are present (by presence, not
+// by being non-zero), and when both are given it must be ordered and span at
+// most 1000 ledgers (rippled Tx.cpp:330-344, doTxHelp:75-93).
 func TestTxMethodInvalidLedgerRange(t *testing.T) {
-	// These tests document the expected behavior based on rippled
-	// The actual implementation would need to validate these ranges
-
-	tests := []struct {
-		name        string
-		minLedger   interface{}
-		maxLedger   interface{}
-		errorCode   int
-		errorToken  string
-		description string
-	}{
-		{
-			name:        "Invalid range - min > max",
-			minLedger:   100,
-			maxLedger:   50,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Minimum ledger cannot be greater than maximum",
-		},
-		{
-			name:        "Invalid range - negative min",
-			minLedger:   -1,
-			maxLedger:   100,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Negative ledger values are invalid",
-		},
-		{
-			name:        "Invalid range - both negative",
-			minLedger:   -20,
-			maxLedger:   -10,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Negative ledger values are invalid",
-		},
-		{
-			name:        "Invalid range - negative max only",
-			minLedger:   0,
-			maxLedger:   -1,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Negative ledger values are invalid",
-		},
-		{
-			name:        "Excessive range - max - min > 1000",
-			minLedger:   1,
-			maxLedger:   1002,
-			errorCode:   46, // rpcEXCESSIVE_LGR_RANGE
-			errorToken:  "excessiveLgrRange",
-			description: "Range cannot exceed 1000 ledgers",
-		},
-		{
-			name:        "Excessive range - 2000 ledgers",
-			minLedger:   1,
-			maxLedger:   2001,
-			errorCode:   46,
-			errorToken:  "excessiveLgrRange",
-			description: "Range of 2000 ledgers exceeds limit",
-		},
-		{
-			name:        "Invalid range - only min provided as single value",
-			minLedger:   20,
-			maxLedger:   nil,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Both min and max must be provided for range search",
-		},
+	mock := newMockLedgerServiceTx()
+	services := servicesForTx(mock)
+	method := &handlers.TxMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Document the expected behavior
-			t.Logf("Expected error: code=%d, token=%s - %s",
-				tc.errorCode, tc.errorToken, tc.description)
-		})
+	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+	storedTx := handlers.StoredTransaction{
+		TxJSON: map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Fee":             "10",
+		},
+		Meta: map[string]any{"TransactionResult": "tesSUCCESS"},
 	}
+	storedData, _ := json.Marshal(storedTx)
+	mock.transactions[validHash] = &types.TransactionInfo{
+		TxData:      storedData,
+		LedgerIndex: 100,
+		Validated:   true,
+	}
+
+	t.Run("min greater than max", func(t *testing.T) {
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 100, "max_ledger": 50})
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_LGR_RANGE, rpcErr.Code)
+	})
+
+	t.Run("span exceeds 1000", func(t *testing.T) {
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 1, "max_ledger": 1002})
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
+	})
+
+	t.Run("present min_ledger 0 still forms a range", func(t *testing.T) {
+		// A present min_ledger of 0 is a real lower bound (presence, not != 0),
+		// so a 2000-ledger span is rejected; the old non-zero gate skipped this.
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 0, "max_ledger": 2000})
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
+	})
+
+	t.Run("single bound is ignored, not an error", func(t *testing.T) {
+		// Only min_ledger supplied: rippled forms no range, so the query is not
+		// rejected and proceeds to the direct hash lookup.
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 20})
+		result, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
 }
 
 // TestTxMethodSearchedAllFlag tests the searched_all flag in response
@@ -1282,7 +1274,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
 	expectedLedgerHash := "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
 
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -1292,10 +1284,10 @@ func TestTxMethodResponseFields(t *testing.T) {
 	}
 	storedTx := handlers.StoredTransaction{
 		TxJSON: txJSON,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"TransactionIndex":  0,
-			"AffectedNodes":     []interface{}{},
+			"AffectedNodes":     []any{},
 		},
 	}
 	storedData, _ := json.Marshal(storedTx)
@@ -1309,7 +1301,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 	}
 
 	t.Run("Response contains all required fields (JSON mode)", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": validHash,
 			"binary":      false,
 		}
@@ -1322,7 +1314,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1344,13 +1336,13 @@ func TestTxMethodResponseFields(t *testing.T) {
 
 		// Check meta is present
 		assert.Contains(t, resp, "meta", "Response must include meta")
-		if meta, ok := resp["meta"].(map[string]interface{}); ok {
+		if meta, ok := resp["meta"].(map[string]any); ok {
 			assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
 		}
 	})
 
 	t.Run("Response contains inLedger for backward compatibility", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": validHash,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1362,7 +1354,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1373,7 +1365,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 	})
 
 	t.Run("Binary mode response fields", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": validHash,
 			"binary":      true,
 		}
@@ -1386,7 +1378,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1426,7 +1418,7 @@ func TestTxMethodServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1450,7 +1442,7 @@ func TestTxMethodServiceNilLedger(t *testing.T) {
 		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1495,7 +1487,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 
 	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
 
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -1503,7 +1495,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 	}
 	storedTx := handlers.StoredTransaction{
 		TxJSON: txJSON,
-		Meta: map[string]interface{}{
+		Meta: map[string]any{
 			"TransactionResult": "tesSUCCESS",
 		},
 	}
@@ -1527,7 +1519,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 				Services:   services,
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"transaction": validHash,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -1662,7 +1654,7 @@ func TestTxMethodEdgeCases(t *testing.T) {
 			Validated:   true,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": strings.ToLower(invalidHash),
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -1676,7 +1668,7 @@ func TestTxMethodEdgeCases(t *testing.T) {
 
 	t.Run("Transaction hash with leading zeros", func(t *testing.T) {
 		leadingZeroHash := "0000000000000000000000000000000000000000000000000000000000000001"
-		txJSON := map[string]interface{}{"TransactionType": "Payment"}
+		txJSON := map[string]any{"TransactionType": "Payment"}
 		storedTx := handlers.StoredTransaction{TxJSON: txJSON}
 		storedData, _ := json.Marshal(storedTx)
 
@@ -1686,7 +1678,7 @@ func TestTxMethodEdgeCases(t *testing.T) {
 			Validated:   true,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": leadingZeroHash,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -1699,7 +1691,7 @@ func TestTxMethodEdgeCases(t *testing.T) {
 
 	t.Run("All-F hash (max value)", func(t *testing.T) {
 		maxHash := "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
-		txJSON := map[string]interface{}{"TransactionType": "Payment"}
+		txJSON := map[string]any{"TransactionType": "Payment"}
 		storedTx := handlers.StoredTransaction{TxJSON: txJSON}
 		storedData, _ := json.Marshal(storedTx)
 
@@ -1709,7 +1701,7 @@ func TestTxMethodEdgeCases(t *testing.T) {
 			Validated:   true,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": maxHash,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -1737,7 +1729,7 @@ func TestTxMethodInternalErrors(t *testing.T) {
 	t.Run("Database error during lookup", func(t *testing.T) {
 		mock.txLookupError = errors.New("database connection failed")
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 		}
 		paramsJSON, _ := json.Marshal(params)

@@ -1,7 +1,7 @@
 package csf
 
 import (
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -133,7 +133,7 @@ func (n *BasicNetwork) Peers(id PeerID) []PeerID {
 	for peer := range peerLinks {
 		result = append(result, peer)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	slices.Sort(result)
 	return result
 }
 

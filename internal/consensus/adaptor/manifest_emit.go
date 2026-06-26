@@ -18,14 +18,10 @@ type manifestSender interface {
 
 // encodeManifestsFrame wraps one or more wire-format manifest STObjects
 // in a TMManifests frame ready for Overlay.Broadcast / Overlay.Send.
-// Mirrors rippled OverlayImpl::getManifestsMessage which builds a
-// TMManifests carrying every ValidatorManifests entry
-// (OverlayImpl.cpp:1184-1212).
 //
 // Shared by relayManifest (single-manifest gossip from a peer) and the
-// local-manifest emission paths in #372 so both produce byte-identical
-// frames; rippled's PeerImp doesn't distinguish between the two on the
-// wire.
+// local-manifest emission paths so both produce byte-identical frames;
+// peers don't distinguish between the two on the wire.
 func encodeManifestsFrame(serialized ...[]byte) ([]byte, error) {
 	list := make([]message.Manifest, 0, len(serialized))
 	for _, b := range serialized {
@@ -104,8 +100,6 @@ func (r *Router) manifestEmitter() manifestSender {
 // known ephemeral signing key back to its trusted master before any
 // validation arrives.
 //
-// Mirrors rippled PeerImp::doProtocolStart (PeerImp.cpp:851-886) which
-// sends overlay_.getManifestsMessage() in the post-handshake window.
 // Skip cases (cache empty, no overlay) are handled inside
 // SendLocalManifestTo so this stays a thin event-loop trampoline.
 func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
@@ -114,12 +108,9 @@ func (r *Router) HandlePeerConnect(peerID peermanagement.PeerID) {
 
 // cachedManifestFrame returns the encoded TMManifests frame for the
 // current state of the manifest cache, building it on demand and
-// reusing it across calls until the cache's Sequence advances. Mirrors
-// rippled OverlayImpl::getManifestsMessage at OverlayImpl.cpp:1184-1212,
-// which compares manifestListSeq_ against ManifestCache::sequence() and
-// only rebuilds the cached protocol::Message on a mismatch — so a burst
-// of post-handshake emissions reuses the same encoded bytes instead of
-// re-walking the cache per peer.
+// reusing it across calls until the cache's Sequence advances — so a
+// burst of post-handshake emissions reuses the same encoded bytes
+// instead of re-walking the cache per peer.
 //
 // Returns nil when the cache is unwired, empty, or fails to encode.
 // Encode failures are NOT cached so a transient error doesn't pin a

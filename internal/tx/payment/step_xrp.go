@@ -1,8 +1,12 @@
 package payment
 
 import (
+	"errors"
+
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -95,26 +99,24 @@ func (s *XRPEndpointStep) Rev(
 		result = out.XRP
 	} else {
 		// Source: limited by available balance
-		if balance < out.XRP {
-			result = balance
-		} else {
-			result = out.XRP
-		}
+		result = min(balance, out.XRP)
 	}
 
-	// Execute the transfer.
-	// When isLast=true (destination endpoint), accountSend may fail if the requested
-	// amount exceeds the serializable range (e.g., sell-flag deliver = 9e18 drops).
-	// In rippled, STAmount doesn't validate during arithmetic so this succeeds.
-	// Our binary codec validates amounts <= MaxDrops (1e17).
-	// For destination in Rev: the sandbox will be reset when the limiting step is found
-	// (BookStep limits to actual order book depth), so the credit doesn't need to persist.
-	// If accountSend fails, we still cache the result and return — the forward pass
-	// will execute the actual credit with reasonable amounts.
-	// Reference: rippled XRPEndpointStep::revImp calls accountSend regardless of isLast_.
+	// Execute the transfer. rippled's revImp credits regardless of isLast_ and
+	// returns {0,0} on any non-tesSUCCESS accountSend, so a genuine failure must
+	// dry the strand in both directions.
+	//
+	// The one accommodation is the destination endpoint when the credit pushes
+	// its balance above the serializable range (e.g. a receive-max / sell-flag
+	// deliver): rippled's STAmount tolerates such transient over-range values
+	// during the reverse pass, but our binary codec does not. That credit never
+	// has to persist — the limiting BookStep resets this sandbox and the forward
+	// pass re-credits a bounded amount — so we treat that specific error as the
+	// expected codec artifact (accountSend reports it via errXRPBalanceOutOfRange)
+	// and cache the result as rippled would, while any other (genuine) credit
+	// failure still dries the strand.
 	err := s.accountSend(sb, result)
-	if err != nil && !s.isLast {
-		// Source endpoint failure is real — can't debit from account
+	if err != nil && !(s.isLast && errors.Is(err, errXRPBalanceOutOfRange)) {
 		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
 	}
 
@@ -142,11 +144,7 @@ func (s *XRPEndpointStep) Fwd(
 		result = in.XRP
 	} else {
 		// Source: limited by available balance
-		if balance < in.XRP {
-			result = balance
-		} else {
-			result = in.XRP
-		}
+		result = min(balance, in.XRP)
 	}
 
 	// Execute the transfer
@@ -184,7 +182,7 @@ func (s *XRPEndpointStep) DebtDirection(sb *PaymentSandbox, dir StrandDirection)
 // XRP endpoint has identity quality (1:1 rate).
 // Reference: rippled XRPEndpointStep::qualityUpperBound → QUALITY_ONE
 func (s *XRPEndpointStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection) {
-	q := qualityFromFloat64(1.0)
+	q := qualityOne
 	return &q, s.DebtDirection(v, StrandDirectionForward)
 }
 
@@ -274,9 +272,8 @@ func (s *XRPEndpointStep) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, i
 		return false, NewXRPEitherAmount(balance)
 	}
 
-	if in.XRP != *s.cache {
-		// Input doesn't match cached value - this is a warning but not failure
-	}
+	// A mismatch between in.XRP and the cached value is a warning in rippled but
+	// not a failure; the strand still validates with the supplied input.
 
 	return true, in
 }
@@ -294,37 +291,42 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 		return 0
 	}
 
-	// Get reserve based on owner count
-	// Use ownerCountHook to get adjusted owner count
 	ownerCount := sb.OwnerCountHook(s.account, accountRoot.OwnerCount)
 
 	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
 	// This is rippled's confineOwnerCount: adjusted = ownerCount + reserveReduction,
 	// clamped to 0 on underflow.
 	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
-	adjustedOwnerCount := int32(ownerCount) + s.reserveReduction
-	if adjustedOwnerCount < 0 {
-		adjustedOwnerCount = 0
+	adjustedOwnerCount := max(int32(ownerCount)+s.reserveReduction, 0)
+
+	// AMM pseudo-accounts (sfAMMID present) have no reserve requirement.
+	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
+	var reserve uint64
+	if !accountRoot.HasAMMID() {
+		baseReserve, ownerReserve := GetLedgerReserves(sb)
+		reserve = uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
 	}
 
-	// Read reserve values from ledger's FeeSettings
-	// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
-	baseReserve, ownerReserve := GetLedgerReserves(sb)
+	// Apply the deferred-credit balance hook to the full balance. XRP credited to
+	// this account earlier in the same payment must not be counted as spendable
+	// liquidity, otherwise the same drops could be moved twice through the strand.
+	// Reference: rippled View.cpp xrpLiquid() line 637:
+	//   balance = view.balanceHook(id, xrpAccount(), fullBalance)
+	fullBalance := tx.NewXRPAmount(int64(accountRoot.Balance))
+	balance := sb.BalanceHook(s.account, [20]byte{}, fullBalance).Drops()
+	if balance < 0 {
+		balance = 0
+	}
 
-	reserve := uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
-
-	// Available = balance - reserve
-	if accountRoot.Balance < reserve {
+	if uint64(balance) < reserve {
 		return 0
 	}
-	available := int64(accountRoot.Balance - reserve)
-
-	return available
+	return balance - int64(reserve)
 }
 
 // accountSend transfers XRP between accounts in the sandbox
-func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
-	if drops <= 0 {
+func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, amount int64) error {
+	if amount <= 0 {
 		return nil // Nothing to send
 	}
 
@@ -352,7 +354,21 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 			return err
 		}
 
-		senderRoot.Balance -= uint64(drops)
+		// Insufficient-balance guard, mirroring rippled accountSendIOU's native
+		// path (View.cpp: sender balance < amount). Defensive: the flow caps the
+		// requested amount at the sender's funds, so this should never trip.
+		if senderRoot.Balance < uint64(amount) {
+			sb.markFundsFailure()
+			return errInsufficientFunds
+		}
+
+		// Record the deferred credit on the sender side BEFORE the debit, so the
+		// same drops are not counted as spendable liquidity elsewhere in the same
+		// payment. Mirrors rippled accountSendIOU native path:
+		//   view.creditHook(uSenderID, xrpAccount(), saAmount, sndBal)
+		sb.CreditHook(sender, xrpAccount, tx.NewXRPAmount(amount), tx.NewXRPAmount(int64(senderRoot.Balance)))
+
+		senderRoot.Balance -= uint64(amount)
 
 		// Serialize and update
 		newData, err := state.SerializeAccountRoot(senderRoot)
@@ -375,7 +391,17 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 			return err
 		}
 
-		receiverRoot.Balance += uint64(drops)
+		// Record the deferred credit on the receiver side. XRP credited here must
+		// not be counted as spendable liquidity by a later step in the same
+		// payment (e.g. the taker's own offers on the opposite book). Mirrors
+		// rippled accountSendIOU native path:
+		//   view.creditHook(xrpAccount(), uReceiverID, saAmount, -rcvBal)
+		sb.CreditHook(xrpAccount, receiver, tx.NewXRPAmount(amount), tx.NewXRPAmount(-int64(receiverRoot.Balance)))
+
+		receiverRoot.Balance += uint64(amount)
+		if receiverRoot.Balance > uint64(drops.MaxDrops) {
+			return errXRPBalanceOutOfRange
+		}
 
 		// Serialize and update
 		newData, err := state.SerializeAccountRoot(receiverRoot)
@@ -389,16 +415,16 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 }
 
 // Check validates the XRPEndpointStep before use
-func (s *XRPEndpointStep) Check(sb *PaymentSandbox) tx.Result {
+func (s *XRPEndpointStep) Check(sb *PaymentSandbox) ter.Result {
 	// Check account exists
 	accountKey := keylet.Account(s.account)
 	exists, err := sb.Exists(accountKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !exists {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

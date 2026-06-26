@@ -2,6 +2,7 @@ package csf
 
 import (
 	"math/rand"
+	"slices"
 	"sort"
 )
 
@@ -52,12 +53,7 @@ func (g *PeerGroup) Peers() []*Peer {
 
 // Contains checks if a peer is in the group.
 func (g *PeerGroup) Contains(p *Peer) bool {
-	for _, peer := range g.peers {
-		if peer == p {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(g.peers, p)
 }
 
 // ContainsID checks if a peer with the given ID is in the group.
@@ -274,12 +270,9 @@ func RandomRankedGroups(
 	groups := make([]*PeerGroup, 0, numGroups)
 	rawPeers := peers.peers
 
-	for i := 0; i < numGroups; i++ {
+	for range numGroups {
 		shuffled := randomWeightedShuffle(rawPeers, ranks, rng)
-		size := sizeFunc()
-		if size > len(shuffled) {
-			size = len(shuffled)
-		}
+		size := min(sizeFunc(), len(shuffled))
 		groups = append(groups, NewPeerGroupFrom(shuffled[:size]))
 	}
 
@@ -335,12 +328,12 @@ func randomWeightedShuffle(peers []*Peer, ranks []float64, rng *rand.Rand) []*Pe
 	indices := make([]int, n)
 	weights := make([]float64, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		indices[i] = i
 		weights[i] = ranks[i]
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Calculate cumulative weights
 		total := 0.0
 		for _, w := range weights[:n-i] {
@@ -377,43 +370,4 @@ func randomWeightedShuffle(peers []*Peer, ranks []float64, rng *rand.Rand) []*Pe
 	}
 
 	return result
-}
-
-// CreateFullyConnectedGroup creates a peer group where all peers trust and
-// are connected to each other.
-func CreateFullyConnectedGroup(peers []*Peer, delay SimDuration) *PeerGroup {
-	group := NewPeerGroupFrom(peers)
-	group.TrustAndConnect(group, delay)
-	return group
-}
-
-// CreateHubAndSpoke creates a network topology where a hub is connected to all spokes,
-// but spokes are not connected to each other.
-func CreateHubAndSpoke(hub *Peer, spokes []*Peer, delay SimDuration) (*PeerGroup, *PeerGroup) {
-	hubGroup := NewPeerGroupSingle(hub)
-	spokeGroup := NewPeerGroupFrom(spokes)
-
-	// Spokes connect to hub
-	spokeGroup.Connect(hubGroup, delay)
-	hubGroup.Connect(spokeGroup, delay)
-
-	// Trust relationships
-	spokeGroup.Trust(hubGroup)
-	hubGroup.Trust(spokeGroup)
-
-	return hubGroup, spokeGroup
-}
-
-// CreatePartitionedNetwork creates two groups of peers that are disconnected
-// from each other.
-func CreatePartitionedNetwork(groupA, groupB []*Peer, delay SimDuration) (*PeerGroup, *PeerGroup) {
-	a := NewPeerGroupFrom(groupA)
-	b := NewPeerGroupFrom(groupB)
-
-	// Each group is fully connected internally
-	a.TrustAndConnect(a, delay)
-	b.TrustAndConnect(b, delay)
-
-	// No connections between groups
-	return a, b
 }

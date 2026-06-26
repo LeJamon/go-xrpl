@@ -49,7 +49,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 
 	t.Run("account_objects per-object index", func(t *testing.T) {
 		mock := newAccountObjectsMock()
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account: account,
 				AccountObjects: []types.AccountObjectItem{
@@ -74,7 +74,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 			Services:   &types.ServiceContainer{Ledger: mock},
 		}
 
-		params, err := json.Marshal(map[string]interface{}{"account": validAccount})
+		params, err := json.Marshal(map[string]any{"account": validAccount})
 		require.NoError(t, err)
 
 		result, rpcErr := method.Handle(ctx, params)
@@ -82,16 +82,16 @@ func TestRPCHexCaseRegression(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(resultJSON, &resp))
 
 		ledgerHash, _ := resp["ledger_hash"].(string)
 		assert.Equal(t, strings.ToUpper(ledgerHash), ledgerHash, "ledger_hash must be uppercase")
 
-		objs, ok := resp["account_objects"].([]interface{})
+		objs, ok := resp["account_objects"].([]any)
 		require.True(t, ok)
 		require.Len(t, objs, 1)
-		obj := objs[0].(map[string]interface{})
+		obj := objs[0].(map[string]any)
 		idx, _ := obj["index"].(string)
 		require.NotEmpty(t, idx)
 		assert.Equal(t, strings.ToUpper(idx), idx, "account_objects[*].index must be uppercase")

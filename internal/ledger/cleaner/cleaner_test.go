@@ -78,10 +78,7 @@ func (s *fakeSource) LedgerRoots(seq uint32) ([32]byte, [32]byte, bool) {
 // returns the root hash.
 func putStateTree(t *testing.T, family *fakeFamily, keys []string) [32]byte {
 	t.Helper()
-	sm, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := shamap.New(shamap.TypeState)
 	for i, k := range keys {
 		var key [32]byte
 		copy(key[:], mustHex(t, k))

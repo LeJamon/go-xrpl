@@ -1,7 +1,7 @@
 // Command rpcmethods generates docs/rpc-methods.md from the live RPC method
-// registry. It registers every method the server wires up (RegisterAll +
-// RegisterWebSocketOnly) into a fresh registry and reflects each handler's
-// required role and supported API versions. Run via `just docs-gen`.
+// registry. It registers every method the server wires up (RegisterAll)
+// into a fresh registry and reflects each handler's required role and
+// supported API versions. Run via `just docs-gen`.
 package main
 
 import (
@@ -49,14 +49,6 @@ func main() {
 	all := types.NewMethodRegistry()
 	handlers.RegisterAll(all)
 
-	wsOnly := types.NewMethodRegistry()
-	handlers.RegisterWebSocketOnly(wsOnly)
-	wsNames := map[string]bool{}
-	for _, n := range wsOnly.List() {
-		wsNames[n] = true
-		all.Register(n, mustGet(wsOnly, n))
-	}
-
 	names := all.List()
 	sort.Strings(names)
 
@@ -65,24 +57,18 @@ func main() {
 	b.WriteString("# RPC methods\n\n")
 	b.WriteString("The JSON-RPC and WebSocket methods registered by the server, generated from\n")
 	b.WriteString("the method registry (`internal/rpc/handlers`). **Role** is the minimum role a\n")
-	b.WriteString("caller needs; **API versions** are the API versions each method supports.\n")
-	b.WriteString("Methods marked WS-only are available only over a WebSocket session (the HTTP\n")
-	b.WriteString("server returns `methodNotFound` for them, matching rippled).\n\n")
+	b.WriteString("caller needs; **API versions** are the API versions each method supports.\n\n")
 	fmt.Fprintf(&b, "Total: %d methods.\n\n", len(names))
-	b.WriteString("| Method | Role | API versions | WS-only |\n")
-	b.WriteString("|--------|------|--------------|---------|\n")
+	b.WriteString("| Method | Role | API versions |\n")
+	b.WriteString("|--------|------|--------------|\n")
 
 	for _, name := range names {
 		h := mustGet(all, name)
-		ws := ""
-		if wsNames[name] {
-			ws = "✓"
-		}
-		fmt.Fprintf(&b, "| `%s` | %s | %s | %s |\n",
-			name, roleName(h.RequiredRole()), versions(h.SupportedApiVersions()), ws)
+		fmt.Fprintf(&b, "| `%s` | %s | %s |\n",
+			name, roleName(h.RequiredRole()), versions(h.SupportedApiVersions()))
 	}
 
-	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil { //nolint:gosec // G306: generated docs artifact, 0644 intentional
+	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil { //nolint:gosec // G306: generated docs artifact, world-readable by intent
 		fmt.Fprintln(os.Stderr, "write:", err)
 		os.Exit(1)
 	}

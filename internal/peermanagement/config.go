@@ -16,25 +16,19 @@ const (
 
 	DefaultConnectTimeout   = 10 * time.Second
 	DefaultHandshakeTimeout = 5 * time.Second
-	DefaultPingInterval     = 30 * time.Second
-	DefaultIdleTimeout      = 2 * time.Minute
 
 	DefaultEventBufferSize   = 256
 	DefaultMessageBufferSize = 256
 	DefaultSendBufferSize    = 64
 
-	// DefaultMaxTransactions matches rippled's Config::MAX_TRANSACTIONS
-	// default (rippled/src/xrpld/core/Config.h:226). It is the per-type
-	// in-flight ceiling consulted at TMTransaction ingress before
-	// dispatching to the router; the rippled-analog of the comparator
-	// at PeerImp.cpp:1349-1355 (`getJobCount(jtTRANSACTION) >
-	// MAX_TRANSACTIONS`).
+	// DefaultMaxTransactions is the per-type in-flight ceiling
+	// consulted at TMTransaction ingress before dispatching to the
+	// router. Matches rippled's [max_transactions] default.
 	DefaultMaxTransactions = 250
 
-	// DefaultTxReduceRelayMinPeers / DefaultTxRelayPercentage mirror
-	// rippled's Config::TX_REDUCE_RELAY_MIN_PEERS (20) and
-	// TX_RELAY_PERCENTAGE (25) at Config.h:268,271. They govern the
-	// reduce-relay tx peer-selection in Overlay.RelayTransaction.
+	// DefaultTxReduceRelayMinPeers / DefaultTxRelayPercentage govern
+	// the reduce-relay tx peer-selection in Overlay.RelayTransaction.
+	// Both match rippled's defaults.
 	DefaultTxReduceRelayMinPeers = 20
 	DefaultTxRelayPercentage     = 25
 
@@ -66,46 +60,39 @@ type Config struct {
 	// Timeouts
 	ConnectTimeout   time.Duration
 	HandshakeTimeout time.Duration
-	PingInterval     time.Duration
-	IdleTimeout      time.Duration
 
-	// Buffer sizes
+	// Buffer sizes. EventBufferSize and MessageBufferSize size the
+	// overlay's internal channels (see New); the per-peer send queue is a
+	// fixed DefaultSendBufferSize.
 	EventBufferSize   int
 	MessageBufferSize int
-	SendBufferSize    int
 
-	// MaxTransactions is the rippled-analog of Config::MAX_TRANSACTIONS
-	// (rippled/src/xrpld/core/Config.h:226, [max_transactions] in
-	// rippled.cfg). It caps the per-type in-flight TMTransaction frames
-	// the overlay will hand to the router before refusing new ones and
-	// bumping droppedTransactions — mirroring PeerImp.cpp:1349-1355
-	// where rippled refuses to schedule a jtTRANSACTION job when the
-	// JobQueue already has more than MAX_TRANSACTIONS in flight.
-	// Non-positive disables the gate (channel-saturation drop remains
-	// the defensive backstop).
+	// MaxTransactions sizes the overlay's dedicated inbound
+	// TMTransaction lane. Inbound tx frames past this ceiling are shed
+	// (bumping droppedTransactions); the separate lane keeps a tx flood
+	// from crowding consensus/acquisition traffic. The analog of
+	// [max_transactions] in rippled.cfg. Non-positive falls back to
+	// DefaultMaxTransactions — the lane is always bounded.
 	MaxTransactions int
 
 	// Features — advertised via X-Protocol-Ctl during handshake so
-	// peers know which optional protocol extensions we speak. Matches
-	// rippled's compr / vprr / txrr / ledgerreplay feature toggles.
+	// peers know which optional protocol extensions we speak (the
+	// compr / vprr / txrr / ledgerreplay feature toggles).
 	//
-	// All three reduce-relay flags default to false to match rippled
-	// (Config.h:248 sets VP_REDUCE_RELAY_BASE_SQUELCH_ENABLE=false,
-	// Config.h:258 sets TX_REDUCE_RELAY_ENABLE=false, Config.cpp:755-762
-	// preserves false when the cfg omits the section). Reduce-relay
-	// is opt-in: an operator must explicitly set one of these flags
-	// (or WithReduceRelay(true)) to advertise vprr/txrr and activate
-	// the slot-squelching engine. Shipping with the flags on would
-	// cause a stock go-xrpl node to squelch traffic on a stock rippled
-	// network where the peer majority does not reciprocate.
+	// All three reduce-relay flags default to false, matching rippled.
+	// Reduce-relay is opt-in: an operator must explicitly set one of
+	// these flags (or WithReduceRelay(true)) to advertise vprr/txrr
+	// and activate the slot-squelching engine. Shipping with the flags
+	// on would cause a stock go-xrpl node to squelch traffic on a
+	// stock rippled network where the peer majority does not
+	// reciprocate.
 	//
 	// EnableReduceRelay is a legacy alias that enables BOTH vprr and
 	// txrr at once. New code should set EnableVPReduceRelay and
 	// EnableTxReduceRelay independently so an operator can run one
-	// without the other — matches rippled's Handshake.cpp handling of
-	// the two features as independent toggles. When EnableReduceRelay
-	// is set, it is propagated to both at Validate() time if either
-	// specific toggle is still false.
+	// without the other — the two features are independent on the
+	// wire. When EnableReduceRelay is set, it is propagated to both at
+	// Validate() time if either specific toggle is still false.
 	EnableReduceRelay   bool
 	EnableVPReduceRelay bool
 	EnableTxReduceRelay bool
@@ -114,21 +101,20 @@ type Config struct {
 
 	// EnableTxReduceRelayMetrics accumulates the tx_reduce_relay
 	// rolling-average metrics even for peers that did not negotiate
-	// tx-reduce-relay. Mirrors rippled's TX_REDUCE_RELAY_METRICS config
-	// (PeerImp.cpp:1049 gates on txReduceRelayEnabled() || this flag).
-	// Off by default — metrics then accrue only for negotiated peers.
+	// tx-reduce-relay. Off by default — metrics then accrue only for
+	// negotiated peers.
 	EnableTxReduceRelayMetrics bool
 
 	// TxReduceRelayMinPeers is the minimum number of enabled peers the
 	// reduce-relay selection always relays a transaction to, and the floor
 	// below which (plus disabled peers) relay falls back to all peers.
-	// Mirrors rippled Config::TX_REDUCE_RELAY_MIN_PEERS (default 20, min 10).
+	// Default 20, min 10.
 	TxReduceRelayMinPeers int
 
 	// TxRelayPercentage is the percentage of the active enabled peers above
 	// the minimum that a transaction is relayed to in full; the remainder
-	// learn of it via the TMHaveTransactions announce. Mirrors rippled
-	// Config::TX_RELAY_PERCENTAGE (default 25, range 10-100).
+	// learn of it via the TMHaveTransactions announce. Default 25,
+	// range 10-100.
 	TxRelayPercentage int
 
 	// LocalValidatorPubKey is the compressed secp256k1 public key (33
@@ -137,16 +123,14 @@ type Config struct {
 	// handleSquelchMessage to drop inbound TMSquelch frames that target
 	// our own validator — otherwise a hostile peer could silence our
 	// own proposals/validations on the RelayFromValidator path.
-	// Matches rippled PeerImp.cpp:2715-2721.
 	LocalValidatorPubKey []byte
 
 	// ClusterNodes lists base58-encoded node public keys (with an
 	// optional trailing comment as the human-readable name) for peers
-	// that should be treated as cluster members. Mirrors the
+	// that should be treated as cluster members — the analog of the
 	// [cluster_nodes] section in rippled.cfg. Parsed by
 	// cluster.Registry.Load at construction time; a malformed entry
-	// fails Overlay startup, matching rippled Application init which
-	// aborts when Cluster::load returns false.
+	// fails Overlay startup.
 	ClusterNodes []string
 
 	// ServerDomain populates the Server-Domain header; "" suppresses it.
@@ -170,18 +154,14 @@ func DefaultConfig() Config {
 
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,
-		PingInterval:     DefaultPingInterval,
-		IdleTimeout:      DefaultIdleTimeout,
 
 		EventBufferSize:   DefaultEventBufferSize,
 		MessageBufferSize: DefaultMessageBufferSize,
-		SendBufferSize:    DefaultSendBufferSize,
 		MaxTransactions:   DefaultMaxTransactions,
 
-		// Reduce-relay is opt-in; rippled defaults all three to false
-		// (Config.h:248, Config.h:258, Config.cpp:755-762). Leaving
-		// these zero-valued avoids advertising vprr/txrr on a stock
-		// rippled network where peers don't reciprocate.
+		// Reduce-relay is opt-in. Leaving these zero-valued avoids
+		// advertising vprr/txrr on a stock rippled network where peers
+		// don't reciprocate.
 		EnableReduceRelay:   false,
 		EnableVPReduceRelay: false,
 		EnableTxReduceRelay: false,
@@ -275,25 +255,10 @@ func WithHandshakeTimeout(d time.Duration) Option {
 	}
 }
 
-// WithPingInterval sets the ping interval for keepalive.
-func WithPingInterval(d time.Duration) Option {
-	return func(c *Config) {
-		c.PingInterval = d
-	}
-}
-
-// WithIdleTimeout sets the idle timeout before disconnecting a peer.
-func WithIdleTimeout(d time.Duration) Option {
-	return func(c *Config) {
-		c.IdleTimeout = d
-	}
-}
-
 // WithReduceRelay enables or disables reduce-relay optimization.
-// Reduce-relay is opt-in and defaults to false to match rippled
-// (Config.h:248, Config.cpp:755-762). Setting this to true activates
-// both vprr and txrr via the Validate() cascade; callers who need
-// one without the other should set EnableVPReduceRelay or
+// Reduce-relay is opt-in and defaults to false. Setting this to true
+// activates both vprr and txrr via the Validate() cascade; callers who
+// need one without the other should set EnableVPReduceRelay or
 // EnableTxReduceRelay directly on the Config instead.
 func WithReduceRelay(enabled bool) Option {
 	return func(c *Config) {
@@ -328,9 +293,7 @@ func WithClock(clock func() time.Time) Option {
 // WithLocalValidatorPubKey sets the compressed secp256k1 public key
 // (33 bytes) of the local validator identity, so inbound TMSquelch
 // frames targeting our own validator can be dropped. Observer nodes
-// should omit this option (the filter becomes a no-op). Matches
-// rippled PeerImp.cpp:2715-2721 which ignores TMSquelch addressed to
-// app_.getValidationPublicKey().
+// should omit this option (the filter becomes a no-op).
 func WithLocalValidatorPubKey(key []byte) Option {
 	return func(c *Config) {
 		if len(key) == 0 {
@@ -346,9 +309,7 @@ func WithLocalValidatorPubKey(key []byte) Option {
 // WithClusterNodes sets the [cluster_nodes] entries (base58 node
 // pubkey + optional trailing comment used as the human-readable
 // name). Each entry is parsed by cluster.Registry.Load at Overlay
-// construction; a malformed value fails startup. Mirrors rippled's
-// behavior in Application init where Cluster::load failure aborts the
-// node.
+// construction; a malformed value fails startup.
 func WithClusterNodes(entries ...string) Option {
 	return func(c *Config) {
 		c.ClusterNodes = append([]string(nil), entries...)
@@ -357,7 +318,7 @@ func WithClusterNodes(entries ...string) Option {
 
 // WithServerDomain sets the operator domain emitted in the
 // `Server-Domain` handshake header. An empty value suppresses the
-// header (matching rippled's behavior when no domain is configured).
+// header.
 func WithServerDomain(domain string) Option {
 	return func(c *Config) {
 		c.ServerDomain = domain
@@ -387,9 +348,9 @@ func WithMessageBufferSize(size int) Option {
 	}
 }
 
-// WithMaxTransactions sets the in-flight TMTransaction ceiling at the
-// overlay → router boundary. Mirrors rippled's [max_transactions]
-// (Config.h:226). Non-positive disables the gate. Default 250.
+// WithMaxTransactions sets the capacity of the overlay's dedicated
+// inbound TMTransaction lane. Non-positive falls back to the default
+// (250).
 func WithMaxTransactions(n int) Option {
 	return func(c *Config) {
 		c.MaxTransactions = n
@@ -420,9 +381,9 @@ func (c *Config) Validate() error {
 		return errors.New("Clock function cannot be nil")
 	}
 	// Legacy EnableReduceRelay propagates to both specific flags when
-	// the caller hasn't set them independently. Matches rippled's
-	// behavior where enabling "reduce-relay" as a whole turns on both
-	// vprr and txrr. The default is false (see DefaultConfig), so this
+	// the caller hasn't set them independently — enabling
+	// "reduce-relay" as a whole turns on both vprr and txrr. The
+	// default is false (see DefaultConfig), so this
 	// cascade only fires when an operator explicitly opts into
 	// reduce-relay via the legacy omnibus flag (either in the config
 	// file or via WithReduceRelay(true)). It remains load-bearing for
@@ -433,9 +394,8 @@ func (c *Config) Validate() error {
 	}
 
 	// Reduce-relay tuning: a zero value means "unset" and takes the
-	// default (rippled reads the [reduce_relay] section's value_or
-	// defaults). Out-of-range values are rejected, mirroring rippled
-	// Config.cpp:782-783 (tx_relay_percentage 10-100, tx_min_peers >= 10).
+	// default. Out-of-range values are rejected
+	// (tx_relay_percentage 10-100, tx_min_peers >= 10).
 	if c.TxReduceRelayMinPeers == 0 {
 		c.TxReduceRelayMinPeers = DefaultTxReduceRelayMinPeers
 	}

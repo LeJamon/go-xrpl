@@ -7,11 +7,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
-// checkNoBadOffers verifies that Offer entries have positive non-zero amounts
-// and that XRP/XRP offers don't exist. Both pre- and post-tx images are
-// inspected so the invariant catches pre-existing malformed offers as well as
-// newly written ones.
-// Reference: rippled InvariantCheck.cpp — NoBadOffers (lines 223-263).
+// checkNoBadOffers verifies that an Offer never carries a negative TakerPays or
+// TakerGets and that no XRP-for-XRP offer exists. Zero amounts are acceptable.
+// Both pre- and post-tx images are inspected so the invariant catches
+// pre-existing malformed offers as well as newly written ones.
+// Reference: rippled InvariantCheck.cpp — NoBadOffers (lines 228-245).
 func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
 		if e.EntryType != "Offer" {
@@ -23,24 +23,22 @@ func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 			}
 			offer, err := parseOfferForInvariant(data)
 			if err != nil {
-				continue
+				return &InvariantViolation{
+					Name:    "NoBadOffers",
+					Message: fmt.Sprintf("could not parse Offer SLE: %v", err),
+				}
+			}
+			// isBad: pays < 0 || gets < 0 || (pays.native() && gets.native()).
+			if offer.takerPaysNegative || offer.takerGetsNegative {
+				return &InvariantViolation{
+					Name:    "NoBadOffers",
+					Message: "Offer has a negative amount",
+				}
 			}
 			if offer.takerPaysIsXRP && offer.takerGetsIsXRP {
 				return &InvariantViolation{
 					Name:    "NoBadOffers",
 					Message: "Offer has XRP on both sides",
-				}
-			}
-			if offer.takerPaysIsXRP && offer.takerPaysXRP == 0 {
-				return &InvariantViolation{
-					Name:    "NoBadOffers",
-					Message: "Offer TakerPays (XRP) is zero",
-				}
-			}
-			if offer.takerGetsIsXRP && offer.takerGetsXRP == 0 {
-				return &InvariantViolation{
-					Name:    "NoBadOffers",
-					Message: "Offer TakerGets (XRP) is zero",
 				}
 			}
 		}
@@ -93,7 +91,10 @@ const MaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
 func checkEscrowAmount(data []byte) *InvariantViolation {
 	esc, err := state.ParseEscrow(data)
 	if err != nil {
-		return nil
+		return &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("could not parse Escrow SLE: %v", err),
+		}
 	}
 	if esc.IsXRP {
 		if esc.Amount == 0 {
@@ -127,7 +128,11 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 		return nil
 	}
 	// IOU escrow — must be strictly positive and must not use the sentinel "bad"
-	// currency code ("XRP" as an IOU currency). Mirrors rippled InvariantCheck.cpp:286-292.
+	// currency code ("XRP" as an IOU currency). The canonical codec renders the
+	// forbidden standard-form "XRP" slot as full hex, so the currency may arrive
+	// either as the literal "XRP" or as hex with "XRP" at bytes 12-14;
+	// isXRPCurrency detects both. Mirrors rippled InvariantCheck.cpp:286-292 /
+	// Issue.h badCurrency().
 	if esc.IOUAmount != nil {
 		if esc.IOUAmount.Signum() <= 0 {
 			return &InvariantViolation{
@@ -135,7 +140,7 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 				Message: "Escrow IOU amount is not positive",
 			}
 		}
-		if esc.IOUAmount.Currency == badIOUCurrency {
+		if isXRPCurrency(esc.IOUAmount.Currency) {
 			return &InvariantViolation{
 				Name:    "NoZeroEscrow",
 				Message: "Escrow IOU amount uses the bad (XRP) currency code",
@@ -145,15 +150,13 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 	return nil
 }
 
-// badIOUCurrency is the sentinel currency code rejected as an IOU asset.
-// Mirrors rippled protocol/Issue.h badCurrency() — the 3-letter ASCII "XRP"
-// is reserved for native XRP and may not appear as an IOU currency.
-const badIOUCurrency = "XRP"
-
 func checkMPTokenIssuanceAmounts(data []byte) *InvariantViolation {
 	issuance, err := state.ParseMPTokenIssuance(data)
 	if err != nil {
-		return nil
+		return &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("could not parse MPTokenIssuance SLE: %v", err),
+		}
 	}
 	if issuance.OutstandingAmount > MaxMPTokenAmount {
 		return &InvariantViolation{
@@ -182,7 +185,10 @@ func checkMPTokenIssuanceAmounts(data []byte) *InvariantViolation {
 func checkMPTokenAmounts(data []byte) *InvariantViolation {
 	token, err := state.ParseMPToken(data)
 	if err != nil {
-		return nil
+		return &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("could not parse MPToken SLE: %v", err),
+		}
 	}
 	if token.MPTAmount > MaxMPTokenAmount {
 		return &InvariantViolation{
@@ -199,86 +205,67 @@ func checkMPTokenAmounts(data []byte) *InvariantViolation {
 	return nil
 }
 
-// offerForInvariant holds the parsed fields of an Offer ledger entry needed for invariant checks.
+// offerForInvariant preserves the sign of both XRP and IOU legs so NoBadOffers
+// can flag a negative amount, mirroring rippled's STAmount comparison.
 type offerForInvariant struct {
-	takerPaysIsXRP bool
-	takerPaysXRP   uint64
-	takerGetsIsXRP bool
-	takerGetsXRP   uint64
+	takerPaysIsXRP    bool
+	takerPaysNegative bool
+	takerGetsIsXRP    bool
+	takerGetsNegative bool
 }
 
-// parseOfferForInvariant extracts TakerPays/TakerGets from an Offer binary entry.
-// Only checks XRP amounts (IOU amounts are assumed non-negative by binary encoding).
 func parseOfferForInvariant(data []byte) (*offerForInvariant, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("offer too short")
 	}
 	result := &offerForInvariant{}
-	offset := 0
-	for offset < len(data) {
-		if offset >= len(data) {
-			break
+	walkErr := state.WalkFields(data, func(f state.Field) error {
+		// TakerPays = Amount (type 6) field 4, TakerGets = field 5.
+		if f.TypeCode != 6 {
+			return nil
 		}
-		header := data[offset]
-		offset++
-
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
+		if len(f.Value) == 0 {
+			return fmt.Errorf("offer truncated at Amount value")
+		}
+		// Bit 63 is the not-XRP flag (clear for XRP) and bit 62 is the sign
+		// (set for positive). For IOU the not-XRP bit is set and the sign is
+		// decoded from the 48-byte value.
+		isXRP := (f.Value[0] & 0x80) == 0
+		if isXRP {
+			if len(f.Value) < 8 {
+				return fmt.Errorf("offer truncated at XRP amount")
 			}
-			typeCode = int(data[offset])
-			offset++
-		}
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
+			raw := binary.BigEndian.Uint64(f.Value[:8])
+			magnitude := raw & 0x3FFFFFFFFFFFFFFF
+			negative := raw&0x4000000000000000 == 0 && magnitude != 0
+			switch f.FieldCode {
+			case 4:
+				result.takerPaysIsXRP = true
+				result.takerPaysNegative = negative
+			case 5:
+				result.takerGetsIsXRP = true
+				result.takerGetsNegative = negative
 			}
-			fieldCode = int(data[offset])
-			offset++
+			return nil
 		}
-
-		// TakerPays = type 6 (Amount), field 4
-		// TakerGets = type 6 (Amount), field 5
-		if typeCode == 6 { // Amount
-			if offset >= len(data) {
-				break
-			}
-			firstByte := data[offset]
-			isXRP := (firstByte & 0x80) == 0 // high bit 0 = XRP
-			if isXRP {
-				if offset+8 > len(data) {
-					break
-				}
-				amount := binary.BigEndian.Uint64(data[offset:offset+8]) & 0x3FFFFFFFFFFFFFFF
-				switch fieldCode {
-				case 4:
-					result.takerPaysIsXRP = true
-					result.takerPaysXRP = amount
-				case 5:
-					result.takerGetsIsXRP = true
-					result.takerGetsXRP = amount
-				}
-				offset += 8
-			} else {
-				// IOU: 48 bytes
-				if offset+48 > len(data) {
-					break
-				}
-				// IOU amounts are always non-negative in valid binary encoding
-				offset += 48
-			}
-			continue
+		if len(f.Value) < 48 {
+			return fmt.Errorf("offer truncated at IOU amount")
 		}
-
-		// Skip non-Amount fields
-		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
-		if !ok {
-			break
+		amt, err := state.ParseIOUAmountBinary(f.Value[:48])
+		if err != nil {
+			return fmt.Errorf("parse IOU amount: %w", err)
 		}
-		offset += skip
+		negative := amt.Signum() < 0
+		switch f.FieldCode {
+		case 4:
+			result.takerPaysNegative = negative
+		case 5:
+			result.takerGetsNegative = negative
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
 	}
 	return result, nil
 }

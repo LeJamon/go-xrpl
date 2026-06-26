@@ -16,13 +16,13 @@ func FuzzAddRootNode(f *testing.F) {
 
 	// Valid full inner node
 	validRoot := make([]byte, 513)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		validRoot[i] = 0xAA
 	}
 	validRoot[512] = protocol.WireTypeInner
 
 	// Compute expected hash: construct the node first to get its hash
-	node, err := NewInnerNodeFromWire(validRoot)
+	node, err := newInnerNodeFromWire(validRoot)
 	if err == nil {
 		h := node.Hash()
 		f.Add(h[:], validRoot)
@@ -33,7 +33,7 @@ func FuzzAddRootNode(f *testing.F) {
 
 	// Leaf node (should be rejected as root)
 	leafData := make([]byte, 45)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		leafData[i] = byte(i + 1)
 	}
 	for i := 12; i < 44; i++ {
@@ -44,7 +44,7 @@ func FuzzAddRootNode(f *testing.F) {
 
 	// Compressed inner node
 	compressed := make([]byte, 34)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		compressed[i] = 0xBB
 	}
 	compressed[32] = 0x00
@@ -58,10 +58,7 @@ func FuzzAddRootNode(f *testing.F) {
 		var hash [32]byte
 		copy(hash[:], hashBytes[:32])
 
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 		if err := sm.StartSync(); err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +76,7 @@ func FuzzAddKnownNode(f *testing.F) {
 
 	// Valid account state leaf
 	leafData := make([]byte, 45)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		leafData[i] = byte(i + 1)
 	}
 	for i := 12; i < 44; i++ {
@@ -104,16 +101,13 @@ func FuzzAddKnownNode(f *testing.F) {
 		copy(hash[:], hashBytes[:32])
 
 		// Build a syncing tree with a root that has missing children
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 		if err := sm.StartSync(); err != nil {
 			t.Fatal(err)
 		}
 
 		// Create a root with some branches pointing to hashes (missing children)
-		root := NewInnerNode()
+		root := newInnerNode()
 		root.hashes[0] = makeHash(0xAA)
 		root.isBranch |= 1 << 0
 		root.hashes[5] = makeHash(0xBB)
@@ -151,10 +145,7 @@ func FuzzSyncSequence(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 		if err := sm.StartSync(); err != nil {
 			t.Fatal(err)
 		}

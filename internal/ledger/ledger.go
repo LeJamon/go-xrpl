@@ -3,7 +3,6 @@ package ledger
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,13 +11,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -135,10 +132,7 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 	}
 
 	// Create empty transaction map
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tx map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Compute the child's close-time resolution dynamically. Rippled
 	// adjusts the bin width each close based on whether the prior
@@ -382,7 +376,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -397,7 +391,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	if seq&0xff != 0 {
 		return [32]byte{}, false, nil
 	}
-	histHashes, lastSeq, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	_, histHashes, lastSeq, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -694,7 +688,7 @@ func (l *Ledger) UpdateNegativeUNL() error {
 	if hasToReEnable {
 		filtered := sle.DisabledValidators[:0]
 		for _, dv := range sle.DisabledValidators {
-			if bytes.Equal(dv, sle.ValidatorToReEnable) {
+			if bytes.Equal(dv.PublicKey, sle.ValidatorToReEnable) {
 				continue
 			}
 			filtered = append(filtered, dv)
@@ -702,13 +696,14 @@ func (l *Ledger) UpdateNegativeUNL() error {
 		sle.DisabledValidators = filtered
 	}
 
-	// Append ValidatorToDisable (if any) as a new DisabledValidators
-	// entry. Rippled also stamps the current ledger seq as
-	// sfFirstLedgerSequence; go-xrpl's NegativeUNLSLE today flattens
-	// DisabledValidators to a [][]byte of pubkeys — the sfFirstLedger
-	// stamping is a SLE serialization concern for a follow-up.
+	// Append ValidatorToDisable (if any) as a new DisabledValidators entry,
+	// stamping the flag-ledger sequence as sfFirstLedgerSequence (rippled
+	// Ledger.cpp:778-784).
 	if hasToDisable {
-		sle.DisabledValidators = append(sle.DisabledValidators, sle.ValidatorToDisable)
+		sle.DisabledValidators = append(sle.DisabledValidators, pseudo.DisabledValidator{
+			PublicKey:           sle.ValidatorToDisable,
+			FirstLedgerSequence: l.header.LedgerIndex,
+		})
 	}
 
 	// Clear the transition fields.
@@ -766,7 +761,7 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 	// window holds at most 65536/256 = 256 entries.
 	if (prevIndex & 0xff) == 0 {
 		histKey := keylet.LedgerHashesForSeq(prevIndex)
-		hashes, lastSeq, err := readLedgerHashesSLE(stateMap, histKey.Key)
+		fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, histKey.Key)
 		if err != nil {
 			return fmt.Errorf("read historical skip list: %w", err)
 		}
@@ -774,14 +769,14 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 			return fmt.Errorf("historical LedgerHashes (key %x): %w", histKey.Key, err)
 		}
 		hashes = append(hashes, parentHash)
-		if err := writeSkipList(stateMap, histKey.Key, hashes, prevIndex); err != nil {
+		if err := writeSkipList(stateMap, histKey.Key, fields, hashes, prevIndex); err != nil {
 			return fmt.Errorf("write historical skip list: %w", err)
 		}
 	}
 
 	// Operation 2: Rolling 256 skiplist (every ledger)
 	rollingKey := keylet.LedgerHashes()
-	hashes, lastSeq, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
+	fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
 	if err != nil {
 		return fmt.Errorf("read rolling skip list: %w", err)
 	}
@@ -793,7 +788,7 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 		hashes = hashes[1:]
 	}
 	hashes = append(hashes, parentHash)
-	if err := writeSkipList(stateMap, rollingKey.Key, hashes, prevIndex); err != nil {
+	if err := writeSkipList(stateMap, rollingKey.Key, fields, hashes, prevIndex); err != nil {
 		return fmt.Errorf("write rolling skip list: %w", err)
 	}
 
@@ -820,10 +815,7 @@ func assertSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) erro
 		return fmt.Errorf("existing LastLedgerSequence=%d, want %d (prevIndex-1); state was mutated by a non-chain-advance path",
 			lastSeq, wantLastSeq)
 	}
-	wantLen := int(prevIndex - 1)
-	if wantLen > 256 {
-		wantLen = 256
-	}
+	wantLen := min(int(prevIndex-1), 256)
 	if len(hashes) != wantLen {
 		return fmt.Errorf("existing Hashes length=%d, want %d for prevIndex=%d; state was mutated by a non-chain-advance path",
 			len(hashes), wantLen, prevIndex)
@@ -853,30 +845,32 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 	return nil
 }
 
-// readLedgerHashesSLE returns (Hashes, LastLedgerSequence) for the
-// LedgerHashes SLE at key, or (nil, 0, nil) when absent.
-func readLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, uint32, error) {
+// readLedgerHashesSLE returns the decoded field map, Hashes, and
+// LastLedgerSequence for the LedgerHashes SLE at key, or (nil, nil, 0, nil)
+// when absent. The field map lets callers preserve every present field —
+// notably the optional FirstLedgerSequence — when rewriting the SLE.
+func readLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
 	item, found, err := stateMap.Get(key)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if !found {
-		return nil, 0, nil
+		return nil, nil, 0, nil
 	}
 	jsonObj, err := binarycodec.DecodeBytes(item.Data())
 	if err != nil {
-		return nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
+		return nil, nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
 	}
 
 	hashes, err := decodeHashesField(jsonObj)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	lastSeq, err := decodeUint32Field(jsonObj, "LastLedgerSequence")
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
-	return hashes, lastSeq, nil
+	return jsonObj, hashes, lastSeq, nil
 }
 
 func decodeHashesField(jsonObj map[string]any) ([][32]byte, error) {
@@ -935,23 +929,37 @@ func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
 // Thin wrapper over readLedgerHashesSLE that drops the LastLedgerSequence
 // — kept for callers (SkipListHashes() exporter) that only need the vector.
 func readSkipListHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
-	hashes, _, err := readLedgerHashesSLE(stateMap, key)
+	_, hashes, _, err := readLedgerHashesSLE(stateMap, key)
 	return hashes, err
 }
 
 // writeSkipList serializes a LedgerHashes SLE and writes it to the state map.
-func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, hashes [][32]byte, lastSeq uint32) error {
+//
+// When fields is non-nil — the decoded map of an existing SLE — it updates
+// only Hashes and LastLedgerSequence and preserves every other present field,
+// mirroring rippled's in-place updateSkipList (Ledger.cpp:878-943). This keeps
+// the optional FirstLedgerSequence (and any future field) intact across the
+// per-close rewrite; rebuilding from a fixed field set would silently drop it
+// and shift the state-tree leaf, diverging account_hash.
+//
+// When fields is nil — no existing SLE — it creates a fresh entry. rippled's
+// updateSkipList likewise sets only Hashes and LastLedgerSequence on a newly
+// created SLE, so FirstLedgerSequence is intentionally absent here.
+func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, fields map[string]any, hashes [][32]byte, lastSeq uint32) error {
 	hashHexes := make([]string, len(hashes))
 	for i, h := range hashes {
 		hashHexes[i] = fmt.Sprintf("%064X", h)
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType":    "LedgerHashes",
-		"Flags":              uint32(0),
-		"Hashes":             hashHexes,
-		"LastLedgerSequence": lastSeq,
+	jsonObj := fields
+	if jsonObj == nil {
+		jsonObj = map[string]any{
+			"LedgerEntryType": "LedgerHashes",
+			"Flags":           uint32(0),
+		}
 	}
+	jsonObj["Hashes"] = hashHexes
+	jsonObj["LastLedgerSequence"] = lastSeq
 
 	data, err := binarycodec.EncodeBytes(jsonObj)
 	if err != nil {
@@ -1084,6 +1092,51 @@ func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
 
+// IterateStateFrom walks state entries in ascending key order, starting with
+// the first entry whose key is strictly greater than `after`; pass the zero key
+// to start from the beginning. fn is called for each entry and returns false to
+// stop early. Iteration advances through the state map's upper bound (O(log n)
+// seek, O(n) walk), so a resume marker pointing at a since-deleted entry
+// continues from the next entry instead of rescanning from the start — and it
+// never silently yields nothing the way a "skip until key == marker" scan does.
+func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(key [32]byte, data []byte) bool) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	it := l.stateMap.UpperBound(after)
+	for it.Valid() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		item := it.Item()
+		if item == nil {
+			break
+		}
+		if !fn(item.Key(), item.Data()) {
+			return nil
+		}
+		it.Next()
+	}
+	return it.Err()
+}
+
+// DecrementKey returns key - 1, treating the 32-byte key as a big-endian
+// integer (wrapping at zero). It is the companion to IterateStateFrom's
+// strictly-greater (UpperBound) resume: recording DecrementKey(firstUnemittedKey)
+// as a page-full marker makes the next IterateStateFrom resume exactly on that
+// first un-emitted entry, whether or not the decremented value is itself a key.
+func DecrementKey(key [32]byte) [32]byte {
+	out := key
+	for i := 31; i >= 0; i-- {
+		if out[i] > 0 {
+			out[i]--
+			return out
+		}
+		out[i] = 0xFF
+	}
+	return out
+}
+
 // ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
 // If fn returns false, iteration stops early.
 // The callback receives the transaction hash and data.
@@ -1136,35 +1189,9 @@ func (l *Ledger) SerializeHeader() []byte {
 	return header.AddRaw(l.header, true)
 }
 
-// calculateLedgerHash computes the hash of a ledger header
-// This is duplicated from genesis package to avoid circular imports
+// calculateLedgerHash computes the hash of a ledger header. The canonical
+// implementation lives in the header package; this thin wrapper keeps the
+// existing call sites readable.
 func calculateLedgerHash(h header.LedgerHeader) [32]byte {
-	data := make([]byte, 0, 122)
-
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
-
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, h.LedgerIndex)
-	data = append(data, seqBytes...)
-
-	dropsBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(dropsBytes, h.Drops)
-	data = append(data, dropsBytes...)
-
-	data = append(data, h.ParentHash[:]...)
-	data = append(data, h.TxHash[:]...)
-	data = append(data, h.AccountHash[:]...)
-
-	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, parentCloseBytes...)
-
-	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, closeTimeBytes...)
-
-	data = append(data, byte(h.CloseTimeResolution))
-	data = append(data, h.CloseFlags)
-
-	return common.Sha512Half(data)
+	return header.CalculateHash(h)
 }

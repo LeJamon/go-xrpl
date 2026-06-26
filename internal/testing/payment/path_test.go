@@ -3,15 +3,89 @@
 package payment
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 	"github.com/stretchr/testify/require"
 )
+
+// acctStep builds an expected account path element (rippled stpath(account)).
+func acctStep(a *xrplgoTesting.Account) payment.PathStep {
+	return payment.PathStep{Account: a.Address}
+}
+
+// bookStepIOU builds an expected order-book path element for an issued
+// currency (rippled's IPE(issue) test helper).
+func bookStepIOU(currency string, issuer *xrplgoTesting.Account) payment.PathStep {
+	return payment.PathStep{Currency: currency, Issuer: issuer.Address}
+}
+
+// bookStepXRP builds an expected order-book path element to XRP
+// (rippled's IPE(xrpIssue())).
+func bookStepXRP() payment.PathStep {
+	return payment.PathStep{Currency: "XRP"}
+}
+
+// pathStepKey canonicalizes one path element for comparison: account hops
+// compare by account, book hops by currency+issuer. This mirrors rippled
+// STPathElement::operator==, which ignores the non-account type bits.
+func pathStepKey(s payment.PathStep) string {
+	if s.Account != "" {
+		return "a:" + s.Account
+	}
+	cur := s.Currency
+	if cur == "" || cur == "XRP" {
+		return "b:XRP"
+	}
+	return "b:" + cur + ":" + s.Issuer
+}
+
+func pathFingerprint(path []payment.PathStep) string {
+	parts := make([]string, len(path))
+	for i, s := range path {
+		parts[i] = pathStepKey(s)
+	}
+	return strings.Join(parts, " -> ")
+}
+
+// requireSamePaths asserts that got contains exactly the want paths in any
+// order, mirroring rippled's jtx `same(st, stpath(...), ...)`.
+func requireSamePaths(t *testing.T, got [][]payment.PathStep, want ...[]payment.PathStep) {
+	t.Helper()
+	gotKeys := make([]string, len(got))
+	for i, p := range got {
+		gotKeys[i] = pathFingerprint(p)
+	}
+	wantKeys := make([]string, len(want))
+	for i, p := range want {
+		wantKeys[i] = pathFingerprint(p)
+	}
+	require.ElementsMatch(t, wantKeys, gotKeys)
+}
+
+// newPathRequest builds a PathRequest at search level 7, matching rippled
+// Path_test's pathTestEnv which raises PATH_SEARCH to 7 because these
+// scenarios were written for deeper search levels than the production
+// default.
+func newPathRequest(
+	src, dst [20]byte,
+	dstAmount tx.Amount,
+	sendMax *tx.Amount,
+	srcCurrencies []payment.Issue,
+	convertAll bool,
+) *pathfinder.PathRequest {
+	pr := pathfinder.NewPathRequest(src, dst, dstAmount, sendMax, srcCurrencies, convertAll)
+	pr.SetSearchLevel(7)
+	return pr
+}
 
 // TestPath_NoDirectPathNoIntermediaryNoAlternatives tests path finding with no available paths.
 // From rippled: no_direct_path_no_intermediary_no_alternatives
@@ -62,7 +136,7 @@ func TestPath_DirectPathNoIntermediary(t *testing.T) {
 	// In rippled: find_paths(env, "alice", "bob", Account("bob")["USD"](5))
 	// Expects: empty path set, source_amount = alice/USD(5)
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", bob.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	// Per rippled: st.empty() — the default path suffices
@@ -177,7 +251,7 @@ func TestPath_IndirectPath(t *testing.T) {
 	// In rippled: find_paths(env, "alice", "carol", Account("carol")["USD"](5))
 	// Expects: path through bob, source_amount = alice/USD(5)
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", carol.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	// Should find at least one alternative with a path through bob
@@ -712,13 +786,76 @@ func TestPath_XRPBridge(t *testing.T) {
 // TestPath_SourceCurrenciesLimit tests RPC path finding with source currency limits.
 // From rippled: Path_test::source_currencies_limit
 func TestPath_SourceCurrenciesLimit(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC implementation")
+	env := rpcenv.New(t)
 
-	// Test RPC::Tuning::max_src_cur source currencies
-	// Test more than RPC::Tuning::max_src_cur source currencies (should error)
-	// Test RPC::Tuning::max_auto_src_cur source currencies
-	// Test more than RPC::Tuning::max_auto_src_cur source currencies (should error)
-	t.Log("Source currencies limit test: requires RPC path finding")
+	gw := xrplgoTesting.NewAccount("gateway")
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+
+	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// rpf mirrors the rippled test's request builder: numeric 3-character
+	// currency codes "100", "101", ... as explicit source currencies.
+	rpf := func(numSrc int) map[string]any {
+		params := map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount": map[string]any{
+				"currency": "USD",
+				"value":    "0.01",
+				"issuer":   bob.Address,
+			},
+		}
+		if numSrc > 0 {
+			sc := make([]map[string]any, 0, numSrc)
+			for i := 0; i < numSrc; i++ {
+				sc = append(sc, map[string]any{"currency": strconv.Itoa(i + 100)})
+			}
+			params["source_currencies"] = sc
+		}
+		return params
+	}
+
+	// RPC::Tuning::max_src_cur (18) explicit source currencies are accepted.
+	_, rpcErr := env.RPC("ripple_path_find", rpf(18))
+	require.Nil(t, rpcErr)
+
+	// More than max_src_cur is rejected.
+	_, rpcErr = env.RPC("ripple_path_find", rpf(19))
+	require.NotNil(t, rpcErr)
+	require.Equal(t, "srcCurMalformed", rpcErr.ErrorString)
+
+	// Give alice max_auto_src_cur-1 (87) sendable currencies; with XRP that
+	// makes exactly RPC::Tuning::max_auto_src_cur (88) auto-discovered
+	// source currencies, which is accepted.
+	for i := 0; i < 87; i++ {
+		cur := strconv.Itoa(i + 100)
+		result = env.Submit(trustset.TrustLine(bob, cur, alice, "100").Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	_, rpcErr = env.RPC("ripple_path_find", rpf(0))
+	require.Nil(t, rpcErr)
+
+	// One more sendable currency exceeds max_auto_src_cur and fails the
+	// request (rippled PathRequest::findPaths returns false -> rpcINTERNAL).
+	result = env.Submit(trustset.TrustLine(bob, "AUD", alice, "100").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	_, rpcErr = env.RPC("ripple_path_find", rpf(0))
+	require.NotNil(t, rpcErr)
+	require.Equal(t, "internal", rpcErr.ErrorString)
 }
 
 // TestPath_PathFindConsumeAll tests path consumption with alternatives.
@@ -770,8 +907,8 @@ func TestPath_PathFindConsumeAll(t *testing.T) {
 	// Expected: paths = stpath("dan"), stpath("bob", "carol")
 	//           source_amount = alice/USD(110)
 	//           dest_amount = edward/USD(110)
-	dstAmount := tx.NewIssuedAmountFromFloat64(1, "USD", edward.Address)            // placeholder, convertAll replaces it
-	pr := pathfinder.NewPathRequest(alice.ID, edward.ID, dstAmount, nil, nil, true) // convertAll=true
+	dstAmount := tx.NewIssuedAmountFromFloat64(1, "USD", edward.Address) // placeholder, convertAll replaces it
+	pr := newPathRequest(alice.ID, edward.ID, dstAmount, nil, nil, true) // convertAll=true
 	pfResult := pr.Execute(env.Ledger())
 
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find alternatives for convertAll")
@@ -846,7 +983,7 @@ func TestPath_AlternativePathConsumeBoth(t *testing.T) {
 	// In rippled: paths(Account("alice")["USD"]) runs the pathfinder
 	usd140 := tx.NewIssuedAmountFromFloat64(140, "USD", bob.Address)
 	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, usd140, nil, srcCurrencies, false)
+	pr := newPathRequest(alice.ID, bob.ID, usd140, nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find alternatives")
 
@@ -870,36 +1007,163 @@ func TestPath_AlternativePathConsumeBoth(t *testing.T) {
 	require.InDelta(t, 70.0, bobGw2Bal, 0.0001, "Bob should have 70 gw2/USD")
 }
 
+// twoGatewayUSDEnv builds the shared fixture for the alternative-paths
+// transfer-rate tests: gw (no fee) and gw2 (1.1x), alice holding 70 USD
+// from each, bob trusting both.
+func twoGatewayUSDEnv(t *testing.T) (env *xrplgoTesting.TestEnv, gw, gw2, alice, bob *xrplgoTesting.Account) {
+	t.Helper()
+	env = xrplgoTesting.NewTestEnv(t)
+
+	gw = xrplgoTesting.NewAccount("gateway")
+	gw2 = xrplgoTesting.NewAccount("gateway2")
+	alice = xrplgoTesting.NewAccount("alice")
+	bob = xrplgoTesting.NewAccount("bob")
+
+	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	env.SetTransferRate(gw2, 1_100_000_000)
+	env.Close()
+
+	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(alice, "USD", gw2, "800").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(bob, "USD", gw2, "900").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	result = env.Submit(PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(gw2, alice, tx.NewIssuedAmountFromFloat64(70, "USD", gw2.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	return env, gw, gw2, alice, bob
+}
+
 // TestPath_AlternativePathsConsumeBestTransfer tests consuming best transfer rate.
 // From rippled: Path_test::alternative_paths_consume_best_transfer
 func TestPath_AlternativePathsConsumeBestTransfer(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and transfer rate support")
+	env, gw, gw2, alice, bob := twoGatewayUSDEnv(t)
 
-	// gw2 has 1.1x transfer rate (10% fee)
-	// alice pays bob 70 USD - should use gw (no transfer fee) first
-	// Result: alice has 0 gw/USD, 70 gw2/USD; bob has 70 gw/USD, 0 gw2/USD
-	t.Log("Alternative paths consume best transfer test: requires RPC path finding")
+	// alice pays bob 70 gw/USD: only the fee-free gw line is touched.
+	result := env.Submit(PayIssued(alice, bob, tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw, "USD", 0)
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw2, "USD", 70)
+	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 70)
+	xrplgoTesting.RequireIOUBalance(t, env, bob, gw2, "USD", 0)
+	xrplgoTesting.RequireIOUBalance(t, env, gw, alice, "USD", 0)
+	xrplgoTesting.RequireIOUBalance(t, env, gw, bob, "USD", -70)
+	xrplgoTesting.RequireIOUBalance(t, env, gw2, alice, "USD", -70)
+	xrplgoTesting.RequireIOUBalance(t, env, gw2, bob, "USD", 0)
 }
 
 // TestPath_AlternativePathsConsumeBestTransferFirst tests best transfer consumed first.
 // From rippled: Path_test::alternative_paths_consume_best_transfer_first
 func TestPath_AlternativePathsConsumeBestTransferFirst(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and transfer rate support")
+	env, gw, gw2, alice, bob := twoGatewayUSDEnv(t)
 
-	// Similar to above but tests that best quality is consumed first
-	// when paying more than one path can provide
-	t.Log("Alternative paths consume best transfer first test: requires RPC path finding")
+	// alice pays bob 77 bob/USD with sendmax 100 alice/USD via the
+	// pathfinder (rippled: paths(Account("alice")["USD"])).
+	usd77 := tx.NewIssuedAmountFromFloat64(77, "USD", bob.Address)
+	sendMax := tx.NewIssuedAmountFromFloat64(100, "USD", alice.Address)
+	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
+	pr := newPathRequest(alice.ID, bob.ID, usd77, nil, srcCurrencies, false)
+	pfResult := pr.Execute(env.Ledger())
+	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find alternatives")
+
+	alt := pfResult.Alternatives[0]
+	requireSamePaths(t, alt.PathsComputed,
+		[]payment.PathStep{acctStep(gw)},
+		[]payment.PathStep{acctStep(gw2)})
+
+	result := env.Submit(PayIssued(alice, bob, usd77).
+		SendMax(sendMax).
+		Paths(alt.PathsComputed).
+		Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// gw (no fee) is consumed entirely first; the remaining 7 USD goes via
+	// gw2 at the 1.1x rate, costing alice 7.7 gw2/USD.
+	xrplgoTesting.RequireIOUBalance(t, env, alice, gw, "USD", 0)
+	xrplgoTesting.RequireIOUBalanceApprox(t, env, alice, gw2, "USD", 62.3, 0.0001)
+	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 70)
+	xrplgoTesting.RequireIOUBalance(t, env, bob, gw2, "USD", 7)
+	xrplgoTesting.RequireIOUBalance(t, env, gw, alice, "USD", 0)
+	xrplgoTesting.RequireIOUBalance(t, env, gw, bob, "USD", -70)
+	xrplgoTesting.RequireIOUBalanceApprox(t, env, gw2, alice, "USD", -62.3, 0.0001)
+	xrplgoTesting.RequireIOUBalance(t, env, gw2, bob, "USD", -7)
 }
 
 // TestPath_AlternativePathsLimitReturnedPaths tests limiting returned paths to best quality.
 // From rippled: Path_test::alternative_paths_limit_returned_paths_to_best_quality
 func TestPath_AlternativePathsLimitReturnedPaths(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC implementation")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	// carol has 1.1x transfer rate
-	// Set up trust lines for multiple paths (carol, dan, gw, gw2)
-	// Find paths - should return paths ordered by quality (best first)
-	t.Log("Alternative paths limit test: requires RPC path finding")
+	gw := xrplgoTesting.NewAccount("gateway")
+	gw2 := xrplgoTesting.NewAccount("gateway2")
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+	carol := xrplgoTesting.NewAccount("carol")
+	dan := xrplgoTesting.NewAccount("dan")
+
+	for _, acc := range []*xrplgoTesting.Account{gw, gw2, alice, bob, carol, dan} {
+		env.FundAmount(acc, uint64(xrplgoTesting.XRP(10000)))
+	}
+	env.Close()
+
+	env.SetTransferRate(carol, 1_100_000_000)
+	env.Close()
+
+	// alice and bob trust carol, dan, gw, and gw2 for USD; dan also trusts
+	// alice and bob so he can ripple between them.
+	for _, issuer := range []*xrplgoTesting.Account{carol, dan, gw, gw2} {
+		result := env.Submit(trustset.TrustLine(alice, "USD", issuer, "800").Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		result = env.Submit(trustset.TrustLine(bob, "USD", issuer, "800").Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	result := env.Submit(trustset.TrustLine(dan, "USD", alice, "800").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(trustset.TrustLine(dan, "USD", bob, "800").Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	result = env.Submit(PayIssued(gw2, alice, tx.NewIssuedAmountFromFloat64(100, "USD", gw2.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+	result = env.Submit(PayIssued(carol, alice, tx.NewIssuedAmountFromFloat64(100, "USD", carol.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+	result = env.Submit(PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// find_paths(alice, bob, bob/USD(5)): exactly four single-hop paths
+	// survive the max_paths_ (4) cut, ordered by quality with carol's 1.1x
+	// rate ranking last but still included.
+	usd5 := tx.NewIssuedAmountFromFloat64(5, "USD", bob.Address)
+	pr := newPathRequest(alice.ID, bob.ID, usd5, nil, nil, false)
+	pfResult := pr.Execute(env.Ledger())
+	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find alternatives")
+
+	alt := pfResult.Alternatives[0]
+	requireSamePaths(t, alt.PathsComputed,
+		[]payment.PathStep{acctStep(gw)},
+		[]payment.PathStep{acctStep(gw2)},
+		[]payment.PathStep{acctStep(dan)},
+		[]payment.PathStep{acctStep(carol)})
+	require.InDelta(t, 5.0, alt.SourceAmount.Float64(), 0.0001, "Source amount should be 5 alice/USD")
 }
 
 // TestPath_IssuesPathNegativeIssue5 tests Issue #5 regression.
@@ -953,7 +1217,7 @@ func TestPath_IssuesPathNegativeIssue5(t *testing.T) {
 
 	// Pathfind alice->bob for bob/USD(25) - should find no paths
 	dstAmount1 := tx.NewIssuedAmountFromFloat64(25, "USD", bob.Address)
-	pr1 := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount1, nil, nil, false)
+	pr1 := newPathRequest(alice.ID, bob.ID, dstAmount1, nil, nil, false)
 	pfResult1 := pr1.Execute(env.Ledger())
 	require.Empty(t, pfResult1.Alternatives,
 		"Should find no paths from alice to bob for bob/USD")
@@ -967,7 +1231,7 @@ func TestPath_IssuesPathNegativeIssue5(t *testing.T) {
 
 	// Pathfind alice->bob for alice/USD(25) - should also find no paths
 	dstAmount2 := tx.NewIssuedAmountFromFloat64(25, "USD", alice.Address)
-	pr2 := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount2, nil, nil, false)
+	pr2 := newPathRequest(alice.ID, bob.ID, dstAmount2, nil, nil, false)
 	pfResult2 := pr2.Execute(env.Ledger())
 	require.Empty(t, pfResult2.Alternatives,
 		"Should find no paths from alice to bob for alice/USD")
@@ -1024,7 +1288,7 @@ func TestPath_IssuesRippleClientIssue23Smaller(t *testing.T) {
 	// and using the discovered paths in the payment.
 	usd55 := tx.NewIssuedAmountFromFloat64(55, "USD", bob.Address)
 	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, usd55, nil, srcCurrencies, false)
+	pr := newPathRequest(alice.ID, bob.ID, usd55, nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find at least one alternative")
 
@@ -1093,7 +1357,7 @@ func TestPath_IssuesRippleClientIssue23Larger(t *testing.T) {
 	// In rippled: paths(Account("alice")["USD"]) runs the pathfinder
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", bob.Address)
 	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, usd50, nil, srcCurrencies, false)
+	pr := newPathRequest(alice.ID, bob.ID, usd50, nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find at least one alternative")
 
@@ -1123,28 +1387,188 @@ func TestPath_IssuesRippleClientIssue23Larger(t *testing.T) {
 	require.InDelta(t, 25.0, bobDanBal, 0.0001, "Bob should have 25 dan/USD")
 }
 
+// requireAllPathsEmpty asserts every alternative carries an empty path set
+// (the default path suffices), matching rippled's `BEAST_EXPECT(st.empty())`.
+func requireAllPathsEmpty(t *testing.T, pfResult *pathfinder.PathRequestResult) {
+	t.Helper()
+	for _, alt := range pfResult.Alternatives {
+		for _, p := range alt.PathsComputed {
+			require.Empty(t, p, "expected empty path set (default path only)")
+		}
+		require.Empty(t, alt.PathsComputed)
+	}
+}
+
+// xrpIssue is the explicit XRP source currency (rippled xrpCurrency()).
+var xrpIssue = []payment.Issue{{Currency: "XRP"}}
+
 // TestPath_PathFind01 tests Path Find: XRP -> XRP and XRP -> IOU.
 // From rippled: Path_test::path_find_01
 func TestPath_PathFind01(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and offers")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	// Test various path finding scenarios:
-	// - XRP -> XRP direct (no path needed)
-	// - XRP -> non-existent account (empty path)
-	// - XRP -> IOU via offers
-	// - XRP -> IOU via multiple hops
-	t.Log("Path find 01 test: requires RPC path finding and offers")
+	a1 := xrplgoTesting.NewAccount("A1")
+	a2 := xrplgoTesting.NewAccount("A2")
+	a3 := xrplgoTesting.NewAccount("A3")
+	g1 := xrplgoTesting.NewAccount("G1")
+	g2 := xrplgoTesting.NewAccount("G2")
+	g3 := xrplgoTesting.NewAccount("G3")
+	m1 := xrplgoTesting.NewAccount("M1")
+
+	env.FundAmount(a1, uint64(xrplgoTesting.XRP(100000)))
+	env.FundAmount(a2, uint64(xrplgoTesting.XRP(10000)))
+	for _, acc := range []*xrplgoTesting.Account{a3, g1, g2, g3, m1} {
+		env.FundAmount(acc, uint64(xrplgoTesting.XRP(1000)))
+	}
+	env.Close()
+
+	for _, tl := range []struct {
+		holder *xrplgoTesting.Account
+		cur    string
+		issuer *xrplgoTesting.Account
+		limit  string
+	}{
+		{a1, "XYZ", g1, "5000"},
+		{a1, "ABC", g3, "5000"},
+		{a2, "XYZ", g2, "5000"},
+		{a2, "ABC", g3, "5000"},
+		{a3, "ABC", a2, "1000"},
+		{m1, "XYZ", g1, "100000"},
+		{m1, "XYZ", g2, "100000"},
+		{m1, "ABC", g3, "100000"},
+	} {
+		result := env.Submit(trustset.TrustLine(tl.holder, tl.cur, tl.issuer, tl.limit).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	result := env.Submit(PayIssued(g1, a1, tx.NewIssuedAmountFromFloat64(3500, "XYZ", g1.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(g3, a1, tx.NewIssuedAmountFromFloat64(1200, "ABC", g3.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(g2, m1, tx.NewIssuedAmountFromFloat64(25000, "XYZ", g2.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	result = env.Submit(PayIssued(g3, m1, tx.NewIssuedAmountFromFloat64(25000, "ABC", g3.Address)).Build())
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// offer(M1, G1["XYZ"](1000), G2["XYZ"](1000)): pays G1/XYZ, gets G2/XYZ
+	result = env.CreateOffer(m1,
+		tx.NewIssuedAmountFromFloat64(1000, "XYZ", g2.Address),
+		tx.NewIssuedAmountFromFloat64(1000, "XYZ", g1.Address))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	// offer(M1, XRP(10000), G3["ABC"](1000)): pays XRP, gets G3/ABC
+	result = env.CreateOffer(m1,
+		tx.NewIssuedAmountFromFloat64(1000, "ABC", g3.Address),
+		tx.NewXRPAmount(xrplgoTesting.XRP(10000)))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	t.Run("XRP to XRP", func(t *testing.T) {
+		pr := newPathRequest(a1.ID, a2.ID, tx.NewXRPAmount(xrplgoTesting.XRP(10)), nil, xrpIssue, false)
+		requireAllPathsEmpty(t, pr.Execute(env.Ledger()))
+	})
+
+	t.Run("XRP to non-existent account", func(t *testing.T) {
+		ghost := xrplgoTesting.NewAccount("A0")
+		pr := newPathRequest(a1.ID, ghost.ID, tx.NewXRPAmount(xrplgoTesting.XRP(200)), nil, xrpIssue, false)
+		requireAllPathsEmpty(t, pr.Execute(env.Ledger()))
+	})
+
+	t.Run("XRP to gateway IOU via offer", func(t *testing.T) {
+		sendAmt := tx.NewIssuedAmountFromFloat64(10, "ABC", g3.Address)
+		pr := newPathRequest(a2.ID, g3.ID, sendAmt, nil, xrpIssue, false)
+		pfResult := pr.Execute(env.Ledger())
+
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.True(t, alt.SourceAmount.IsNative())
+		require.EqualValues(t, xrplgoTesting.XRP(100), alt.SourceAmount.Drops(), "10 ABC at 10 XRP/ABC costs 100 XRP")
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{bookStepIOU("ABC", g3)})
+	})
+
+	t.Run("XRP to user IOU via offer and gateway", func(t *testing.T) {
+		sendAmt := tx.NewIssuedAmountFromFloat64(1, "ABC", a2.Address)
+		pr := newPathRequest(a1.ID, a2.ID, sendAmt, nil, xrpIssue, false)
+		pfResult := pr.Execute(env.Ledger())
+
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.True(t, alt.SourceAmount.IsNative())
+		require.EqualValues(t, xrplgoTesting.XRP(10), alt.SourceAmount.Drops())
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{bookStepIOU("ABC", g3), acctStep(g3)})
+	})
+
+	t.Run("XRP to user IOU via offer gateway and rippling", func(t *testing.T) {
+		sendAmt := tx.NewIssuedAmountFromFloat64(1, "ABC", a3.Address)
+		pr := newPathRequest(a1.ID, a3.ID, sendAmt, nil, xrpIssue, false)
+		pfResult := pr.Execute(env.Ledger())
+
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.True(t, alt.SourceAmount.IsNative())
+		require.EqualValues(t, xrplgoTesting.XRP(10), alt.SourceAmount.Drops())
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{bookStepIOU("ABC", g3), acctStep(g3), acctStep(a2)})
+	})
 }
 
 // TestPath_PathFind02 tests Path Find: non-XRP -> XRP.
 // From rippled: Path_test::path_find_02
 func TestPath_PathFind02(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and offers")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	// Test path finding from IOU to XRP via offer
-	// A1 sends ABC -> A2 receives XRP
-	// Path goes through offer: ABC -> XRP
-	t.Log("Path find 02 test: requires RPC path finding and offers")
+	a1 := xrplgoTesting.NewAccount("A1")
+	a2 := xrplgoTesting.NewAccount("A2")
+	g3 := xrplgoTesting.NewAccount("G3")
+	m1 := xrplgoTesting.NewAccount("M1")
+
+	env.FundAmount(a1, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(a2, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(g3, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
+	env.Close()
+
+	for _, tl := range []struct {
+		holder *xrplgoTesting.Account
+		limit  string
+	}{{a1, "1000"}, {a2, "1000"}, {m1, "100000"}} {
+		result := env.Submit(trustset.TrustLine(tl.holder, "ABC", g3, tl.limit).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	for _, p := range []struct {
+		to     *xrplgoTesting.Account
+		amount float64
+	}{{a1, 1000}, {a2, 1000}, {m1, 1200}} {
+		result := env.Submit(PayIssued(g3, p.to, tx.NewIssuedAmountFromFloat64(p.amount, "ABC", g3.Address)).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	// offer(M1, G3["ABC"](1000), XRP(10000)): pays G3/ABC, gets XRP
+	result := env.CreateOffer(m1,
+		tx.NewXRPAmount(xrplgoTesting.XRP(10000)),
+		tx.NewIssuedAmountFromFloat64(1000, "ABC", g3.Address))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// A1 -> A2 XRP(10) with source currency ABC: 1 ABC through G3 and the
+	// ABC/XRP book.
+	srcCurrencies := []payment.Issue{{Currency: "ABC", Issuer: a1.ID}}
+	pr := newPathRequest(a1.ID, a2.ID, tx.NewXRPAmount(xrplgoTesting.XRP(10)), nil, srcCurrencies, false)
+	pfResult := pr.Execute(env.Ledger())
+
+	require.NotEmpty(t, pfResult.Alternatives)
+	alt := pfResult.Alternatives[0]
+	require.False(t, alt.SourceAmount.IsNative())
+	require.Equal(t, "ABC", alt.SourceAmount.Currency)
+	require.InDelta(t, 1.0, alt.SourceAmount.Float64(), 0.0001)
+	requireSamePaths(t, alt.PathsComputed,
+		[]payment.PathStep{acctStep(g3), bookStepXRP()})
 }
 
 // TestPath_PathFind04 tests Bitstamp and SnapSwap liquidity with no offers.
@@ -1201,7 +1625,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("A1_to_A2", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", a2.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: a1.ID}}
-		pr := pathfinder.NewPathRequest(a1.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(a1.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives, "Should find path A1->A2")
@@ -1226,7 +1650,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("A2_to_A1", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", a1.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: a2.ID}}
-		pr := pathfinder.NewPathRequest(a2.ID, a1.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(a2.ID, a1.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives, "Should find path A2->A1")
@@ -1251,7 +1675,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("G1BS_to_A2", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", a2.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: g1bs.ID}}
-		pr := pathfinder.NewPathRequest(g1bs.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(g1bs.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives, "Should find path G1BS->A2")
@@ -1275,7 +1699,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("M1_to_G1BS", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", g1bs.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: m1.ID}}
-		pr := pathfinder.NewPathRequest(m1.ID, g1bs.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(m1.ID, g1bs.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		// Empty path set means default path handles it
@@ -1292,35 +1716,302 @@ func TestPath_PathFind04(t *testing.T) {
 // TestPath_PathFind05 tests non-XRP -> non-XRP, same currency.
 // From rippled: Path_test::path_find_05
 func TestPath_PathFind05(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and offers")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	// Complex trust line setup for various path scenarios:
-	// A) Borrow or repay - Source -> Destination (direct to issuer)
-	// B) Common gateway - Source -> AC -> Destination
-	// C) Gateway to gateway - Source -> OB -> Destination
-	// D) User to unlinked gateway - Source -> AC -> OB -> Destination
-	// I4) XRP bridge - Source -> AC -> OB to XRP -> OB from XRP -> AC -> Destination
-	t.Log("Path find 05 test: requires RPC path finding and offers")
+	a1 := xrplgoTesting.NewAccount("A1")
+	a2 := xrplgoTesting.NewAccount("A2")
+	a3 := xrplgoTesting.NewAccount("A3")
+	a4 := xrplgoTesting.NewAccount("A4")
+	g1 := xrplgoTesting.NewAccount("G1")
+	g2 := xrplgoTesting.NewAccount("G2")
+	g3 := xrplgoTesting.NewAccount("G3")
+	g4 := xrplgoTesting.NewAccount("G4")
+	m1 := xrplgoTesting.NewAccount("M1")
+	m2 := xrplgoTesting.NewAccount("M2")
+
+	for _, acc := range []*xrplgoTesting.Account{a1, a2, a3, g1, g2, g3, g4} {
+		env.FundAmount(acc, uint64(xrplgoTesting.XRP(1000)))
+	}
+	env.FundAmount(a4, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
+	env.FundAmount(m2, uint64(xrplgoTesting.XRP(11000)))
+	env.Close()
+
+	for _, tl := range []struct {
+		holder *xrplgoTesting.Account
+		issuer *xrplgoTesting.Account
+		limit  string
+	}{
+		{a1, g1, "2000"},
+		{a2, g2, "2000"},
+		{a3, g1, "2000"},
+		{m1, g1, "100000"},
+		{m1, g2, "100000"},
+		{m2, g1, "100000"},
+		{m2, g2, "100000"},
+	} {
+		result := env.Submit(trustset.TrustLine(tl.holder, "HKD", tl.issuer, tl.limit).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	for _, p := range []struct {
+		from, to *xrplgoTesting.Account
+		amount   float64
+	}{
+		{g1, a1, 1000},
+		{g2, a2, 1000},
+		{g1, a3, 1000},
+		{g1, m1, 1200},
+		{g2, m1, 5000},
+		{g1, m2, 1200},
+		{g2, m2, 5000},
+	} {
+		result := env.Submit(PayIssued(p.from, p.to, tx.NewIssuedAmountFromFloat64(p.amount, "HKD", p.from.Address)).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	// offer(M1, G1["HKD"](1000), G2["HKD"](1000)): pays G1/HKD, gets G2/HKD
+	result := env.CreateOffer(m1,
+		tx.NewIssuedAmountFromFloat64(1000, "HKD", g2.Address),
+		tx.NewIssuedAmountFromFloat64(1000, "HKD", g1.Address))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	// offer(M2, XRP(10000), G2["HKD"](1000)): pays XRP, gets G2/HKD
+	result = env.CreateOffer(m2,
+		tx.NewIssuedAmountFromFloat64(1000, "HKD", g2.Address),
+		tx.NewXRPAmount(xrplgoTesting.XRP(10000)))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	// offer(M2, G1["HKD"](1000), XRP(10000)): pays G1/HKD, gets XRP
+	result = env.CreateOffer(m2,
+		tx.NewXRPAmount(xrplgoTesting.XRP(10000)),
+		tx.NewIssuedAmountFromFloat64(1000, "HKD", g1.Address))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	hkd := func(value float64, issuer *xrplgoTesting.Account) tx.Amount {
+		return tx.NewIssuedAmountFromFloat64(value, "HKD", issuer.Address)
+	}
+	findHKD := func(src, dst *xrplgoTesting.Account, sendAmt tx.Amount) *pathfinder.PathRequestResult {
+		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: src.ID}}
+		pr := newPathRequest(src.ID, dst.ID, sendAmt, nil, srcCurrencies, false)
+		return pr.Execute(env.Ledger())
+	}
+
+	t.Run("A) repay source issuer", func(t *testing.T) {
+		pfResult := findHKD(a1, g1, hkd(10, g1))
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.Empty(t, alt.PathsComputed)
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+	})
+
+	t.Run("A2) repay destination issuer", func(t *testing.T) {
+		pfResult := findHKD(a1, g1, hkd(10, a1))
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.Empty(t, alt.PathsComputed)
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+	})
+
+	t.Run("B) common gateway", func(t *testing.T) {
+		pfResult := findHKD(a1, a3, hkd(10, a3))
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{acctStep(g1)})
+	})
+
+	t.Run("C) gateway to gateway", func(t *testing.T) {
+		pfResult := findHKD(g1, g2, hkd(10, g2))
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{bookStepIOU("HKD", g2)},
+			[]payment.PathStep{acctStep(m1)},
+			[]payment.PathStep{acctStep(m2)},
+			[]payment.PathStep{bookStepXRP(), bookStepIOU("HKD", g2)})
+	})
+
+	t.Run("D) user to unlinked gateway", func(t *testing.T) {
+		pfResult := findHKD(a1, g2, hkd(10, g2))
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{acctStep(g1), acctStep(m1)},
+			[]payment.PathStep{acctStep(g1), acctStep(m2)},
+			[]payment.PathStep{acctStep(g1), bookStepIOU("HKD", g2)},
+			[]payment.PathStep{acctStep(g1), bookStepXRP(), bookStepIOU("HKD", g2)})
+	})
+
+	t.Run("I4) XRP bridge", func(t *testing.T) {
+		pfResult := findHKD(a1, a2, hkd(10, a2))
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{acctStep(g1), acctStep(m1), acctStep(g2)},
+			[]payment.PathStep{acctStep(g1), acctStep(m2), acctStep(g2)},
+			[]payment.PathStep{acctStep(g1), bookStepIOU("HKD", g2), acctStep(g2)},
+			[]payment.PathStep{acctStep(g1), bookStepXRP(), bookStepIOU("HKD", g2), acctStep(g2)})
+	})
 }
 
 // TestPath_PathFind06 tests gateway to user path.
 // From rippled: Path_test::path_find_06
 func TestPath_PathFind06(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and offers")
+	env := xrplgoTesting.NewTestEnv(t)
 
-	// E) Gateway to user - Source -> OB -> AC -> Destination
-	// G1 pays A2 (who trusts G2) via market maker M1
-	t.Log("Path find 06 test: requires RPC path finding and offers")
+	a1 := xrplgoTesting.NewAccount("A1")
+	a2 := xrplgoTesting.NewAccount("A2")
+	a3 := xrplgoTesting.NewAccount("A3")
+	g1 := xrplgoTesting.NewAccount("G1")
+	g2 := xrplgoTesting.NewAccount("G2")
+	m1 := xrplgoTesting.NewAccount("M1")
+
+	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
+	for _, acc := range []*xrplgoTesting.Account{a1, a2, a3, g1, g2} {
+		env.FundAmount(acc, uint64(xrplgoTesting.XRP(1000)))
+	}
+	env.Close()
+
+	for _, tl := range []struct {
+		holder *xrplgoTesting.Account
+		issuer *xrplgoTesting.Account
+		limit  string
+	}{
+		{a1, g1, "2000"},
+		{a2, g2, "2000"},
+		{a3, a2, "2000"},
+		{m1, g1, "100000"},
+		{m1, g2, "100000"},
+	} {
+		result := env.Submit(trustset.TrustLine(tl.holder, "HKD", tl.issuer, tl.limit).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	for _, p := range []struct {
+		from, to *xrplgoTesting.Account
+		amount   float64
+	}{
+		{g1, a1, 1000},
+		{g2, a2, 1000},
+		{g1, m1, 5000},
+		{g2, m1, 5000},
+	} {
+		result := env.Submit(PayIssued(p.from, p.to, tx.NewIssuedAmountFromFloat64(p.amount, "HKD", p.from.Address)).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+	}
+	env.Close()
+
+	// offer(M1, G1["HKD"](1000), G2["HKD"](1000)): pays G1/HKD, gets G2/HKD
+	result := env.CreateOffer(m1,
+		tx.NewIssuedAmountFromFloat64(1000, "HKD", g2.Address),
+		tx.NewIssuedAmountFromFloat64(1000, "HKD", g1.Address))
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// E) Gateway to user: G1 -> A2, paths through M1 or the G2/HKD book.
+	sendAmt := tx.NewIssuedAmountFromFloat64(10, "HKD", a2.Address)
+	srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: g1.ID}}
+	pr := newPathRequest(g1.ID, a2.ID, sendAmt, nil, srcCurrencies, false)
+	pfResult := pr.Execute(env.Ledger())
+
+	require.NotEmpty(t, pfResult.Alternatives)
+	alt := pfResult.Alternatives[0]
+	require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+	requireSamePaths(t, alt.PathsComputed,
+		[]payment.PathStep{acctStep(m1), acctStep(g2)},
+		[]payment.PathStep{bookStepIOU("HKD", g2), acctStep(g2)})
 }
 
 // TestPath_ReceiveMax tests receive max in path finding.
 // From rippled: Path_test::receive_max
 func TestPath_ReceiveMax(t *testing.T) {
-	t.Skip("TODO: Requires ripple_path_find RPC and offers")
+	setup := func(t *testing.T) (env *xrplgoTesting.TestEnv, gw, alice, bob, charlie *xrplgoTesting.Account) {
+		t.Helper()
+		env = xrplgoTesting.NewTestEnv(t)
+		gw = xrplgoTesting.NewAccount("gw")
+		alice = xrplgoTesting.NewAccount("alice")
+		bob = xrplgoTesting.NewAccount("bob")
+		charlie = xrplgoTesting.NewAccount("charlie")
+		for _, acc := range []*xrplgoTesting.Account{alice, bob, charlie, gw} {
+			env.FundAmount(acc, uint64(xrplgoTesting.XRP(10000)))
+		}
+		env.Close()
+		for _, acc := range []*xrplgoTesting.Account{alice, bob, charlie} {
+			result := env.Submit(trustset.TrustLine(acc, "USD", gw, "100").Build())
+			xrplgoTesting.RequireTxSuccess(t, result)
+		}
+		env.Close()
+		return env, gw, alice, bob, charlie
+	}
 
-	// Test XRP -> IOU receive max (find max receivable given send limit)
-	// Test IOU -> XRP receive max
-	t.Log("Receive max test: requires RPC path finding and offers")
+	t.Run("XRP to IOU receive max", func(t *testing.T) {
+		env, gw, alice, bob, charlie := setup(t)
+
+		result := env.Submit(PayIssued(gw, charlie, tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// offer(charlie, XRP(10), USD(10)): pays XRP, gets USD
+		result = env.CreateOffer(charlie,
+			tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address),
+			tx.NewXRPAmount(xrplgoTesting.XRP(10)))
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// find_paths(alice, bob, USD(-1), sendmax XRP(100))
+		dstAmount, _ := state.NewIssuedAmountFromDecimalString("-1", "USD", gw.Address)
+		sendMax := tx.NewXRPAmount(xrplgoTesting.XRP(100))
+		pr := newPathRequest(alice.ID, bob.ID, dstAmount, &sendMax, nil, true)
+		pfResult := pr.Execute(env.Ledger())
+
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.True(t, alt.SourceAmount.IsNative())
+		require.EqualValues(t, xrplgoTesting.XRP(10), alt.SourceAmount.Drops())
+		require.False(t, alt.DestinationAmount.IsNative())
+		require.Equal(t, "USD", alt.DestinationAmount.Currency)
+		require.InDelta(t, 10.0, alt.DestinationAmount.Float64(), 0.0001)
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{bookStepIOU("USD", gw)})
+	})
+
+	t.Run("IOU to XRP receive max", func(t *testing.T) {
+		env, gw, alice, bob, charlie := setup(t)
+
+		result := env.Submit(PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)).Build())
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// offer(charlie, USD(10), XRP(10)): pays USD, gets XRP
+		result = env.CreateOffer(charlie,
+			tx.NewXRPAmount(xrplgoTesting.XRP(10)),
+			tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address))
+		xrplgoTesting.RequireTxSuccess(t, result)
+		env.Close()
+
+		// find_paths(alice, bob, drops(-1), sendmax USD(100))
+		dstAmount := state.NewXRPAmountFromInt(-1)
+		sendMax := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
+		pr := newPathRequest(alice.ID, bob.ID, dstAmount, &sendMax, nil, true)
+		pfResult := pr.Execute(env.Ledger())
+
+		require.NotEmpty(t, pfResult.Alternatives)
+		alt := pfResult.Alternatives[0]
+		require.False(t, alt.SourceAmount.IsNative())
+		require.Equal(t, "USD", alt.SourceAmount.Currency)
+		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
+		require.True(t, alt.DestinationAmount.IsNative())
+		require.EqualValues(t, xrplgoTesting.XRP(10), alt.DestinationAmount.Drops())
+		requireSamePaths(t, alt.PathsComputed,
+			[]payment.PathStep{bookStepXRP()})
+	})
 }
 
 // TestPath_HybridOfferPath tests hybrid domain/open offers.
@@ -1390,7 +2081,7 @@ func TestPath_PathFind(t *testing.T) {
 	// Our pathfinder may return 0 alternatives when default path suffices,
 	// which is correct — it means explicit paths are unnecessary.
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", gw.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	// Destination currencies should include USD
@@ -1503,7 +2194,7 @@ func TestPath_IndirectPathsPathFind(t *testing.T) {
 	// Pathfinder: find_paths(env, "alice", "carol", carol/USD(5))
 	// Expects: same(st, stpath("bob")), equal(sa, alice/USD(5))
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", carol.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	require.NotEmpty(t, pfResult.Alternatives, "Should find at least one path alternative")

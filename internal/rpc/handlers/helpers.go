@@ -3,10 +3,13 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -16,6 +19,22 @@ import (
 func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	if services == nil || services.Ledger == nil {
 		return types.RpcErrorInternal("Ledger service not available")
+	}
+	return nil
+}
+
+// RequireTxTables gates tx-history-backed handlers (tx, account_tx,
+// tx_history) the way rippled does: config().useTxTables() is checked
+// before any parameter validation, so a node without a transaction
+// database answers notEnabled even for otherwise-malformed requests.
+// Services that don't implement types.TxTablesProvider are assumed to
+// have history available.
+func RequireTxTables(services *types.ServiceContainer) *types.RpcError {
+	if err := RequireLedgerService(services); err != nil {
+		return err
+	}
+	if p, ok := services.Ledger.(types.TxTablesProvider); ok && !p.UseTxTables() {
+		return types.RpcErrorNotEnabled("")
 	}
 	return nil
 }
@@ -88,7 +107,7 @@ func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 
 // ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
 // If params is nil, dest is left untouched (zero value).
-func ParseParams(params json.RawMessage, dest interface{}) *types.RpcError {
+func ParseParams(params json.RawMessage, dest any) *types.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -113,14 +132,184 @@ func ValidateAccount(account string) *types.RpcError {
 		return types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 	if !types.IsValidXRPLAddress(account) {
-		return types.RpcErrorActMalformed("Malformed account.")
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 	return nil
+}
+
+// normalizeLedgerSpecifier folds rippled's legacy combined `ledger` field into
+// LedgerHash/LedgerIndex (RPCHelpers.cpp:367-374): a string longer than 12
+// characters becomes a ledger_hash, anything else a ledger_index. When present,
+// the legacy field overwrites the matching slot even if an explicit ledger_hash
+// or ledger_index was also supplied, leaving the other slot untouched; the
+// hash-before-index resolution that follows then gives a long legacy `ledger`
+// priority over an explicit ledger_index, matching rippled.
+func normalizeLedgerSpecifier(spec types.LedgerSpecifier) types.LedgerSpecifier {
+	if spec.Ledger != "" {
+		if legacy := spec.Ledger.String(); len(legacy) > 12 {
+			spec.LedgerHash = legacy
+		} else {
+			spec.LedgerIndex = spec.Ledger
+		}
+		spec.Ledger = ""
+	}
+	return spec
+}
+
+// resolveLedgerSelector returns the string ledger selector the service query
+// path expects, mirroring rippled's ledgerFromRequest (RPCHelpers.cpp:367-402).
+// ledger_hash takes precedence over ledger_index when both are supplied, and the
+// hash is threaded through verbatim so the service resolves the specific named
+// ledger (its 64-char-hex branch) rather than collapsing to the latest validated
+// one. A malformed hash maps to rpcINVALID_PARAMS, matching rippled's
+// ledgerHashMalformed. With neither field set the request falls back to the open
+// "current" ledger.
+func resolveLedgerSelector(spec types.LedgerSpecifier) (string, *types.RpcError) {
+	spec = normalizeLedgerSpecifier(spec)
+	if spec.LedgerHash != "" {
+		if len(spec.LedgerHash) != 64 {
+			return "", types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		if _, err := hex.DecodeString(spec.LedgerHash); err != nil {
+			return "", types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		return spec.LedgerHash, nil
+	}
+	if spec.LedgerIndex != "" {
+		return spec.LedgerIndex.String(), nil
+	}
+	return "current", nil
+}
+
+// LookupLedger resolves the ledger a request targets and returns the reader plus
+// whether that ledger is validated, mirroring rippled's RPC::lookupLedger /
+// ledgerFromRequest (RPCHelpers.cpp:355-402). ledger_hash takes precedence over
+// ledger_index; with neither supplied it defaults to the open (current) ledger.
+// Errors use rippled's tokens: ledgerHashMalformed / ledgerIndexMalformed
+// (rpcINVALID_PARAMS) for bad selectors and ledgerNotFound (rpcLGR_NOT_FOUND)
+// for an absent ledger. It is the single resolution point the direct-ledger
+// handlers share in place of hand-rolled validated/current/closed/numeric
+// switches.
+func LookupLedger(ctx *types.RpcContext, spec types.LedgerSpecifier) (types.LedgerReader, bool, *types.RpcError) {
+	if err := RequireLedgerService(ctx.Services); err != nil {
+		return nil, false, err
+	}
+	svc := ctx.Services.Ledger
+	spec = normalizeLedgerSpecifier(spec)
+
+	if spec.LedgerHash != "" {
+		if len(spec.LedgerHash) != 64 {
+			return nil, false, types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		hashBytes, err := hex.DecodeString(spec.LedgerHash)
+		if err != nil {
+			return nil, false, types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		var hash [32]byte
+		copy(hash[:], hashBytes)
+		l, err := svc.GetLedgerByHash(hash)
+		if err != nil || l == nil {
+			return nil, false, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return l, l.IsValidated(), nil
+	}
+
+	switch idx := spec.LedgerIndex.String(); idx {
+	case "", "current":
+		l, err := svc.GetLedgerBySequence(svc.GetCurrentLedgerIndex())
+		if err != nil || l == nil {
+			return nil, false, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return l, false, nil
+	case "validated":
+		seq := svc.GetValidatedLedgerIndex()
+		if seq == 0 {
+			return nil, false, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		l, err := svc.GetLedgerBySequence(seq)
+		if err != nil || l == nil {
+			return nil, false, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return l, true, nil
+	case "closed":
+		l, err := svc.GetLedgerBySequence(svc.GetClosedLedgerIndex())
+		if err != nil || l == nil {
+			return nil, false, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return l, l.IsValidated(), nil
+	default:
+		seq, perr := strconv.ParseUint(idx, 10, 32)
+		if perr != nil {
+			return nil, false, types.RpcErrorInvalidParams("ledgerIndexMalformed")
+		}
+		l, err := svc.GetLedgerBySequence(uint32(seq))
+		if err != nil || l == nil {
+			return nil, false, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return l, l.IsValidated(), nil
+	}
+}
+
+// mapLedgerLookupErr maps the ledger-resolution errors a ledger-backed account
+// query can return into rippled RpcErrors (ledgerNotFound,
+// ledgerIndexMalformed, ledgerHashMalformed). It returns nil when err is not a
+// ledger-resolution error so callers fall through to their handler-specific
+// mapping (account-not-found, etc.), mirroring how rippled's lookupLedger sits
+// ahead of each handler's own checks.
+func mapLedgerLookupErr(err error) *types.RpcError {
+	switch {
+	case errors.Is(err, svcerr.ErrLedgerNotFound):
+		return types.RpcErrorLgrNotFound("ledgerNotFound")
+	case errors.Is(err, svcerr.ErrInvalidLedgerIndex):
+		return types.RpcErrorInvalidParams("ledgerIndexMalformed")
+	case errors.Is(err, svcerr.ErrInvalidLedgerHash):
+		return types.RpcErrorInvalidParams("ledgerHashMalformed")
+	}
+	return nil
+}
+
+// markerString extracts the opaque pagination marker from a request's
+// PaginationParams.Marker (decoded as `any`). A nil marker means "first page";
+// a non-string marker is rejected as rippled's expected_field_error(marker,
+// "string"). The service validates the marker's contents (a 64-hex ledger-state
+// key).
+func markerString(marker any) (string, *types.RpcError) {
+	if marker == nil {
+		return "", nil
+	}
+	s, ok := marker.(string)
+	if !ok {
+		return "", types.RpcErrorExpectedField("marker", "string")
+	}
+	return s, nil
 }
 
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).
 func FormatLedgerHash(hash [32]byte) string {
 	return strings.ToUpper(hex.EncodeToString(hash[:]))
+}
+
+// isOpenLedgerSelector reports whether a resolved ledger selector refers to
+// the open (current) ledger. The open ledger is selected by "current" or the
+// empty default; "closed", "validated" and numeric indices all refer to
+// closed ledgers.
+func isOpenLedgerSelector(selector string) bool {
+	return selector == "current" || selector == ""
+}
+
+// fillLedgerFields writes the ledger-identity fields of an RPC response,
+// mirroring rippled's RPC::lookupLedger. For the open ledger it emits only
+// ledger_current_index (rippled withholds the interim hash and index); for a
+// closed ledger it emits ledger_hash and ledger_index. The validated flag is
+// always emitted. ledgerHash must already be the formatted uppercase-hex hash.
+func fillLedgerFields(response map[string]any, selector string, ledgerHash string, ledgerSeq uint32, validated bool) {
+	if isOpenLedgerSelector(selector) {
+		response["ledger_current_index"] = ledgerSeq
+	} else {
+		response["ledger_hash"] = ledgerHash
+		response["ledger_index"] = ledgerSeq
+	}
+	response["validated"] = validated
 }
 
 // FormatHash formats arbitrary bytes as uppercase hex string.
@@ -231,7 +420,7 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 // Otherwise, for Payment transactions, the Amount field from the transaction
 // is used as a fallback for "DeliveredAmount".
 // Non-Payment transactions and nil meta are no-ops.
-func InjectDeliveredAmount(txJSON map[string]interface{}, meta map[string]interface{}) {
+func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
 	txType, _ := txJSON["TransactionType"].(string)
 	if txType != "Payment" {
 		return

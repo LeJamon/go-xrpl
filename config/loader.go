@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -22,9 +23,9 @@ func LoadConfig(paths ConfigPaths) (*Config, error) {
 
 	// Unmarshal into struct.
 	// The custom decode hook is required so viper can decode the typed
-	// union fields (LedgerHistory, FetchDepth, NetworkID) and the typed
-	// RPCStartup entries from raw TOML scalars/tables. The remaining hooks
-	// preserve viper's default behaviour for time durations and slices.
+	// union fields (LedgerHistory, FetchDepth, NetworkID) from raw TOML
+	// scalars. The remaining hooks preserve viper's default behaviour
+	// for time durations and slices.
 	var config Config
 	if err := v.Unmarshal(&config, viper.DecodeHook(mapstructure.ComposeDecodeHookFunc(
 		configDecodeHook(),
@@ -35,7 +36,7 @@ func LoadConfig(paths ConfigPaths) (*Config, error) {
 	}
 
 	// Load validators configuration
-	validators, err := loadValidatorsConfig(paths.Validators, config.ValidatorsFile)
+	validators, err := loadValidatorsConfig(paths, config.ValidatorsFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load validators config: %w", err)
 	}
@@ -45,10 +46,6 @@ func LoadConfig(paths ConfigPaths) (*Config, error) {
 	if err := processPorts(&config, v); err != nil {
 		return nil, fmt.Errorf("failed to process ports: %w", err)
 	}
-
-	// Store paths for reference
-	config.configPath = paths.Main
-	config.validatorsPath = paths.Validators
 
 	// Validate the complete configuration (reports ALL errors at once)
 	if err := ValidateConfig(&config); err != nil {
@@ -78,30 +75,36 @@ func loadMainConfig(v *viper.Viper, configPath string) error {
 }
 
 // loadValidatorsConfig loads the validators configuration.
-// If validators_file is explicitly specified in the config, the file MUST exist.
-// If not specified, returns empty config (validation will catch this for non-standalone mode).
-func loadValidatorsConfig(validatorsPath, validatorsFile string) (*ValidatorsConfig, error) {
+//
+// The operator's validators_file key takes precedence over a
+// caller-supplied paths.Validators; a relative validators_file is
+// resolved against the main config file's directory, matching rippled's
+// handling of [validators_file]. Whichever path is selected MUST exist
+// — both sources are explicit requests for a validators file.
+func loadValidatorsConfig(paths ConfigPaths, validatorsFile string) (*ValidatorsConfig, error) {
 	var filePath string
 	switch {
-	case validatorsPath != "":
-		filePath = validatorsPath
 	case validatorsFile != "":
 		filePath = validatorsFile
+		if !filepath.IsAbs(filePath) {
+			filePath = filepath.Join(filepath.Dir(paths.Main), filePath)
+		}
+	case paths.Validators != "":
+		filePath = paths.Validators
 	default:
 		// No validators file specified — return empty config
 		return &ValidatorsConfig{}, nil
 	}
 
-	// If explicitly specified, file MUST exist
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		// Try alternative formats
-		if strings.HasSuffix(filePath, ".toml") {
-			txtPath := strings.TrimSuffix(filePath, ".toml") + ".txt"
+		if before, ok := strings.CutSuffix(filePath, ".toml"); ok {
+			txtPath := before + ".txt"
 			if _, err := os.Stat(txtPath); err == nil {
 				return loadValidatorsTxtFile(txtPath)
 			}
 		}
-		return nil, fmt.Errorf("validators file not found: %s (file was explicitly specified and must exist)", filePath)
+		return nil, fmt.Errorf("validators file not found: %s", filePath)
 	}
 
 	if strings.HasSuffix(filePath, ".toml") {
@@ -206,39 +209,26 @@ func loadPortConfig(v *viper.Viper, portName string, serverDefaults ServerConfig
 	return portConfig, nil
 }
 
-// applyServerDefaults applies server-level defaults to a port configuration
+// applyServerDefaults applies server-level defaults to a port
+// configuration. SetDefault already yields to values set explicitly in
+// the port section, so no IsSet guards are needed.
 func applyServerDefaults(portViper *viper.Viper, serverDefaults ServerConfig) {
-	if serverDefaults.Port != 0 && !portViper.IsSet("port") {
+	if serverDefaults.Port != 0 {
 		portViper.SetDefault("port", serverDefaults.Port)
 	}
-	if serverDefaults.IP != "" && !portViper.IsSet("ip") {
+	if serverDefaults.IP != "" {
 		portViper.SetDefault("ip", serverDefaults.IP)
 	}
-	if serverDefaults.Protocol != "" && !portViper.IsSet("protocol") {
+	if serverDefaults.Protocol != "" {
 		portViper.SetDefault("protocol", serverDefaults.Protocol)
 	}
-	if serverDefaults.Limit != 0 && !portViper.IsSet("limit") {
+	if serverDefaults.Limit != 0 {
 		portViper.SetDefault("limit", serverDefaults.Limit)
 	}
-	if serverDefaults.User != "" && !portViper.IsSet("user") {
+	if serverDefaults.User != "" {
 		portViper.SetDefault("user", serverDefaults.User)
 	}
-	if serverDefaults.Password != "" && !portViper.IsSet("password") {
+	if serverDefaults.Password != "" {
 		portViper.SetDefault("password", serverDefaults.Password)
 	}
-}
-
-// LoadConfigFromDir loads configuration from a directory containing both files
-func LoadConfigFromDir(configDir string) (*Config, error) {
-	paths := ConfigPathsFromDir(configDir)
-	return LoadConfig(paths)
-}
-
-// ReloadConfig reloads configuration from the same paths
-func ReloadConfig(existingConfig *Config) (*Config, error) {
-	paths := ConfigPaths{
-		Main:       existingConfig.GetConfigPath(),
-		Validators: existingConfig.GetValidatorsPath(),
-	}
-	return LoadConfig(paths)
 }

@@ -5,9 +5,11 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -47,8 +49,9 @@ type WebSocketServer struct {
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
-	peerSource          atomic.Pointer[types.PeerSource]
-	loadTracker         *loadtrack.Tracker
+	urlSubs             *URLSubscriptionRegistry
+	peerSourceHolder
+	loadTracker *loadtrack.Tracker
 	// pingInterval is how often pingLoop sends a keepalive ping. Settable
 	// so concurrency tests can drive the ping path without waiting on the
 	// production cadence.
@@ -56,24 +59,6 @@ type WebSocketServer struct {
 	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
 	// so Close can join them on shutdown.
 	wg sync.WaitGroup
-}
-
-// SetPeerSource registers the source of per-peer entries served by the
-// `peers` RPC handler. Passing nil detaches the source so the handler
-// returns an empty list. Safe to call concurrently with reads.
-func (ws *WebSocketServer) SetPeerSource(src types.PeerSource) {
-	if src == nil {
-		ws.peerSource.Store(nil)
-		return
-	}
-	ws.peerSource.Store(&src)
-}
-
-func (ws *WebSocketServer) loadPeerSource() types.PeerSource {
-	if p := ws.peerSource.Load(); p != nil {
-		return *p
-	}
-	return nil
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -116,24 +101,39 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 	if services != nil && services.ClientLoad == nil {
 		services.ClientLoad = types.NewClientLoadShedder()
 	}
-	return &WebSocketServer{
+	ws := &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// TODO: Implement proper origin checking for security
-				// For now, allow all origins (matching rippled behavior)
-				return true
-			},
+			// Accept any Origin, deliberately matching rippled: its WS
+			// server never validates the Origin header — access control
+			// is done via admin IP nets / port configuration instead.
+			CheckOrigin: func(r *http.Request) bool { return true },
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
-		subscriptionManager: &subscription.Manager{
-			Connections: make(map[string]*types.Connection),
-		},
-		methodRegistry: types.NewMethodRegistry(),
-		connections:    make(map[string]*WebSocketConnection),
-		timeout:        timeout,
-		services:       services,
-		loadTracker:    loadtrack.New(),
-		pingInterval:   30 * time.Second,
+		subscriptionManager: subscription.NewManager(),
+		methodRegistry:      types.NewMethodRegistry(),
+		connections:         make(map[string]*WebSocketConnection),
+		timeout:             timeout,
+		services:            services,
+		loadTracker:         loadtrack.New(),
+		pingInterval:        30 * time.Second,
+	}
+	// The url (RPCSub) registry lives on the WebSocket server because url
+	// subscribers share its subscription manager's broadcast fan-out.
+	// Exposing it through the service container lets the plain JSON-RPC
+	// subscribe/unsubscribe handlers reach it.
+	ws.urlSubs = newURLSubscriptionRegistry(ws)
+	if services != nil {
+		services.URLSubscriptions = ws.urlSubs
+	}
+	return ws
+}
+
+// SetPingInterval overrides the keepalive ping cadence (the operator's
+// websocket_ping_frequency key). Non-positive values are ignored. Must
+// be called before connections are accepted.
+func (ws *WebSocketServer) SetPingInterval(d time.Duration) {
+	if d > 0 {
+		ws.pingInterval = d
 	}
 }
 
@@ -171,7 +171,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Use Background() not r.Context() because the WebSocket connection
 	// lives beyond the HTTP request lifecycle.
-	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in wsConn.cancel, called in closeConnection
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// Capture proxy-attribution headers at upgrade time. They are only
 	// consulted when the upgrade socket peer is in the per-port
@@ -292,6 +292,9 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := wsConn.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				wsLog().Debug("WebSocket send failed", "err", err)
+				// Close the socket so the read loop unblocks and tears the
+				// connection down now, not at the 90 s read deadline.
+				wsConn.closeSocket()
 				return
 			}
 		}
@@ -309,21 +312,38 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}()
 
 	// XRPL WebSocket format: command and id at top level, all other fields are params.
-	var cmdMap map[string]interface{}
+	var cmdMap map[string]any
 	if err := json.Unmarshal(message, &cmdMap); err != nil {
 		ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
 		return
 	}
 
-	command, ok := cmdMap["command"].(string)
-	if !ok || command == "" {
-		ws.sendError(wsConn, types.NewRpcError(types.RpcMISSING_COMMAND, "missingCommand", "missingCommand", "Missing command field"), nil)
-		return
-	}
-
-	var id interface{}
+	var id any
 	if idVal, exists := cmdMap["id"]; exists {
 		id = idVal
+	}
+
+	// Role is always derived from the socket-level peer, never from
+	// header-supplied IPs. ClientIP is the peer too, unless the peer is in this
+	// port's secure_gateway set — then we substitute the value captured at
+	// upgrade time (matches rippled WSInfoSub::forwarded_for,
+	// ServerHandler.cpp:497-501). Derived before command resolution so a
+	// malformed request can be load-charged like rippled charges it.
+	peerIP := getWebSocketClientIP(wsConn.conn)
+	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
+	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
+
+	// rippled accepts `method` as an alias for `command`, rejecting only when
+	// neither is present (or both are present strings that disagree) with a
+	// bare missingCommand token that echoes the original request, and charges
+	// feeMalformedRPC (ServerHandler.cpp:446-468).
+	command, ok := resolveWSCommand(cmdMap)
+	if !ok {
+		ws.sendMissingCommand(wsConn, cmdMap, id)
+		if ws.loadTracker != nil && !role.IsUnlimited() {
+			ws.loadTracker.Charge(clientIP, loadtrack.LoadMalformed)
+		}
+		return
 	}
 
 	cmd := types.WebSocketCommand{
@@ -332,6 +352,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	delete(cmdMap, "command")
+	delete(cmdMap, "method")
 	delete(cmdMap, "id")
 
 	var apiVersion int = types.DefaultApiVersion
@@ -347,14 +368,6 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		cmd.Params = paramsBytes
 	}
 
-	// Role is always derived from the socket-level peer, never from
-	// header-supplied IPs. ClientIP is the peer too, unless the peer is
-	// in this port's secure_gateway set — then we substitute the value
-	// captured at upgrade time (matches rippled WSInfoSub::forwarded_for,
-	// ServerHandler.cpp:497-501).
-	peerIP := getWebSocketClientIP(wsConn.conn)
-	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
-	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	dispatchCtx := wsConn.ctx
 	var cancel context.CancelFunc
@@ -362,16 +375,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
 		defer cancel()
 	}
-	rpcCtx := &types.RpcContext{
-		Context:    dispatchCtx,
-		Role:       role,
-		ApiVersion: apiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
-		ClientIP:   clientIP,
-		PeerSource: ws.loadPeerSource(),
-		Services:   ws.services,
-	}
+	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 
 	// Handle subscription commands specially
 	switch cmd.Command {
@@ -398,84 +402,38 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 		}
 	}
 
-	conn := &types.Connection{
-		ID:            wsConn.ID,
-		Subscriptions: wsConn.subscriptions,
-		SendChannel:   wsConn.sendChannel,
-		CloseChannel:  wsConn.closeChannel,
+	// url requests are server-to-server (RPCSub) subscriptions: events go
+	// to the url's subscriber, not to this WebSocket connection.
+	if request.HasURL() {
+		if !ctx.IsAdmin {
+			ws.sendError(wsConn, types.RpcErrorNoPermission("subscribe"), cmd.ID)
+			return
+		}
+		result, rpcErr := ws.urlSubs.Subscribe(ctx, request)
+		if rpcErr != nil {
+			ws.sendError(wsConn, rpcErr, cmd.ID)
+			return
+		}
+		ws.sendResponse(wsConn, types.WebSocketResponse{
+			Type:       "response",
+			ID:         cmd.ID,
+			Status:     "success",
+			Result:     result,
+			ApiVersion: ctx.ApiVersion,
+		})
+		return
 	}
-	if err := ws.subscriptionManager.HandleSubscribe(conn, request, ctx.IsAdmin); err != nil {
+
+	// wsConn.legacy is the same connection the subscription manager already
+	// tracks (created in attachConnection, before any message can arrive); it
+	// shares the subscriptions map and carries the Disconnect callback a
+	// freshly-built copy would lack.
+	if err := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, request, ctx.IsAdmin); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}
 
-	// rippled returns current ledger info in the subscribe response when
-	// the ledger stream is among the requested streams.
-	result := make(map[string]interface{})
-
-	for _, stream := range request.Streams {
-		if stream == types.SubLedger {
-			if ws.ledgerInfoProvider != nil {
-				info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
-				if info != nil {
-					// Subscribe ack field set mirrors rippled subLedger
-					// at NetworkOPs.cpp:4174-4189. Per-ledger pubLedger
-					// events (LedgerCloseEvent) carry txn_count separately.
-					result["ledger_index"] = info.LedgerIndex
-					result["ledger_hash"] = info.LedgerHash
-					result["ledger_time"] = info.LedgerTime
-					result["fee_base"] = info.FeeBase
-					result["fee_ref"] = info.FeeRef
-					result["reserve_base"] = info.ReserveBase
-					result["reserve_inc"] = info.ReserveInc
-					if info.NetworkID > 0 {
-						result["network_id"] = info.NetworkID
-					}
-					if info.ValidatedLedgers != "" {
-						result["validated_ledgers"] = info.ValidatedLedgers
-					}
-				}
-			}
-			break
-		}
-	}
-
-	// Synthetic book-offers snapshot for any `snapshot:true` book in the
-	// request. Mirrors rippled Subscribe.cpp:339-394: when snapshot is
-	// set, the response carries `offers` (or `bids`/`asks` if `both` is
-	// set) populated by NetworkOPs::getBookPage. Reuses the ledger
-	// service's GetBookOffers — the same code path the book_offers RPC
-	// uses — so the snapshot a subscriber gets in the ack is identical
-	// to what they would have read with a separate book_offers call.
-	for _, book := range request.Books {
-		if !book.Snapshot || ctx.Services == nil || ctx.Services.Ledger == nil {
-			continue
-		}
-		var takerGets, takerPays types.CurrencySpec
-		if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
-			continue
-		}
-		if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
-			continue
-		}
-		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
-		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
-		if book.Both {
-			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
-			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker)
-			if bids != nil {
-				result["bids"] = appendOffers(result["bids"], bids)
-			}
-			if asks != nil {
-				result["asks"] = appendOffers(result["asks"], asks)
-			}
-			continue
-		}
-		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
-		if offers != nil {
-			result["offers"] = appendOffers(result["offers"], offers)
-		}
-	}
+	result := ws.buildSubscribeAck(ctx, request)
 
 	response := types.WebSocketResponse{
 		Type:       "response",
@@ -496,13 +454,28 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 		}
 	}
 
-	conn := &types.Connection{
-		ID:            wsConn.ID,
-		Subscriptions: wsConn.subscriptions,
-		SendChannel:   wsConn.sendChannel,
-		CloseChannel:  wsConn.closeChannel,
+	// See handleSubscribe: url requests target the RPCSub registry.
+	if request.HasURL() {
+		if !ctx.IsAdmin {
+			ws.sendError(wsConn, types.RpcErrorNoPermission("unsubscribe"), cmd.ID)
+			return
+		}
+		result, rpcErr := ws.urlSubs.Unsubscribe(ctx, request)
+		if rpcErr != nil {
+			ws.sendError(wsConn, rpcErr, cmd.ID)
+			return
+		}
+		ws.sendResponse(wsConn, types.WebSocketResponse{
+			Type:       "response",
+			ID:         cmd.ID,
+			Status:     "success",
+			Result:     result,
+			ApiVersion: ctx.ApiVersion,
+		})
+		return
 	}
-	if err := ws.subscriptionManager.HandleUnsubscribe(conn, request, ctx.IsAdmin); err != nil {
+
+	if err := ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, request, ctx.IsAdmin); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}
@@ -511,7 +484,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
-		Result:     map[string]interface{}{},
+		Result:     map[string]any{},
 		ApiVersion: ctx.ApiVersion,
 	}
 	ws.sendResponse(wsConn, response)
@@ -604,7 +577,7 @@ func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx 
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
-		Result:     map[string]interface{}{"closed": true},
+		Result:     map[string]any{"closed": true},
 		ApiVersion: ctx.ApiVersion,
 	}
 	ws.sendResponse(wsConn, response)
@@ -673,67 +646,43 @@ func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerSt
 			continue
 		}
 
-		select {
-		case conn.sendChannel <- data:
-		default:
-			// Channel full, skip this update
-		}
+		// Deliver through the shared TrySend so a persistently slow path-find
+		// subscriber accrues drops and is disconnected like any other outbound
+		// path, rather than silently skipping forever on a bare select/default.
+		conn.legacy.TrySend(data)
 	}
 }
 
 func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
-	handler, exists := ws.methodRegistry.Get(cmd.Command)
-	if !exists {
-		ws.sendError(wsConn, types.RpcErrorMethodNotFound(cmd.Command), cmd.ID)
-		return
-	}
-
-	// Admin gate. Mirrors rippled ServerHandler.cpp:482-486 (WS path):
-	// when requestRole returns Role::FORBID for an admin-required command,
-	// rippled writes rpcError(rpcFORBIDDEN) before doCommand ever runs.
-	// The fallback rpcNO_PERMISSION at RPCHandler.cpp:166-167 is only
-	// reached when the outer requestRole gate let the request through.
-	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		ws.sendError(wsConn, types.RpcErrorForbidden(cmd.Command), cmd.ID)
-		return
-	}
-
-	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
-	}
-
-	if rpcErr := gateLoad(ws.loadTracker, ctx, cmd.Command, wsLog()); rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
-	}
-
-	if ws.services != nil && ws.services.ClientLoad != nil {
-		ws.services.ClientLoad.Begin()
-		defer ws.services.ClientLoad.End()
-	}
-
-	result, rpcErr := handler.Handle(ctx, cmd.Params)
-	finalizeLoad(ws.loadTracker, ctx, cmd.Command, handler, rpcErr, wsLog())
+	// Shared dispatch core (registry → admin gate → conditionMet →
+	// api-version → busy/load gates → handle → finalize), identical to the
+	// HTTP path. The WS-specific admin gate returns rpcFORBIDDEN instead of
+	// rpcNO_PERMISSION (ServerHandler.cpp:482-486): when requestRole returns
+	// Role::FORBID for an admin-required command, rippled writes
+	// rpcError(rpcFORBIDDEN) before doCommand ever runs.
+	result, rpcErr := dispatchMethod(ws.methodRegistry, ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, types.RpcErrorForbidden, wsLog())
+	opts := wsLoadWarningOpts(ctx)
 	if rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-	} else {
-		response := types.WebSocketResponse{
-			Type:       "response",
-			ID:         cmd.ID,
-			Status:     "success",
-			Result:     result,
-			ApiVersion: ctx.ApiVersion,
-		}
-		ws.sendResponse(wsConn, response)
+		ws.sendErrorWithOptions(wsConn, rpcErr, cmd.ID, opts)
+		return
 	}
+	ws.sendResponseWithOptions(wsConn, types.WebSocketResponse{
+		Type:       "response",
+		ID:         cmd.ID,
+		Status:     "success",
+		Result:     result,
+		ApiVersion: ctx.ApiVersion,
+	}, opts)
 }
 
-// WebSocketResponseOptions contains optional fields for WebSocket responses
-type WebSocketResponseOptions struct {
-	Warning   string                // "load" when approaching rate limit
-	Warnings  []types.WarningObject // Array of warning objects
-	Forwarded bool                  // True if forwarded from Clio to P2P server
+// wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
+// dispatch crossed the resource warn threshold (recorded on ctx by
+// finalizeLoad), and returns nil otherwise.
+func wsLoadWarningOpts(ctx *types.RpcContext) *types.WebSocketResponseOptions {
+	if ctx != nil && ctx.LoadWarning {
+		return &types.WebSocketResponseOptions{Warning: "load"}
+	}
+	return nil
 }
 
 func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response types.WebSocketResponse) {
@@ -752,18 +701,21 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 		wsLog().Error("Failed to marshal WebSocket response", "err", err)
 		return
 	}
+	ws.deliver(wsConn, data)
+}
 
-	// Route through the shared TrySend so per-request response delivery
-	// and broadcast delivery use the same consecutive-drop counter and
-	// the same disconnect-on-N-drops threshold.
+// deliver queues an already-marshalled WS frame through the shared TrySend so
+// per-request response delivery and broadcast delivery use the same
+// consecutive-drop counter and the same disconnect-on-N-drops threshold. Test
+// fixtures may build a wsConn without a legacy peer; those fall back to a
+// non-blocking channel send so unit tests stay self-contained.
+func (ws *WebSocketServer) deliver(wsConn *WebSocketConnection, data []byte) {
 	if wsConn.legacy != nil {
 		if !wsConn.legacy.TrySend(data) {
 			wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
 		}
 		return
 	}
-	// Test fixtures may build a wsConn without a legacy peer. Fall back
-	// to a non-blocking send so unit tests stay self-contained.
 	select {
 	case wsConn.sendChannel <- data:
 	case <-wsConn.ctx.Done():
@@ -772,13 +724,67 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 	}
 }
 
-func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}) {
+// resolveWSCommand resolves the WS command name from the incoming JSON,
+// accepting `method` as an alias for `command` (ServerHandler.cpp:446-475).
+// ok is false — meaning the caller emits missingCommand — when neither is a
+// non-empty string, or both are present strings that disagree.
+func resolveWSCommand(m map[string]any) (string, bool) {
+	cmd, cmdOK := m["command"].(string)
+	method, methodOK := m["method"].(string)
+	switch {
+	case cmdOK && methodOK:
+		if cmd != method {
+			return "", false
+		}
+		return cmd, cmd != ""
+	case cmdOK:
+		return cmd, cmd != ""
+	case methodOK:
+		return method, method != ""
+	default:
+		return "", false
+	}
+}
+
+// sendMissingCommand emits rippled's bare missingCommand reply: a lone
+// `error` token (no error_code/error_message) plus the echoed request and id
+// (ServerHandler.cpp:452-468). Credentials in the echo are redacted — a
+// deliberate goxrpl superset of rippled's raw echo.
+func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, request map[string]any, id any) {
+	echo := make(map[string]any, len(request))
+	maps.Copy(echo, request)
+	redactCredentials(echo)
+	resp := map[string]any{
+		"type":    "response",
+		"status":  "error",
+		"error":   "missingCommand",
+		"request": echo,
+	}
+	if id != nil {
+		resp["id"] = id
+	}
+	// rippled also lifts jsonrpc/ripplerpc/api_version to the top level of the
+	// error reply, alongside the request echo (ServerHandler.cpp:460-465).
+	for _, k := range []string{"jsonrpc", "ripplerpc", "api_version"} {
+		if v, ok := request[k]; ok {
+			resp[k] = v
+		}
+	}
+	data, err := json.Marshal(resp)
+	if err != nil {
+		wsLog().Error("Failed to marshal missingCommand response", "err", err)
+		return
+	}
+	ws.deliver(wsConn, data)
+}
+
+func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any) {
 	ws.sendErrorWithOptions(wsConn, rpcErr, id, nil)
 }
 
 // sendErrorWithOptions writes an XRPL-format error: error fields are at top
 // level (not nested in result) per the WebSocket spec.
-func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}, opts *types.WebSocketResponseOptions) {
+func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions) {
 	response := types.WebSocketResponse{
 		Type:   "response",
 		Status: "error",
@@ -804,17 +810,7 @@ func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpc
 		wsLog().Error("Failed to marshal WebSocket error response", "err", err)
 		return
 	}
-
-	if wsConn.legacy != nil {
-		wsConn.legacy.TrySend(data)
-		return
-	}
-	select {
-	case wsConn.sendChannel <- data:
-	case <-wsConn.ctx.Done():
-	default:
-		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
-	}
+	ws.deliver(wsConn, data)
 }
 
 // attachConnection is the single point at which a new WS connection
@@ -828,10 +824,11 @@ func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) {
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
 		CloseChannel:  wsConn.closeChannel,
-		// Subscription-manager-driven disconnect routes back through
-		// the WS cancel func so a persistently slow subscriber is torn
-		// down via the same code path as a normal close.
-		Disconnect: wsConn.cancel,
+		// Subscription-manager-driven disconnect closes the socket (not just
+		// cancels the ctx) so a persistently slow subscriber is torn down
+		// immediately — cancel alone leaves the read loop blocked in
+		// ReadMessage until the 90 s deadline.
+		Disconnect: wsConn.closeSocket,
 	}
 	wsConn.legacy = legacy
 	ws.connectionsMutex.Lock()
@@ -846,6 +843,17 @@ func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
 	delete(ws.connections, wsConn.ID)
 	ws.connectionsMutex.Unlock()
 	ws.subscriptionManager.RemoveConnection(wsConn.ID)
+}
+
+// closeSocket cancels the connection context and closes the underlying
+// socket. Closing the socket unblocks a read loop parked in ReadMessage
+// immediately, so closeConnection (and the conn-limit slot release) run
+// without waiting out the 90 s read deadline. Used by the slow-consumer
+// Disconnect callback and the send-error path; idempotent — closeConnection
+// closes again and gorilla tolerates the double close.
+func (wsConn *WebSocketConnection) closeSocket() {
+	wsConn.cancel()
+	wsConn.conn.Close()
 }
 
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
@@ -864,6 +872,79 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsConn.conn.Close()
 
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
+}
+
+// buildSubscribeAck assembles the subscribe response payload shared by the
+// WebSocket and url (RPCSub) subscribe paths: current ledger info when the
+// ledger stream is among the requested streams, and a synthetic book-offers
+// snapshot for any `snapshot:true` book.
+//
+// The ledger ack field set mirrors rippled subLedger: fee_ref only while
+// XRPFees is disabled, network_id always present; per-ledger pubLedger
+// events (LedgerCloseEvent) carry txn_count separately. The snapshot block
+// mirrors rippled
+// Subscribe.cpp:339-394: when snapshot is set, the response carries `offers`
+// (or `bids`/`asks` if `both` is set) populated by NetworkOPs::getBookPage.
+// It reuses the ledger service's GetBookOffers — the same code path the
+// book_offers RPC uses — so the snapshot a subscriber gets in the ack is
+// identical to what they would have read with a separate book_offers call.
+func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
+	result := make(map[string]any)
+
+	if slices.Contains(request.Streams, types.SubLedger) {
+		if ws.ledgerInfoProvider != nil {
+			info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
+			if info != nil {
+				result["ledger_index"] = info.LedgerIndex
+				result["ledger_hash"] = info.LedgerHash
+				result["ledger_time"] = info.LedgerTime
+				result["fee_base"] = info.FeeBase
+				// rippled emits the deprecated fee_ref only while XRPFees
+				// is disabled; network_id is always present.
+				if !info.XRPFeesEnabled {
+					result["fee_ref"] = info.FeeRef
+				}
+				result["reserve_base"] = info.ReserveBase
+				result["reserve_inc"] = info.ReserveInc
+				result["network_id"] = info.NetworkID
+				if info.ValidatedLedgers != "" {
+					result["validated_ledgers"] = info.ValidatedLedgers
+				}
+			}
+		}
+	}
+
+	for _, book := range request.Books {
+		if !book.Snapshot || ctx.Services == nil || ctx.Services.Ledger == nil {
+			continue
+		}
+		var takerGets, takerPays types.CurrencySpec
+		if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
+			continue
+		}
+		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
+		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
+		if book.Both {
+			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker)
+			if bids != nil {
+				result["bids"] = appendOffers(result["bids"], bids)
+			}
+			if asks != nil {
+				result["asks"] = appendOffers(result["asks"], asks)
+			}
+			continue
+		}
+		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+		if offers != nil {
+			result["offers"] = appendOffers(result["offers"], offers)
+		}
+	}
+
+	return result
 }
 
 // snapshotBook is the WS-side shim around the LedgerService's
@@ -888,7 +969,7 @@ func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerP
 // RPC::Tuning::bookOffers.rdefault used in Subscribe.cpp:349-356.
 const DefaultBookSnapshotLimit uint32 = 60
 
-func appendOffers(prev interface{}, more []types.BookOffer) []types.BookOffer {
+func appendOffers(prev any, more []types.BookOffer) []types.BookOffer {
 	if prev == nil {
 		return more
 	}
@@ -902,7 +983,7 @@ func appendOffers(prev interface{}, more []types.BookOffer) []types.BookOffer {
 // a specific stream. Iteration runs through the subscription Manager so
 // the per-connection subscription map is read under the same mutex
 // HandleSubscribe / HandleUnsubscribe write under (#428 race fix).
-func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message interface{}) {
+func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message any) {
 	data, err := json.Marshal(message)
 	if err != nil {
 		wsLog().Error("Failed to marshal broadcast message", "err", err)
@@ -951,14 +1032,11 @@ func resolveWSClientIP(peerIP, upgradeForwardedFor string, portCtx *PortContext)
 }
 
 // RegisterAllMethods registers every RPC method available on the WebSocket
-// endpoint: the universal HTTP/WS set plus the WebSocket-only commands
-// (subscribe / unsubscribe). The HTTP server intentionally omits the
-// WebSocket-only set so clients hitting those over HTTP get
-// methodNotFound rather than "method exists, returns notSupported"
-// (#428 audit, P2).
+// endpoint. subscribe/unsubscribe are part of the common table (as in
+// rippled); the WebSocket dispatch intercepts both before registry lookup
+// and runs the real subscription implementation.
 func (ws *WebSocketServer) RegisterAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
-	handlers.RegisterWebSocketOnly(ws.methodRegistry)
 }
 
 // GetSubscriptionManager returns the subscription manager for event publishing
@@ -966,10 +1044,11 @@ func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 
-// Close gracefully closes all active WebSocket connections and waits for
-// all per-connection goroutines (read loop, send pump, ping loop) to exit.
-// The wait is bounded by ctx so a misbehaving handler cannot stall shutdown
-// indefinitely; if ctx expires first, Close returns ctx.Err().
+// Close gracefully closes all active WebSocket connections and url (RPCSub)
+// subscriptions, waiting for all per-connection goroutines (read loop, send
+// pump, ping loop) and url delivery loops to exit. The wait is bounded by
+// ctx so a misbehaving handler cannot stall shutdown indefinitely; if ctx
+// expires first, Close returns ctx.Err().
 func (ws *WebSocketServer) Close(ctx context.Context) error {
 	ws.connectionsMutex.Lock()
 	for _, conn := range ws.connections {
@@ -989,6 +1068,7 @@ func (ws *WebSocketServer) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		ws.wg.Wait()
+		ws.urlSubs.Close()
 		close(done)
 	}()
 	select {

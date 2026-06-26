@@ -1,28 +1,29 @@
 // Package grpc implements the XRPLedgerAPIService gRPC surface mirroring
-// rippled's binary-only ledger RPCs (the API surface consumed by Clio).
-//
-// References:
-//   - rippled/include/xrpl/proto/org/xrpl/rpc/v1/xrp_ledger.proto
-//   - rippled/src/xrpld/rpc/handlers/LedgerHandler.cpp (doLedgerGrpc)
-//   - rippled/src/xrpld/rpc/handlers/GRPCHandlers.cpp
-//
-// The service delegates ledger lookups to the existing
-// internal/ledger/service.Service so the gRPC and JSON-RPC surfaces stay
-// behaviourally consistent.
+// rippled's binary-only ledger RPCs (the API surface consumed by Clio):
+// GetLedger, GetLedgerEntry, GetLedgerData and GetLedgerDiff. Ledger lookups
+// are delegated to the existing internal/ledger/service.Service so the gRPC
+// and JSON-RPC surfaces stay behaviourally consistent.
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"math"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // LedgerLookup is the slice of the ledger Service that this gRPC
@@ -45,13 +46,12 @@ func NewServer(lookup LedgerLookup) *Server {
 	return &Server{lookup: lookup}
 }
 
-// resolveLedger maps a LedgerSpecifier to a concrete *ledger.Ledger.
-// Mirrors rippled RPC::ledgerFromSpecifier (RPCHelpers.cpp:434-484):
-//   - shortcut VALIDATED          → most recent validated ledger
-//   - shortcut CLOSED             → most recent closed ledger
-//   - shortcut CURRENT or         → open ledger
-//     UNSPECIFIED (or nil spec)
-//   - sequence/hash               → exact lookup
+// resolveLedger maps a LedgerSpecifier to a concrete *ledger.Ledger,
+// mirroring rippled's ledgerFromSpecifier shortcut semantics:
+//   - VALIDATED              → most recent validated ledger
+//   - CLOSED                 → most recent closed ledger
+//   - CURRENT / UNSPECIFIED  → the open ledger (also the nil-spec default)
+//   - explicit sequence/hash → an exact lookup
 func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, error) {
 	if spec == nil {
 		if l := s.lookup.GetOpenLedger(); l != nil {
@@ -61,24 +61,28 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 	}
 	switch sel := spec.Ledger.(type) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
-		switch sel.Shortcut {
-		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
+		name, err := shortcutToName(sel.Shortcut)
+		if err != nil {
+			return nil, err
+		}
+		switch name {
+		case "validated":
 			if l := s.lookup.GetValidatedLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no validated ledger available")
-		case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
+		case "closed":
 			if l := s.lookup.GetClosedLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no closed ledger available")
-		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
+		case "current":
 			if l := s.lookup.GetOpenLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no open ledger available")
 		default:
-			return nil, status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", sel.Shortcut)
+			return nil, status.Errorf(codes.Internal, "unhandled ledger shortcut name %q", name)
 		}
 	case *rpcv1.LedgerSpecifier_Sequence:
 		l, err := s.lookup.GetLedgerBySequence(sel.Sequence)
@@ -87,11 +91,10 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 		}
 		return l, nil
 	case *rpcv1.LedgerSpecifier_Hash:
-		if len(sel.Hash) != 32 {
-			return nil, status.Errorf(codes.InvalidArgument, "ledger hash must be 32 bytes, got %d", len(sel.Hash))
+		h, err := hash32(sel.Hash, "ledger hash")
+		if err != nil {
+			return nil, err
 		}
-		var h [32]byte
-		copy(h[:], sel.Hash)
 		l, err := s.lookup.GetLedgerByHash(h)
 		if err != nil {
 			return nil, status.Errorf(codes.NotFound, "ledger hash not found: %v", err)
@@ -102,7 +105,8 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 	}
 }
 
-// GetLedger mirrors rippled LedgerHandler.cpp doLedgerGrpc().
+// GetLedger returns a ledger header and, on request, its transaction set
+// (hashes or expanded blobs) and the objects that changed versus its parent.
 func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*rpcv1.GetLedgerResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -119,31 +123,15 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 
 	if req.GetTransactions() {
 		if req.GetExpand() {
-			list := &rpcv1.TransactionAndMetadataList{}
-			if err := l.ForEachTransaction(func(_ [32]byte, data []byte) bool {
-				// The txMap stores tx+metadata as a single VL-prefixed
-				// blob. A proper Clio surface needs the
-				// SHAMapTxNode-style split into separate transaction
-				// and metadata Serializers; that lives one layer
-				// deeper in the SHAMap encoding. Emit the combined
-				// payload as transaction_blob for now; metadata_blob
-				// stays empty until that helper is ported. See
-				// rippled SHAMapItem layout and
-				// LedgerHandler.cpp:140-146.
-				list.Transactions = append(list.Transactions, &rpcv1.TransactionAndMetadata{
-					TransactionBlob: append([]byte(nil), data...),
-				})
-				return true
-			}); err != nil {
-				return nil, status.Errorf(codes.Internal, "iterating transactions: %v", err)
+			list, err := expandTransactions(l)
+			if err != nil {
+				return nil, err
 			}
 			resp.Transactions = &rpcv1.GetLedgerResponse_TransactionsList{TransactionsList: list}
 		} else {
 			hashes := &rpcv1.TransactionHashList{}
 			if err := l.ForEachTransaction(func(h [32]byte, _ []byte) bool {
-				out := make([]byte, 32)
-				copy(out, h[:])
-				hashes.Hashes = append(hashes.Hashes, out)
+				hashes.Hashes = append(hashes.Hashes, cloneHash(h))
 				return true
 			}); err != nil {
 				return nil, status.Errorf(codes.Internal, "iterating transactions: %v", err)
@@ -153,24 +141,175 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	}
 
 	if req.GetGetObjects() {
-		// Computing a state-map diff between this ledger and its
-		// parent requires SHAMap.compare(). Not exposed yet at the
-		// go-xrpl shamap layer; document the gap and surface it via
-		// the proto's objects_included=false convention rather than
-		// silently dropping the request.
-		resp.ObjectsIncluded = false
+		if err := s.appendChangedObjects(resp, l, req.GetGetObjectNeighbors()); err != nil {
+			return nil, err
+		}
 	}
 
 	return resp, nil
 }
 
-// GetLedgerEntry mirrors rippled LedgerEntry.cpp doLedgerEntryGrpc().
+// expandTransactions splits each stored tx+metadata blob into its separate
+// transaction and metadata serializations, the shape Clio expects.
+func expandTransactions(l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, error) {
+	list := &rpcv1.TransactionAndMetadataList{}
+	var splitErr error
+	if err := l.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+		txBlob, metaBlob, e := tx.SplitTxWithMetaBlob(data)
+		if e != nil {
+			splitErr = e
+			return false
+		}
+		list.Transactions = append(list.Transactions, &rpcv1.TransactionAndMetadata{
+			TransactionBlob: append([]byte(nil), txBlob...),
+			MetadataBlob:    append([]byte(nil), metaBlob...),
+		})
+		return true
+	}); err != nil {
+		return nil, status.Errorf(codes.Internal, "iterating transactions: %v", err)
+	}
+	if splitErr != nil {
+		return nil, status.Errorf(codes.Internal, "splitting transaction blob: %v", splitErr)
+	}
+	return list, nil
+}
+
+// appendChangedObjects fills the response with the state objects that differ
+// between l and its parent (sequence-1), tagging each CREATED, MODIFIED or
+// DELETED. When wantNeighbors is set it also fills each created/deleted
+// object's predecessor and successor and any order-book successors.
+func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.Ledger, wantNeighbors bool) error {
+	parent, err := s.lookup.GetLedgerBySequence(l.Sequence() - 1)
+	if err != nil {
+		return status.Error(codes.NotFound, "parent ledger not validated")
+	}
+	diff, baseMap, desiredMap, err := stateDiff(parent, l)
+	if err != nil {
+		return status.Errorf(codes.Internal, "comparing state maps: %v", err)
+	}
+	if !diff.Complete {
+		return status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
+	}
+	objects := &rpcv1.RawLedgerObjects{}
+	for _, d := range diff.Differences {
+		obj := &rpcv1.RawLedgerObject{Key: cloneHash(d.Key)}
+		switch d.Type {
+		case shamap.DiffAdded:
+			obj.ModType = rpcv1.RawLedgerObject_CREATED
+			obj.Data = d.SecondItem.Data()
+		case shamap.DiffModified:
+			obj.ModType = rpcv1.RawLedgerObject_MODIFIED
+			obj.Data = d.SecondItem.Data()
+		case shamap.DiffRemoved:
+			obj.ModType = rpcv1.RawLedgerObject_DELETED
+		}
+		// Neighbours are computed only for created and deleted objects, not
+		// modified ones.
+		if wantNeighbors && d.Type != shamap.DiffModified {
+			appendNeighbors(obj, resp, d, baseMap, desiredMap)
+		}
+		objects.Objects = append(objects.Objects, obj)
+	}
+	resp.LedgerObjects = objects
+	resp.ObjectsIncluded = true
+	resp.ObjectNeighborsIncluded = wantNeighbors
+	resp.SkiplistIncluded = true
+	return nil
+}
+
+// appendNeighbors fills the predecessor and successor of a created or deleted
+// object and, for the first page of an order book, the book successor.
+// Predecessor and successor come from the desired (new) state map; the book
+// successor is keyed by the deleted book in the base map or the created book
+// in the desired map.
+func appendNeighbors(obj *rpcv1.RawLedgerObject, resp *rpcv1.GetLedgerResponse, d shamap.DifferenceItem, baseMap, desiredMap *shamap.SHAMap) {
+	k := d.Key
+	if it := desiredMap.LowerBound(k); it.Valid() {
+		obj.Predecessor = cloneHash(it.Item().Key())
+	}
+	if it := desiredMap.UpperBound(k); it.Valid() {
+		obj.Successor = cloneHash(it.Item().Key())
+	}
+
+	var blob []byte
+	switch d.Type {
+	case shamap.DiffAdded:
+		blob = d.SecondItem.DataUnsafe()
+	case shamap.DiffRemoved:
+		blob = d.FirstItem.DataUnsafe()
+	}
+	if !isBookDirectory(blob) {
+		return
+	}
+
+	bookBase := keylet.Quality(keylet.Keylet{Type: entry.TypeDirectoryNode, Key: k}, 0).Key
+	bookEnd := getQualityNext(bookBase)
+	inBook := func(key [32]byte) bool { return bytes.Compare(key[:], bookEnd[:]) < 0 }
+
+	switch d.Type {
+	case shamap.DiffAdded:
+		if it := desiredMap.UpperBound(bookBase); it.Valid() {
+			if first := it.Item().Key(); inBook(first) && first == k {
+				resp.BookSuccessors = append(resp.BookSuccessors, &rpcv1.BookSuccessor{
+					BookBase:  cloneHash(bookBase),
+					FirstBook: cloneHash(first),
+				})
+			}
+		}
+	case shamap.DiffRemoved:
+		if it := baseMap.UpperBound(bookBase); it.Valid() {
+			if old := it.Item().Key(); inBook(old) && old == k {
+				succ := &rpcv1.BookSuccessor{BookBase: cloneHash(bookBase)}
+				if it2 := desiredMap.UpperBound(bookBase); it2.Valid() {
+					if next := it2.Item().Key(); inBook(next) {
+						succ.FirstBook = cloneHash(next)
+					}
+				}
+				resp.BookSuccessors = append(resp.BookSuccessors, succ)
+			}
+		}
+	}
+}
+
+// isBookDirectory reports whether blob is a serialized directory node that
+// roots an order book — a directory without an Owner field (owner directories
+// carry sfOwner; book directories do not).
+func isBookDirectory(blob []byte) bool {
+	if len(blob) < 3 {
+		return false
+	}
+	if entry.Type(uint16(blob[1])<<8|uint16(blob[2])) != entry.TypeDirectoryNode {
+		return false
+	}
+	fields, err := binarycodec.DecodeBytes(blob)
+	if err != nil {
+		return false
+	}
+	_, hasOwner := fields["Owner"]
+	return !hasOwner
+}
+
+// getQualityNext returns base + 2^64, the smallest key past the highest
+// quality of the order book rooted at base. The quality occupies the low 64
+// bits, so the increment lands on byte 23.
+func getQualityNext(base [32]byte) [32]byte {
+	for i := 23; i >= 0; i-- {
+		base[i]++
+		if base[i] != 0 {
+			break
+		}
+	}
+	return base
+}
+
+// GetLedgerEntry returns the raw bytes of a single ledger entry.
 func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRequest) (*rpcv1.GetLedgerEntryResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	if len(req.GetKey()) != 32 {
-		return nil, status.Errorf(codes.InvalidArgument, "entry key must be 32 bytes, got %d", len(req.GetKey()))
+	key, err := hash32(req.GetKey(), "entry key")
+	if err != nil {
+		return nil, err
 	}
 
 	ledgerIdx, err := s.specToIndex(req.GetLedger())
@@ -178,28 +317,30 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 		return nil, err
 	}
 
-	var key [32]byte
-	copy(key[:], req.GetKey())
-
 	entry, err := s.lookup.GetLedgerEntry(ctx, key, ledgerIdx)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
+		switch {
+		case errors.Is(err, svcerr.ErrLedgerEntryNotFound):
 			return nil, status.Error(codes.NotFound, "ledger entry not found")
+		case errors.Is(err, svcerr.ErrLedgerNotFound), errors.Is(err, svcerr.ErrNoOpenLedger):
+			return nil, status.Error(codes.NotFound, err.Error())
+		default:
+			return nil, status.Errorf(codes.Internal, "lookup: %v", err)
 		}
-		return nil, status.Errorf(codes.Internal, "lookup: %v", err)
 	}
 
 	return &rpcv1.GetLedgerEntryResponse{
 		LedgerObject: &rpcv1.RawLedgerObject{
 			Data: entry.Node,
-			Key:  append([]byte(nil), key[:]...),
+			Key:  cloneHash(key),
 		},
 		Ledger: req.GetLedger(),
 	}, nil
 }
 
-// GetLedgerData iterates all state entries of a ledger, paginated by
-// marker / end_marker. Mirrors rippled GRPCHandlers.cpp doLedgerDataGrpc().
+// GetLedgerData iterates a ledger's state entries, paginated by marker /
+// end_marker. The page cap is the binary pageLength rippled uses for the gRPC
+// surface; resume is strictly after marker and end_marker is inclusive.
 func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequest) (*rpcv1.GetLedgerDataResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -212,20 +353,18 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	var startKey [32]byte
 	hasMarker := false
 	if m := req.GetMarker(); len(m) > 0 {
-		if len(m) != 32 {
-			return nil, status.Errorf(codes.InvalidArgument, "marker must be 32 bytes, got %d", len(m))
+		if startKey, err = hash32(m, "marker"); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "marker malformed")
 		}
-		copy(startKey[:], m)
 		hasMarker = true
 	}
 
 	var endKey [32]byte
 	hasEnd := false
 	if m := req.GetEndMarker(); len(m) > 0 {
-		if len(m) != 32 {
-			return nil, status.Errorf(codes.InvalidArgument, "end_marker must be 32 bytes, got %d", len(m))
+		if endKey, err = hash32(m, "end_marker"); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "end marker malformed")
 		}
-		copy(endKey[:], m)
 		hasEnd = true
 	}
 	if hasMarker && hasEnd && compareKey(endKey, startKey) < 0 {
@@ -239,50 +378,42 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		LedgerObjects: &rpcv1.RawLedgerObjects{},
 	}
 
-	passedMarker := !hasMarker
+	// Resume strictly after the marker via the shared state iterator; the zero
+	// startKey starts from the first entry. A since-deleted marker continues
+	// from the next entry rather than rescanning or returning an empty page.
 	count := 0
-	var lastKey [32]byte
-	pageFull := false
-	if err := l.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		if !passedMarker {
-			if key == startKey {
-				passedMarker = true
-			}
-			return true
-		}
-		if hasEnd && compareKey(key, endKey) >= 0 {
+	if err := l.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
+		// end_marker is inclusive: stop only past it, so an entry whose key
+		// equals end_marker is still returned.
+		if hasEnd && compareKey(key, endKey) > 0 {
 			return false
 		}
 		if count >= pageLimit {
-			pageFull = true
+			// One entry past the page. Resume is strictly-greater than the
+			// marker, so record the first un-emitted key minus one — the next
+			// page then begins exactly at that entry.
+			resp.Marker = cloneHash(ledger.DecrementKey(key))
 			return false
 		}
 		resp.LedgerObjects.Objects = append(resp.LedgerObjects.Objects, &rpcv1.RawLedgerObject{
 			Key:  cloneHash(key),
 			Data: append([]byte(nil), data...),
 		})
-		lastKey = key
 		count++
 		return true
 	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
 		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
-	}
-	if pageFull {
-		resp.Marker = cloneHash(lastKey)
 	}
 	return resp, nil
 }
 
-// GetLedgerDiff returns the state-map differences between two ledgers.
-// Without a fast SHAMap.compare helper at the go-xrpl layer, we fall
-// back to a streaming key-by-key comparison. Mirrors rippled
-// LedgerDiff.cpp doLedgerDiffGrpc() — including its wire-shape choice
-// of leaving `mod_type` UNSPECIFIED on every entry; consumers infer
-// CREATED / MODIFIED / DELETED from whether `data` is present (and,
-// where they have the base ledger, whether the key existed there).
+// GetLedgerDiff returns the state-map differences between two ledgers. It
+// leaves mod_type UNSPECIFIED on every entry; consumers infer
+// CREATED / MODIFIED / DELETED from whether data is present (and, where they
+// hold the base ledger, whether the key existed there).
 func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequest) (*rpcv1.GetLedgerDiffResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -296,36 +427,29 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 		return nil, err
 	}
 
-	baseEntries, err := collectState(ctx, base)
+	diff, _, _, err := stateDiff(base, desired)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "scanning base ledger: %v", err)
+		return nil, status.Errorf(codes.Internal, "comparing state maps: %v", err)
 	}
-	desiredEntries, err := collectState(ctx, desired)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "scanning desired ledger: %v", err)
+	if !diff.Complete {
+		return nil, status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
 	}
 
 	includeBlobs := req.GetIncludeBlobs()
 	out := &rpcv1.GetLedgerDiffResponse{LedgerObjects: &rpcv1.RawLedgerObjects{}}
-	for key, desiredData := range desiredEntries {
-		baseData, inBase := baseEntries[key]
-		if inBase && bytesEqual(baseData, desiredData) {
-			continue
+	for _, d := range diff.Differences {
+		var desiredData []byte
+		if d.SecondItem != nil {
+			desiredData = d.SecondItem.Data()
 		}
-		out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, diffEntry(key, desiredData, includeBlobs))
-	}
-	for key := range baseEntries {
-		if _, ok := desiredEntries[key]; !ok {
-			out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, diffEntry(key, nil, false))
-		}
+		out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, diffEntry(d.Key, desiredData, includeBlobs))
 	}
 	return out, nil
 }
 
-// diffEntry builds a single RawLedgerObject for GetLedgerDiff in the
-// rippled wire shape: `key` is always set; `data` is set only when the
-// entry exists in the desired ledger AND the caller asked for blobs;
-// `mod_type` is intentionally left UNSPECIFIED (see GetLedgerDiff).
+// diffEntry builds a single RawLedgerObject for GetLedgerDiff: key is always
+// set; data only when the entry exists in the desired ledger and the caller
+// asked for blobs; mod_type is left UNSPECIFIED.
 func diffEntry(key [32]byte, desiredData []byte, includeBlobs bool) *rpcv1.RawLedgerObject {
 	obj := &rpcv1.RawLedgerObject{Key: cloneHash(key)}
 	if includeBlobs && desiredData != nil {
@@ -334,50 +458,48 @@ func diffEntry(key [32]byte, desiredData []byte, includeBlobs bool) *rpcv1.RawLe
 	return obj
 }
 
-func collectState(ctx context.Context, l *ledger.Ledger) (map[[32]byte][]byte, error) {
-	out := make(map[[32]byte][]byte)
-	err := l.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		out[key] = append([]byte(nil), data...)
-		return ctx.Err() == nil
-	})
+// maxStateDifferences bounds a state-map diff. The cap is effectively
+// unreachable, so the incomplete-result path stays dead in practice.
+const maxStateDifferences = math.MaxInt32
+
+// stateDiff diffs base and desired ledgers' state maps, returning the
+// difference set and the snapshots it was computed from (so callers can query
+// neighbours). The snapshots share the immutable ledger nodes and Compare
+// walks only the differing subtrees, so neither ledger is materialised in
+// full.
+func stateDiff(base, desired *ledger.Ledger) (*shamap.DifferenceSet, *shamap.SHAMap, *shamap.SHAMap, error) {
+	baseMap, err := base.StateMapSnapshot()
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	desiredMap, err := desired.StateMapSnapshot()
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return out, nil
+	diff, err := baseMap.Compare(desiredMap, maxStateDifferences)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return diff, baseMap, desiredMap, nil
 }
 
 // specToIndex flattens a LedgerSpecifier into the string form expected by
 // LedgerLookup.GetLedgerEntry. Hash-based specs are resolved through the
-// lookup so callers can address a ledger by hash, matching rippled
-// (RPCHelpers.cpp:445-450 + the explicit ledgerFromRequest template
-// instantiation for GetLedgerEntryRequest at RPCHelpers.cpp:415-430).
+// lookup so callers can address a ledger by hash.
 func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	if spec == nil {
 		return "current", nil
 	}
 	switch sel := spec.Ledger.(type) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
-		switch sel.Shortcut {
-		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
-			return "validated", nil
-		case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
-			return "closed", nil
-		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
-			return "current", nil
-		default:
-			return "", status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", sel.Shortcut)
-		}
+		return shortcutToName(sel.Shortcut)
 	case *rpcv1.LedgerSpecifier_Sequence:
 		return decimal(sel.Sequence), nil
 	case *rpcv1.LedgerSpecifier_Hash:
-		if len(sel.Hash) != 32 {
-			return "", status.Errorf(codes.InvalidArgument, "ledger hash must be 32 bytes, got %d", len(sel.Hash))
+		h, err := hash32(sel.Hash, "ledger hash")
+		if err != nil {
+			return "", err
 		}
-		var h [32]byte
-		copy(h[:], sel.Hash)
 		l, err := s.lookup.GetLedgerByHash(h)
 		if err != nil {
 			return "", status.Errorf(codes.NotFound, "ledger hash not found: %v", err)
@@ -386,6 +508,33 @@ func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	default:
 		return "", status.Error(codes.InvalidArgument, "ledger specifier missing")
 	}
+}
+
+// shortcutToName maps a LedgerSpecifier shortcut to its ledger name
+// ("validated", "closed", "current"). Single source of truth for the
+// shortcut enum so resolveLedger and specToIndex cannot drift.
+func shortcutToName(shortcut rpcv1.LedgerSpecifier_Shortcut) (string, error) {
+	switch shortcut {
+	case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
+		return "validated", nil
+	case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
+		return "closed", nil
+	case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
+		return "current", nil
+	default:
+		return "", status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", shortcut)
+	}
+}
+
+// hash32 validates that input is exactly 32 bytes and copies it into a
+// fixed-size array, reporting InvalidArgument with the field name otherwise.
+func hash32(input []byte, field string) ([32]byte, error) {
+	var h [32]byte
+	if len(input) != 32 {
+		return h, status.Errorf(codes.InvalidArgument, "%s must be 32 bytes, got %d", field, len(input))
+	}
+	copy(h[:], input)
+	return h, nil
 }
 
 func cloneHash(h [32]byte) []byte {
@@ -404,18 +553,6 @@ func compareKey(a, b [32]byte) int {
 		}
 	}
 	return 0
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func decimal(n uint32) string {

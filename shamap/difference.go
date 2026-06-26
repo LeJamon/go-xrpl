@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"fmt"
+	"strings"
 )
 
 // DifferenceType represents the type of difference between two SHAMapItems
@@ -59,17 +60,18 @@ func (ds *DifferenceSet) IsEmpty() bool {
 
 // String returns a human-readable representation of the differences
 func (ds *DifferenceSet) String() string {
-	result := fmt.Sprintf("DifferenceSet: %d differences", len(ds.Differences))
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("DifferenceSet: %d differences", len(ds.Differences)))
 	if !ds.Complete {
-		result += " (truncated)"
+		result.WriteString(" (truncated)")
 	}
-	result += "\n"
+	result.WriteString("\n")
 
 	for i, diff := range ds.Differences {
-		result += fmt.Sprintf("  [%d] %s\n", i, diff.String())
+		result.WriteString(fmt.Sprintf("  [%d] %s\n", i, diff.String()))
 	}
 
-	return result
+	return result.String()
 }
 
 // AddDifference adds a difference to the set

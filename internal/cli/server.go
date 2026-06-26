@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,7 +32,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -42,6 +45,7 @@ import (
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
+	googlegrpc "google.golang.org/grpc"
 )
 
 var (
@@ -73,25 +77,33 @@ func init() {
 	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
 }
 
-func runServer(cmd *cobra.Command, args []string) (retErr error) {
+func runServer(cmd *cobra.Command, args []string) error {
 	if _, err := requireConfig(); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "%v\n", err)
-		fmt.Fprintf(cmd.ErrOrStderr(), "  Use 'xrpld generate-config' to create an initial configuration file.\n")
-		fmt.Fprintf(cmd.ErrOrStderr(), "  Example: xrpld server --conf /path/to/xrpld.toml\n")
-		return err
+		// Fold the guidance into the error so Execute() prints it once. A bare
+		// pre-print here would duplicate the message Execute() emits.
+		return fmt.Errorf("%w\n  Use 'xrpld generate-config' to create an initial configuration file."+
+			"\n  Example: xrpld server --conf /path/to/xrpld.toml", err)
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
-	logCfg := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	logCfg, err := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	if err != nil {
+		return fmt.Errorf("configure logging: %w", err)
+	}
 	if debug {
 		logCfg.Level = xrpllog.LevelDebug
 	}
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	rootLogger := xrpllog.New(xrpllog.NewHandler(logCfg), logCfg)
+	logHandler := xrpllog.NewHandler(logCfg)
+	rootLogger := xrpllog.New(logHandler, logCfg)
 	xrpllog.SetRoot(rootLogger)
 	xrpllog.SetRootConfig(logCfg)
+	// Route subsystems that log through slog.Default() (consensus adaptor,
+	// inbound-ledger, validator-list) through the same configured handler so
+	// they honour the operator's level, format, output file, and rotation.
+	slog.SetDefault(slog.New(logHandler))
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
 	serverLog.Info("Starting go-xrpl", "version", version.Version)
@@ -99,7 +111,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
 		go func() {
-			if err := startPProfServer(addr); err != nil {
+			if err := observability.StartPProf(addr); err != nil {
 				serverLog.Warn("pprof server failed", "addr", addr, "err", err)
 			}
 		}()
@@ -126,60 +138,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		ledgerService       *service.Service
 		ledgerCleaner       *cleaner.Cleaner
 		consensusComponents *adaptor.Components
+		rotator             *shamapstore.Rotator
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
+		grpcSrv             *googlegrpc.Server
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
-	// Initialize storage from config
-	nodestorePath := globalConfig.NodeDB.Path
-	if nodestorePath != "" {
-		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
-		if err != nil {
-			return fmt.Errorf("storage backend: %w", err)
-		}
-
-		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
-		serverLog.Info("Storage initialized", "backend", "pebble", "path", nodestorePath)
-	} else {
-		serverLog.Info("Storage initialized", "backend", "in-memory")
-	}
-
-	// Initialize RelationalDB if configured
-	dbPath := globalConfig.DatabasePath
-	if strings.HasPrefix(dbPath, "postgres://") || strings.HasPrefix(dbPath, "postgresql://") {
-		pgConfig := relationaldb.NewConfig()
-		pgConfig.ConnectionString = dbPath
-
-		var err error
-		repoManager, err = postgres.NewRepositoryManager(pgConfig)
-		if err != nil {
-			serverLog.Warn("PostgreSQL not available", "err", err)
-		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				serverLog.Warn("PostgreSQL connection failed", "err", err)
-				repoManager = nil
-			} else {
-				serverLog.Info("PostgreSQL connected", "purpose", "transaction indexing")
-			}
-		}
-	} else if dbPath != "" {
-		// Default: auto-create SQLite databases at the given directory path
-		var err error
-		repoManager, err = sqlitedb.NewRepositoryManager(dbPath)
-		if err != nil {
-			serverLog.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
-		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				serverLog.Warn("SQLite failed to open", "path", dbPath, "err", err)
-				repoManager = nil
-			} else {
-				serverLog.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
-			}
-		}
+	db, repoManager, err = setupStorage(globalConfig, serverLog)
+	if err != nil {
+		return err
 	}
 
 	// Load genesis configuration from config file path (if set)
@@ -236,6 +207,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// stances from it).
 	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
 
+	// Build the transaction-queue config from the operator's
+	// [transaction_queue] stanza layered over the rippled defaults.
+	txqCfg, err := service.TxQConfigFromTuning(globalConfig.TransactionQueue, standalone)
+	if err != nil {
+		return err
+	}
+
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:     standalone,
@@ -244,6 +222,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		RelationalDB:   repoManager,
 		Logger:         rootLogger,
 		AmendmentTable: amendmentTable,
+		TxQ:            &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
 
@@ -268,6 +247,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	services := types.NewServiceContainer(ledgerAdapter)
 
+	// Gate the beta RPC API (api_version 3) on the operator's beta_rpc_api
+	// knob, mirroring rippled Config::BETA_RPC_API.
+	services.BetaRPCAPI = globalConfig.BetaRPCAPI != 0
+
 	// Advisory-delete state (can_delete RPC). Available in both standalone and
 	// consensus modes; gated by node_db advisory_delete and persisted under
 	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.
@@ -278,6 +261,38 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Warn("Failed to load advisory-delete state", "err", asErr)
 	} else {
 		services.AdvisoryDeleteState = advisoryStore
+
+		// Online-delete rotation: when node_db online_delete is set and the
+		// node store can enumerate its keyspace, run a background job that
+		// reclaims disk by deleting complete ledgers below the rotation
+		// boundary. NewRotator returns nil when online_delete is off.
+		if globalConfig.NodeDB.IsOnlineDeleteEnabled() {
+			if prunable, ok := db.(shamapstore.NodePruner); ok {
+				var relPruner shamapstore.RelationalPruner
+				if repoManager != nil {
+					relPruner = relationaldb.NewLedgerPruner(repoManager, globalConfig.NodeDB.GetDeleteBatch())
+				}
+				rotator = shamapstore.NewRotator(
+					advisoryStore,
+					prunable,
+					relPruner,
+					shamapstore.RotationConfig{
+						DeleteInterval: uint32(globalConfig.NodeDB.OnlineDelete),
+						DeleteBatch:    globalConfig.NodeDB.GetDeleteBatch(),
+					},
+					serverLog,
+				)
+				rotator.Start()
+				// Clamp complete_ledgers to the deletion boundary so
+				// server_info never advertises ledgers rotation reclaimed.
+				ledgerService.SetMinimumOnlineFunc(rotator.MinimumOnline)
+				serverLog.Info("Online delete enabled",
+					"online_delete", globalConfig.NodeDB.OnlineDelete,
+					"advisory_delete", globalConfig.NodeDB.IsAdvisoryDeleteEnabled())
+			} else {
+				serverLog.Warn("online_delete configured but node store backend does not support pruning")
+			}
+		}
 	}
 
 	// TxQ metrics are available in both standalone and consensus modes,
@@ -303,6 +318,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			MedFeeLevel:           m.MedFeeLevel,
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
 		}
+	}
+	services.QueueAccountTxs = func(account [20]byte) []types.QueuedTxInfo {
+		return queuedTxInfos(ledgerSvcRef.GetQueueAccountTxs(account))
+	}
+	services.QueueAllTxs = func() []types.QueuedTxInfo {
+		return queuedTxInfos(ledgerSvcRef.GetQueueAllTxs())
 	}
 
 	// get_counts surfaces node-store I/O counters and locally-held
@@ -355,10 +376,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if db != nil {
 		cleanerFamily = shamap.NewNodeStoreFamily(db)
 	} else {
-		memFamily, ferr := shamap.NewMemoryNodeStoreFamily()
-		if ferr != nil {
-			return fmt.Errorf("create ledger cleaner family: %w", ferr)
-		}
+		memFamily := shamap.NewMemoryNodeStoreFamily()
 		cleanerFamily = memFamily
 	}
 	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
@@ -386,7 +404,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		if repoManager != nil {
 			validationRepo = repoManager.Validation()
 		}
-		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo)
+		// Pass the online-delete floor to consensus so acquisition and
+		// peer-serving refuse ledgers below the deletion boundary. Keep the
+		// interface nil when rotation is off so the disabled path is unchanged
+		// (a typed-nil *Rotator would be a non-nil interface).
+		var floor adaptor.MinimumOnlineFloor
+		if rotator != nil {
+			floor = rotator
+		}
+		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
@@ -417,38 +443,11 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			age := time.Since(vl.CloseTime())
 			return vl.Sequence(), age, true
 		})
-		ledgerAdapter.SetTxBroadcaster(func(txBlob []byte) {
-			txMsg := &message.Transaction{
-				RawTransaction: txBlob,
-				Status:         message.TxStatusCurrent,
-			}
-			encoded, err := message.Encode(txMsg)
-			if err != nil {
-				return
-			}
-			frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
-			if err != nil {
-				return
-			}
-			overlay.Broadcast(frame)
-		})
+		broadcastTx := newTxBroadcaster(overlay)
+		ledgerAdapter.SetTxBroadcaster(broadcastTx)
 		// Wire OpenLedger.Accept's relay callback so recovered txs are
 		// re-broadcast post-LCL (rippled OpenLedger.cpp:120-150).
-		ledgerService.SetTxRelay(func(txBlob []byte) {
-			txMsg := &message.Transaction{
-				RawTransaction: txBlob,
-				Status:         message.TxStatusCurrent,
-			}
-			encoded, err := message.Encode(txMsg)
-			if err != nil {
-				return
-			}
-			frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
-			if err != nil {
-				return
-			}
-			overlay.Broadcast(frame)
-		})
+		ledgerService.SetTxRelay(broadcastTx)
 
 		// Wire the tx-set "we have this" announce: BuildTxSet fires
 		// onTxSetBuilt → overlay broadcasts TMHaveTransactionSet{tsHAVE}.
@@ -516,7 +515,20 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		services.PeerDisconnects = func() (uint64, uint64) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
-		services.JqTransOverflow = overlayRef.DroppedTransactions
+		// jq_trans_overflow folds the two sequential stages where a
+		// saturated inbound transaction is shed: the overlay ingress gate
+		// (max_transactions ceiling) and the consensus worker pool
+		// (Router.DroppedTxJobs). A frame is shed by at most one stage, so
+		// summing the disjoint counts reports the total without double-counting
+		// and mirrors rippled's single jq_trans_overflow counter.
+		routerRef := consensusComponents.Router
+		services.JqTransOverflow = func() uint64 {
+			n := overlayRef.DroppedTransactions()
+			if routerRef != nil {
+				n += routerRef.DroppedTxJobs()
+			}
+			return n
+		}
 		services.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
 			s := overlayRef.TxMetricsSnapshot()
 			return types.TxReduceRelayMetrics{
@@ -723,6 +735,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	// Create WebSocket server for real-time subscriptions
 	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
+	if globalConfig.WebsocketPingFrequency > 0 {
+		wsServer.SetPingInterval(time.Duration(globalConfig.WebsocketPingFrequency) * time.Second)
+	}
 	wsServer.RegisterAllMethods()
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		wsServer.SetPeerSource(consensusComponents.Overlay)
@@ -802,6 +817,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return
 		}
 
+		// Drive online-delete rotation off the validated-ledger advance. The
+		// callback fires from both the standalone accept path and the
+		// consensus SetValidatedLedger path, so the rotator sees every
+		// validated sequence. Notify never blocks.
+		rotator.Notify(event.LedgerInfo.Sequence)
+
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
 		ledgerTime := uint32(event.LedgerInfo.CloseTime.Unix() - protocol.RippleEpochUnix)
@@ -809,7 +830,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		ledgerCloseEvent := &rpc.LedgerCloseEvent{
 			Type:             "ledgerClosed",
 			LedgerIndex:      event.LedgerInfo.Sequence,
-			LedgerHash:       hex.EncodeToString(event.LedgerInfo.Hash[:]),
+			LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
 			LedgerTime:       ledgerTime,
 			FeeBase:          baseFee,
 			FeeRef:           baseFee,
@@ -820,7 +841,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		ledgerHashStr := hex.EncodeToString(event.LedgerInfo.Hash[:])
+		ledgerHashStr := upperHex(event.LedgerInfo.Hash[:])
 
 		for _, txResult := range event.TransactionResults {
 			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
@@ -835,7 +856,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				LedgerHash:          ledgerHashStr,
 				Transaction:         txJSON,
 				Meta:                metaJSON,
-				Hash:                hex.EncodeToString(txResult.TxHash[:]),
+				Hash:                upperHex(txResult.TxHash[:]),
 				Validated:           txResult.Validated,
 			}
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
@@ -930,6 +951,210 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		)
 	})
 
+	var listenerErrCh chan error
+	if httpSrvs, wsSrvs, listenerErrCh, err = startListeners(serverLog, globalConfig, httpServer, wsServer); err != nil {
+		return err
+	}
+
+	// Start the gRPC XRPLedgerAPIService listener when [port_grpc] is
+	// configured. Disabled by default: no section → no listener (mirrors
+	// rippled's GRPCServer). The ledger service already satisfies the
+	// grpc.LedgerLookup surface the service implementation needs.
+	if grpcName, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+		srv, addr, err := startGRPCServer(grpcName, grpcPort, ledgerService, serverLog, listenerErrCh)
+		if err != nil {
+			return fmt.Errorf("start grpc server: %w", err)
+		}
+		grpcSrv = srv
+		serverLog.Info("gRPC server started", "name", grpcName, "addr", addr)
+	}
+
+	// Arm the out-of-band stall watchdog now that the server is up and
+	// servicing its event loops. Mirrors rippled arming activateStallDetector
+	// only at full start, and only outside standalone (ApplicationImp::run:
+	// guarded by !config_->standalone()). Standalone closes ledgers solely on
+	// the ledger_accept RPC, so an idle node produces no heartbeat and would
+	// otherwise self-abort; consensus mode drives a periodic heartbeat. The
+	// watchdog runs on its own goroutine and aborts the process if a monitored
+	// loop wedges, so a deadlocked node screams and can be restarted instead of
+	// going quiet.
+	if !standalone && globalConfig.Watchdog.IsEnabled() {
+		wdCfg := watchdog.ConfigFromSeconds(
+			globalConfig.Watchdog.WarnSecondsResolved(),
+			globalConfig.Watchdog.FatalSecondsResolved(),
+			globalConfig.Watchdog.AbortSecondsResolved(),
+		)
+		wd := watchdog.New(wdCfg, nil)
+		ledgerService.SetStallPing(wd.Register("ledger"))
+		if consensusComponents != nil {
+			if sp, ok := consensusComponents.Engine.(stallPinger); ok {
+				sp.SetStallPing(wd.Register("consensus"))
+			}
+		}
+		wdCtx, cancelWatchdog := context.WithCancel(context.Background())
+		defer cancelWatchdog()
+		go wd.Run(wdCtx)
+		serverLog.Info("Stall watchdog armed",
+			"warn_s", globalConfig.Watchdog.WarnSecondsResolved(),
+			"fatal_s", globalConfig.Watchdog.FatalSecondsResolved(),
+			"abort_s", globalConfig.Watchdog.AbortSecondsResolved(),
+		)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+
+	// SIGHUP triggers a UNL reload: re-read the config from --conf and
+	// replace the adaptor's trusted validator set. Per-round delta
+	// detection in the consensus engine then drives OnUNLChange so
+	// newly-added validators get the NegativeUNL grace period.
+	// Mirrors the operator-trigger surface of rippled's ValidatorList
+	// (applyLists → updateTrusted) without (yet) the publisher-trust
+	// subsystem. Buffered so a flurry of HUPs coalesces.
+	reloadCh := make(chan os.Signal, 1)
+	signal.Notify(reloadCh, syscall.SIGHUP)
+
+	// shutdownCh lets the RPC stop command trigger the same path
+	shutdownCh := make(chan struct{}, 1)
+
+	services.SetShutdownFunc(func() {
+		serverLog.Info("Shutdown requested via RPC stop command")
+		// Non-blocking: the main loop drains one value and returns, so a
+		// second concurrent stop must not park its handler goroutine forever.
+		select {
+		case shutdownCh <- struct{}{}:
+		default:
+		}
+	})
+
+	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents)
+}
+
+// waitForShutdown blocks until a terminating event arrives: an OS signal, an
+// RPC stop, or a listener goroutine failure. SIGHUP is non-terminating — it
+// reloads the trusted validator set in place and keeps waiting. It returns the
+// listener error (if any) so the caller's deferred cleanup runs.
+func waitForShutdown(
+	log xrpllog.Logger,
+	sigCh, reloadCh chan os.Signal,
+	shutdownCh chan struct{},
+	listenerErrCh chan error,
+	consensusComponents *adaptor.Components,
+) error {
+	for {
+		select {
+		case sig := <-sigCh:
+			log.Info("Received signal, shutting down", "signal", sig)
+			return nil
+		case <-shutdownCh:
+			return nil
+		case err := <-listenerErrCh:
+			log.Error("Listener failed — initiating shutdown", "err", err)
+			return err
+		case <-reloadCh:
+			reloadTrustedValidators(log, consensusComponents)
+		}
+	}
+}
+
+// setupStorage initializes the node store (pebble or in-memory) and the
+// optional relational DB (PostgreSQL or SQLite, used for transaction indexing)
+// from config. A node-store backend failure is fatal; a relational-DB failure
+// is logged and leaves indexing disabled (repoManager nil), as before.
+func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, relationaldb.RepositoryManager, error) {
+	var db nodestore.Database
+	nodestorePath := cfg.NodeDB.Path
+	if nodestorePath != "" {
+		store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
+		if err != nil {
+			return nil, nil, fmt.Errorf("storage backend: %w", err)
+		}
+		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB)
+		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
+			"cache_size", cacheSize, "cache_age", cacheTTL)
+	} else {
+		log.Info("Storage initialized", "backend", "in-memory")
+	}
+
+	var repoManager relationaldb.RepositoryManager
+	dbPath := cfg.DatabasePath
+	if strings.HasPrefix(dbPath, "postgres://") || strings.HasPrefix(dbPath, "postgresql://") {
+		pgConfig := relationaldb.NewConfig()
+		pgConfig.ConnectionString = dbPath
+
+		var err error
+		repoManager, err = postgres.NewRepositoryManager(pgConfig)
+		if err != nil {
+			log.Warn("PostgreSQL not available", "err", err)
+		} else {
+			if err := repoManager.Open(context.Background()); err != nil {
+				log.Warn("PostgreSQL connection failed", "err", err)
+				repoManager = nil
+			} else {
+				log.Info("PostgreSQL connected", "purpose", "transaction indexing")
+			}
+		}
+	} else if dbPath != "" {
+		// Default: auto-create SQLite databases at the given directory
+		// path, applying the operator's [sqlite] tuning.
+		journalMode, synchronous, tempStore := cfg.SQLite.GetEffectiveSettings()
+		var err error
+		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
+			JournalMode:      journalMode,
+			Synchronous:      synchronous,
+			TempStore:        tempStore,
+			PageSize:         cfg.SQLite.PageSize,
+			JournalSizeLimit: cfg.SQLite.JournalSizeLimit,
+		})
+		if err != nil {
+			log.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
+		} else {
+			if err := repoManager.Open(context.Background()); err != nil {
+				log.Warn("SQLite failed to open", "path", dbPath, "err", err)
+				repoManager = nil
+			} else {
+				log.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
+			}
+		}
+	}
+
+	return db, repoManager, nil
+}
+
+// newTxBroadcaster returns a callback that wire-encodes a raw transaction blob
+// and broadcasts it to peers. Shared by the RPC-submit relay (SetTxBroadcaster)
+// and the post-LCL recovered-tx relay (SetTxRelay), which are byte-identical.
+func newTxBroadcaster(overlay *peermanagement.Overlay) func([]byte) {
+	return func(txBlob []byte) {
+		txMsg := &message.Transaction{
+			RawTransaction: txBlob,
+			Status:         message.TxStatusCurrent,
+		}
+		encoded, err := message.Encode(txMsg)
+		if err != nil {
+			return
+		}
+		frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+		if err != nil {
+			return
+		}
+		overlay.Broadcast(frame)
+	}
+}
+
+// startListeners wires the shared HTTP mux (JSON-RPC at "/" and "/rpc", health
+// at "/health") and starts one listener per configured HTTP and WebSocket port,
+// each wrapped in its own PortMiddleware so admin/secure-gateway trust is scoped
+// per port. ListenAndServe failures are funnelled into the returned channel so
+// the caller's deferred cleanup runs. On a port-config error the partially
+// started listeners are returned so the caller can still drain them.
+func startListeners(
+	log xrpllog.Logger,
+	cfg *config.Config,
+	httpServer http.Handler,
+	wsServer *rpc.WebSocketServer,
+) (httpSrvs, wsSrvs []*http.Server, listenerErrCh chan error, err error) {
 	// Shared connection limiter for all ports
 	connLimiter := rpc.NewConnLimiter()
 	wsServer.SetConnLimiter(connLimiter)
@@ -944,50 +1169,41 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
 	})
 
-	// Start listeners from config ports
-	httpPorts := globalConfig.GetHTTPPorts()
-	wsPorts := globalConfig.GetWebSocketPorts()
+	httpPorts := cfg.GetHTTPPorts()
+	wsPorts := cfg.GetWebSocketPorts()
 
 	for name, p := range httpPorts {
-		serverLog.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
+		log.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
 	}
 	for name, p := range wsPorts {
-		serverLog.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
+		log.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
 	}
-	if _, peerPort, hasPeer := globalConfig.GetPeerPort(); hasPeer {
-		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
+	if _, peerPort, hasPeer := cfg.GetPeerPort(); hasPeer {
+		log.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
+	}
+	if _, grpcPort, hasGRPC := cfg.GetGRPCPort(); hasGRPC {
+		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.GetBindAddress())
 	}
 
 	// listenerErrCh routes ListenAndServe failures back to the main
-	// goroutine so shutdown runs the deferred cleanup chain.
-	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts))
+	// goroutine so shutdown runs the deferred cleanup chain. Sized for
+	// every WS/HTTP listener plus the optional gRPC listener.
+	listenerErrCh = make(chan error, 2+len(wsPorts)+len(httpPorts))
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	for name, p := range wsPorts {
-		portCfg := p
-		adminNets, err := portCfg.ParseAdminNets()
-		if err != nil {
-			return fmt.Errorf("parse admin nets for ws port %q: %w", name, err)
-		}
-		secureGW, err := portCfg.ParseSecureGatewayNets()
-		if err != nil {
-			return fmt.Errorf("parse secure_gateway nets for ws port %q: %w", name, err)
-		}
-		pc := &rpc.PortContext{
-			PortName:          name,
-			AdminNets:         adminNets,
-			SecureGatewayNets: secureGW,
-			Limit:             portCfg.Limit,
-			SendQueue:         portCfg.SendQueueLimit,
+		pc, perr := parsePortConfig("ws", name, p)
+		if perr != nil {
+			return httpSrvs, wsSrvs, listenerErrCh, perr
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: portCfg.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		wsSrvs = append(wsSrvs, srv)
 		go func(n string, s *http.Server) {
-			serverLog.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
+			log.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
 			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverLog.Error("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
+				log.Error("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
 				select {
 				case listenerErrCh <- fmt.Errorf("ws %s (%s): %w", n, s.Addr, err):
 				default:
@@ -1007,31 +1223,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		addr string
 	}, 0, len(httpPorts))
 	for name, p := range httpPorts {
-		portCfg := p
-		adminNets, err := portCfg.ParseAdminNets()
-		if err != nil {
-			return fmt.Errorf("parse admin nets for http port %q: %w", name, err)
-		}
-		secureGW, err := portCfg.ParseSecureGatewayNets()
-		if err != nil {
-			return fmt.Errorf("parse secure_gateway nets for http port %q: %w", name, err)
-		}
-		pc := &rpc.PortContext{
-			PortName:          name,
-			AdminNets:         adminNets,
-			SecureGatewayNets: secureGW,
-			Limit:             portCfg.Limit,
-			SendQueue:         portCfg.SendQueueLimit,
+		pc, perr := parsePortConfig("http", name, p)
+		if perr != nil {
+			return httpSrvs, wsSrvs, listenerErrCh, perr
 		}
 		httpPortList = append(httpPortList, struct {
 			name string
 			pc   *rpc.PortContext
 			addr string
-		}{name, pc, portCfg.GetBindAddress()})
+		}{name, pc, p.GetBindAddress()})
 	}
 
 	if len(httpPortList) == 0 {
-		return fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
+		return httpSrvs, wsSrvs, listenerErrCh, fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
 	}
 
 	for _, entry := range httpPortList {
@@ -1046,9 +1250,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		httpSrvs = append(httpSrvs, srv)
 		go func(n, addr string, s *http.Server) {
-			serverLog.Info("Listening", "protocol", "http", "name", n, "addr", addr)
+			log.Info("Listening", "protocol", "http", "name", n, "addr", addr)
 			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverLog.Error("HTTP server failed", "name", n, "addr", addr, "err", err)
+				log.Error("HTTP server failed", "name", n, "addr", addr, "err", err)
 				select {
 				case listenerErrCh <- fmt.Errorf("http %s (%s): %w", n, addr, err):
 				default:
@@ -1057,45 +1261,57 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}(entry.name, entry.addr, srv)
 	}
 
-	// Add signal handling and a shared shutdown trigger
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	return httpSrvs, wsSrvs, listenerErrCh, nil
+}
 
-	// SIGHUP triggers a UNL reload: re-read the config from --conf and
-	// replace the adaptor's trusted validator set. Per-round delta
-	// detection in the consensus engine then drives OnUNLChange so
-	// newly-added validators get the NegativeUNL grace period.
-	// Mirrors the operator-trigger surface of rippled's ValidatorList
-	// (applyLists → updateTrusted) without (yet) the publisher-trust
-	// subsystem. Buffered so a flurry of HUPs coalesces.
-	reloadCh := make(chan os.Signal, 1)
-	signal.Notify(reloadCh, syscall.SIGHUP)
+// Pebble-internal tuning with no corresponding config key: the block
+// cache for the storage engine itself and the max open file handles.
+const (
+	pebbleBlockCacheBytes = 256 << 20
+	pebbleFileHandles     = 500
+)
 
-	// shutdownCh lets the RPC stop command trigger the same path
-	shutdownCh := make(chan struct{}, 1)
+// Node-object cache defaults applied when the operator leaves node_db
+// cache_size / cache_age unset.
+const (
+	defaultNodeCacheSize = 10000
+	defaultNodeCacheAge  = 10 * time.Minute
+)
 
-	services.SetShutdownFunc(func() {
-		serverLog.Info("Shutdown requested via RPC stop command")
-		shutdownCh <- struct{}{}
-	})
-
-	// Block until signal, RPC stop, or a listener goroutine fails.
-	// SIGHUP is non-terminating — handle it in-place and keep waiting.
-	for {
-		select {
-		case sig := <-sigCh:
-			serverLog.Info("Received signal, shutting down", "signal", sig)
-			return retErr
-		case <-shutdownCh:
-			return retErr
-		case err := <-listenerErrCh:
-			serverLog.Error("Listener failed — initiating shutdown", "err", err)
-			retErr = err
-			return retErr
-		case <-reloadCh:
-			reloadTrustedValidators(serverLog, consensusComponents)
-		}
+// nodeStoreCacheParams maps node_db cache_size (entries) and cache_age
+// (minutes) onto the node-object cache parameters, substituting the
+// built-in defaults for unset (zero) values.
+func nodeStoreCacheParams(n config.NodeDBConfig) (int, time.Duration) {
+	size := defaultNodeCacheSize
+	if n.CacheSize > 0 {
+		size = n.CacheSize
 	}
+	age := defaultNodeCacheAge
+	if n.CacheAge > 0 {
+		age = time.Duration(n.CacheAge) * time.Minute
+	}
+	return size, age
+}
+
+// parsePortConfig builds the per-port RPC context (admin and
+// secure_gateway nets, connection limits) for a listener of the given
+// protocol ("ws" or "http").
+func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortContext, error) {
+	adminNets, err := p.ParseAdminNets()
+	if err != nil {
+		return nil, fmt.Errorf("parse admin nets for %s port %q: %w", protocol, name, err)
+	}
+	secureGW, err := p.ParseSecureGatewayNets()
+	if err != nil {
+		return nil, fmt.Errorf("parse secure_gateway nets for %s port %q: %w", protocol, name, err)
+	}
+	return &rpc.PortContext{
+		PortName:          name,
+		AdminNets:         adminNets,
+		SecureGatewayNets: secureGW,
+		Limit:             p.Limit,
+		SendQueue:         p.SendQueueLimit,
+	}, nil
 }
 
 // staticValidatorReloader is the writable surface
@@ -1105,6 +1321,14 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 // so a SIGHUP removal is not silently undone by the next OnChange.
 type staticValidatorReloader interface {
 	ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte)
+}
+
+// stallPinger is the optional surface the stall watchdog installs on the
+// consensus engine. Kept off the core consensus.Engine interface so test
+// mocks and alternative engines need not implement it; *rcl.Engine satisfies
+// it. Mirrors the optional-extension pattern of consensus.WireableAdaptor.
+type stallPinger interface {
+	SetStallPing(ping func())
 }
 
 // reloadTrustedValidators is the SIGHUP entry point: bridge from the
@@ -1150,9 +1374,11 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 func doShutdown(
 	httpSrvs, wsSrvs []*http.Server,
 	wsServer *rpc.WebSocketServer,
+	grpcSrv *googlegrpc.Server,
 	ledgerService *service.Service,
 	ledgerCleaner *cleaner.Cleaner,
 	consensusComponents *adaptor.Components,
+	rotator *shamapstore.Rotator,
 	kvDB nodestore.Database,
 	repoManager relationaldb.RepositoryManager,
 	logger xrpllog.Logger,
@@ -1175,14 +1401,31 @@ func doShutdown(
 		}
 	}
 
-	// Stop the background ledger-integrity verifier before tearing down the
-	// node store it walks.
+	if grpcSrv != nil {
+		logger.Info("Draining gRPC connections...")
+		stopped := make(chan struct{})
+		go func() {
+			grpcSrv.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			grpcSrv.Stop()
+			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
+		}
+	}
+
+	if rotator != nil {
+		rotator.Stop()
+		logger.Info("Online delete rotator stopped")
+	}
+
 	if ledgerCleaner != nil {
 		ledgerCleaner.Stop()
 		logger.Info("Ledger cleaner stopped")
 	}
 
-	// Stop consensus components (if running)
 	if consensusComponents != nil {
 		consensusComponents.Stop()
 		logger.Info("Consensus components stopped")
@@ -1191,10 +1434,14 @@ func doShutdown(
 	// Note: ledgerService has no Stop method; it is garbage collected
 	_ = ledgerService
 	if kvDB != nil {
-		kvDB.Close()
+		if err := kvDB.Close(); err != nil {
+			logger.Warn("Node store close failed", "err", err)
+		}
 	}
 	if repoManager != nil {
-		repoManager.Close(context.Background())
+		if err := repoManager.Close(context.Background()); err != nil {
+			logger.Warn("Relational DB close failed", "err", err)
+		}
 	}
 
 	logger.Info("Shutdown complete")
@@ -1270,7 +1517,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 
 	return &types.LedgerSubscribeInfo{
 		LedgerIndex:      validatedLedger.Sequence(),
-		LedgerHash:       hex.EncodeToString(hash[:]),
+		LedgerHash:       upperHex(hash[:]),
 		LedgerTime:       ledgerTime,
 		FeeBase:          baseFee,
 		FeeRef:           baseFee,
@@ -1278,7 +1525,48 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		ReserveInc:       reserveInc,
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 		NetworkID:        serverInfo.NetworkID,
+		XRPFeesEnabled:   a.ledgerService.XRPFeesEnabled(),
 	}
+}
+
+// upperHex renders bytes as uppercase hex
+func upperHex(b []byte) string {
+	return strings.ToUpper(hex.EncodeToString(b))
+}
+
+// queuedTxInfos projects the ledger service's TxQ candidate details into the
+// RPC-layer view consumed by account_info and the ledger method's queue_data.
+// The transaction body is flattened only for the ledger dump (which echoes it);
+// account_info ignores TxJSON.
+func queuedTxInfos(details []*txq.CandidateDetails) []types.QueuedTxInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]types.QueuedTxInfo, 0, len(details))
+	for _, d := range details {
+		info := types.QueuedTxInfo{
+			Account:          d.Account,
+			TxID:             d.TxID,
+			SeqValue:         d.SeqProxy.Value,
+			IsTicket:         d.SeqProxy.IsTicket,
+			FeeLevel:         uint64(d.FeeLevel),
+			LastValid:        d.LastValid,
+			Fee:              d.Fee,
+			MaxSpendDrops:    d.PotentialSpend + d.Fee,
+			AuthChange:       d.AuthChange,
+			RetriesRemaining: d.RetriesRemaining,
+			PreflightResult:  d.PreflightResult.String(),
+			LastResult:       d.LastResult.String(),
+			HasLastResult:    d.HasLastResult,
+		}
+		if d.Txn != nil {
+			if flat, err := d.Txn.Flatten(); err == nil {
+				info.TxJSON = flat
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes
@@ -1389,16 +1677,16 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	v := e.Validation
 	signingEnc, _ := addresscodec.EncodeNodePublicKey(v.SigningPubKey[:])
 	ev := rpc.NewValidationEvent(
-		hex.EncodeToString(v.LedgerID[:]),
+		upperHex(v.LedgerID[:]),
 		strconv.FormatUint(uint64(v.LedgerSeq), 10),
 		signingEnc,
-		hex.EncodeToString(v.Signature),
+		upperHex(v.Signature),
 		uint32(v.SignTime.Unix()-protocol.RippleEpochUnix),
 		v.Flags,
 		v.Full,
 	)
 	if len(v.Raw) > 0 {
-		ev.Data = hex.EncodeToString(v.Raw)
+		ev.Data = upperHex(v.Raw)
 	}
 	if networkID > 0 {
 		ev.NetworkID = networkID
@@ -1412,10 +1700,13 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 		}
 	}
 	if v.Cookie != 0 {
-		ev.Cookie = strconv.FormatUint(v.Cookie, 16)
+		ev.Cookie = strconv.FormatUint(v.Cookie, 10)
 	}
 	if v.LoadFee != 0 {
 		ev.LoadFee = v.LoadFee
+	}
+	if v.ServerVersion != 0 {
+		ev.ServerVersion = strconv.FormatUint(v.ServerVersion, 10)
 	}
 	if v.BaseFee != 0 {
 		ev.BaseFee = v.BaseFee
@@ -1435,11 +1726,11 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if len(v.Amendments) > 0 {
 		ev.Amendments = make([]string, len(v.Amendments))
 		for i, a := range v.Amendments {
-			ev.Amendments[i] = hex.EncodeToString(a[:])
+			ev.Amendments[i] = upperHex(a[:])
 		}
 	}
 	if v.ValidatedHash != [32]byte{} {
-		ev.ValidatedHash = hex.EncodeToString(v.ValidatedHash[:])
+		ev.ValidatedHash = upperHex(v.ValidatedHash[:])
 	}
 	return ev
 }
@@ -1471,8 +1762,8 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 	for _, node := range meta.AffectedNodes {
 		for _, raw := range node {
 			var nd struct {
-				LedgerEntryType string                 `json:"LedgerEntryType"`
-				FinalFields     map[string]interface{} `json:"FinalFields"`
+				LedgerEntryType string         `json:"LedgerEntryType"`
+				FinalFields     map[string]any `json:"FinalFields"`
 			}
 			if err := json.Unmarshal(raw, &nd); err != nil {
 				continue
@@ -1493,11 +1784,11 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 	return out
 }
 
-func currencySpecFromAmount(raw interface{}) types.CurrencySpec {
+func currencySpecFromAmount(raw any) types.CurrencySpec {
 	switch v := raw.(type) {
 	case string:
 		return types.CurrencySpec{Currency: "XRP"}
-	case map[string]interface{}:
+	case map[string]any:
 		currency, _ := v["currency"].(string)
 		issuer, _ := v["issuer"].(string)
 		return types.CurrencySpec{Currency: currency, Issuer: issuer}
@@ -1550,7 +1841,7 @@ func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 		masterSig,
 		sig,
 		m.Domain,
-		hex.EncodeToString(m.Serialized),
+		upperHex(m.Serialized),
 		m.Sequence,
 	)
 }

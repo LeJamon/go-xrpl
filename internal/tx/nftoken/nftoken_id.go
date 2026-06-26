@@ -3,6 +3,7 @@ package nftoken
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
@@ -34,25 +35,17 @@ func getNFTIssuer(nftokenID [32]byte) [20]byte {
 	return issuer
 }
 
-// getNFTokenFlags extracts the flags from an NFTokenID string (first 4 hex chars)
+// getNFTokenFlags extracts the flags from an NFTokenID string (first 4 hex
+// chars). Returns 0 when the string is too short or not valid hex.
 func getNFTokenFlags(nftokenID string) uint16 {
 	if len(nftokenID) < 4 {
 		return 0
 	}
-	var flags uint16
-	for i := 0; i < 4 && i < len(nftokenID); i++ {
-		flags <<= 4
-		c := nftokenID[i]
-		switch {
-		case c >= '0' && c <= '9':
-			flags |= uint16(c - '0')
-		case c >= 'a' && c <= 'f':
-			flags |= uint16(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			flags |= uint16(c - 'A' + 10)
-		}
+	b, err := hex.DecodeString(nftokenID[:4])
+	if err != nil {
+		return 0
 	}
-	return flags
+	return binary.BigEndian.Uint16(b)
 }
 
 // getNFTTransferFee extracts the transfer fee from an NFTokenID
@@ -127,7 +120,7 @@ func compareNFTokenID(a, b [32]byte) int {
 // getNFTPageKey returns the low 96 bits of an NFTokenID (for page grouping)
 func getNFTPageKey(nftokenID [32]byte) [32]byte {
 	var result [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		result[i] = nftokenID[i] & nftPageMask[i]
 	}
 	return result

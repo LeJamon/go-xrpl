@@ -36,34 +36,31 @@ const (
 	// EventLedgerAccepted fires when a new ledger is accepted.
 	EventLedgerAccepted
 
-	// EventDisputeCreated fires when a new disputed transaction is found.
-	EventDisputeCreated
-
-	// EventDisputeResolved fires when a dispute is resolved.
-	EventDisputeResolved
-
 	// EventTimerFired fires when a consensus timer expires.
 	EventTimerFired
 )
 
-// String returns the string representation.
 func (t EventType) String() string {
-	names := map[EventType]string{
-		EventRoundStarted:       "RoundStarted",
-		EventModeChanged:        "ModeChanged",
-		EventPhaseChanged:       "PhaseChanged",
-		EventProposalReceived:   "ProposalReceived",
-		EventValidationReceived: "ValidationReceived",
-		EventConsensusReached:   "ConsensusReached",
-		EventLedgerAccepted:     "LedgerAccepted",
-		EventDisputeCreated:     "DisputeCreated",
-		EventDisputeResolved:    "DisputeResolved",
-		EventTimerFired:         "TimerFired",
+	switch t {
+	case EventRoundStarted:
+		return "RoundStarted"
+	case EventModeChanged:
+		return "ModeChanged"
+	case EventPhaseChanged:
+		return "PhaseChanged"
+	case EventProposalReceived:
+		return "ProposalReceived"
+	case EventValidationReceived:
+		return "ValidationReceived"
+	case EventConsensusReached:
+		return "ConsensusReached"
+	case EventLedgerAccepted:
+		return "LedgerAccepted"
+	case EventTimerFired:
+		return "TimerFired"
+	default:
+		return "Unknown"
 	}
-	if name, ok := names[t]; ok {
-		return name
-	}
-	return "Unknown"
 }
 
 // RoundStartedEvent is emitted when a new consensus round begins.
@@ -138,37 +135,12 @@ type LedgerAcceptedEvent struct {
 
 func (e *LedgerAcceptedEvent) Type() EventType { return EventLedgerAccepted }
 
-// DisputeCreatedEvent is emitted when a disputed transaction is found.
-type DisputeCreatedEvent struct {
-	Round     RoundID
-	TxID      TxID
-	OurVote   bool
-	Timestamp time.Time
-}
-
-func (e *DisputeCreatedEvent) Type() EventType { return EventDisputeCreated }
-
-// DisputeResolvedEvent is emitted when a dispute is resolved.
-type DisputeResolvedEvent struct {
-	Round     RoundID
-	TxID      TxID
-	Included  bool
-	YayVotes  int
-	NayVotes  int
-	Timestamp time.Time
-}
-
-func (e *DisputeResolvedEvent) Type() EventType { return EventDisputeResolved }
-
 // TimerType identifies consensus timer types.
 type TimerType int
 
 const (
 	// TimerLedgerClose fires when it's time to close the ledger.
 	TimerLedgerClose TimerType = iota
-
-	// TimerProposalExpire fires when proposals have expired.
-	TimerProposalExpire
 
 	// TimerRoundTimeout fires when a round has timed out.
 	TimerRoundTimeout

@@ -192,15 +192,14 @@ func buildResponseAgainstParent(t *testing.T, svc *service.Service, txCount int)
 
 	blobs := make([][]byte, 0, txCount)
 	ids := make([][32]byte, 0, txCount)
-	for i := 0; i < txCount; i++ {
+	for i := range txCount {
 		txBytes := []byte{0x10, 0x20, 0x30, byte(i), 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01}
 		blob, id := txWithMetaBlob(t, txBytes, uint32(i))
 		blobs = append(blobs, blob)
 		ids = append(ids, id)
 	}
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	for i := range blobs {
 		require.NoError(t, txMap.PutWithNodeType(ids[i], blobs[i], shamap.NodeTypeTransactionWithMeta))
 	}
@@ -268,7 +267,7 @@ func makeRouter(t *testing.T) (*Router, *Adaptor, *recordingSender, *service.Ser
 	svc := newTestLedgerService(t)
 	a, rs := newRecordingAdaptor(t, svc)
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, nil, inbox)
+	r := NewRouter(nil, a, inbox)
 	return r, a, rs, svc
 }
 

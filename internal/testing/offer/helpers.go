@@ -1,6 +1,7 @@
 package offer
 
 import (
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -61,12 +62,7 @@ func newEnvWithFeatures(t *testing.T, disabledFeatures []string) *jtx.TestEnv {
 
 // featureEnabled checks if a feature is enabled (not in disabled list).
 func featureEnabled(disabledFeatures []string, feature string) bool {
-	for _, f := range disabledFeatures {
-		if f == feature {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(disabledFeatures, feature)
 }
 
 // Reserve computes the account reserve for a given owner count.
@@ -102,7 +98,7 @@ func GetOffer(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) *state.Ledger
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	offer, err := state.ParseLedgerOfferFromBytes(data)
+	offer, err := state.ParseLedgerOffer(data)
 	if err != nil {
 		return nil
 	}
@@ -149,7 +145,7 @@ func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
 			return nil
 		}
 		if entryType == 0x006f {
-			offer, parseErr := state.ParseLedgerOfferFromBytes(data)
+			offer, parseErr := state.ParseLedgerOffer(data)
 			if parseErr == nil {
 				offers = append(offers, offer)
 			}

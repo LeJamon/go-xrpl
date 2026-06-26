@@ -1,7 +1,6 @@
 package ed25519
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
 	"errors"
@@ -22,7 +21,7 @@ const (
 var ed25519FamilySeedPrefixBytes = []byte{0x01, 0xE1, 0x4B}
 
 var (
-	_ rootcrypto.Algorithm = &ED25519CryptoAlgorithm{}
+	_ rootcrypto.Algorithm = ED25519CryptoAlgorithm{}
 
 	// ErrValidatorNotSupported is returned when a validator keypair is used with the ED25519 algorithm.
 	ErrValidatorNotSupported = errors.New("validator keypairs can not use Ed25519")
@@ -65,14 +64,14 @@ func (c ED25519CryptoAlgorithm) DeriveKeypair(decodedSeed []byte, validator bool
 		return "", "", ErrValidatorNotSupported
 	}
 	rawPriv := common.Sha512Half(decodedSeed)
-	pubKey, privKey, err := ed25519.GenerateKey(bytes.NewBuffer(rawPriv[:]))
-	if err != nil {
-		return "", "", err
-	}
-	pubKey = append([]byte{c.prefix}, pubKey...)
-	public := strings.ToUpper(hex.EncodeToString(pubKey))
-	privKey = append([]byte{c.prefix}, privKey...)
-	private := strings.ToUpper(hex.EncodeToString(privKey[:32+len([]byte{c.prefix})]))
+	privKey := ed25519.NewKeyFromSeed(rawPriv[:])
+	pubKey := privKey.Public().(ed25519.PublicKey)
+
+	public := strings.ToUpper(hex.EncodeToString(append([]byte{c.prefix}, pubKey...)))
+	// The XRPL private-key encoding is the 0xED prefix + the 32-byte seed, i.e.
+	// the first 33 bytes of the prefixed expanded key (seed || public).
+	prefixedPriv := append([]byte{c.prefix}, privKey...)
+	private := strings.ToUpper(hex.EncodeToString(prefixedPriv[:33]))
 	return private, public, nil
 }
 

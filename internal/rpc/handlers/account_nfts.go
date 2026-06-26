@@ -9,10 +9,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountNftsMethod handles the account_nfts RPC method
+// AccountNftsMethod handles account_nfts: it enumerates the NFTs the account
+// owns, read from its NFTokenPage entries.
 type AccountNftsMethod struct{ BaseHandler }
 
-func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -31,10 +32,9 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.Unlimited)
@@ -45,25 +45,22 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		limit,
 	)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account not found.",
-			}
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
 		}
-		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account malformed.",
-			}
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrAccountMalformed) {
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
 	}
 
 	// Build NFTs array with proper field handling
-	nfts := make([]map[string]interface{}, len(result.AccountNFTs))
+	nfts := make([]map[string]any, len(result.AccountNFTs))
 	for i, nft := range result.AccountNFTs {
-		nftObj := map[string]interface{}{
+		nftObj := map[string]any{
 			"Flags":        nft.Flags,
 			"Issuer":       nft.Issuer,
 			"NFTokenID":    nft.NFTokenID,
@@ -83,7 +80,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"account_nfts": nfts,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

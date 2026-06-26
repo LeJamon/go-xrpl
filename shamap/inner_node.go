@@ -17,8 +17,6 @@ import (
 // nibble (4 bits) of the key.
 const BranchFactor = 16
 
-var zeroHash [32]byte
-
 const fullInnerSerializedSize = 4 + BranchFactor*32
 
 // Errors returned by inner-node operations.
@@ -27,46 +25,44 @@ var (
 	ErrEmptyNonRoot  = errors.New("non-root inner node cannot be empty")
 )
 
-// InnerNode represents an inner node in the SHAMap tree
-type InnerNode struct {
-	BaseNode
+// innerNode represents an inner node in the SHAMap tree
+type innerNode struct {
+	baseNode
 	mu       sync.RWMutex
 	children [BranchFactor]Node
 	hashes   [BranchFactor][32]byte
 	isBranch uint16
 }
 
-// NewInnerNode creates a new empty inner node
-func NewInnerNode() *InnerNode {
-	return &InnerNode{
-		BaseNode: BaseNode{dirty: true},
-	}
-}
-
-// IsLeaf returns false - inner nodes are never leaves
-func (n *InnerNode) IsLeaf() bool {
-	return false
-}
-
-// IsInner returns true - this is an inner node
-func (n *InnerNode) IsInner() bool {
-	return true
+// newInnerNode creates a new empty inner node
+func newInnerNode() *innerNode {
+	n := &innerNode{}
+	n.SetDirty(true)
+	return n
 }
 
 // Type returns the node type
-func (n *InnerNode) Type() NodeType {
+func (n *innerNode) Type() NodeType {
 	return NodeTypeInner
 }
 
+// Hash returns the node's hash under the node lock, so readers on a
+// structurally-shared subtree never race a concurrent recompute.
+func (n *innerNode) Hash() [32]byte {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.hash
+}
+
 // IsEmpty returns true if the node has no active branches
-func (n *InnerNode) IsEmpty() bool {
+func (n *innerNode) IsEmpty() bool {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.isBranch == 0
 }
 
 // IsEmptyBranch returns true if the given branch index is empty
-func (n *InnerNode) IsEmptyBranch(index int) bool {
+func (n *innerNode) IsEmptyBranch(index int) bool {
 	if index < 0 || index >= BranchFactor {
 		return true
 	}
@@ -77,14 +73,14 @@ func (n *InnerNode) IsEmptyBranch(index int) bool {
 }
 
 // BranchCount returns the number of active branches
-func (n *InnerNode) BranchCount() int {
+func (n *innerNode) BranchCount() int {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return bits.OnesCount16(n.isBranch)
 }
 
 // Child returns the child node at the given branch index
-func (n *InnerNode) Child(index int) (Node, error) {
+func (n *innerNode) Child(index int) (Node, error) {
 	if index < 0 || index >= BranchFactor {
 		return nil, ErrInvalidBranch
 	}
@@ -94,14 +90,8 @@ func (n *InnerNode) Child(index int) (Node, error) {
 	return n.children[index], nil
 }
 
-// ChildUnsafe returns the child without bounds checking or locking
-// Use only when you're certain the index is valid and you hold the lock
-func (n *InnerNode) ChildUnsafe(index int) Node {
-	return n.children[index]
-}
-
 // SetChild sets the child node at the given branch index
-func (n *InnerNode) SetChild(index int, child Node) error {
+func (n *innerNode) SetChild(index int, child Node) error {
 	if index < 0 || index >= BranchFactor {
 		return ErrInvalidBranch
 	}
@@ -118,20 +108,8 @@ func (n *InnerNode) SetChild(index int, child Node) error {
 		n.isBranch &= ^(1 << index)
 	}
 
-	n.dirty = true
+	n.SetDirty(true)
 	return n.updateHashUnsafe()
-}
-
-// SetChildDirect sets the child pointer without updating hash or dirty flag.
-// Used for attaching lazily-loaded nodes from the store.
-// The caller must ensure the hash is already correct (set during deserialization).
-func (n *InnerNode) SetChildDirect(index int, child Node) {
-	if index < 0 || index >= BranchFactor {
-		return
-	}
-	n.mu.Lock()
-	defer n.mu.Unlock()
-	n.children[index] = child
 }
 
 // LoadChild returns the child pointer, stored hash, and isBranch bit for
@@ -141,7 +119,7 @@ func (n *InnerNode) SetChildDirect(index int, child Node) {
 // may lag child.Hash() during a mutation cycle because dirtyUp clears
 // parent hashes before they are recomputed. Callers that need the child's
 // own current hash should call child.Hash() on the returned pointer.
-func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
+func (n *innerNode) LoadChild(index int) (Node, [32]byte, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.children[index], n.hashes[index], n.isBranch&(1<<index) != 0
@@ -156,7 +134,7 @@ func (n *InnerNode) LoadChild(index int) (Node, [32]byte, bool) {
 // SHAMapInnerNode.cpp:397-412, enforced by construction at callers, not at
 // runtime): branch must be a non-empty branch in isBranch, child must be
 // non-nil, and child.Hash() must equal n.hashes[index].
-func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
+func (n *innerNode) SetChildIfNil(index int, child Node) Node {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if existing := n.children[index]; existing != nil {
@@ -167,7 +145,7 @@ func (n *InnerNode) SetChildIfNil(index int, child Node) Node {
 }
 
 // ChildHash returns the hash at a given branch index
-func (n *InnerNode) ChildHash(index int) ([32]byte, error) {
+func (n *innerNode) ChildHash(index int) ([32]byte, error) {
 	if index < 0 || index >= BranchFactor {
 		return [32]byte{}, ErrInvalidBranch
 	}
@@ -177,20 +155,15 @@ func (n *InnerNode) ChildHash(index int) ([32]byte, error) {
 	return n.hashes[index], nil
 }
 
-// ChildHashUnsafe returns the hash without bounds checking or locking
-func (n *InnerNode) ChildHashUnsafe(index int) [32]byte {
-	return n.hashes[index]
-}
-
 // UpdateHash recalculates the node's hash from its children
-func (n *InnerNode) UpdateHash() error {
+func (n *innerNode) UpdateHash() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	return n.updateHashUnsafe()
 }
 
 // updateHashUnsafe updates hash without locking (caller must hold lock).
-func (n *InnerNode) updateHashUnsafe() error {
+func (n *innerNode) updateHashUnsafe() error {
 	if n.isBranch == 0 {
 		n.hash = [32]byte{}
 		return nil
@@ -199,12 +172,13 @@ func (n *InnerNode) updateHashUnsafe() error {
 	h := common.AcquireSHA512()
 	defer common.ReleaseSHA512(h)
 	h.Write(protocol.HashPrefixInnerNode[:])
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
 			h.Write(ch[:])
 		} else {
-			h.Write(zeroHash[:])
+			var zero [32]byte
+			h.Write(zero[:])
 		}
 	}
 	var buf [sha512.Size]byte
@@ -219,11 +193,11 @@ func (n *InnerNode) updateHashUnsafe() error {
 // source, so the in-memory node hash and the serialized preimage are computed
 // identically and can never disagree — even mid-mutation, when dirtyUp clears
 // parent hashes before they are recomputed and the split path leaves the chain
-// transiently stale (see LoadChild and the #470 note in shamap.go). Hash-only
-// branches (children released after flush) fall back to hashes[i], which
-// updateHashDeep keeps authoritative before ReleaseChildren runs.
+// transiently stale (see LoadChild and the split-chain note in put.go).
+// Hash-only branches (children released after flush) fall back to hashes[i],
+// which updateHashDeep keeps authoritative before ReleaseChildren runs.
 // Caller must hold n.mu.
-func (n *InnerNode) childPreimageHash(i int) [32]byte {
+func (n *innerNode) childPreimageHash(i int) [32]byte {
 	if child := n.children[i]; child != nil {
 		return child.Hash()
 	}
@@ -234,8 +208,8 @@ func (n *InnerNode) childPreimageHash(i int) [32]byte {
 // disagrees with its live child's hash. ok is false when every loaded child
 // matches its cached preimage — the invariant SetChild and updateHashDeep
 // maintain. Caller must hold n.mu.
-func (n *InnerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok bool) {
-	for i := 0; i < BranchFactor; i++ {
+func (n *innerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok bool) {
+	for i := range BranchFactor {
 		child := n.children[i]
 		if child == nil {
 			continue
@@ -253,13 +227,12 @@ func (n *InnerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok 
 // after ReleaseChildren a branch serializes from hashes[i] (childPreimageHash
 // falls back to it when the child is nil), so any value left stale by a
 // mutation cycle must be reconciled here first. Mirrors rippled's
-// SHAMapInnerNode::updateHashDeep (rippled/src/xrpld/shamap/detail/
-// SHAMapInnerNode.cpp:216-229), invoked from walkSubTree before each inner
-// node is written (SHAMap.cpp:1139).
-func (n *InnerNode) updateHashDeep() error {
+// SHAMapInnerNode::updateHashDeep, invoked from walkSubTree before each inner
+// node is written.
+func (n *innerNode) updateHashDeep() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			if child := n.children[i]; child != nil {
 				n.hashes[i] = child.Hash()
@@ -273,11 +246,10 @@ func (n *InnerNode) updateHashDeep() error {
 // contributes childPreimageHash(i) — the same live-child-preferred source
 // updateHashUnsafe hashes — so the wire bytes always hash to this node's
 // reported hash. rippled's SHAMapInnerNode::serializeForWire reads hashes_
-// directly (rippled/src/xrpld/shamap/detail/SHAMapInnerNode.cpp:231-254);
-// go-xrpl prefers the live child because its mutation cycle can leave hashes[i]
-// transiently lagging child.Hash() (see childPreimageHash). The bytes are
-// identical once the cache is in sync.
-func (n *InnerNode) SerializeForWire() ([]byte, error) {
+// directly; go-xrpl prefers the live child because its mutation cycle can
+// leave hashes[i] transiently lagging child.Hash() (see childPreimageHash).
+// The bytes are identical once the cache is in sync.
+func (n *innerNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
@@ -290,7 +262,7 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	if branchCount < 12 {
 		// Compressed: [Hash32][Position1] × N + [WireType].
 		result := make([]byte, 0, branchCount*33+1)
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if n.isBranch&(1<<i) != 0 {
 				ch := n.childPreimageHash(i)
 				result = append(result, ch[:]...)
@@ -303,7 +275,7 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 
 	// Full: 16 × 32-byte hashes + WireType.
 	result := make([]byte, BranchFactor*32+1)
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		off := i * 32
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
@@ -318,11 +290,10 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 // Like SerializeForWire, each branch contributes childPreimageHash(i) (live
 // child preferred, cached hashes[i] as fallback) — the same source
 // updateHashUnsafe hashes — so the preimage always hashes to this node's hash.
-// rippled's SHAMapInnerNode::serializeWithPrefix reads hashes_ directly
-// (rippled/src/xrpld/shamap/detail/SHAMapInnerNode.cpp:256-266); the bytes
-// match once the cache is in sync, which flushNode guarantees by calling
-// updateHashDeep before releasing children (SHAMap.cpp:1139).
-func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
+// rippled's SHAMapInnerNode::serializeWithPrefix reads hashes_ directly; the
+// bytes match once the cache is in sync, which flushNode guarantees by calling
+// updateHashDeep before releasing children.
+func (n *innerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
@@ -332,7 +303,7 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 
 	result := make([]byte, fullInnerSerializedSize)
 	copy(result[:4], protocol.HashPrefixInnerNode[:])
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			off := 4 + i*32
 			ch := n.childPreimageHash(i)
@@ -342,8 +313,8 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	return result, nil
 }
 
-// NewInnerNodeFromWire creates an InnerNode from wire format data
-func NewInnerNodeFromWire(data []byte) (*InnerNode, error) {
+// newInnerNodeFromWire creates an innerNode from wire format data
+func newInnerNodeFromWire(data []byte) (*innerNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
@@ -362,16 +333,16 @@ func NewInnerNodeFromWire(data []byte) (*InnerNode, error) {
 }
 
 // parseFullInnerNode parses a full inner node (16 hashes of 32 bytes each = 512 bytes)
-func parseFullInnerNode(data []byte) (*InnerNode, error) {
+func parseFullInnerNode(data []byte) (*innerNode, error) {
 	expectedSize := BranchFactor * 32 // 16 * 32 = 512 bytes
 	if len(data) != expectedSize {
 		return nil, fmt.Errorf("invalid full inner node size: expected %d, got %d", expectedSize, len(data))
 	}
 
-	node := NewInnerNode()
+	node := newInnerNode()
 
 	// Read 16 child hashes in order
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		start := i * 32
 		end := start + 32
 
@@ -390,12 +361,12 @@ func parseFullInnerNode(data []byte) (*InnerNode, error) {
 		return nil, fmt.Errorf("failed to update inner node hash: %w", err)
 	}
 
-	node.dirty = false // loaded from wire, not modified
+	node.SetDirty(false) // loaded from wire, not modified
 	return node, nil
 }
 
 // parseCompressedInnerNode parses compressed format: series of (32-byte hash + 1-byte position)
-func parseCompressedInnerNode(data []byte) (*InnerNode, error) {
+func parseCompressedInnerNode(data []byte) (*innerNode, error) {
 	const chunkSize = 33 // 32 bytes hash + 1 byte position
 
 	if len(data)%chunkSize != 0 {
@@ -406,7 +377,7 @@ func parseCompressedInnerNode(data []byte) (*InnerNode, error) {
 		return nil, fmt.Errorf("compressed inner node too large: %d > %d", len(data), chunkSize*BranchFactor)
 	}
 
-	node := NewInnerNode()
+	node := newInnerNode()
 
 	// Parse each hash+position pair
 	for i := 0; i < len(data); i += chunkSize {
@@ -415,7 +386,7 @@ func parseCompressedInnerNode(data []byte) (*InnerNode, error) {
 		copy(hash[:], data[i:i+32])
 
 		// Read 1-byte position
-		position := data[i+32] //nolint:gosec // G602: len(data) is a multiple of 33 and i steps by 33, so i+32 < len(data)
+		position := data[i+32] //nolint:gosec // G602: len(data) is a multiple of chunkSize=33 (guarded above), so i+32 is in range
 		if position >= BranchFactor {
 			return nil, fmt.Errorf("invalid branch position: %d >= %d", position, BranchFactor)
 		}
@@ -430,21 +401,21 @@ func parseCompressedInnerNode(data []byte) (*InnerNode, error) {
 		return nil, fmt.Errorf("failed to update inner node hash: %w", err)
 	}
 
-	node.dirty = false // loaded from wire, not modified
+	node.SetDirty(false) // loaded from wire, not modified
 	return node, nil
 }
 
 // String returns a human-readable representation of the node
-func (n *InnerNode) String(id NodeID) string {
+func (n *innerNode) String(id NodeID) string {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("InnerNode ID: %s\n", id.String()))
+	sb.WriteString(fmt.Sprintf("innerNode ID: %s\n", id.String()))
 	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
 	sb.WriteString("Branches:\n")
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			sb.WriteString(fmt.Sprintf("  %d: %s\n", i, hex.EncodeToString(n.hashes[i][:])))
 		}
@@ -454,12 +425,12 @@ func (n *InnerNode) String(id NodeID) string {
 }
 
 // Invariants performs internal consistency checks
-func (n *InnerNode) Invariants(isRoot bool) error {
+func (n *innerNode) Invariants(isRoot bool) error {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
 	count := 0
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		hasChild := n.children[i] != nil
 		hasBit := (n.isBranch & (1 << i)) != 0
 		hasHash := !isZeroHash(n.hashes[i])
@@ -494,7 +465,7 @@ func (n *InnerNode) Invariants(isRoot bool) error {
 	// Verify hash is correct
 	if !n.IsZeroHash() {
 		// Create a temporary copy to verify hash
-		temp := &InnerNode{
+		temp := &innerNode{
 			isBranch: n.isBranch,
 			hashes:   n.hashes,
 			children: n.children,
@@ -511,18 +482,19 @@ func (n *InnerNode) Invariants(isRoot bool) error {
 }
 
 // Clone returns a deep copy of the node
-func (n *InnerNode) Clone() (Node, error) {
+func (n *innerNode) Clone() (Node, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	clone := &InnerNode{
-		BaseNode: BaseNode{hash: n.hash, dirty: true},
+	clone := &innerNode{
 		isBranch: n.isBranch,
 		hashes:   n.hashes, // Copy the array
 	}
+	clone.hash = n.hash
+	clone.SetDirty(true)
 
 	// Deep clone children
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.children[i] != nil {
 			childClone, err := n.children[i].Clone()
 			if err != nil {
@@ -542,53 +514,31 @@ func (n *InnerNode) Clone() (Node, error) {
 // inner nodes from root down to that leaf, while every untouched subtree
 // stays structurally shared with whichever snapshot or sibling map still
 // references the source node.
-func (n *InnerNode) shallowClone() *InnerNode {
+func (n *innerNode) shallowClone() *innerNode {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
-	return &InnerNode{
-		BaseNode: BaseNode{hash: n.hash, dirty: true},
+	clone := &innerNode{
 		isBranch: n.isBranch,
 		hashes:   n.hashes,
 		children: n.children,
 	}
-}
-
-// ForEachChild calls fn for each non-nil child with its branch index
-// If fn returns false, iteration stops early
-func (n *InnerNode) ForEachChild(fn func(index int, child Node) bool) {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-
-	for i := 0; i < BranchFactor; i++ {
-		if n.children[i] != nil {
-			if !fn(i, n.children[i]) {
-				break
-			}
-		}
-	}
+	clone.hash = n.hash
+	clone.SetDirty(true)
+	return clone
 }
 
 // HasChildren returns true if the node has any children
-func (n *InnerNode) HasChildren() bool {
+func (n *innerNode) HasChildren() bool {
 	return !n.IsEmpty()
 }
 
 // ReleaseChildren drops in-memory child pointers while retaining per-branch
 // hashes, allowing GC to reclaim a freshly-flushed subtree that will be
 // lazy-reloaded from the NodeStore on next access.
-func (n *InnerNode) ReleaseChildren() {
+func (n *innerNode) ReleaseChildren() {
 	n.mu.Lock()
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		n.children[i] = nil
 	}
 	n.mu.Unlock()
-}
-
-func isZeroHash(hash [32]byte) bool {
-	for _, b := range hash {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
 }

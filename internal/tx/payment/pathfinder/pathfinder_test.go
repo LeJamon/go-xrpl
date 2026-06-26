@@ -1,6 +1,7 @@
 package pathfinder
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -12,6 +13,11 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+// testSearchLevel mirrors rippled Path_test's pathTestEnv, which raises
+// PATH_SEARCH to 7 because these scenarios were written for deeper search
+// levels than the production default.
+const testSearchLevel = 7
 
 // Mock LedgerView
 
@@ -87,7 +93,7 @@ func (m *mockLedgerView) Rules() *amendment.Rules { return nil }
 func (m *mockLedgerView) LedgerSeq() uint32 { return 0 }
 
 func compareKeys(a, b [32]byte) int {
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if a[i] < b[i] {
 			return -1
 		}
@@ -216,10 +222,8 @@ func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]by
 	require.NoError(t, err, "parse existing OwnerDir")
 
 	// Check for duplicates
-	for _, idx := range dir.Indexes {
-		if idx == itemKey {
-			return
-		}
+	if slices.Contains(dir.Indexes, itemKey) {
+		return
 	}
 	dir.Indexes = append(dir.Indexes, itemKey)
 	data, err := state.SerializeDirectoryNode(dir, false)
@@ -230,11 +234,9 @@ func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]by
 // addBookDir creates a book directory entry so BookExists can find it.
 func addBookDir(t *testing.T, ledger *mockLedgerView, takerPays, takerGets payment.Issue) {
 	t.Helper()
-	paysCurr := currencyTo20(takerPays.Currency)
-	paysIssuer := takerPays.Issuer
-	getsCurr := currencyTo20(takerGets.Currency)
-	getsIssuer := takerGets.Issuer
-	k := keylet.BookDir(paysCurr, paysIssuer, getsCurr, getsIssuer)
+	paysCurr := keylet.CurrencyBytes(takerPays.Currency)
+	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
+	k := keylet.BookDir(paysCurr, takerPays.Issuer, getsCurr, takerGets.Issuer)
 
 	dir := &state.DirectoryNode{
 		RootIndex: k.Key,
@@ -281,13 +283,7 @@ func TestPathTable_XRPToNonXRP_AllStartWithSource(t *testing.T) {
 
 func TestPathTable_NonXRPToXRP_AllHaveXRPBook(t *testing.T) {
 	for _, cp := range pathTable[ptNonXRP_to_XRP] {
-		hasXRPBook := false
-		for _, nt := range cp.Type {
-			if nt == ntXRP_BOOK {
-				hasXRPBook = true
-				break
-			}
-		}
+		hasXRPBook := slices.Contains(cp.Type, ntXRP_BOOK)
 		require.True(t, hasXRPBook,
 			"NonXRP-to-XRP path should contain ntXRP_BOOK: level=%d", cp.SearchLevel)
 	}
@@ -774,6 +770,28 @@ func TestBookIndex_BookExists(t *testing.T) {
 	require.False(t, bi.BookExists(usdIssue, xrpIssue), "reverse book should not exist")
 }
 
+// TestBookIndex_BookExists_HexCurrency is a regression test for the old
+// currencyTo20 hex gap: 40-char hex currencies were encoded as all-zeros (the
+// XRP currency), so every distinct hex currency collided onto the same book
+// key. keylet.CurrencyBytes decodes the hex, so the books stay distinct.
+func TestBookIndex_BookExists_HexCurrency(t *testing.T) {
+	ledger := newMockLedger()
+	gw := testAccountID(3)
+
+	xrpIssue := payment.Issue{Currency: "XRP"}
+	hexA := payment.Issue{Currency: "0158415500000000C1F76FF6ECB0BAC600000000", Issuer: gw}
+	hexB := payment.Issue{Currency: "025841550000000000000000000000000000BEEF", Issuer: gw}
+
+	addBookDir(t, ledger, hexA, xrpIssue)
+
+	bi := NewBookIndex(ledger)
+	require.True(t, bi.BookExists(hexA, xrpIssue), "the hex-A book must be found")
+	require.False(t, bi.BookExists(hexB, xrpIssue),
+		"a distinct hex currency must not collide onto the hex-A book key")
+	require.False(t, bi.BookExists(xrpIssue, xrpIssue),
+		"an XRP book must not collide onto a hex-currency book key")
+}
+
 func TestBookIndex_LazyBuild(t *testing.T) {
 	ledger := newMockLedger()
 	bi := NewBookIndex(ledger)
@@ -787,7 +805,7 @@ func TestBookIndex_LazyBuild(t *testing.T) {
 	require.True(t, bi.built)
 }
 
-// Test 6: pathHasSeen and pathHasSeenIssue (loop detection)
+// Test 6: pathHasSeen (loop detection)
 
 func TestPathHasSeen_EmptyPath(t *testing.T) {
 	acct := testAccountID(1)
@@ -833,42 +851,6 @@ func TestPathHasSeen_XRPEmptyCurrency(t *testing.T) {
 	}
 	require.True(t, pathHasSeen(path, acct, "XRP"),
 		"empty currency should match XRP")
-}
-
-func TestPathHasSeenIssue_EmptyPath(t *testing.T) {
-	issue := payment.Issue{Currency: "USD", Issuer: testAccountID(1)}
-	require.False(t, pathHasSeenIssue(nil, issue), "empty path has seen nothing")
-}
-
-func TestPathHasSeenIssue_MatchByIssuer(t *testing.T) {
-	acct := testAccountID(1)
-	acctAddr := testAccountAddress(acct)
-	path := []payment.PathStep{
-		{Currency: "USD", Issuer: acctAddr},
-	}
-	issue := payment.Issue{Currency: "USD", Issuer: acct}
-	require.True(t, pathHasSeenIssue(path, issue), "should find issue by issuer")
-}
-
-func TestPathHasSeenIssue_MatchByAccount(t *testing.T) {
-	acct := testAccountID(1)
-	acctAddr := testAccountAddress(acct)
-	path := []payment.PathStep{
-		{Account: acctAddr, Currency: "USD"},
-	}
-	issue := payment.Issue{Currency: "USD", Issuer: acct}
-	require.True(t, pathHasSeenIssue(path, issue), "should find issue by account")
-}
-
-func TestPathHasSeenIssue_DifferentCurrency(t *testing.T) {
-	acct := testAccountID(1)
-	acctAddr := testAccountAddress(acct)
-	path := []payment.PathStep{
-		{Currency: "EUR", Issuer: acctAddr},
-	}
-	issue := payment.Issue{Currency: "USD", Issuer: acct}
-	require.False(t, pathHasSeenIssue(path, issue),
-		"different currency should not match")
 }
 
 // Test 7: addUniquePath (deduplication)
@@ -977,37 +959,6 @@ func TestIsNoRipple_FlagNotSet(t *testing.T) {
 		"NoRipple on from's side should not trigger")
 }
 
-// Test 9: pathsEqual
-
-func TestPathsEqual_Empty(t *testing.T) {
-	require.True(t, pathsEqual(nil, nil))
-	require.True(t, pathsEqual([]payment.PathStep{}, []payment.PathStep{}))
-}
-
-func TestPathsEqual_DifferentLength(t *testing.T) {
-	a := []payment.PathStep{{Currency: "USD"}}
-	b := []payment.PathStep{{Currency: "USD"}, {Currency: "EUR"}}
-	require.False(t, pathsEqual(a, b))
-}
-
-func TestPathsEqual_SameSteps(t *testing.T) {
-	a := []payment.PathStep{
-		{Account: "rA", Currency: "USD", Issuer: "rI"},
-		{Currency: "EUR"},
-	}
-	b := []payment.PathStep{
-		{Account: "rA", Currency: "USD", Issuer: "rI"},
-		{Currency: "EUR"},
-	}
-	require.True(t, pathsEqual(a, b))
-}
-
-func TestPathsEqual_DifferentSteps(t *testing.T) {
-	a := []payment.PathStep{{Currency: "USD"}}
-	b := []payment.PathStep{{Currency: "EUR"}}
-	require.False(t, pathsEqual(a, b))
-}
-
 // Test 10: pathTypeKey
 
 func TestPathTypeKey_DeterministicAndUnique(t *testing.T) {
@@ -1021,33 +972,6 @@ func TestPathTypeKey_DeterministicAndUnique(t *testing.T) {
 
 	require.Equal(t, k1, k3, "same PathType should produce same key")
 	require.NotEqual(t, k1, k2, "different PathType should produce different key")
-}
-
-// Test 11: currencyTo20
-
-func TestCurrencyTo20_XRP(t *testing.T) {
-	result := currencyTo20("XRP")
-	require.Equal(t, [20]byte{}, result, "XRP should be all zeros")
-}
-
-func TestCurrencyTo20_Empty(t *testing.T) {
-	result := currencyTo20("")
-	require.Equal(t, [20]byte{}, result, "empty should be all zeros")
-}
-
-func TestCurrencyTo20_Standard3Char(t *testing.T) {
-	result := currencyTo20("USD")
-	// bytes 12-14 should contain "USD"
-	require.Equal(t, byte('U'), result[12])
-	require.Equal(t, byte('S'), result[13])
-	require.Equal(t, byte('D'), result[14])
-	// All other bytes should be zero
-	for i, b := range result {
-		if i >= 12 && i <= 14 {
-			continue
-		}
-		require.Equal(t, byte(0), b, "byte %d should be zero", i)
-	}
 }
 
 // Test 12: issueFromAmount
@@ -1082,7 +1006,7 @@ func TestFindPaths_ZeroDstAmount(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "zero dst amount should return false")
 }
 
@@ -1098,7 +1022,7 @@ func TestFindPaths_SameAccountSameCurrency(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "same account same currency should return false (no paths needed)")
 }
 
@@ -1120,7 +1044,7 @@ func TestFindPaths_SourceNotFound(t *testing.T) {
 		"USD", gwID, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "non-existent source should return false")
 }
 
@@ -1138,7 +1062,7 @@ func TestFindPaths_XRPToXRP_NoPaths(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	// XRP-to-XRP returns true but with no explicit paths (default path only)
 	require.True(t, result, "XRP-to-XRP should succeed with default path")
 	require.Empty(t, pf.CompletePaths(), "XRP-to-XRP should find no explicit paths")
@@ -1186,7 +1110,7 @@ func TestFindPaths_IOUToSameIOU_ThroughGateway(t *testing.T) {
 		dstAmt, srcAmt, "USD", gw, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "should find paths for IOU-to-same-IOU through gateway")
 	// There should be at least one complete path found
 	// (the specific paths depend on which patterns match — gateway is directly connected)
@@ -1256,7 +1180,7 @@ func TestFindPaths_DestNotExist_IOUFails(t *testing.T) {
 	srcAmt := state.NewIssuedAmountFromFloat64(100, "USD", gwAddr)
 
 	pf := NewPathfinder(ledger, cache, src, dst, dstAmt, srcAmt, "USD", gw, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "IOU payment to non-existent destination should fail")
 }
 
@@ -1316,7 +1240,7 @@ func TestFindPaths_SourceIsEffectiveDst_DefaultPath(t *testing.T) {
 	srcAmt := state.NewIssuedAmountFromFloat64(100, "USD", gwAddr)
 
 	pf := NewPathfinder(ledger, cache, gw, bob, dstAmt, srcAmt, "USD", gw, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "source is effective dst with same currency -> default path works")
 	require.Empty(t, pf.CompletePaths(), "should have no explicit paths (default path suffices)")
 }
@@ -1368,7 +1292,7 @@ func TestFindPaths_XRPToIOU_ThroughOfferBook(t *testing.T) {
 	srcAmt := state.NewXRPAmountFromInt(99999999999)
 
 	pf := NewPathfinder(ledger, cache, alice, bob, dstAmt, srcAmt, "XRP", [20]byte{}, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "should find paths for XRP-to-IOU through offer book")
 
 	// The path type table for XRP-to-nonXRP includes patterns that go through books.
@@ -1641,7 +1565,7 @@ func TestFindPaths_IOUSameIOU_MultipleTrustLines(t *testing.T) {
 	srcAmt := state.NewIssuedAmountFromFloat64(200, "USD", gwAddr)
 
 	pf := NewPathfinder(ledger, cache, alice, bob, dstAmt, srcAmt, "USD", gw, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "should complete pathfinding")
 
 	paths := pf.CompletePaths()
@@ -1782,7 +1706,7 @@ func TestBuildPathFindTrustLine_ViewAsHigh(t *testing.T) {
 // Utility: compareAccountIDs (used by helpers above)
 
 func compareAccountIDs(a, b [20]byte) int {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if a[i] < b[i] {
 			return -1
 		}
@@ -1818,7 +1742,9 @@ func TestConstants(t *testing.T) {
 	require.Equal(t, 4, maxReturnedPaths)
 	require.Equal(t, 50, maxCandidatesFromSource)
 	require.Equal(t, 10, maxCandidatesFromOther)
-	require.Equal(t, 7, DefaultSearchLevel)
+	require.Equal(t, 2, SearchLevelFast)
+	require.Equal(t, 2, SearchLevelDefault)
+	require.Equal(t, 3, SearchLevelMax)
 }
 
 func TestAddFlags(t *testing.T) {
@@ -1860,13 +1786,7 @@ func TestPathTable_AllEntriesStartWithSource(t *testing.T) {
 func TestPathTable_NonXRPToNonXRP_HasDestBook(t *testing.T) {
 	// All nonXRP-to-nonXRP patterns should contain a ntDEST_BOOK
 	for _, cp := range pathTable[ptNonXRP_to_nonXRP] {
-		hasDestBook := false
-		for _, nt := range cp.Type {
-			if nt == ntDEST_BOOK {
-				hasDestBook = true
-				break
-			}
-		}
+		hasDestBook := slices.Contains(cp.Type, ntDEST_BOOK)
 		require.True(t, hasDestBook,
 			"NonXRP-to-nonXRP path at level %d should contain ntDEST_BOOK", cp.SearchLevel)
 	}
@@ -2195,19 +2115,6 @@ func TestPathHasSeen_MultiStepPath(t *testing.T) {
 		"should find acct2+EUR")
 }
 
-func TestPathHasSeenIssue_MultipleSteps(t *testing.T) {
-	acct1 := testAccountID(1)
-	acct2 := testAccountID(2)
-
-	path := []payment.PathStep{
-		{Currency: "USD", Issuer: testAccountAddress(acct1)},
-		{Currency: "EUR", Issuer: testAccountAddress(acct2)},
-	}
-
-	require.True(t, pathHasSeenIssue(path, payment.Issue{Currency: "EUR", Issuer: acct2}))
-	require.False(t, pathHasSeenIssue(path, payment.Issue{Currency: "USD", Issuer: acct2}))
-}
-
 // Test 32: PathRank sorting with liquidity
 
 func TestPathRank_LiquiditySorting(t *testing.T) {
@@ -2270,24 +2177,6 @@ func TestPathRank_MixedCriteria(t *testing.T) {
 	require.Equal(t, 0, ranks[2].Index, "worst quality last despite high liquidity")
 }
 
-// Test 33: currencyTo20 additional cases
-
-func TestCurrencyTo20_EUR(t *testing.T) {
-	result := currencyTo20("EUR")
-	require.Equal(t, byte('E'), result[12])
-	require.Equal(t, byte('U'), result[13])
-	require.Equal(t, byte('R'), result[14])
-}
-
-func TestCurrencyTo20_DifferentCurrenciesAreDifferent(t *testing.T) {
-	usd := currencyTo20("USD")
-	eur := currencyTo20("EUR")
-	btc := currencyTo20("BTC")
-	require.NotEqual(t, usd, eur)
-	require.NotEqual(t, usd, btc)
-	require.NotEqual(t, eur, btc)
-}
-
 // Test 34: FindPaths — XRP destination when dest doesn't exist
 
 func TestFindPaths_DestNotExist_XRPAllowed(t *testing.T) {
@@ -2308,7 +2197,7 @@ func TestFindPaths_DestNotExist_XRPAllowed(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	// XRP-to-XRP pathfinding should succeed even when dest doesn't exist
 	require.True(t, result, "XRP payment to non-existent dest should not fail at pathfinding stage")
 }

@@ -38,17 +38,6 @@ func FuzzVerifyProofPath(f *testing.F) {
 		// VerifyProofPath must not panic — just returns bool
 		result := VerifyProofPath(rootHash, key, path)
 
-		// VerifyProofPathDetailed must not panic — returns nil or error
-		err := VerifyProofPathDetailed(rootHash, key, path)
-
-		// Both functions must agree
-		if result && err != nil {
-			t.Fatalf("VerifyProofPath returned true but VerifyProofPathDetailed returned error: %v", err)
-		}
-		if !result && err == nil {
-			t.Fatal("VerifyProofPath returned false but VerifyProofPathDetailed returned nil")
-		}
-
 		// VerifyProofPathWithValue must not panic
 		val := VerifyProofPathWithValue(rootHash, key, path)
 
@@ -68,10 +57,7 @@ func FuzzVerifyProofPathValidTree(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, keyMutator []byte, pathMutator []byte) {
 		// Build a small tree with known data
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 
 		var key1 [32]byte
 		key1[0] = 0x11
@@ -138,7 +124,6 @@ func FuzzVerifyProofPathValidTree(f *testing.F) {
 
 		// Must not panic regardless of mutations
 		_ = VerifyProofPath(rootHash, mutatedKey, mutatedPath)
-		_ = VerifyProofPathDetailed(rootHash, mutatedKey, mutatedPath)
 		_ = VerifyProofPathWithValue(rootHash, mutatedKey, mutatedPath)
 	})
 }
@@ -165,14 +150,11 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 	if n == 0 || len(data) == 0 {
 		return nil
 	}
-	count := int(n)
-	// Cap to prevent huge allocations
-	if count > MaxDepth+1 {
-		count = MaxDepth + 1
-	}
-	if count > len(data) {
-		count = len(data)
-	}
+	count := min(
+		// Cap to prevent huge allocations
+		min(
+
+			int(n), MaxDepth+1), len(data))
 
 	blobs := make([][]byte, count)
 	chunkSize := len(data) / count
@@ -180,7 +162,7 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 		chunkSize = 1
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		start := i * chunkSize
 		end := start + chunkSize
 		if i == count-1 {
@@ -201,10 +183,7 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 // buildValidProofSeed constructs a valid proof from a real tree
 // and returns the components as fuzz seed parameters.
 func buildValidProofSeed() ([32]byte, [32]byte, []byte, uint8) {
-	sm, err := New(TypeState)
-	if err != nil {
-		return [32]byte{}, [32]byte{}, nil, 0
-	}
+	sm := New(TypeState)
 
 	var key [32]byte
 	key[0] = 0xAB

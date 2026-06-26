@@ -11,10 +11,20 @@ import (
 
 // XRPL API Version constants
 const (
-	ApiVersion1       = 1
-	ApiVersion2       = 2
-	ApiVersion3       = 3
-	DefaultApiVersion = ApiVersion2
+	ApiVersion1 = 1
+	ApiVersion2 = 2
+	ApiVersion3 = 3
+	// DefaultApiVersion is the version assumed when a request omits
+	// api_version. Matches rippled's apiVersionIfUnspecified = 1
+	// (ApiVersion.h): every request expecting a v2+ response shape must
+	// set api_version explicitly.
+	DefaultApiVersion = ApiVersion1
+	// MaxSupportedApiVersion is the highest non-beta version a request may
+	// reach (rippled apiMaximumSupportedVersion).
+	MaxSupportedApiVersion = ApiVersion2
+	// BetaApiVersion is the highest version accepted only when the
+	// beta_rpc_api config knob is set (rippled apiBetaVersion).
+	BetaApiVersion = ApiVersion3
 )
 
 // Role-based access control matching rippled's Role enum (Role.h).
@@ -91,11 +101,16 @@ type RpcContext struct {
 	// fixtures they need. Replaces the former package-level
 	// types.Services global.
 	Services *ServiceContainer
+	// LoadWarning is set by the post-dispatch load charge when the caller
+	// crosses the resource warn threshold. Transport writers surface it as
+	// the top-level warning:"load" field, mirroring rippled's
+	// `if (consumer.warn()) jr[warning] = load`.
+	LoadWarning bool
 }
 
 // Method handler interface - all RPC methods implement this
 type MethodHandler interface {
-	Handle(ctx *RpcContext, params json.RawMessage) (interface{}, *RpcError)
+	Handle(ctx *RpcContext, params json.RawMessage) (any, *RpcError)
 	RequiredRole() Role
 	SupportedApiVersions() []int
 	RequiredCondition() Condition
@@ -162,33 +177,12 @@ func (li LedgerIndex) String() string {
 type LedgerSpecifier struct {
 	LedgerHash  string      `json:"ledger_hash,omitempty"`
 	LedgerIndex LedgerIndex `json:"ledger_index,omitempty"` // can be number or "validated", "current", "closed"
-}
 
-// JSON-RPC 2.0 Request
-type JsonRpcRequest struct {
-	JsonRpc string          `json:"jsonrpc"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	ID      interface{}     `json:"id,omitempty"`
-}
-
-// JSON-RPC 2.0 Response
-type JsonRpcResponse struct {
-	JsonRpc string      `json:"jsonrpc"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *RpcError   `json:"error,omitempty"`
-	ID      interface{} `json:"id,omitempty"`
-}
-
-// Base response structure for XRPL RPC responses
-type BaseResponse struct {
-	// Standard fields present in most responses
-	Status        string `json:"status,omitempty"`
-	Type          string `json:"type,omitempty"`
-	Validated     *bool  `json:"validated,omitempty"`
-	LedgerHash    string `json:"ledger_hash,omitempty"`
-	LedgerIndex   uint32 `json:"ledger_index,omitempty"`
-	LedgerCurrent uint32 `json:"ledger_current_index,omitempty"`
+	// Ledger is rippled's legacy combined selector (RPCHelpers.cpp:367-374):
+	// a string longer than 12 chars is treated as a ledger_hash, anything
+	// else as a ledger_index. It is folded into LedgerHash/LedgerIndex during
+	// lookup and never read directly by handlers.
+	Ledger LedgerIndex `json:"ledger,omitempty"`
 }
 
 // API Warning IDs as defined in XRPL documentation
@@ -200,25 +194,27 @@ const (
 
 // WarningObject represents an API warning in responses
 type WarningObject struct {
-	ID      int                    `json:"id"`                // Unique numeric code for this warning
-	Message string                 `json:"message"`           // Human-readable description
-	Details map[string]interface{} `json:"details,omitempty"` // Additional warning-specific information
+	ID      int            `json:"id"`                // Unique numeric code for this warning
+	Message string         `json:"message"`           // Human-readable description
+	Details map[string]any `json:"details,omitempty"` // Additional warning-specific information
 }
 
-// WebSocket specific structures
+// WebSocketCommand is assembled by the WS read loop from the decoded
+// message: Command/ID are lifted from the top level and Params holds the
+// remaining fields. It is never JSON-(un)marshalled directly, so Params
+// carries no wire tag.
 type WebSocketCommand struct {
-	Command    string          `json:"command"`
-	ID         interface{}     `json:"id,omitempty"`
-	ApiVersion *int            `json:"api_version,omitempty"`
-	Params     json.RawMessage `json:",inline,omitempty"`
+	Command string
+	ID      any
+	Params  json.RawMessage
 }
 
 // WebSocketResponse represents an XRPL WebSocket API response
 type WebSocketResponse struct {
 	Status       string          `json:"status"`
 	Type         string          `json:"type"`
-	Result       interface{}     `json:"result,omitempty"`
-	ID           interface{}     `json:"id,omitempty"`
+	Result       any             `json:"result,omitempty"`
+	ID           any             `json:"id,omitempty"`
 	Warning      string          `json:"warning,omitempty"`
 	Warnings     []WarningObject `json:"warnings,omitempty"`
 	Forwarded    bool            `json:"forwarded,omitempty"`
@@ -226,6 +222,10 @@ type WebSocketResponse struct {
 	Error        string          `json:"error,omitempty"`
 	ErrorCode    int             `json:"error_code,omitempty"`
 	ErrorMessage string          `json:"error_message,omitempty"`
+	// Request echoes the original command back on an error reply. rippled's
+	// WS missingCommand path returns the unparsed request alongside the
+	// error token (ServerHandler.cpp:457).
+	Request any `json:"request,omitempty"`
 }
 
 // Subscription types for WebSocket streams. Rippled's per-book stream
@@ -242,6 +242,7 @@ const (
 	SubTransactions         SubscriptionType = "transactions"
 	SubTransactionsProposed SubscriptionType = "transactions_proposed"
 	SubAccounts             SubscriptionType = "accounts"
+	SubAccountsProposed     SubscriptionType = "accounts_proposed"
 	SubBook                 SubscriptionType = "book"
 	SubBookChanges          SubscriptionType = "book_changes"
 	SubValidations          SubscriptionType = "validations"
@@ -261,6 +262,123 @@ type SubscriptionRequest struct {
 	URL              string             `json:"url,omitempty"`
 	URLUsername      string             `json:"url_username,omitempty"`
 	URLPassword      string             `json:"url_password,omitempty"`
+	// Username / Password are the deprecated aliases rippled still accepts
+	// for url_username / url_password. When present they take precedence,
+	// and they alone trigger credential updates on an already-registered
+	// url subscription (doSubscribe's reuse branch only checks them).
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
+
+	// wire holds the as-received JSON of the array-valued fields, captured at
+	// decode time. The typed slices above collapse the four shapes rippled
+	// distinguishes via isMember/isArray — absent, null, non-array, and empty
+	// array — into a single nil-or-empty slice, so the subscription manager
+	// reads wire to reproduce rippled's per-shape error codes. nil when the
+	// request was built directly in Go rather than decoded from the wire.
+	// url/username/password presence is captured too: rippled branches on
+	// isMember, so an empty-string url still selects the url branch.
+	wire *wireSubscriptionArrays
+}
+
+type wireSubscriptionArrays struct {
+	streams          json.RawMessage
+	accounts         json.RawMessage
+	accountsProposed json.RawMessage
+	books            json.RawMessage
+	url              json.RawMessage
+	username         json.RawMessage
+	password         json.RawMessage
+}
+
+// WireSubscriptionArrays exposes the raw JSON the wire carried for the
+// array-valued subscription fields. Present is false when the request was not
+// decoded from JSON, in which case the manager falls back to the typed slices.
+type WireSubscriptionArrays struct {
+	Present          bool
+	Streams          json.RawMessage
+	Accounts         json.RawMessage
+	AccountsProposed json.RawMessage
+	Books            json.RawMessage
+}
+
+// WireArrays returns the raw array-field JSON captured by UnmarshalJSON.
+func (r *SubscriptionRequest) WireArrays() WireSubscriptionArrays {
+	if r.wire == nil {
+		return WireSubscriptionArrays{}
+	}
+	return WireSubscriptionArrays{
+		Present:          true,
+		Streams:          r.wire.streams,
+		Accounts:         r.wire.accounts,
+		AccountsProposed: r.wire.accountsProposed,
+		Books:            r.wire.books,
+	}
+}
+
+// UnmarshalJSON captures the raw JSON of the array-valued fields before
+// decoding the typed fields, so the subscription manager can apply rippled's
+// per-field, per-shape error codes — a typed slice cannot tell an absent field
+// from a null, an empty array, or a non-array value. Shape mismatches on the
+// array fields are tolerated here (left for the manager to report with the
+// correct code) rather than failing the whole decode; scalars decode normally.
+func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	r.wire = &wireSubscriptionArrays{
+		streams:          m["streams"],
+		accounts:         m["accounts"],
+		accountsProposed: m["accounts_proposed"],
+		books:            m["books"],
+		url:              m["url"],
+		username:         m["username"],
+		password:         m["password"],
+	}
+	_ = json.Unmarshal(m["streams"], &r.Streams)
+	_ = json.Unmarshal(m["accounts"], &r.Accounts)
+	_ = json.Unmarshal(m["accounts_proposed"], &r.AccountsProposed)
+	_ = json.Unmarshal(m["books"], &r.Books)
+	_ = json.Unmarshal(m["url"], &r.URL)
+	_ = json.Unmarshal(m["url_username"], &r.URLUsername)
+	_ = json.Unmarshal(m["url_password"], &r.URLPassword)
+	_ = json.Unmarshal(m["username"], &r.Username)
+	_ = json.Unmarshal(m["password"], &r.Password)
+	return nil
+}
+
+// HasURL reports whether the request selects rippled's url (RPCSub) branch.
+// For wire-decoded requests this is member presence — an empty-string url
+// still takes the branch (and then fails url parsing); for Go-built requests
+// a non-empty URL stands in for presence.
+func (r *SubscriptionRequest) HasURL() bool {
+	if r.wire != nil {
+		return r.wire.url != nil
+	}
+	return r.URL != ""
+}
+
+// URLCredentials resolves the basic-auth credentials for a url subscription
+// the way doSubscribe does: url_username / url_password, overridden by the
+// deprecated username / password members when present. usernameSet and
+// passwordSet report the deprecated members' presence — on an existing url
+// subscription only those trigger credential updates.
+func (r *SubscriptionRequest) URLCredentials() (username, password string, usernameSet, passwordSet bool) {
+	username, password = r.URLUsername, r.URLPassword
+	if r.wire != nil {
+		usernameSet = r.wire.username != nil
+		passwordSet = r.wire.password != nil
+	} else {
+		usernameSet = r.Username != ""
+		passwordSet = r.Password != ""
+	}
+	if usernameSet {
+		username = r.Username
+	}
+	if passwordSet {
+		password = r.Password
+	}
+	return username, password, usernameSet, passwordSet
 }
 
 // Book request for order book subscriptions
@@ -275,22 +393,10 @@ type BookRequest struct {
 	// when the field is absent. Validated against XRPL-address format
 	// in subscription.HandleSubscribe.
 	Taker string `json:"taker,omitempty"`
-}
-
-// Stream message types
-type StreamMessage struct {
-	Type        string          `json:"type"`
-	LedgerIndex uint32          `json:"ledger_index,omitempty"`
-	LedgerHash  string          `json:"ledger_hash,omitempty"`
-	LedgerTime  uint32          `json:"ledger_time,omitempty"`
-	FeeBase     uint32          `json:"fee_base,omitempty"`
-	FeeRef      uint32          `json:"fee_ref,omitempty"`
-	ReserveBase uint32          `json:"reserve_base,omitempty"`
-	ReserveInc  uint32          `json:"reserve_inc,omitempty"`
-	Validated   bool            `json:"validated,omitempty"`
-	Transaction json.RawMessage `json:"transaction,omitempty"`
-	Meta        json.RawMessage `json:"meta,omitempty"`
-	Account     string          `json:"account,omitempty"`
+	// Domain optionally scopes the book to a permissioned domain
+	// (Subscribe.cpp:308-320). Carried as the uint256 hex string the
+	// client sent; parse-validated in subscription.HandleSubscribe.
+	Domain string `json:"domain,omitempty"`
 }
 
 // Common parameter structures
@@ -308,8 +414,8 @@ type TransactionParam struct {
 
 // Pagination parameters
 type PaginationParams struct {
-	Limit  uint32      `json:"limit,omitempty"`
-	Marker interface{} `json:"marker,omitempty"`
+	Limit  uint32 `json:"limit,omitempty"`
+	Marker any    `json:"marker,omitempty"`
 }
 
 // Currency specification
@@ -317,9 +423,6 @@ type Currency struct {
 	Currency string `json:"currency"`
 	Issuer   string `json:"issuer,omitempty"`
 }
-
-// RawAmount can be drops (string) or IOU object (used for JSON parsing)
-type RawAmount json.RawMessage
 
 // Path specification for path finding
 type Path []PathStep
@@ -399,8 +502,14 @@ type Connection struct {
 	// Disconnect is invoked when MaxConsecutiveDrops is reached. The
 	// WS layer populates this with its per-conn cancel func so a
 	// persistently slow client gets torn down once, in one place.
-	Disconnect      func()
-	URLSubscription string // URL for server-to-server subscriptions
+	Disconnect func()
+
+	// EncodeOutbound, when set, transforms each event at the single
+	// enqueue point before it is queued. url (RPCSub) subscriptions use
+	// it to stamp the per-url sequence number at enqueue, mirroring
+	// rippled's mSeq++ in send(): a number is consumed even when the
+	// bounded queue then drops the event, so the remote sees a gap.
+	EncodeOutbound func([]byte) []byte
 
 	// consecutiveDrops counts back-to-back send failures. Reset to 0
 	// on every successful TrySend.
@@ -416,6 +525,9 @@ type Connection struct {
 func (c *Connection) TrySend(data []byte) bool {
 	if c == nil || c.SendChannel == nil {
 		return false
+	}
+	if c.EncodeOutbound != nil {
+		data = c.EncodeOutbound(data)
 	}
 	select {
 	case c.SendChannel <- data:
@@ -493,10 +605,10 @@ type LedgerInfoProvider interface {
 
 // LedgerSubscribeInfo contains ledger info returned in the subscribe
 // response for the `ledger` stream. Field set mirrors rippled's
-// subLedger ack at NetworkOPs.cpp:4174-4189 (ledger_index, ledger_hash,
-// ledger_time, fee_ref, fee_base, reserve_base, reserve_inc,
-// network_id, validated_ledgers). The per-ledger streamed event uses
-// LedgerCloseEvent and carries additional fields (txn_count, etc.).
+// subLedger ack (NetworkOPs::subLedger): fee_ref is emitted only when
+// the XRPFees amendment is disabled, and network_id is always present.
+// The per-ledger streamed event uses LedgerCloseEvent and carries
+// additional fields (txn_count, etc.).
 type LedgerSubscribeInfo struct {
 	LedgerIndex      uint32 `json:"ledger_index"`
 	LedgerHash       string `json:"ledger_hash"`
@@ -506,13 +618,8 @@ type LedgerSubscribeInfo struct {
 	ReserveBase      uint64 `json:"reserve_base"`
 	ReserveInc       uint64 `json:"reserve_inc"`
 	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32 `json:"network_id,omitempty"`
-}
-
-// ServerSubscribeInfo contains server info returned when subscribing to server stream
-type ServerSubscribeInfo struct {
-	ServerStatus string `json:"server_status"`
-	LoadBase     int    `json:"load_base"`
-	LoadFactor   int    `json:"load_factor"`
-	StandAlone   bool   `json:"stand_alone,omitempty"`
+	NetworkID        uint32 `json:"network_id"`
+	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref
+	// only while the XRPFees amendment is disabled.
+	XRPFeesEnabled bool `json:"-"`
 }

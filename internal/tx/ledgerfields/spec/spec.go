@@ -45,6 +45,15 @@ type Field struct {
 	// Meta is the per-field metadata behavior. Zero value (MetaDefault)
 	// covers most fields.
 	Meta Meta
+
+	// DecodeOnly marks a field that the decoder must tolerate on incoming
+	// blobs but that is never carried on the struct, emitted into metadata,
+	// or re-encoded. It exists to read legacy blobs that an earlier go-xrpl
+	// release wrote with a non-canonical field rippled's template omits. The
+	// generator emits a consume-and-discard decode arm for it (mirroring the
+	// synthetic LedgerEntryType arm), so Decode succeeds while Encode produces
+	// the canonical field set without the legacy field.
+	DecodeOnly bool
 }
 
 // Entry describes one ledger-entry type's typed metadata layout.
@@ -152,10 +161,9 @@ var Specs = []Entry{
 	{
 		Name: "NFTokenOffer",
 		Fields: []Field{
-			// rippled's macro uses sfOwner; go-xrpl's serializer
-			// (internal/tx/nftoken/nftoken_serialize.go) emits sfAccount.
-			// Include both so the typed Decode handles either source.
-			{Name: "Account"},
+			// rippled's macro (ledger_entries.macro ltNFTOKEN_OFFER) uses
+			// sfOwner, matched by go-xrpl's serializer
+			// (internal/tx/nftoken/nftoken_serialize.go).
 			{Name: "Owner"},
 			{Name: "NFTokenID"},
 			{Name: "Amount"},
@@ -224,10 +232,12 @@ var Specs = []Entry{
 	{
 		Name: "SignerList",
 		Fields: []Field{
-			// Account is go-xrpl-specific (rippled's macro doesn't list it;
-			// the serializer in internal/ledger/state/signer_list.go emits
-			// it for owner-account tracking).
-			{Name: "Account"},
+			// rippled's ltSIGNER_LIST has no sfAccount (ledger_entries.macro:
+			// 122-129); the field order mirrors that macro. Account is decoded
+			// for tolerance only: go-xrpl releases before the write-path fix
+			// stored an owner Account on the blob, so a node reading such a
+			// legacy entry must still decode it (then re-encode without it).
+			{Name: "Account", DecodeOnly: true},
 			{Name: "OwnerNode"},
 			{Name: "SignerQuorum"},
 			{Name: "SignerEntries"},
@@ -261,6 +271,9 @@ var Specs = []Entry{
 	{
 		Name: "LedgerHashes",
 		Fields: []Field{
+			// sfFlags is soeREQUIRED (commonFields) — writeSkipList serializes
+			// Flags=0 on every LedgerHashes; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "FirstLedgerSequence"},
 			{Name: "LastLedgerSequence"},
 			{Name: "Hashes"},
@@ -277,6 +290,9 @@ var Specs = []Entry{
 			{Name: "XChainAccountCreateCount"},
 			{Name: "XChainAccountClaimCount"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every Bridge; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -303,6 +319,9 @@ var Specs = []Entry{
 			{Name: "XChainClaimAttestations"},
 			{Name: "SignatureReward"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every XChainOwnedClaimID; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -317,6 +336,9 @@ var Specs = []Entry{
 			{Name: "BaseFeeDrops"},
 			{Name: "ReserveBaseDrops"},
 			{Name: "ReserveIncrementDrops"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every FeeSettings; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -329,6 +351,9 @@ var Specs = []Entry{
 			{Name: "XChainAccountCreateCount"},
 			{Name: "XChainCreateAccountAttestations"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every XChainOwnedCreateAccountClaimID; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -384,6 +409,9 @@ var Specs = []Entry{
 			{Name: "Asset"},
 			{Name: "Asset2"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every AMM; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -410,11 +438,6 @@ var Specs = []Entry{
 		Name: "MPToken",
 		Fields: []Field{
 			{Name: "Account"},
-			// Issuer + Sequence are go-xrpl extras (not in rippled's
-			// ltMPTOKEN macro) emitted by
-			// internal/ledger/state/mptoken_entry.go's serializer.
-			{Name: "Issuer"},
-			{Name: "Sequence"},
 			{Name: "MPTokenIssuanceID"},
 			{Name: "MPTAmount"},
 			{Name: "LockedAmount"},
@@ -493,6 +516,9 @@ var Specs = []Entry{
 			{Name: "LossUnrealized"},
 			{Name: "ShareMPTID"},
 			{Name: "WithdrawalPolicy"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every Vault; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},

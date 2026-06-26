@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // TxQ is the transaction queue (mempool) that holds transactions waiting to
@@ -57,6 +58,11 @@ func New(config Config) *TxQ {
 	}
 }
 
+// Config returns the configuration the queue was constructed with.
+func (q *TxQ) Config() Config {
+	return q.config
+}
+
 // Metrics holds queue metrics for monitoring and RPC.
 type Metrics struct {
 	TxCount               uint32
@@ -68,14 +74,6 @@ type Metrics struct {
 	MedFeeLevel           uint64
 	OpenLedgerFeeLevel    uint64
 	TxQFull               uint64
-}
-
-// TxQFull returns the cumulative count of transactions rejected
-// because the TxQ was full at submission time
-// (telCAN_NOT_QUEUE_FULL). Internal diagnostic only — see the
-// txqFull field doc for why this is not surfaced via server_info.
-func (q *TxQ) TxQFull() uint64 {
-	return q.txqFull.Load()
 }
 
 func (q *TxQ) incTxQFull() {
@@ -95,9 +93,17 @@ func (q *TxQ) GetMetrics(txInLedger uint32) Metrics {
 		minProcessingFeeLevel = uint64(q.byFee[len(q.byFee)-1].FeeLevel) + 1
 	}
 
+	// Snapshot maxSize by value rather than handing out the interior pointer,
+	// so callers can't observe a later in-place mutation through it.
+	var maxSize *uint32
+	if q.maxSize != nil {
+		v := *q.maxSize
+		maxSize = &v
+	}
+
 	return Metrics{
 		TxCount:               uint32(len(q.byFee)),
-		TxQMaxSize:            q.maxSize,
+		TxQMaxSize:            maxSize,
 		TxInLedger:            txInLedger,
 		TxPerLedger:           snapshot.TxnsExpected,
 		ReferenceFeeLevel:     BaseLevel,
@@ -177,30 +183,16 @@ func (q *TxQ) candidateLess(a, b *Candidate) bool {
 	// Same fee level, use pseudo-random ordering based on txID XOR parentHash
 	aXor := xorHash(a.TxID, q.parentHash)
 	bXor := xorHash(b.TxID, q.parentHash)
-	return compareHashes(aXor, bXor) < 0
+	return bytes.Compare(aXor[:], bXor[:]) < 0
 }
 
 // xorHash computes a XOR b.
 func xorHash(a, b [32]byte) [32]byte {
 	var result [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		result[i] = a[i] ^ b[i]
 	}
 	return result
-}
-
-// compareHashes compares two hashes lexicographically.
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
-func compareHashes(a, b [32]byte) int {
-	for i := 0; i < 32; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
 }
 
 // removeByFee removes a candidate from the byFee slice.
@@ -263,15 +255,7 @@ func (q *TxQ) GetAccountTxs(account [20]byte) []*CandidateDetails {
 
 	result := make([]*CandidateDetails, 0, aq.Count())
 	for _, c := range aq.GetSortedCandidates() {
-		result = append(result, &CandidateDetails{
-			TxID:             c.TxID,
-			Account:          c.Account,
-			FeeLevel:         c.FeeLevel,
-			SeqProxy:         c.SeqProxy,
-			LastValid:        c.LastValid,
-			RetriesRemaining: c.RetriesRemaining,
-			LastResult:       c.LastResult,
-		})
+		result = append(result, candidateDetails(c))
 	}
 	return result
 }
@@ -283,17 +267,31 @@ func (q *TxQ) GetAllTxs() []*CandidateDetails {
 
 	result := make([]*CandidateDetails, 0, len(q.byFee))
 	for _, c := range q.byFee {
-		result = append(result, &CandidateDetails{
-			TxID:             c.TxID,
-			Account:          c.Account,
-			FeeLevel:         c.FeeLevel,
-			SeqProxy:         c.SeqProxy,
-			LastValid:        c.LastValid,
-			RetriesRemaining: c.RetriesRemaining,
-			LastResult:       c.LastResult,
-		})
+		result = append(result, candidateDetails(c))
 	}
 	return result
+}
+
+// candidateDetails projects a queue Candidate into the external view
+// surfaced by account_info and ledger queue_data. AuthChange mirrors
+// rippled's tx.consequences.isBlocker(); Fee/PotentialSpend feed the
+// per-tx fee and max_spend_drops emits (AccountInfo.cpp:251-256).
+func candidateDetails(c *Candidate) *CandidateDetails {
+	return &CandidateDetails{
+		TxID:             c.TxID,
+		Account:          c.Account,
+		FeeLevel:         c.FeeLevel,
+		SeqProxy:         c.SeqProxy,
+		LastValid:        c.LastValid,
+		RetriesRemaining: c.RetriesRemaining,
+		LastResult:       c.LastResult,
+		HasLastResult:    c.RetriesRemaining < RetriesAllowed,
+		PreflightResult:  c.PreflightResult,
+		Fee:              c.Consequences.Fee,
+		PotentialSpend:   c.Consequences.PotentialSpend,
+		AuthChange:       c.Consequences.IsBlocker,
+		Txn:              c.Txn,
+	}
 }
 
 // CandidateDetails holds information about a queued transaction for external queries.
@@ -304,5 +302,15 @@ type CandidateDetails struct {
 	SeqProxy         SeqProxy
 	LastValid        uint32
 	RetriesRemaining int
-	LastResult       tx.Result
+	LastResult       ter.Result
+	// HasLastResult mirrors rippled's std::optional<TER> lastResult: it is
+	// only set once a candidate has been re-applied at least once, so the
+	// ledger queue dump suppresses last_result for never-retried txs
+	// (LedgerToJson.cpp:308-309).
+	HasLastResult   bool
+	PreflightResult ter.Result
+	Fee             uint64
+	PotentialSpend  uint64
+	AuthChange      bool
+	Txn             tx.Transaction
 }

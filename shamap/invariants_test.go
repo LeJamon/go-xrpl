@@ -9,7 +9,7 @@ func TestInvariantError(t *testing.T) {
 		nodeID := NewRootNodeID()
 		inner := ErrInvalidType
 
-		err := &InvariantError{
+		err := &invariantError{
 			NodeID:      nodeID,
 			Description: "test error",
 			Err:         inner,
@@ -28,7 +28,7 @@ func TestInvariantError(t *testing.T) {
 	t.Run("WithoutError", func(t *testing.T) {
 		nodeID := NewRootNodeID()
 
-		err := &InvariantError{
+		err := &invariantError{
 			NodeID:      nodeID,
 			Description: "test error",
 		}
@@ -46,8 +46,8 @@ func TestInvariantError(t *testing.T) {
 
 func TestInvariantCheckResult(t *testing.T) {
 	t.Run("NoErrors", func(t *testing.T) {
-		result := &InvariantCheckResult{
-			Errors:            make([]*InvariantError, 0),
+		result := &invariantCheckResult{
+			Errors:            make([]*invariantError, 0),
 			NodesChecked:      10,
 			LeavesChecked:     5,
 			InnerNodesChecked: 5,
@@ -64,8 +64,8 @@ func TestInvariantCheckResult(t *testing.T) {
 	})
 
 	t.Run("WithErrors", func(t *testing.T) {
-		result := &InvariantCheckResult{
-			Errors: []*InvariantError{
+		result := &invariantCheckResult{
+			Errors: []*invariantError{
 				{Description: "error 1"},
 				{Description: "error 2"},
 			},
@@ -87,21 +87,15 @@ func TestInvariantCheckResult(t *testing.T) {
 
 func TestInvariants(t *testing.T) {
 	t.Run("EmptyMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
-		if err := sMap.Invariants(); err != nil {
+		if err := sMap.invariants(); err != nil {
 			t.Errorf("Empty map should pass invariants: %v", err)
 		}
 	})
 
 	t.Run("ValidMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
 		// Add some items - use non-zero keys to avoid zero-key validation error
 		for i := byte(1); i <= 10; i++ {
@@ -112,16 +106,13 @@ func TestInvariants(t *testing.T) {
 			}
 		}
 
-		if err := sMap.Invariants(); err != nil {
+		if err := sMap.invariants(); err != nil {
 			t.Errorf("Valid map should pass invariants: %v", err)
 		}
 	})
 
 	t.Run("LargerMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
 		// Add many items - use non-zero keys to avoid zero-key validation error
 		for i := byte(1); i <= 100; i++ {
@@ -132,16 +123,13 @@ func TestInvariants(t *testing.T) {
 			}
 		}
 
-		if err := sMap.Invariants(); err != nil {
+		if err := sMap.invariants(); err != nil {
 			t.Errorf("Larger map should pass invariants: %v", err)
 		}
 	})
 
 	t.Run("AfterDeletions", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
 		// Add items - use non-zero keys to avoid zero-key validation error
 		for i := byte(1); i <= 20; i++ {
@@ -161,7 +149,7 @@ func TestInvariants(t *testing.T) {
 			}
 		}
 
-		if err := sMap.Invariants(); err != nil {
+		if err := sMap.invariants(); err != nil {
 			t.Errorf("Map after deletions should pass invariants: %v", err)
 		}
 	})
@@ -169,22 +157,16 @@ func TestInvariants(t *testing.T) {
 
 func TestInvariantsDetailed(t *testing.T) {
 	t.Run("EmptyMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
-		result := sMap.InvariantsDetailed()
+		result := sMap.invariantsDetailed()
 		if result.HasErrors() {
 			t.Errorf("Empty map should have no errors: %+v", result.Errors)
 		}
 	})
 
 	t.Run("ValidMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
 		// Use non-zero keys to avoid zero-key validation error
 		for i := byte(1); i <= 10; i++ {
@@ -195,7 +177,7 @@ func TestInvariantsDetailed(t *testing.T) {
 			}
 		}
 
-		result := sMap.InvariantsDetailed()
+		result := sMap.invariantsDetailed()
 		if result.HasErrors() {
 			t.Errorf("Valid map should have no errors: %+v", result.Errors)
 		}
@@ -212,23 +194,17 @@ func TestInvariantsDetailed(t *testing.T) {
 
 func TestVerifyHashes(t *testing.T) {
 	t.Run("EmptyMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
-		if err := sMap.VerifyHashes(); err != nil {
+		if err := sMap.verifyHashes(); err != nil {
 			t.Errorf("Empty map should verify: %v", err)
 		}
 	})
 
 	t.Run("ValidMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
-		for i := byte(0); i < 20; i++ {
+		for i := range byte(20) {
 			var key [32]byte
 			key[0] = i
 			if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -236,7 +212,7 @@ func TestVerifyHashes(t *testing.T) {
 			}
 		}
 
-		if err := sMap.VerifyHashes(); err != nil {
+		if err := sMap.verifyHashes(); err != nil {
 			t.Errorf("Valid map hashes should verify: %v", err)
 		}
 	})
@@ -247,10 +223,7 @@ func TestInvariantsWithDifferentMapTypes(t *testing.T) {
 
 	for _, mapType := range mapTypes {
 		t.Run(mapType.String(), func(t *testing.T) {
-			sMap, err := New(mapType)
-			if err != nil {
-				t.Fatalf("Failed to create SHAMap: %v", err)
-			}
+			sMap := New(mapType)
 
 			// Use non-zero keys to avoid zero-key validation error
 			for i := byte(1); i <= 10; i++ {
@@ -261,7 +234,7 @@ func TestInvariantsWithDifferentMapTypes(t *testing.T) {
 				}
 			}
 
-			if err := sMap.Invariants(); err != nil {
+			if err := sMap.invariants(); err != nil {
 				t.Errorf("%s map should pass invariants: %v", mapType.String(), err)
 			}
 		})
@@ -269,10 +242,7 @@ func TestInvariantsWithDifferentMapTypes(t *testing.T) {
 }
 
 func TestInvariantsAfterSnapshot(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Use non-zero keys to avoid zero-key validation error
 	for i := byte(1); i <= 10; i++ {
@@ -290,11 +260,11 @@ func TestInvariantsAfterSnapshot(t *testing.T) {
 	}
 
 	// Both should pass invariants
-	if err := sMap.Invariants(); err != nil {
+	if err := sMap.invariants(); err != nil {
 		t.Errorf("Original map should pass invariants: %v", err)
 	}
 
-	if err := snapshot.Invariants(); err != nil {
+	if err := snapshot.invariants(); err != nil {
 		t.Errorf("Snapshot should pass invariants: %v", err)
 	}
 
@@ -306,11 +276,11 @@ func TestInvariantsAfterSnapshot(t *testing.T) {
 	}
 
 	// Both should still pass
-	if err := sMap.Invariants(); err != nil {
+	if err := sMap.invariants(); err != nil {
 		t.Errorf("Modified map should pass invariants: %v", err)
 	}
 
-	if err := snapshot.Invariants(); err != nil {
+	if err := snapshot.invariants(); err != nil {
 		t.Errorf("Snapshot should still pass invariants: %v", err)
 	}
 }

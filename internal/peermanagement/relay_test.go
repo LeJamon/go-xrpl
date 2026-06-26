@@ -77,7 +77,7 @@ func TestRelayOnMessage(t *testing.T) {
 	}
 
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 
 	// Set start time to past so we're past bootup wait
 	relay.startTime = time.Now().Add(-WaitOnBootup - time.Minute)
@@ -106,7 +106,7 @@ func TestRelayDisabled(t *testing.T) {
 	}
 
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 
 	validator := []byte("test-validator")
 
@@ -144,7 +144,7 @@ func TestRelay_VPRROnly_Activates(t *testing.T) {
 		Clock:               clock,
 	}
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 
 	// Advance past WaitOnBootup so OnMessage accepts the traffic.
 	now = start.Add(WaitOnBootup + time.Minute)
@@ -175,7 +175,7 @@ func TestRelay_BothFlagsOff_StaysDormant(t *testing.T) {
 		Clock:               clock,
 	}
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 
 	now = start.Add(WaitOnBootup + time.Minute)
 	relay.OnMessage([]byte("validator"), PeerID(1))
@@ -196,7 +196,7 @@ func TestRelayRemovePeer(t *testing.T) {
 	}
 
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 	relay.startTime = time.Now().Add(-WaitOnBootup - time.Minute)
 
 	validator := []byte("test-validator")
@@ -223,7 +223,7 @@ func TestRelayBootupWait(t *testing.T) {
 	}
 
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 
 	// Start time is now, so we're within bootup wait
 	validator := []byte("test-validator")
@@ -328,7 +328,7 @@ func TestRelay_DeleteIdlePeers_EvictsStaleEntries(t *testing.T) {
 		Clock:             time.Now,
 	}
 	mock := newMockSquelchCallback()
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 	relay.startTime = time.Now().Add(-WaitOnBootup - time.Minute)
 
 	validator := []byte("test-validator-idle")
@@ -441,7 +441,7 @@ func TestSlot_UnsquelchedRelay_DoesNotCharge(t *testing.T) {
 	// the Update path transitions RelayPeerCounting → considered →
 	// (not enough peers to select) but never enters Squelched for
 	// this peer. Charge must stay at 0.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		slot.Update(validator, PeerID(1))
 	}
 
@@ -534,7 +534,7 @@ func TestRelay_SquelchedPeerRelayChargesPeer(t *testing.T) {
 	}
 
 	mock := newMockSquelchCallback()
-	relay := NewRelayWithIgnoredCallback(cfg, mock.callback, ignoredCb)
+	relay := NewRelay(cfg, mock.callback, ignoredCb)
 
 	// Advance past bootup so OnMessage is active.
 	now = start.Add(WaitOnBootup + time.Minute)
@@ -588,14 +588,14 @@ func TestRelay_UnsquelchedPeerRelayDoesNotCharge(t *testing.T) {
 	ignoredCb := func(peerID PeerID) { charges++ }
 
 	mock := newMockSquelchCallback()
-	relay := NewRelayWithIgnoredCallback(cfg, mock.callback, ignoredCb)
+	relay := NewRelay(cfg, mock.callback, ignoredCb)
 
 	now = start.Add(WaitOnBootup + time.Minute)
 
 	validator := []byte("test-validator-ok")
 
 	// A handful of messages from one unsquelched peer.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		relay.OnMessage(validator, PeerID(1))
 	}
 
@@ -636,7 +636,7 @@ func TestRelay_DeleteIdlePeers_DemotesSelectedBelowQuorum(t *testing.T) {
 		EnableReduceRelay: true,
 		Clock:             time.Now,
 	}
-	relay := NewRelay(cfg, mock.callback)
+	relay := NewRelay(cfg, mock.callback, nil)
 	validator := []byte("test-validator-demote")
 	relay.mu.Lock()
 	relay.slots[string(validator)] = slot

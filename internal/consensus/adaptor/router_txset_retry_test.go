@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -27,15 +28,14 @@ type retryRecordedCall struct {
 	txSetID  consensus.TxSetID
 	nodeIDs  [][]byte
 	excluded map[uint64]bool
+	indirect bool
 }
 
-func (s *retryRecordingSender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+func (s *retryRecordingSender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	copyExcluded := map[uint64]bool{}
-	for k, v := range excluded {
-		copyExcluded[k] = v
-	}
+	maps.Copy(copyExcluded, excluded)
 	copyIDs := make([][]byte, len(nodeIDs))
 	for i, n := range nodeIDs {
 		copyIDs[i] = append([]byte(nil), n...)
@@ -44,6 +44,7 @@ func (s *retryRecordingSender) RequestTxSetMissingNodes(id consensus.TxSetID, no
 		txSetID:  id,
 		nodeIDs:  copyIDs,
 		excluded: copyExcluded,
+		indirect: indirect,
 	})
 	return s.returnErr
 }
@@ -63,6 +64,12 @@ func (s *retryRecordingSender) lastCall() retryRecordedCall {
 	return s.calls[len(s.calls)-1]
 }
 
+func (s *retryRecordingSender) callAt(i int) retryRecordedCall {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls[i]
+}
+
 // newRetryRouter wires a Router whose NetworkSender records every
 // RequestTxSetMissingNodes call. The router is NOT started — tests
 // invoke handleTxSetData directly so timings are deterministic.
@@ -78,7 +85,7 @@ func newRetryRouter(t *testing.T) (*Router, *retryRecordingSender) {
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	router := NewRouter(&mockEngine{}, a, nil, make(chan *peermanagement.InboundMessage, 1))
+	router := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
 	return router, rs
 }
 
@@ -165,7 +172,7 @@ func TestTxSetRetry_MaxAttemptsCapDropsAcquire(t *testing.T) {
 	withRetryKnobs(router, 0, maxAttempts, 1_000_000, func() {
 		ld, _ := rootOnlyTxSetLedgerData(t, 4)
 
-		for i := 0; i < maxAttempts; i++ {
+		for i := range maxAttempts {
 			router.handleTxSetData(ld, uint64(i+1))
 		}
 		require.Equal(t, maxAttempts, rs.calledN(),
@@ -330,7 +337,7 @@ func TestTxSetRetry_StillNeededReArmsAtCap(t *testing.T) {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
 
 		// Drive attempts up to the cap.
-		for i := 0; i < maxAttempts; i++ {
+		for i := range maxAttempts {
 			router.handleTxSetData(ld, uint64(i+1))
 		}
 		require.Equal(t, maxAttempts, rs.calledN(),
@@ -366,4 +373,43 @@ func TestTxSetRetry_StillNeededNoOpOnUnknownTxSet(t *testing.T) {
 	_, exists := router.txSetAcquire[unknownID]
 	router.txSetAcquireMu.Unlock()
 	assert.False(t, exists, "MarkTxSetStillNeeded must not allocate state for unknown tx-sets")
+}
+
+// TestTxSetRetry_QueryTypeEscalation pins issue #977's requester-side
+// escalation for tx-set acquisition: the first (inbound-driven)
+// missing-nodes request is direct (query_type absent, non-relayable),
+// while requests issued after the stall timer fires carry indirect=true
+// (query_type=qtINDIRECT) so peers relay them on our behalf. Once the
+// acquisition has timed out, the latch holds: later inbound-driven
+// requests stay indirect too — mirroring rippled's TransactionAcquire
+// timeouts_ != 0 gate (TransactionAcquire.cpp:133,164), which is a
+// per-acquisition latch, not a per-request flag.
+func TestTxSetRetry_QueryTypeEscalation(t *testing.T) {
+	router, rs := newRetryRouter(t)
+	// MinInterval=0 so neither the inbound throttle nor the timer skip
+	// fires; high attempt cap so nothing is dropped mid-test.
+	withRetryKnobs(router, 0, 1_000_000, 1_000_000, func() {
+		ld, _ := rootOnlyTxSetLedgerData(t, 4)
+
+		// First attempt is inbound-driven, before any timeout → direct.
+		router.handleTxSetData(ld, 1)
+		require.Equal(t, 1, rs.calledN(), "first reply must broadcast once")
+		assert.False(t, rs.callAt(0).indirect,
+			"first-attempt request must NOT carry query_type (directly routed)")
+
+		// The stall timer firing IS the timeout signal → indirect, and it
+		// latches the acquisition into the aggressive (relayable) mode.
+		router.retryStalledTxSetAcquires()
+		require.Equal(t, 2, rs.calledN(), "stall timer must re-request missing nodes")
+		assert.True(t, rs.callAt(1).indirect,
+			"timer re-trigger is post-stall, so its request must carry query_type=qtINDIRECT")
+
+		// Latch: a further inbound-driven request after the timeout stays
+		// indirect (rippled re-triggers with query_type set on every reply
+		// once timeouts_ != 0, not just on the timeout itself).
+		router.handleTxSetData(ld, 1)
+		require.Equal(t, 3, rs.calledN())
+		assert.True(t, rs.callAt(2).indirect,
+			"after the acquisition has timed out once, subsequent requests stay indirect (latch)")
+	})
 }

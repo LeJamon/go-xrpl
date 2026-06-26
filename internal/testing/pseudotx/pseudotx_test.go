@@ -7,11 +7,14 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
+	"github.com/stretchr/testify/require"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/stretchr/testify/require"
 )
 
 // TestPseudoTx_IsPseudoTransaction verifies that the type system correctly
@@ -78,7 +81,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 		OpenLedger:                true,
 		Rules:                     amendment.AllSupportedRules(),
 	}
-	engine := tx.NewEngine(env.Ledger(), engineConfig)
+	engine := txengine.NewEngine(env.Ledger(), engineConfig)
 
 	// Test that each pseudo-transaction type is rejected by Apply()
 	// Reference: rippled PseudoTx_test.cpp line 97:
@@ -142,7 +145,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 	t.Run("EnableAmendment allowed via ApplyPseudo", func(t *testing.T) {
 		closedConfig := engineConfig
 		closedConfig.OpenLedger = false
-		closedEngine := tx.NewEngine(env.Ledger(), closedConfig)
+		closedEngine := txengine.NewEngine(env.Ledger(), closedConfig)
 
 		amendTx := &pseudo.EnableAmendment{
 			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),

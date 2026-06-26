@@ -161,7 +161,7 @@ func TestTxSet_ConcurrentSizeReader(t *testing.T) {
 	for _, blob := range blobs {
 		require.NoError(t, ts.Add(blob))
 	}
-	for i := 0; i < ops/2; i++ {
+	for i := range ops / 2 {
 		require.NoError(t, ts.Remove(computeTxID(blobs[i])))
 	}
 	close(stop)

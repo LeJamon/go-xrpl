@@ -47,7 +47,7 @@ func TestBurnRandom(t *testing.T) {
 	beckyStat := &AcctStat{acct: becky}
 
 	// Mint 105 NFTs for alice (transferable + burnable)
-	for i := 0; i < 105; i++ {
+	for i := range 105 {
 		fee := uint16(i * 100 % 50001) // pseudo-random transfer fee
 		flags := nftoken.NFTokenFlagTransferable | nftoken.NFTokenFlagBurnable
 		nftID := nft.GetNextNFTokenID(env, alice, 0, flags, fee)
@@ -59,7 +59,7 @@ func TestBurnRandom(t *testing.T) {
 	}
 
 	// Mint 105 NFTs by minter for alice (transferable + burnable)
-	for i := 0; i < 105; i++ {
+	for i := range 105 {
 		fee := uint16((i + 50) * 100 % 50001) // pseudo-random transfer fee
 		flags := nftoken.NFTokenFlagTransferable | nftoken.NFTokenFlagBurnable
 		nftID := nft.GetNextNFTokenID(env, alice, 0, flags, fee)
@@ -161,7 +161,7 @@ func TestBurnSequential(t *testing.T) {
 	genPackedTokens := func(env *jtx.TestEnv, account *jtx.Account) []string {
 		nfts := make([]string, 0, 96)
 
-		for i := uint32(0); i < 96; i++ {
+		for i := range uint32(96) {
 			// To fill the pages we use the taxon to break them into groups
 			// of 16 entries. By having the internal representation of the
 			// taxon go 0, 3, 2, 5, 4, 7... in sets of 16 NFTs we can get
@@ -247,7 +247,7 @@ func TestBurnSequential(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, alice, 2)
 
 		// Burn remaining tokens
-		for i := 0; i < 32; i++ {
+		for i := range 32 {
 			env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
 			env.Close()
 		}
@@ -269,7 +269,7 @@ func TestBurnSequential(t *testing.T) {
 		nfts := genPackedTokens(env, alice)
 
 		// Burn first page
-		for i := 0; i < 32; i++ {
+		for i := range 32 {
 			result := env.Submit(nft.NFTokenBurn(alice, nfts[i]).Build())
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
@@ -323,7 +323,7 @@ func TestBurnTooManyOffers(t *testing.T) {
 
 		// Create 500 buy offers from different accounts
 		offerIndexes := make([]string, 0, maxTokenOfferCancelCount)
-		for i := uint32(0); i < maxTokenOfferCancelCount; i++ {
+		for i := range uint32(maxTokenOfferCancelCount) {
 			acct := jtx.NewAccount("acct" + string(rune('A'+i%26)) + string(rune('0'+i/26)))
 			env.Fund(acct)
 			env.Close()
@@ -416,7 +416,7 @@ func TestBurnTooManyOffers(t *testing.T) {
 		env.Close()
 
 		// Create 499 sell offers from alice
-		for i := uint32(0); i < maxTokenOfferCancelCount-1; i++ {
+		for i := range uint32(maxTokenOfferCancelCount - 1) {
 			result = env.Submit(nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(int64(i+1))).Build())
 			if !result.Success {
 				t.Fatalf("Failed to create sell offer %d: %s", i, result.Code)
@@ -469,7 +469,7 @@ func TestExerciseBrokenLinks(t *testing.T) {
 	// Minter creates, then transfers to alice.
 	nfts := make([]string, 0, 96)
 
-	for i := uint32(0); i < 96; i++ {
+	for i := range uint32(96) {
 		// Taxon manipulation for page packing
 		intTaxon := (i / 16)
 		if i&0b10000 != 0 {

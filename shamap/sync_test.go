@@ -18,34 +18,6 @@ func TestSyncFilter(t *testing.T) {
 			t.Error("DefaultSyncFilter should always return true")
 		}
 	})
-
-	// Test CachingSyncFilter
-	t.Run("CachingSyncFilter", func(t *testing.T) {
-		inner := &DefaultSyncFilter{}
-		filter := NewCachingSyncFilter(inner, 100)
-
-		var hash1, hash2 [32]byte
-		hash1[0] = 1
-		hash2[0] = 2
-
-		// First call should hit inner
-		result1 := filter.ShouldFetch(hash1)
-		if !result1 {
-			t.Error("First call should return true")
-		}
-
-		// Second call should hit cache
-		result2 := filter.ShouldFetch(hash1)
-		if !result2 {
-			t.Error("Cached call should return true")
-		}
-
-		// Different hash
-		result3 := filter.ShouldFetch(hash2)
-		if !result3 {
-			t.Error("New hash should return true")
-		}
-	})
 }
 
 func TestMissingNode(t *testing.T) {
@@ -64,13 +36,10 @@ func TestMissingNode(t *testing.T) {
 
 func TestGetMissingNodes(t *testing.T) {
 	// Create a complete map
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add some items
-	for i := byte(0); i < 10; i++ {
+	for i := range byte(10) {
 		var key [32]byte
 		key[0] = i
 		if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -85,18 +54,8 @@ func TestGetMissingNodes(t *testing.T) {
 	}
 }
 
-func TestSyncState(t *testing.T) {
-	state := NewSyncState()
-	if state == nil {
-		t.Fatal("NewSyncState should return non-nil")
-	}
-}
-
 func TestStartAndFinishSync(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Start sync
 	if err := sMap.StartSync(); err != nil {
@@ -118,10 +77,7 @@ func TestStartAndFinishSync(t *testing.T) {
 }
 
 func TestIsComplete(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Empty map is complete
 	if !sMap.IsComplete() {
@@ -142,10 +98,7 @@ func TestIsComplete(t *testing.T) {
 }
 
 func TestSyncProgress(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	present, total := sMap.SyncProgress()
 	// Empty map should have root
@@ -157,7 +110,7 @@ func TestSyncProgress(t *testing.T) {
 	}
 
 	// Add items
-	for i := byte(0); i < 5; i++ {
+	for i := range byte(5) {
 		var key [32]byte
 		key[0] = i
 		if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -173,10 +126,7 @@ func TestSyncProgress(t *testing.T) {
 
 func TestAddRootNode(t *testing.T) {
 	// Create a map and get its serialized root
-	sourceMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create source map: %v", err)
-	}
+	sourceMap := New(TypeState)
 
 	var key [32]byte
 	key[0] = 1
@@ -195,10 +145,7 @@ func TestAddRootNode(t *testing.T) {
 	}
 
 	// Create new map and add root
-	destMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create dest map: %v", err)
-	}
+	destMap := New(TypeState)
 
 	if err := destMap.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("AddRootNode failed: %v", err)
@@ -216,10 +163,7 @@ func TestAddRootNode(t *testing.T) {
 }
 
 func TestAddRootNodeErrors(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create map: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Empty data should fail
 	if err := sMap.AddRootNode([32]byte{}, []byte{}); err == nil {
@@ -237,11 +181,8 @@ func TestAddRootNodeErrors(t *testing.T) {
 // map's state. This matches rippled's SHAMap::walkMap which has no
 // state precondition.
 func TestWalkMap_NotGatedOnState(t *testing.T) {
-	source, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	for i := byte(0); i < 32; i++ {
+	source := New(TypeState)
+	for i := range byte(32) {
 		var key [32]byte
 		key[0] = i
 		if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -268,15 +209,12 @@ func TestWalkMap_NotGatedOnState(t *testing.T) {
 // nodes. The parallel version may reorder results, so comparison is
 // set-based.
 func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
-	source, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
+	source := New(TypeState)
 	// Spread keys across every first-nibble branch so the root has all
 	// 16 branches populated and the parallel walker actually has work
 	// to fan out.
-	for branch := byte(0); branch < 16; branch++ {
-		for i := byte(0); i < 4; i++ {
+	for branch := range byte(16) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -294,10 +232,7 @@ func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
 
-	dest, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New dest: %v", err)
-	}
+	dest := New(TypeState)
 	if err := dest.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("AddRootNode: %v", err)
 	}
@@ -337,11 +272,8 @@ func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
 // maxMissing bound and return exactly that many entries when at least
 // that many are available.
 func TestWalkMap_MaxMissingHonored(t *testing.T) {
-	source, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
-	for branch := byte(0); branch < 16; branch++ {
+	source := New(TypeState)
+	for branch := range byte(16) {
 		var key [32]byte
 		key[0] = branch << 4
 		if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -357,10 +289,7 @@ func TestWalkMap_MaxMissingHonored(t *testing.T) {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
 
-	dest, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New dest: %v", err)
-	}
+	dest := New(TypeState)
 	if err := dest.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("AddRootNode: %v", err)
 	}
@@ -453,12 +382,9 @@ func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
 // MissingNode.NodeID with each missing node's path-based identifier so
 // the caller can request that exact subtree from a peer.
 func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
-	source, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
-	for branch := byte(0); branch < 8; branch++ {
-		for i := byte(0); i < 4; i++ {
+	source := New(TypeState)
+	for branch := range byte(8) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -476,10 +402,7 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 		t.Fatalf("SerializeRoot: %v", err)
 	}
 
-	dest, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("New dest: %v", err)
-	}
+	dest := New(TypeState)
 	if err := dest.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("AddRootNode: %v", err)
 	}
@@ -511,13 +434,10 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 
 // Regression for issue #413: full SHAMap reconstruct via AddKnownNodeByID.
 func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
-	source, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
-	for branch := byte(0); branch < 4; branch++ {
-		for sub := byte(0); sub < 4; sub++ {
-			for i := byte(0); i < 4; i++ {
+	source := New(TypeTransaction)
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			for i := range byte(4) {
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4
@@ -544,10 +464,7 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 		t.Fatalf("test setup gave only %d wire nodes; need a multi-level tree", len(wireNodes))
 	}
 
-	dest, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New dest: %v", err)
-	}
+	dest := New(TypeTransaction)
 	if err := dest.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
@@ -563,7 +480,7 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Fatalf("AddKnownNodeByID[%d] depth=%d: %v", i, nid.Depth(), err)
 		}
 	}
@@ -582,12 +499,9 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 }
 
 func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
-	source, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
-	for branch := byte(0); branch < 3; branch++ {
-		for sub := byte(0); sub < 3; sub++ {
+	source := New(TypeTransaction)
+	for branch := range byte(3) {
+		for sub := range byte(3) {
 			var key [32]byte
 			key[0] = (branch << 4) | sub
 			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
@@ -624,10 +538,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	}
 
 	t.Run("ParentNotInTree", func(t *testing.T) {
-		dest, err := New(TypeTransaction)
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
+		dest := New(TypeTransaction)
 		if err := dest.StartSync(); err != nil {
 			t.Fatalf("StartSync: %v", err)
 		}
@@ -635,17 +546,14 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Fatalf("AddRootNode: %v", err)
 		}
 		nid, _ := UnmarshalBinary(deep.NodeID)
-		err = dest.AddKnownNodeByID(nid, deep.Data)
+		_, err = dest.AddKnownNodeByID(nid, deep.Data)
 		if !errors.Is(err, ErrParentNotInTree) {
 			t.Fatalf("want ErrParentNotInTree, got %v", err)
 		}
 	})
 
 	t.Run("NodeHashMismatch", func(t *testing.T) {
-		dest, err := New(TypeTransaction)
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
+		dest := New(TypeTransaction)
 		if err := dest.StartSync(); err != nil {
 			t.Fatalf("StartSync: %v", err)
 		}
@@ -672,17 +580,14 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Skip("need at least two depth-1 wire nodes")
 		}
 		nid, _ := UnmarshalBinary(d1a.NodeID)
-		err = dest.AddKnownNodeByID(nid, d1b.Data)
+		_, err = dest.AddKnownNodeByID(nid, d1b.Data)
 		if !errors.Is(err, ErrNodeHashMismatch) {
 			t.Fatalf("want ErrNodeHashMismatch, got %v", err)
 		}
 	})
 
 	t.Run("EmptyBranchOnPath", func(t *testing.T) {
-		dest, err := New(TypeTransaction)
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
+		dest := New(TypeTransaction)
 		if err := dest.StartSync(); err != nil {
 			t.Fatalf("StartSync: %v", err)
 		}
@@ -694,10 +599,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		// nibble 0xF is guaranteed empty).
 		var path [32]byte
 		path[0] = 0xF0
-		nid, err := NewNodeID(1, path)
-		if err != nil {
-			t.Fatalf("NewNodeID: %v", err)
-		}
+		nid := NodeID{depth: 1, id: path}
 		// Borrow any non-root wire data; descent fails before the data
 		// is parsed.
 		var anyData []byte
@@ -708,17 +610,14 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 				break
 			}
 		}
-		err = dest.AddKnownNodeByID(nid, anyData)
+		_, err = dest.AddKnownNodeByID(nid, anyData)
 		if !errors.Is(err, ErrEmptyBranchOnPath) {
 			t.Fatalf("want ErrEmptyBranchOnPath, got %v", err)
 		}
 	})
 
 	t.Run("DuplicateIsNoOp", func(t *testing.T) {
-		dest, err := New(TypeTransaction)
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
+		dest := New(TypeTransaction)
 		if err := dest.StartSync(); err != nil {
 			t.Fatalf("StartSync: %v", err)
 		}
@@ -737,13 +636,21 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Skip("no depth-1 node available")
 		}
 		nid, _ := UnmarshalBinary(d1.NodeID)
-		if err := dest.AddKnownNodeByID(nid, d1.Data); err != nil {
+		added, err := dest.AddKnownNodeByID(nid, d1.Data)
+		if err != nil {
 			t.Fatalf("first AddKnownNodeByID: %v", err)
 		}
+		if !added {
+			t.Fatal("first AddKnownNodeByID: want added=true (useful)")
+		}
 		// Second call must be a no-op success (rippled SHAMap::addKnownNode
-		// returns SHAMapAddNode::duplicate(); we surface that as nil).
-		if err := dest.AddKnownNodeByID(nid, d1.Data); err != nil {
+		// returns SHAMapAddNode::duplicate(); we surface that as false, nil).
+		added, err = dest.AddKnownNodeByID(nid, d1.Data)
+		if err != nil {
 			t.Fatalf("duplicate AddKnownNodeByID: %v", err)
+		}
+		if added {
+			t.Fatal("duplicate AddKnownNodeByID: want added=false (duplicate)")
 		}
 	})
 }
@@ -751,10 +658,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 // Mirrors rippled SHAMapSync.cpp:597,671-672: a leaf encountered mid-path
 // is the canonical content at that slot — return duplicate (nil), not error.
 func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
-	source, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
+	source := New(TypeTransaction)
 	// Single key → root has a single leaf child at the path's first
 	// nibble, consolidated at depth 1.
 	var k [32]byte
@@ -776,10 +680,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 		t.Fatalf("WalkWireNodes: %v", err)
 	}
 
-	dest, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New dest: %v", err)
-	}
+	dest := New(TypeTransaction)
 	if err := dest.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
@@ -794,7 +695,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Fatalf("seed AddKnownNodeByID: %v", err)
 		}
 	}
@@ -802,20 +703,123 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	// Synthesize a depth-2 NodeID on the same path as the consolidated
 	// leaf. The peer's data here is irrelevant — descent must short-
 	// circuit on the leaf and return nil.
-	deepNID, err := NewNodeID(2, k)
+	deepNID := NodeID{depth: 2, id: k}
+	added, err := dest.AddKnownNodeByID(deepNID, []byte{0xFF})
 	if err != nil {
-		t.Fatalf("NewNodeID: %v", err)
-	}
-	if err := dest.AddKnownNodeByID(deepNID, []byte{0xFF}); err != nil {
 		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
+	}
+	if added {
+		t.Fatal("leaf-mid-path: want added=false (duplicate)")
+	}
+}
+
+// Direct exercise of the public AddKnownNodeFromPrefix API: reconstructs a
+// map from fetch-pack ([HashPrefix][body]) blobs keyed by the NodeIDs that
+// GetMissingNodes reports, then pins the duplicate / poison / root /
+// empty-data / not-syncing outcomes.
+func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
+	source := New(TypeTransaction)
+	for branch := range byte(3) {
+		for sub := range byte(3) {
+			var key [32]byte
+			key[0] = (branch << 4) | sub
+			key[1] = 0x99
+			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	packNodes, err := source.WalkFetchPackNodes(1 << 10)
+	if err != nil {
+		t.Fatalf("WalkFetchPackNodes: %v", err)
+	}
+	byHash := make(map[[32]byte][]byte, len(packNodes))
+	for _, n := range packNodes {
+		byHash[n.Hash] = n.Data
+	}
+
+	dest := New(TypeTransaction)
+
+	someID, err := NewRootNodeID().ChildNodeID(0)
+	if err != nil {
+		t.Fatalf("ChildNodeID: %v", err)
+	}
+	if _, err := dest.AddKnownNodeFromPrefix(someID, []byte{1}); !errors.Is(err, ErrSyncNotInProgress) {
+		t.Errorf("not-syncing: want ErrSyncNotInProgress, got %v", err)
+	}
+
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	if _, err := dest.AddKnownNodeFromPrefix(NewRootNodeID(), rootData); !errors.Is(err, ErrUnexpectedNode) {
+		t.Errorf("root nodeID: want ErrUnexpectedNode, got %v", err)
+	}
+	if _, err := dest.AddKnownNodeFromPrefix(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
+		t.Errorf("empty data: want ErrInvalidNodeData, got %v", err)
+	}
+
+	poisonTested := false
+	for {
+		missing := dest.GetMissingNodes(64, nil)
+		if len(missing) == 0 {
+			break
+		}
+		// Poison: another missing node's blob at this NodeID must be
+		// rejected by the parent-hash check before it can attach.
+		if !poisonTested && len(missing) >= 2 && missing[0].Hash != missing[1].Hash {
+			poisonTested = true
+			if _, err := dest.AddKnownNodeFromPrefix(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, ErrNodeHashMismatch) {
+				t.Fatalf("poison: want ErrNodeHashMismatch, got %v", err)
+			}
+		}
+		for i := range missing {
+			data, ok := byHash[missing[i].Hash]
+			if !ok {
+				t.Fatalf("no fetch-pack blob for missing hash %x", missing[i].Hash[:8])
+			}
+			added, err := dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			if err != nil {
+				t.Fatalf("AddKnownNodeFromPrefix depth=%d: %v", missing[i].NodeID.Depth(), err)
+			}
+			if !added {
+				t.Fatalf("fresh attach depth=%d: want added=true", missing[i].NodeID.Depth())
+			}
+			added, err = dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			if err != nil || added {
+				t.Fatalf("duplicate: want (false, nil), got (%v, %v)", added, err)
+			}
+		}
+	}
+	if !poisonTested {
+		t.Error("poison case never exercised — tree shape too small")
+	}
+
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+	destHash, err := dest.Hash()
+	if err != nil {
+		t.Fatalf("dest hash: %v", err)
+	}
+	if destHash != rootHash {
+		t.Errorf("reconstructed hash mismatch: want %x got %x", rootHash[:8], destHash[:8])
 	}
 }
 
 func TestAddKnownNodeErrors(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create map: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Should fail when not syncing
 	if err := sMap.AddKnownNode([32]byte{}, []byte{1, 2, 3}); err == nil {

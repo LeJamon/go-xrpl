@@ -8,10 +8,6 @@ import (
 )
 
 const (
-	// MaxDepth is the maximum depth of the SHAMap tree
-	MaxDepth = 64
-	// BranchMask is the mask for valid branch values (0-15)
-	BranchMask = 0x0F
 	// NodeIDSize is the size of a serialized NodeID in bytes
 	NodeIDSize = 33
 )
@@ -28,22 +24,13 @@ type NodeID struct {
 	id    [32]byte // The key prefix from the leaf's hash
 }
 
-// NewNodeID New creates a new NodeID with the given depth and ID
-func NewNodeID(depth uint8, id [32]byte) (NodeID, error) {
-	if depth > MaxDepth {
-		return NodeID{}, ErrMaxDepthExceeded
-	}
-
-	return NodeID{depth: depth, id: id}, nil
-}
-
 // NewRootNodeID creates a new root NodeID
 func NewRootNodeID() NodeID {
 	return NodeID{depth: 0, id: [32]byte{}}
 }
 
-// CreateNodeID creates a node ID for a given key and depth
-func CreateNodeID(depth uint8, key [32]byte) (NodeID, error) {
+// createNodeID creates a node ID for a given key and depth
+func createNodeID(depth uint8, key [32]byte) (NodeID, error) {
 	if depth > MaxDepth {
 		return NodeID{}, ErrMaxDepthExceeded
 	}
@@ -110,11 +97,6 @@ func UnmarshalBinary(data []byte) (NodeID, error) {
 	return NodeID{depth: depth, id: id}, nil
 }
 
-// FromBytes parses a NodeID from raw bytes
-func FromBytes(data []byte) (NodeID, error) {
-	return UnmarshalBinary(data)
-}
-
 // Bytes returns the wire format: 32-byte ID + 1-byte depth
 func (n NodeID) Bytes() []byte {
 	data, _ := n.MarshalBinary() // Cannot fail for valid NodeID
@@ -142,9 +124,9 @@ func (n NodeID) ChildNodeID(branch uint8) (NodeID, error) {
 	isHighNibble := n.depth%2 == 0
 
 	if isHighNibble {
-		newID[byteIndex] = (newID[byteIndex] & 0x0F) | (branch << 4) //nolint:gosec // G602: byteIndex < 32 guarded above (>=32 returns early)
+		newID[byteIndex] = (newID[byteIndex] & 0x0F) | (branch << 4) //nolint:gosec // G602: byteIndex < 32 guarded above
 	} else {
-		newID[byteIndex] = (newID[byteIndex] & 0xF0) | branch //nolint:gosec // G602: byteIndex < 32 guarded above (>=32 returns early)
+		newID[byteIndex] = (newID[byteIndex] & 0xF0) | branch //nolint:gosec // G602: byteIndex < 32 guarded above
 	}
 
 	return NodeID{depth: newDepth, id: newID}, nil
@@ -173,25 +155,6 @@ func (n NodeID) ParentNodeID() (NodeID, error) {
 	return NodeID{depth: parentDepth, id: parentID}, nil
 }
 
-// SelectBranch returns which branch of a node would contain the given key
-func SelectBranch(nodeID NodeID, key [32]byte) uint8 {
-	depth := nodeID.depth
-	if depth >= MaxDepth {
-		return 0
-	}
-
-	byteIndex := depth / 2
-	if byteIndex >= 32 {
-		return 0
-	}
-
-	b := key[byteIndex] //nolint:gosec // G602: byteIndex < 32 guarded above (>=32 returns 0)
-	if depth%2 == 0 {
-		return b >> 4 // Use upper 4 bits
-	}
-	return b & BranchMask // Use lower 4 bits
-}
-
 // String returns a human-readable representation of the node ID
 func (n NodeID) String() string {
 	if n.IsRoot() {
@@ -199,10 +162,7 @@ func (n NodeID) String() string {
 	}
 
 	// Only show relevant bytes based on depth
-	relevantBytes := (n.depth + 1) / 2
-	if relevantBytes > 32 {
-		relevantBytes = 32
-	}
+	relevantBytes := min((n.depth+1)/2, 32)
 
 	return fmt.Sprintf("NodeID(depth=%d, id=%s)",
 		n.depth,

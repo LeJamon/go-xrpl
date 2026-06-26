@@ -9,7 +9,8 @@ import "fmt"
 type ValidationArchiveConfig struct {
 	// Enabled flips the archive on. When false no writer goroutine runs
 	// and OnStale is a no-op, regardless of whether the relational DB
-	// is configured. Default: true.
+	// is configured. The loader applies no defaults, so omitting the
+	// [validation_archive] section leaves the archive disabled.
 	Enabled bool `toml:"enabled" mapstructure:"enabled"`
 
 	// RetentionLedgers is the number of fully-validated ledgers of
@@ -41,8 +42,10 @@ type ValidationArchiveConfig struct {
 	InMemoryLedgers uint32 `toml:"in_memory_ledgers" mapstructure:"in_memory_ledgers"`
 }
 
-// DefaultValidationArchiveConfig returns the built-in defaults. Applied
-// when the [validation_archive] section is absent from xrpld.toml.
+// DefaultValidationArchiveConfig returns the built-in tuning defaults
+// that WithDefaults substitutes for unset fields. Note that nothing
+// applies these automatically when the section is absent — an absent
+// [validation_archive] section means the archive is disabled.
 func DefaultValidationArchiveConfig() ValidationArchiveConfig {
 	return ValidationArchiveConfig{
 		Enabled:          true,

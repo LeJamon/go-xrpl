@@ -22,10 +22,10 @@ const (
 // close markers.
 func nestedObjectBlob(depth int) []byte {
 	b := make([]byte, 0, depth*2)
-	for i := 0; i < depth; i++ {
+	for range depth {
 		b = append(b, memoFieldHeader)
 	}
-	for i := 0; i < depth; i++ {
+	for range depth {
 		b = append(b, ObjectEndMarker)
 	}
 	return b
@@ -88,8 +88,8 @@ func TestSTArray_DecodeNestingDepthLimit(t *testing.T) {
 	// Alternating Memos arrays and Memo objects through the full decode path
 	// must also stay bounded.
 	t.Run("alternating array/object payload is bounded", func(t *testing.T) {
-		var blob []byte
-		for i := 0; i < 50; i++ {
+		blob := make([]byte, 0, 100)
+		for range 50 {
 			blob = append(blob, memosFieldHeader, memoFieldHeader)
 		}
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))

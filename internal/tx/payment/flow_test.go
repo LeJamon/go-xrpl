@@ -2,12 +2,16 @@ package payment
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -17,6 +21,7 @@ import (
 type paymentMockLedgerView struct {
 	data       map[[32]byte][]byte
 	ownerCount map[[20]byte]uint32
+	rules      *amendment.Rules
 }
 
 func newPaymentMockLedgerView() *paymentMockLedgerView {
@@ -59,7 +64,10 @@ func (m *paymentMockLedgerView) TxExists(txID [32]byte) bool {
 }
 
 func (m *paymentMockLedgerView) Rules() *amendment.Rules {
-	return nil
+	if m.rules != nil {
+		return m.rules
+	}
+	return amendment.AllSupportedRules()
 }
 
 func (m *paymentMockLedgerView) LedgerSeq() uint32 {
@@ -390,6 +398,218 @@ func TestXRPEndpointStep_QualityUpperBound(t *testing.T) {
 	}
 }
 
+// createAccountWithTransferRate creates an account carrying a non-default
+// transfer rate, used to make the legacy vs post-fix qualityUpperBound diverge.
+func (m *paymentMockLedgerView) createAccountWithTransferRate(accountID [20]byte, balanceDrops uint64, transferRate uint32) {
+	account := &state.AccountRoot{
+		Account:      state.EncodeAccountIDSafe(accountID),
+		Balance:      balanceDrops,
+		Sequence:     1,
+		TransferRate: transferRate,
+	}
+	data, _ := state.SerializeAccountRoot(account)
+	key := keylet.Account(accountID)
+	m.data[key.Key] = data
+}
+
+// TestDirectStepI_QualityUpperBound_FixQualityUpperBoundGate exercises both
+// branches of the fixQualityUpperBound gate. The legacy branch computes the
+// quality with the getRate arguments inverted relative to the post-fix branch,
+// so a source that issues with a non-unit transfer rate (and a redeeming prior
+// step) yields reciprocal qualities. Reference: rippled DirectStep.cpp:847-877.
+func TestDirectStepI_QualityUpperBound_FixQualityUpperBoundGate(t *testing.T) {
+	var alice, bob [20]byte
+	copy(alice[:], []byte("alice12345678901234"))
+	copy(bob[:], []byte("bob1234567890123456"))
+
+	// transferRate 1.25 (QualityOne * 1.25), src (alice) issues USD to bob.
+	const rate = uint32(1_250_000_000) // 1.25 in transfer-rate units (QualityOne = 1e9)
+
+	build := func(t *testing.T, fixEnabled bool) *Quality {
+		t.Helper()
+		view := newPaymentMockLedgerView()
+		if fixEnabled {
+			view.rules = amendment.AllSupportedRules()
+		} else {
+			view.rules = amendment.NewRulesBuilder().
+				FromPreset(amendment.PresetAllSupported).
+				DisableByName("fixQualityUpperBound").
+				Build()
+		}
+		view.createAccountWithTransferRate(alice, 100_000_000, rate)
+		view.createAccount(bob, 100_000_000, 0)
+		sandbox := NewPaymentSandbox(view)
+
+		// alice issues to bob (no trust line where alice is owed → DebtDirectionIssues).
+		step := NewDirectStepI(alice, bob, "USD", nil, false, false)
+		// A redeeming prior step makes the legacy branch charge the transfer rate.
+		q, _ := step.QualityUpperBound(sandbox, DebtDirectionRedeems)
+		require.NotNil(t, q)
+		return q
+	}
+
+	enabled := build(t, true)
+	disabled := build(t, false)
+
+	// Post-fix: srcQOut/dstQIn with srcQOut=QualityOne (prevStep nil) → quality 1.0.
+	// Legacy: dstQIn/srcQOut with srcQOut=transferRate → quality < 1.0.
+	// The two must therefore differ, proving the gate is wired.
+	require.NotEqual(t, enabled.Value, disabled.Value,
+		"legacy and post-fix qualityUpperBound must differ when the transfer rate is non-unit")
+	require.Less(t, disabled.Value, enabled.Value,
+		"legacy quality (dstQIn/srcQOut) must be strictly smaller than post-fix quality")
+}
+
+// putCLOBTipQuality writes a synthetic order-book directory at the given quality
+// holding one offer index, so getCLOBTipQuality observes it as the tip offer.
+// The key is the book base with the quality encoded into bytes 24-31. The
+// directory must carry a real (non-empty) sfIndexes vector: getCLOBTipQuality
+// skips empty directory tiers exactly as rippled's BookTip::step does.
+func (m *paymentMockLedgerView) putCLOBTipQuality(step *BookStep, q Quality) {
+	key := step.bookBaseKey()
+	binary.BigEndian.PutUint64(key[24:], q.Value)
+	var offerIdx [32]byte
+	offerIdx[31] = 0x01
+	dir := &state.DirectoryNode{
+		RootIndex:         key,
+		Indexes:           [][32]byte{offerIdx},
+		TakerPaysCurrency: keylet.CurrencyBytes(step.book.In.Currency),
+		TakerPaysIssuer:   step.book.In.Issuer,
+		TakerGetsCurrency: keylet.CurrencyBytes(step.book.Out.Currency),
+		TakerGetsIssuer:   step.book.Out.Issuer,
+	}
+	dirData, err := state.SerializeDirectoryNode(dir, true)
+	if err != nil {
+		panic(err)
+	}
+	m.data[key] = dirData
+}
+
+// TestBookStep_QualityUpperBound_TransferFeeAdjusted proves that
+// BookStep.QualityUpperBound routes the tip quality through the same transfer-fee
+// adjustment as GetQualityFunc, rather than returning the raw tip quality. With a
+// transfer-fee issuer on the input side and a redeeming previous step, the
+// fee-adjusted quality must (a) equal the CLOB quality GetQualityFunc reports for
+// the same step and (b) differ from the raw tip quality.
+// Reference: rippled BookStep.cpp qualityUpperBound() lines 582-606.
+func TestBookStep_QualityUpperBound_TransferFeeAdjusted(t *testing.T) {
+	var gateway, strandSrc, strandDst [20]byte
+	copy(gateway[:], []byte("gateway123456789012"))
+	copy(strandSrc[:], []byte("src12345678901234567"))
+	copy(strandDst[:], []byte("dst12345678901234567"))
+
+	view := newPaymentMockLedgerView()
+	view.rules = amendment.AllSupportedRules()
+	// Gateway issues the input currency with a 1.25 transfer rate. It is NOT the
+	// strand destination, so the fee is charged (not waived via parityRate).
+	view.createAccountWithTransferRate(gateway, 100_000_000, 1_250_000_000)
+	sandbox := NewPaymentSandbox(view)
+
+	inIssue := Issue{Currency: "USD", Issuer: gateway}
+	outIssue := Issue{Currency: "EUR", Issuer: gateway}
+	// Payment step (ownerPaysTransferFee = false).
+	step := NewBookStep(inIssue, outIssue, strandSrc, strandDst, nil, false)
+
+	rawTip := qualityFromFloat64(0.5)
+	view.putCLOBTipQuality(step, rawTip)
+
+	// A redeeming previous step makes adjustQualityWithFees charge the input fee.
+	const prevDir = DebtDirectionRedeems
+
+	qub, _ := step.QualityUpperBound(sandbox, prevDir)
+	require.NotNil(t, qub)
+
+	qf, _ := step.GetQualityFunc(sandbox, prevDir)
+	require.NotNil(t, qf)
+	require.True(t, qf.IsConst(), "CLOB tip must yield a constant quality function")
+	require.NotNil(t, qf.quality)
+
+	// (a) QualityUpperBound must equal the fee-adjusted CLOB quality.
+	require.Equal(t, qf.quality.Value, qub.Value,
+		"QualityUpperBound must match GetQualityFunc's fee-adjusted CLOB quality")
+
+	// (b) The adjustment must actually have moved the quality off the raw tip,
+	// proving the transfer fee is applied (the old code returned the raw tip).
+	require.NotEqual(t, rawTip.Value, qub.Value,
+		"QualityUpperBound must apply the transfer-fee adjustment, not return the raw tip")
+}
+
+// TestDirectStepI_QualityUpperBound_HonorsPrevStepDir proves that the post-fix
+// DirectStepI.QualityUpperBound uses the PROPAGATED prevStepDir (from the
+// quality-upper-bound strand walk) rather than re-querying the previous step.
+// When the source issues, srcQOut is the source's transfer rate only if the
+// propagated previous direction redeems; otherwise it is QUALITY_ONE. With a
+// non-unit transfer rate the two directions must therefore yield different
+// qualities. Reference: rippled DirectStep.cpp lines 865-878.
+func TestDirectStepI_QualityUpperBound_HonorsPrevStepDir(t *testing.T) {
+	var alice, bob [20]byte
+	copy(alice[:], []byte("alice12345678901234"))
+	copy(bob[:], []byte("bob1234567890123456"))
+
+	view := newPaymentMockLedgerView()
+	view.rules = amendment.AllSupportedRules() // fixQualityUpperBound enabled
+	// alice (the strand source / issuer) has a 1.25 transfer rate.
+	view.createAccountWithTransferRate(alice, 100_000_000, 1_250_000_000)
+	view.createAccount(bob, 100_000_000, 0)
+	sandbox := NewPaymentSandbox(view)
+
+	// alice issues USD to bob (no trust line where alice is owed → src issues).
+	// A non-first step (isFirst=false) keeps the transfer-rate path active.
+	step := NewDirectStepI(alice, bob, "USD", nil, false, false)
+
+	qRedeems, _ := step.QualityUpperBound(sandbox, DebtDirectionRedeems)
+	qIssues, _ := step.QualityUpperBound(sandbox, DebtDirectionIssues)
+	require.NotNil(t, qRedeems)
+	require.NotNil(t, qIssues)
+
+	// prevStep redeems → srcQOut = transferRate (1.25) → quality 1.25.
+	// prevStep issues  → srcQOut = QUALITY_ONE        → quality 1.0.
+	// dstQIn is QUALITY_ONE in both cases, so the qualities must differ.
+	require.NotEqual(t, qRedeems.Value, qIssues.Value,
+		"post-fix QualityUpperBound must honor the propagated prevStepDir")
+}
+
+// TestMaxOffersToConsume_Fix1515Gate exercises both branches of the fix1515
+// offer-consumption limit: 1000 when enabled, 2000 when disabled.
+// Reference: rippled BookStep.cpp:86-91.
+func TestMaxOffersToConsume_Fix1515Gate(t *testing.T) {
+	enabledView := newPaymentMockLedgerView()
+	enabledView.rules = amendment.AllSupportedRules()
+	require.Equal(t, uint32(1000), maxOffersToConsume(NewPaymentSandbox(enabledView)))
+
+	disabledView := newPaymentMockLedgerView()
+	disabledView.rules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("fix1515").
+		Build()
+	require.Equal(t, uint32(2000), maxOffersToConsume(NewPaymentSandbox(disabledView)))
+}
+
+// TestFix1515Enabled_NilRulesGuard covers the fix1515 gate used by the BookStep
+// offer-limit branch. The nil-rules case is the rules-free pathfinding path: a
+// sandbox with no parent and no view returns nil rules, and the gate must
+// default to the active-network value (enabled) rather than panic. Both the
+// limit helper and the boolean gate must agree on that default.
+func TestFix1515Enabled_NilRulesGuard(t *testing.T) {
+	enabledView := newPaymentMockLedgerView()
+	enabledView.rules = amendment.AllSupportedRules()
+	require.True(t, fix1515Enabled(NewPaymentSandbox(enabledView)))
+
+	disabledView := newPaymentMockLedgerView()
+	disabledView.rules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("fix1515").
+		Build()
+	require.False(t, fix1515Enabled(NewPaymentSandbox(disabledView)))
+
+	// Nil-rules sandbox: parent and view both nil → Rules() == nil. The gate must
+	// default to enabled and must not panic.
+	nilRulesSandbox := &PaymentSandbox{}
+	require.Nil(t, nilRulesSandbox.Rules())
+	require.True(t, fix1515Enabled(nilRulesSandbox))
+	require.Equal(t, uint32(1000), maxOffersToConsume(nilRulesSandbox))
+}
+
 // DirectStepI Tests
 
 func TestDirectStepI_Basic(t *testing.T) {
@@ -412,38 +632,12 @@ func TestDirectStepI_Basic(t *testing.T) {
 
 	// Check the step
 	result := step.Check(sandbox)
-	if result != tx.TesSUCCESS {
-		t.Errorf("expected tx.TesSUCCESS, got %d", result)
+	if result != ter.TesSUCCESS {
+		t.Errorf("expected ter.TesSUCCESS, got %d", result)
 	}
 }
 
 // Strand Tests
-
-func TestToStrand_XRPToXRP(t *testing.T) {
-	view := newPaymentMockLedgerView()
-
-	var alice, bob [20]byte
-	copy(alice[:], []byte("alice12345678901234"))
-	copy(bob[:], []byte("bob1234567890123456"))
-	view.createAccount(alice, 100_000_000, 0)
-	view.createAccount(bob, 100_000_000, 0)
-
-	sandbox := NewPaymentSandbox(view)
-
-	// XRP to XRP payment - default path
-	dstIssue := Issue{Currency: "XRP"}
-
-	strand, err := ToStrand(sandbox, alice, bob, dstIssue, nil, nil, true)
-
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	// Should have at least source and destination XRP endpoints
-	if len(strand) < 1 {
-		t.Errorf("expected at least 1 step, got %d", len(strand))
-	}
-}
 
 func TestToStrands_WithPaths(t *testing.T) {
 	view := newPaymentMockLedgerView()
@@ -470,9 +664,9 @@ func TestToStrands_WithPaths(t *testing.T) {
 		{{Currency: "USD", Issuer: state.EncodeAccountIDSafe(gateway)}},
 	}
 
-	strands, result := ToStrands(sandbox, alice, bob, dstAmt, nil, paths, true)
+	strands, result := ToStrands(sandbox, alice, bob, dstAmt, nil, paths, true, false, false)
 
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		t.Fatalf("unexpected result: %v", result)
 	}
 
@@ -504,7 +698,7 @@ func TestExecuteStrand_XRPPayment(t *testing.T) {
 	// Execute with 10 XRP requested output
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := ExecuteStrand(sandbox, strand, nil, requestedOut)
+	result := ExecuteStrand(sandbox, strand, nil, requestedOut, nil)
 
 	if !result.Success {
 		t.Error("expected successful execution")
@@ -540,10 +734,10 @@ func TestFlow_SingleStrand(t *testing.T) {
 
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil)
+	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false, false)
 
-	if result.Result != tx.TesSUCCESS {
-		t.Errorf("expected tx.TesSUCCESS, got %d", result.Result)
+	if result.Result != ter.TesSUCCESS {
+		t.Errorf("expected ter.TesSUCCESS, got %d", result.Result)
 	}
 	if result.Out.XRP != 10_000_000 {
 		t.Errorf("expected output=10M, got %d", result.Out.XRP)
@@ -573,7 +767,7 @@ func TestFlow_PartialPayment(t *testing.T) {
 	requestedOut := NewXRPEitherAmount(100_000_000)
 
 	// Without partial payment flag - should fail or deliver less
-	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil)
+	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false, false)
 
 	// Should not deliver full amount
 	if result.Out.XRP >= 100_000_000 {
@@ -588,11 +782,11 @@ func TestFlow_PartialPayment(t *testing.T) {
 			NewXRPEndpointStep(bob, true),
 		},
 	}
-	result2 := Flow(sandbox2, strands2, requestedOut, true, nil, nil, nil)
+	result2 := Flow(sandbox2, strands2, requestedOut, true, nil, nil, nil, false, false)
 
 	// With partial payment, any delivery (even partial) is success
 	// We just check that something was delivered
-	if result2.Out.XRP == 0 && result2.Result != tx.TecPATH_DRY {
+	if result2.Out.XRP == 0 && result2.Result != ter.TecPATH_DRY {
 		t.Errorf("expected some delivery with partial payment, got out=%d, result=%d", result2.Out.XRP, result2.Result)
 	}
 }
@@ -603,10 +797,10 @@ func TestFlow_EmptyStrands(t *testing.T) {
 
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil)
+	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil, false, false)
 
-	if result.Result != tx.TecPATH_DRY {
-		t.Errorf("expected tx.TecPATH_DRY for empty strands, got %d", result.Result)
+	if result.Result != ter.TecPATH_DRY {
+		t.Errorf("expected ter.TecPATH_DRY for empty strands, got %d", result.Result)
 	}
 }
 
@@ -631,7 +825,7 @@ func TestFlow_SendMaxLimit(t *testing.T) {
 	requestedOut := NewXRPEitherAmount(50_000_000)
 	sendMax := NewXRPEitherAmount(20_000_000) // Limit to 20 XRP
 
-	result := Flow(sandbox, strands, requestedOut, true, nil, &sendMax, nil)
+	result := Flow(sandbox, strands, requestedOut, true, nil, &sendMax, nil, false, false)
 
 	// Should be limited by sendMax
 	if result.In.XRP > 20_000_000 {
@@ -654,7 +848,7 @@ func TestRippleCalculate_XRPPayment(t *testing.T) {
 	var txHash [32]byte
 	ledgerSeq := uint32(1000)
 
-	actualIn, actualOut, _, _, result := RippleCalculate(
+	rc := RippleCalculate(
 		view,
 		alice,
 		bob,
@@ -668,17 +862,17 @@ func TestRippleCalculate_XRPPayment(t *testing.T) {
 		ledgerSeq, // Ledger sequence
 	)
 
-	if result != tx.TesSUCCESS && result != tx.TecPATH_DRY {
-		t.Errorf("expected tx.TesSUCCESS or tx.TecPATH_DRY, got %d", result)
+	if rc.Result != ter.TesSUCCESS && rc.Result != ter.TecPATH_DRY {
+		t.Errorf("expected ter.TesSUCCESS or ter.TecPATH_DRY, got %d", rc.Result)
 	}
 
 	// If successful, verify amounts
-	if result == tx.TesSUCCESS {
-		if actualOut.XRP != 10_000_000 {
-			t.Errorf("expected output=10M, got %d", actualOut.XRP)
+	if rc.Result == ter.TesSUCCESS {
+		if rc.ActualOut.XRP != 10_000_000 {
+			t.Errorf("expected output=10M, got %d", rc.ActualOut.XRP)
 		}
-		if actualIn.XRP != 10_000_000 {
-			t.Errorf("expected input=10M, got %d", actualIn.XRP)
+		if rc.ActualIn.XRP != 10_000_000 {
+			t.Errorf("expected input=10M, got %d", rc.ActualIn.XRP)
 		}
 	}
 }

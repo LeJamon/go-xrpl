@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,9 +41,9 @@ type LoadCharger interface {
 }
 
 type Server struct {
+	peerSourceHolder
 	registry    *types.MethodRegistry
 	timeout     time.Duration
-	peerSource  atomic.Pointer[types.PeerSource]
 	services    *types.ServiceContainer
 	loadTracker *loadtrack.Tracker
 
@@ -58,19 +60,27 @@ type Server struct {
 
 var _ types.MethodDispatcher = (*Server)(nil)
 
+// peerSourceHolder is the atomic peer-source slot embedded by both the HTTP
+// and WebSocket servers, exposed through the `peers` RPC. Embedding it gives
+// both the same SetPeerSource / loadPeerSource without duplicating the field
+// and methods on each server.
+type peerSourceHolder struct {
+	peerSource atomic.Pointer[types.PeerSource]
+}
+
 // SetPeerSource registers the source of per-peer entries served by the
 // `peers` RPC handler. Passing nil detaches the source so the handler
 // returns an empty list. Safe to call concurrently with reads.
-func (s *Server) SetPeerSource(src types.PeerSource) {
+func (h *peerSourceHolder) SetPeerSource(src types.PeerSource) {
 	if src == nil {
-		s.peerSource.Store(nil)
+		h.peerSource.Store(nil)
 		return
 	}
-	s.peerSource.Store(&src)
+	h.peerSource.Store(&src)
 }
 
-func (s *Server) loadPeerSource() types.PeerSource {
-	if p := s.peerSource.Load(); p != nil {
+func (h *peerSourceHolder) loadPeerSource() types.PeerSource {
+	if p := h.peerSource.Load(); p != nil {
 		return *p
 	}
 	return nil
@@ -150,7 +160,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			rpcLog().Error("rpc handler panic", "err", rec, "stack", string(debug.Stack()), "method", r.Method, "remote", r.RemoteAddr)
-			s.writeXrplError(w, "", nil, "internal", "Internal server error")
+			s.writeXrplError(w, nil, "internal", "Internal server error")
 		}
 	}()
 
@@ -191,6 +201,10 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	method := query.Get("command")
 
+	// Deliberate goxrpl extension: a GET with no `command` defaults to
+	// server_info. rippled has no GET form (it feeds every request body
+	// through the JSON parser); this keeps the endpoint browser-pokeable,
+	// like the permissive default CORS header above.
 	if method == "" {
 		method = "server_info"
 	}
@@ -202,19 +216,10 @@ func (s *Server) handleGetRequest(w http.ResponseWriter, r *http.Request) {
 	role := roleForRequest(peerIP, user, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
-	ctx := &types.RpcContext{
-		Context:    dispatchCtx,
-		Role:       role,
-		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
-		ClientIP:   clientIP,
-		PeerSource: s.loadPeerSource(),
-		Services:   s.services,
-	}
+	ctx := newRpcContext(dispatchCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
 
 	result, rpcErr := s.executeMethod(method, nil, ctx)
-	s.writeXrplResponse(w, method, nil, result, rpcErr)
+	s.writeXrplResponseWithOptions(w, nil, result, rpcErr, loadWarningOpts(ctx))
 }
 
 func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +233,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Request body exceeds limit", http.StatusBadRequest)
 			return
 		}
-		s.writeXrplError(w, "", nil, "internal", "Failed to read request body")
+		s.writeXrplError(w, nil, "internal", "Failed to read request body")
 		return
 	}
 
@@ -237,16 +242,22 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// request carries a one-element array, and rippled inspects the method
 	// before deciding which shape params must take (ServerHandler.cpp:638-649).
 	var request struct {
-		Method string          `json:"method"`
+		Method json.RawMessage `json:"method"`
 		Params json.RawMessage `json:"params"`
 	}
+	// rippled answers a malformed single request with an HTTP 400, not a 200 +
+	// JSON-RPC envelope (ServerHandler.cpp:629-635, :764-808): an unparseable
+	// body, then the method field validated for the same three malformed shapes
+	// the batch path distinguishes. The bodies are application/json (rippled's
+	// HTTPReply quirk), not Go's http.Error text/plain default.
 	if err := json.Unmarshal(body, &request); err != nil {
-		s.writeXrplError(w, "", nil, "jsonInvalid", "Invalid JSON: "+err.Error())
+		writePlainHTTPError(w, http.StatusBadRequest, "Unable to parse request: "+err.Error())
 		return
 	}
 
-	if request.Method == "" {
-		s.writeXrplError(w, "", nil, "missingCommand", "Missing method field")
+	method, methodErr := decodeMethodField(request.Method)
+	if methodErr != "" {
+		writePlainHTTPError(w, http.StatusBadRequest, methodErr)
 		return
 	}
 
@@ -270,7 +281,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// missing, null, or non-array is HTTP 400 "Malformed batch request"
 	// (ServerHandler.cpp:643-647). An empty array is valid: size is 0, the loop
 	// runs zero times, and the reply is an empty array (ServerHandler.cpp:648-653).
-	if request.Method == "batch" {
+	if method == "batch" {
 		var elements []json.RawMessage
 		// A JSON null params leaves elements nil with no error, which rippled
 		// rejects as "not an array"; an empty [] unmarshals to a non-nil empty
@@ -279,7 +290,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Malformed batch request", http.StatusBadRequest)
 			return
 		}
-		replies := make([]map[string]interface{}, len(elements))
+		replies := make([]map[string]any, len(elements))
 		for i, el := range elements {
 			replies[i] = s.dispatchBatchElement(el, dispatchCtx, role, clientIP)
 		}
@@ -296,7 +307,9 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	if len(request.Params) > 0 {
 		var arr []json.RawMessage
 		if err := json.Unmarshal(request.Params, &arr); err != nil {
-			s.writeXrplError(w, request.Method, nil, "jsonInvalid", "Invalid JSON: params must be an array")
+			// params present but not a JSON array → HTTP 400
+			// (ServerHandler.cpp:826).
+			writePlainHTTPError(w, http.StatusBadRequest, "params unparseable")
 			return
 		}
 		if len(arr) > 0 {
@@ -304,32 +317,93 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ctx := &types.RpcContext{
-		Context:    dispatchCtx,
-		Role:       role,
-		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
-		ClientIP:   clientIP,
-		PeerSource: s.loadPeerSource(),
-		Services:   s.services,
-	}
+	ctx := newRpcContext(dispatchCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
 
 	if params != nil {
 		applyApiVersionFromObject(ctx, params)
 	}
 
-	result, rpcErr := s.executeMethod(request.Method, params, ctx)
+	result, rpcErr := s.executeMethod(method, params, ctx)
 
-	requestObj := buildRequestEcho(request.Method, params)
+	// rippled answers an unsupported api_version on the HTTP-single path with
+	// HTTPReply(400, "invalid_API_version") — a 400 whose body is the bare
+	// token, not a JSON-RPC result envelope (ServerHandler.cpp:687-690).
+	if rpcErr != nil && rpcErr.IsInvalidApiVersion() {
+		writeInvalidApiVersionHTTP(w)
+		return
+	}
 
-	s.writeXrplResponse(w, request.Method, requestObj, result, rpcErr)
+	// rippled rejects a caller already over its per-IP resource budget at the
+	// overload-admission layer, ahead of FORBID: a positive usage.disconnect()
+	// yields HTTPReply(503, "Server is overloaded") — a 503 whose body is the
+	// bare string, not the JSON-RPC result envelope (ServerHandler.cpp:735-740).
+	// This precedes the FORBID render below, matching rippled's order.
+	if rpcErr != nil && rpcErr.IsOverloaded() {
+		writePlainHTTPError(w, http.StatusServiceUnavailable, "Server is overloaded")
+		return
+	}
+
+	// rippled rejects an admin-only command from a non-admin caller at the role
+	// layer: a FORBID role yields HTTPReply(403, "Forbidden") before the handler
+	// runs, not the JSON-RPC result envelope (ServerHandler.cpp:750-757). The
+	// feeMalformedRPC charge is applied in the shared dispatch core; here we only
+	// render the 403.
+	if rpcErr != nil && rpcErr.IsForbidden() {
+		writePlainHTTPError(w, http.StatusForbidden, "Forbidden")
+		return
+	}
+
+	requestObj := buildRequestEcho(method, params)
+
+	s.writeXrplResponseWithOptions(w, requestObj, result, rpcErr, loadWarningOpts(ctx))
+}
+
+// writeInvalidApiVersionHTTP mirrors rippled's HTTP-single rejection of an
+// unsupported api_version: HTTP 400 with the bare token as the response body
+// (ServerHandler.cpp:689 → HTTPReply(400, ...)). The body carries no JSON
+// envelope, matching rippled's plain-string reply.
+func writeInvalidApiVersionHTTP(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(http.StatusBadRequest)
+	if _, err := io.WriteString(w, types.InvalidApiVersionToken); err != nil {
+		rpcLog().Error("Failed to write invalid_API_version response", "err", err)
+	}
+}
+
+// writePlainHTTPError mirrors rippled's HTTPReply(status, content): a bare
+// string body labelled application/json (rippled labels even non-JSON error
+// strings that way) terminated with CRLF (JSONRPCUtil.cpp:148-158), rather
+// than Go's http.Error text/plain + LF default.
+func writePlainHTTPError(w http.ResponseWriter, status int, content string) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(status)
+	if _, err := io.WriteString(w, content+"\r\n"); err != nil {
+		rpcLog().Error("Failed to write HTTP error response", "err", err)
+	}
+}
+
+// decodeMethodField validates the HTTP-single "method" field the same way the
+// batch path does, mirroring rippled's three distinct messages
+// (ServerHandler.cpp:764-808): a missing/null method → "Null method", a
+// non-string method → "method is not string", an empty string → "method is
+// empty". On success it returns the method name and an empty errMsg.
+func decodeMethodField(raw json.RawMessage) (method string, errMsg string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "Null method"
+	}
+	if err := json.Unmarshal(raw, &method); err != nil {
+		return "", "method is not string"
+	}
+	if method == "" {
+		return "", "method is empty"
+	}
+	return method, ""
 }
 
 // applyApiVersionFromObject overrides ctx.ApiVersion when the given JSON object
 // carries a numeric "api_version" field.
 func applyApiVersionFromObject(ctx *types.RpcContext, obj json.RawMessage) {
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(obj, &m); err == nil {
 		if apiVer, ok := m["api_version"]; ok {
 			if ver, ok := apiVer.(float64); ok {
@@ -341,9 +415,9 @@ func applyApiVersionFromObject(ctx *types.RpcContext, obj json.RawMessage) {
 
 // buildRequestEcho builds the request echo attached to error responses, masking
 // credentials before the echo leaves the process (see redactCredentials).
-func buildRequestEcho(method string, params json.RawMessage) interface{} {
+func buildRequestEcho(method string, params json.RawMessage) any {
 	if params != nil {
-		var reqMap map[string]interface{}
+		var reqMap map[string]any
 		// params may unmarshal to JSON null, which yields a nil map.
 		if err := json.Unmarshal(params, &reqMap); err == nil && reqMap != nil {
 			redactCredentials(reqMap)
@@ -351,7 +425,7 @@ func buildRequestEcho(method string, params json.RawMessage) interface{} {
 			return reqMap
 		}
 	}
-	return map[string]interface{}{"command": method}
+	return map[string]any{"command": method}
 }
 
 // dispatchBatchElement processes one element of a batch envelope and returns its
@@ -359,14 +433,14 @@ func buildRequestEcho(method string, params json.RawMessage) interface{} {
 // request params ("params = jsonRPC", ServerHandler.cpp:681-683), with
 // api_version taken from params[0] when present and otherwise from the
 // element's top level (ServerHandler.cpp:668-683).
-func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]interface{} {
-	var elem map[string]interface{}
+func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]any {
+	var elem map[string]any
 	if err := json.Unmarshal(el, &elem); err != nil || elem == nil {
 		// Non-object element: echo it under "request" with a method_not_found
 		// JSON-RPC error (ServerHandler.cpp:658-665).
-		var raw interface{}
+		var raw any
 		_ = json.Unmarshal(el, &raw)
-		return map[string]interface{}{
+		return map[string]any{
 			"request": raw,
 			"error":   makeBatchJSONError(rpcMethodNotFoundCode, "Method not found"),
 		}
@@ -387,29 +461,50 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 		return batchMalformedElement(elem, "method is empty")
 	}
 
-	ctx := &types.RpcContext{
-		Context:    baseCtx,
-		Role:       role,
-		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
-		ClientIP:   clientIP,
-		PeerSource: s.loadPeerSource(),
-		Services:   s.services,
-	}
+	ctx := newRpcContext(baseCtx, role, types.DefaultApiVersion, clientIP, s.loadPeerSource(), s.services)
 	if ver, ok := apiVersionFromBatchElement(elem); ok {
 		ctx.ApiVersion = ver
 	}
 
 	result, rpcErr := s.executeMethod(method, el, ctx)
 
-	echo := make(map[string]interface{}, len(elem)+1)
-	for k, v := range elem {
-		echo[k] = v
+	// rippled rejects an unsupported api_version per batch element with
+	// {request: <element>, error: make_json_error(wrong_version,
+	// "invalid_API_version")} — a JSON-RPC error object, not the XRPL result
+	// envelope (ServerHandler.cpp:692-697). The element is echoed raw (its own
+	// fields, no injected `command`), so redact credentials but keep the shape.
+	if rpcErr != nil && rpcErr.IsInvalidApiVersion() {
+		echo := make(map[string]any, len(elem))
+		maps.Copy(echo, elem)
+		redactCredentials(echo)
+		return map[string]any{
+			"request": echo,
+			"error":   makeBatchJSONError(types.WrongVersionJSONRPCCode, types.InvalidApiVersionToken),
+		}
 	}
+
+	// rippled rejects a batch element whose caller is over its per-IP budget at
+	// the overload-admission layer, ahead of FORBID: the echoed element plus
+	// make_json_error(server_overloaded, "Server is overloaded")
+	// (ServerHandler.cpp:735-746). Like the single path, this precedes the FORBID
+	// branch below.
+	if rpcErr != nil && rpcErr.IsOverloaded() {
+		return batchOverloadedElement(elem)
+	}
+
+	// rippled renders a batch element denied at the role layer as the echoed
+	// element plus a make_json_error(forbidden, "Forbidden") object — the
+	// malformed-element early-exit shape, not the XRPL result envelope
+	// (ServerHandler.cpp:758-760).
+	if rpcErr != nil && rpcErr.IsForbidden() {
+		return batchForbiddenElement(elem)
+	}
+
+	echo := make(map[string]any, len(elem)+1)
+	maps.Copy(echo, elem)
 	redactCredentials(echo)
 	echo["command"] = method
-	return buildXrplResponseBody(echo, result, rpcErr, nil)
+	return buildXrplResponseBody(echo, result, rpcErr, loadWarningOpts(ctx))
 }
 
 // rpcMethodNotFoundCode is the JSON-RPC error code rippled attaches to malformed
@@ -418,14 +513,26 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 // batch malformed-element replies, to match rippled byte-for-byte.
 const rpcMethodNotFoundCode = -32601
 
+// forbiddenJSONRPCCode is the JSON-RPC error code rippled attaches to a batch
+// element refused at the role layer (ServerHandler.cpp:607, forbidden = -32605).
+// It is distinct from method_not_found and appears only inside batch
+// forbidden-element replies, matching rippled byte-for-byte.
+const forbiddenJSONRPCCode = -32605
+
+// serverOverloadedJSONRPCCode is the JSON-RPC error code rippled attaches to a
+// batch element whose caller is over its per-IP resource budget
+// (ServerHandler.cpp:606, server_overloaded = -32604). It appears only inside
+// batch overload-element replies, matching rippled byte-for-byte.
+const serverOverloadedJSONRPCCode = -32604
+
 // makeBatchJSONError mirrors rippled's make_json_error (ServerHandler.cpp:594-603):
 // it returns {"error": {"code": code, "message": message}}. rippled assigns this
 // whole object to the element's "error" field, so a malformed batch element's
 // wire shape is the (intentional, rippled-faithful) double-nested
 // {"error": {"error": {"code": ..., "message": ...}}}. Do not flatten it.
-func makeBatchJSONError(code int, message string) map[string]interface{} {
-	return map[string]interface{}{
-		"error": map[string]interface{}{
+func makeBatchJSONError(code int, message string) map[string]any {
+	return map[string]any{
+		"error": map[string]any{
 			"code":    code,
 			"message": message,
 		},
@@ -436,21 +543,43 @@ func makeBatchJSONError(code int, message string) map[string]interface{} {
 // element's own fields are echoed at the top level — unmasked, matching
 // rippled's early-exit paths which echo the raw element (ServerHandler.cpp:764-808) —
 // with a method_not_found JSON-RPC error attached.
-func batchMalformedElement(elem map[string]interface{}, message string) map[string]interface{} {
-	r := make(map[string]interface{}, len(elem)+1)
-	for k, v := range elem {
-		r[k] = v
-	}
+func batchMalformedElement(elem map[string]any, message string) map[string]any {
+	r := make(map[string]any, len(elem)+1)
+	maps.Copy(r, elem)
 	r["error"] = makeBatchJSONError(rpcMethodNotFoundCode, message)
+	return r
+}
+
+// batchForbiddenElement builds the reply for a batch element whose admin-only
+// command is refused for a non-admin caller. Like rippled's FORBID branch
+// (ServerHandler.cpp:758-760), the element's own fields are echoed at the top
+// level — unmasked, matching the other early-exit paths — with a forbidden
+// JSON-RPC error attached, rather than the XRPL result envelope.
+func batchForbiddenElement(elem map[string]any) map[string]any {
+	r := make(map[string]any, len(elem)+1)
+	maps.Copy(r, elem)
+	r["error"] = makeBatchJSONError(forbiddenJSONRPCCode, "Forbidden")
+	return r
+}
+
+// batchOverloadedElement builds the reply for a batch element whose caller is
+// over its per-IP resource budget. Like rippled's overload branch
+// (ServerHandler.cpp:742-746), the element's own fields are echoed at the top
+// level — unmasked, matching the other early-exit paths — with a
+// server_overloaded JSON-RPC error attached, rather than the XRPL result envelope.
+func batchOverloadedElement(elem map[string]any) map[string]any {
+	r := make(map[string]any, len(elem)+1)
+	maps.Copy(r, elem)
+	r["error"] = makeBatchJSONError(serverOverloadedJSONRPCCode, "Server is overloaded")
 	return r
 }
 
 // apiVersionFromBatchElement resolves a batch element's api_version, preferring
 // params[0].api_version and falling back to a top-level api_version, mirroring
 // rippled's two-level lookup (ServerHandler.cpp:668-683).
-func apiVersionFromBatchElement(elem map[string]interface{}) (int, bool) {
-	if params, ok := elem["params"].([]interface{}); ok && len(params) > 0 {
-		if first, ok := params[0].(map[string]interface{}); ok {
+func apiVersionFromBatchElement(elem map[string]any) (int, bool) {
+	if params, ok := elem["params"].([]any); ok && len(params) > 0 {
+		if first, ok := params[0].(map[string]any); ok {
 			if v, ok := first["api_version"].(float64); ok {
 				return int(v), true
 			}
@@ -467,6 +596,21 @@ func (s *Server) withTimeout(parent context.Context) (context.Context, context.C
 		return parent, func() {}
 	}
 	return context.WithTimeout(parent, s.timeout)
+}
+
+// newRpcContext assembles an RpcContext, deriving IsAdmin / Unlimited from the
+// role so every HTTP/WS dispatch site computes them identically.
+func newRpcContext(ctx context.Context, role types.Role, apiVersion int, clientIP string, peers types.PeerSource, services *types.ServiceContainer) *types.RpcContext {
+	return &types.RpcContext{
+		Context:    ctx,
+		Role:       role,
+		ApiVersion: apiVersion,
+		IsAdmin:    role == types.RoleAdmin,
+		Unlimited:  role.IsUnlimited(),
+		ClientIP:   clientIP,
+		PeerSource: peers,
+		Services:   services,
+	}
 }
 
 // credentialKeys are request fields masked in error envelopes.
@@ -486,67 +630,160 @@ var credentialKeys = []string{
 // debugging client can see a credential was supplied.
 const maskedValue = "<masked>"
 
-func redactCredentials(m map[string]interface{}) {
+func redactCredentials(m map[string]any) {
 	for _, k := range credentialKeys {
 		if _, ok := m[k]; ok {
 			m[k] = maskedValue
 		}
 	}
 	for _, nested := range []string{"tx_json", "transaction"} {
-		if sub, ok := m[nested].(map[string]interface{}); ok {
+		if sub, ok := m[nested].(map[string]any); ok {
 			redactCredentials(sub)
 		}
 	}
 }
 
-func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (interface{}, *types.RpcError) {
+func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (any, *types.RpcError) {
 	rpcLog().Debug("rpc", "method", method, "client", ctx.ClientIP)
+	// Both transports signal a forbidden admin-only command via RpcErrorForbidden.
+	// rippled resolves it at the role layer (Role::FORBID) ahead of the handler
+	// and renders it per transport — HTTP single 403 "Forbidden", batch
+	// make_json_error(forbidden), WS rpcError(rpcFORBIDDEN) (ServerHandler.cpp:482-486,
+	// 750-762). The writers special-case IsForbidden; in-handler permission
+	// denials keep returning rpcNO_PERMISSION on the normal result envelope.
+	return dispatchMethod(s.registry, s.loadTracker, s.services, ctx, method, params, types.RpcErrorForbidden, rpcLog())
+}
 
-	handler, exists := s.registry.Get(method)
-	if !exists {
+// dispatchMethod is the transport-agnostic dispatch core shared by the HTTP
+// (Server.executeMethod) and WebSocket (WebSocketServer.handleRPCMethod)
+// paths. Hoisting it keeps the two transports from drifting (the WS path
+// previously skipped conditionMet). The only transport-specific bit is the
+// admin-gate error, supplied by adminGate.
+//
+// The gate order spans rippled's two layers: the per-IP overload check and the
+// role-layer FORBID short-circuit both fire in ServerHandler::processRequest
+// *before* doCommand, while the job-queue busy gate lives inside fillHandler.
+// The effective sequence is:
+//
+//	api-version (400) → overload (503) → FORBID (403) → busy (rpcTOO_BUSY) →
+//	unknown-command → conditionMet → handle → load finalize
+//
+// The overload admission (usage.disconnect()) precedes FORBID: a forbidden admin
+// request from a caller already over its per-IP budget is denied 503 "Server is
+// overloaded", not 403 (ServerHandler.cpp:735 ahead of :750). FORBID in turn
+// precedes busy: a forbidden admin request under queue saturation is denied 403,
+// not rpcTOO_BUSY. busy still precedes the unknown-command failure, so an
+// unresolved command under saturation stays rpcTOO_BUSY (a command that does not
+// resolve — unknown, or known but not served at the requested api_version — is
+// never forbidden; rippled's roleRequired yields GUEST for it).
+func dispatchMethod(
+	registry *types.MethodRegistry,
+	tracker *loadtrack.Tracker,
+	services *types.ServiceContainer,
+	ctx *types.RpcContext,
+	method string,
+	params json.RawMessage,
+	adminGate func(string) *types.RpcError,
+	log xrpllog.Logger,
+) (any, *types.RpcError) {
+	// Resolve the handler without yet failing: the api-version and FORBID gates
+	// run ahead of the unknown-command failure, with the busy gate between them.
+	handler, exists := registry.Get(method)
+
+	// The api_version range is handler-independent and rejected ahead of command
+	// resolution.
+	if rpcErr := validateApiVersion(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	// A known command whose handler does not serve the requested (in-range)
+	// api_version resolves to "unknown command", mirroring rippled's getHandler
+	// returning null on a name match with no version-range match
+	// (Handler.cpp:265-272) → rpcUNKNOWN_COMMAND, not invalid_API_version. Such a
+	// request is also not forbidden: rippled's roleRequired yields GUEST when the
+	// lookup misses, deferring to the busy-then-unknown-command path below.
+	resolved := exists && handlerSupportsVersion(handler, ctx.ApiVersion)
+
+	// The per-IP resource-overload admission check runs before FORBID and busy,
+	// mirroring usage.disconnect() consulted ahead of doCommand and the FORBID
+	// short-circuit (ServerHandler.cpp:735 ahead of :750). A caller already over
+	// its budget is denied here (503 "Server is overloaded") regardless of whether
+	// the command is forbidden, unknown, or saturated. Admin / unlimited callers
+	// no-op (matching isUnlimited taking the newUnlimitedEndpoint branch).
+	if rpcErr := gateLoad(tracker, ctx, method, log); rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	// Refuse an admin-only command for a non-admin caller. rippled decides this
+	// at the role layer (Role::FORBID) before doCommand runs and charges
+	// feeMalformedRPC (ServerHandler.cpp:750-762, :482-486). The gate returns
+	// before the normal finalizeLoad site, so charge here; loadKindFor maps the
+	// forbidden error to the malformed bucket.
+	if resolved && handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
+		rpcErr := adminGate(method)
+		finalizeLoad(tracker, ctx, method, handler, rpcErr, log)
+		return nil, rpcErr
+	}
+
+	// The job-queue busy gate sheds after FORBID but before the unknown-command
+	// failure (RPCHandler.cpp:132-141, ahead of :143-164).
+	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	if !resolved {
 		return nil, types.RpcErrorMethodNotFound(method)
 	}
 
-	// Check role permissions — matches rippled RPCHandler.cpp line 166:
-	// if (handler->role_ == Role::ADMIN && context.role != Role::ADMIN)
-	//     return rpcNO_PERMISSION;
-	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		return nil, types.RpcErrorNoPermission(method)
-	}
-
 	// Enforce the method's precondition, mirroring rippled's RPC::conditionMet
-	// (Handler.h:78-139).
+	// (Handler.h:78-139), after the admin gate (RPCHandler.cpp:169).
 	if rpcErr := conditionMet(handler.RequiredCondition(), ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	supportedVersions := handler.SupportedApiVersions()
-	if len(supportedVersions) > 0 {
-		supported := false
-		for _, version := range supportedVersions {
-			if ctx.ApiVersion == version {
-				supported = true
-				break
-			}
-		}
-		if !supported {
-			return nil, types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
-		}
-	}
-
-	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		return nil, rpcErr
-	}
-	if err := gateLoad(s.loadTracker, ctx, method, rpcLog()); err != nil {
-		return nil, err
-	}
-	if s.services != nil && s.services.ClientLoad != nil {
-		s.services.ClientLoad.Begin()
-		defer s.services.ClientLoad.End()
+	if services != nil && services.ClientLoad != nil {
+		services.ClientLoad.Begin()
+		defer services.ClientLoad.End()
 	}
 	result, rpcErr := handler.Handle(ctx, params)
-	finalizeLoad(s.loadTracker, ctx, method, handler, rpcErr, rpcLog())
+	finalizeLoad(tracker, ctx, method, handler, rpcErr, log)
 	return result, rpcErr
+}
+
+// betaEnabled reports whether the operator turned on the beta RPC API for
+// this request. nil-safe: a request without a service container (routing-only
+// tests) is treated as non-beta.
+func betaEnabled(ctx *types.RpcContext) bool {
+	return ctx.Services != nil && ctx.Services.BetaRPCAPI
+}
+
+// validateApiVersion enforces the accepted api_version range, mirroring
+// rippled's dispatch-layer cap (getAPIVersionNumber rejecting anything above
+// apiBetaVersion when beta is off, ServerHandler.cpp:685-695). It is handler-
+// independent: a version outside the range yields invalid_API_version ahead of
+// command resolution, exactly as rippled rejects it before reaching a handler.
+// The narrower per-handler support set is enforced separately as part of
+// command resolution — see handlerSupportsVersion.
+func validateApiVersion(ctx *types.RpcContext) *types.RpcError {
+	maxVersion := types.MaxSupportedApiVersion
+	if betaEnabled(ctx) {
+		maxVersion = types.BetaApiVersion
+	}
+	if ctx.ApiVersion < types.ApiVersion1 || ctx.ApiVersion > maxVersion {
+		return types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
+	}
+	return nil
+}
+
+// handlerSupportsVersion reports whether the handler serves the requested
+// api_version; a handler listing no versions serves every in-range version.
+// rippled folds this per-handler range match into getHandler (Handler.cpp:265-
+// 272): a name match whose version falls outside the handler's range returns
+// null, which the caller treats as an unknown command — never as an invalid
+// api_version (that error is reserved for the out-of-range dispatch-layer cap).
+func handlerSupportsVersion(handler types.MethodHandler, version int) bool {
+	supportedVersions := handler.SupportedApiVersions()
+	return len(supportedVersions) == 0 || slices.Contains(supportedVersions, version)
 }
 
 // maxValidatedLedgerAge mirrors rippled's Tuning::maxValidatedLedgerAge
@@ -605,14 +842,33 @@ func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	return nil
 }
 
-// atLeastSyncing reports whether the operating-mode string is SYNCING or higher
-// (rippled's OperatingMode >= SYNCING floor).
+// atLeastSyncing reports whether the server_state is SYNCING or higher,
+// mirroring rippled's OperatingMode >= SYNCING floor. The comparison is
+// ordinal rather than a positive allow-list so it cannot silently reject the
+// modes above FULL: a validator presents server_state "proposing" or
+// "validating", which are FULL-mode aliases and so sit above the floor.
 func atLeastSyncing(serverState string) bool {
+	return serverStateRank(serverState) >= serverStateRank("syncing")
+}
+
+// serverStateRank maps a server_state presentation string to its operating
+// mode rank. "proposing" and "validating" are the aliases a FULL-mode
+// validator reports, so they rank with "full". An unrecognised string ranks
+// below every operating mode and fails any floor comparison.
+func serverStateRank(serverState string) int {
 	switch serverState {
-	case "syncing", "tracking", "full":
-		return true
+	case "disconnected":
+		return 0
+	case "connected":
+		return 1
+	case "syncing":
+		return 2
+	case "tracking":
+		return 3
+	case "full", "proposing", "validating":
+		return 4
 	default:
-		return false
+		return -1
 	}
 }
 
@@ -638,10 +894,13 @@ func notSyncedError(apiVersion, v1Code int, v1Token, v1Message string) *types.Rp
 		"Not synced to the network.")
 }
 
-// gateLoad is the pre-dispatch admission check. It does NOT charge the
-// caller; it only rejects when the (decayed) balance is already at or
-// above DropThreshold. Mirrors rippled ServerHandler.cpp:735 where
-// usage.disconnect() is consulted *before* doCommand runs.
+// gateLoad is the pre-dispatch overload admission check, run ahead of the FORBID
+// and busy gates. It does NOT charge the caller; it only rejects when the
+// (decayed) balance is already at or above DropThreshold. Mirrors rippled
+// ServerHandler.cpp:735 where usage.disconnect() is consulted *before* the FORBID
+// short-circuit and doCommand, returning without charging feeMalformedRPC. The
+// rejection carries the overloaded flag so the transport writers render rippled's
+// 503 "Server is overloaded" (single) / make_json_error(server_overloaded) (batch).
 //
 // Admin / identified callers bypass tracking entirely, matching rippled
 // isUnlimited() (Role.cpp:124-128).
@@ -652,7 +911,7 @@ func gateLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, 
 	if tracker.OverDropThreshold(ctx.ClientIP) {
 		log.Warn("rpc dropped: client over load threshold",
 			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
-		return types.RpcErrorSlowDown("Slow down. Server is too busy for this client.")
+		return types.RpcErrorOverloaded()
 	}
 	return nil
 }
@@ -674,19 +933,22 @@ func finalizeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method stri
 		log.Warn("rpc client crossed drop threshold (post-charge)",
 			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
 	case loadtrack.OutcomeWarn:
+		// Surface rippled's warning:"load" on the reply (ServerHandler.cpp:519,920).
+		ctx.LoadWarning = true
 		log.Info("rpc client over warn threshold",
 			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
 	}
 }
 
 // loadKindFor returns the charge bucket to apply for one dispatch. A
-// malformed / unknown-method response is charged LoadMalformed so a
-// client cannot use bad input as a cheap probe (matches rippled's
-// feeMalformedRPC bump in RPCHandler.cpp / ServerHandler.cpp).
+// malformed / unknown-method response, and a role-layer FORBID, are charged
+// LoadMalformed so a client cannot use bad input or admin-probing as a cheap
+// probe (matches rippled's feeMalformedRPC bump in RPCHandler.cpp /
+// ServerHandler.cpp:752,:484).
 func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.LoadKind {
 	if rpcErr != nil {
 		switch rpcErr.Code {
-		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND:
+		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND, types.RpcFORBIDDEN:
 			return loadtrack.LoadMalformed
 		case types.RpcINTERNAL:
 			return loadtrack.LoadException
@@ -698,22 +960,27 @@ func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.
 	return loadtrack.LoadReference
 }
 
-// writeXrplResponse writes an XRPL format JSON-RPC response. Per XRPL spec
-// result.status is "success" or "error" and warning/warnings/forwarded
-// live at the top level, not inside result.
-func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError) {
-	s.writeXrplResponseWithOptions(w, method, request, result, rpcErr, nil)
+// loadWarningOpts returns response options carrying warning:"load" when the
+// dispatch crossed the resource warn threshold (recorded on ctx by
+// finalizeLoad), and nil otherwise. Mirrors rippled attaching
+// jr[warning]=load after the post-dispatch charge.
+func loadWarningOpts(ctx *types.RpcContext) *JsonRpcResponseOptions {
+	if ctx != nil && ctx.LoadWarning {
+		return &JsonRpcResponseOptions{Warning: "load"}
+	}
+	return nil
 }
 
-// buildXrplResponseBody assembles the `{"result": {...}}` envelope (plus any
-// top-level warning/forwarded fields) for a single dispatched request. It is
-// shared by the single-request writer and by each element of a batch envelope,
-// so every batch reply has the same shape as a standalone reply.
-func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) map[string]interface{} {
-	response := make(map[string]interface{})
+// buildXrplResponseBody assembles the `{"result": {...}}` envelope for a single
+// dispatched request. It is shared by the single-request writer and by each
+// element of a batch envelope, so every batch reply has the same shape as a
+// standalone reply.
+func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) map[string]any {
+	response := make(map[string]any)
 
+	var resultObj map[string]any
 	if rpcErr != nil {
-		resultObj := map[string]interface{}{
+		resultObj = map[string]any{
 			"status": "error",
 			"error":  rpcErr.ErrorString,
 		}
@@ -726,23 +993,27 @@ func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *type
 		if request != nil {
 			resultObj["request"] = request
 		}
-		response["result"] = resultObj
+	} else if resultMap, ok := result.(map[string]any); ok {
+		resultMap["status"] = "success"
+		resultObj = resultMap
 	} else {
-		if resultMap, ok := result.(map[string]interface{}); ok {
-			resultMap["status"] = "success"
-			response["result"] = resultMap
-		} else {
-			response["result"] = map[string]interface{}{
-				"status": "success",
-				"data":   result,
-			}
+		resultObj = map[string]any{
+			"status": "success",
+			"data":   result,
 		}
 	}
 
 	if opts != nil {
+		// On the HTTP path rippled writes warning:"load" INTO result, before
+		// wrapping it in the envelope (ServerHandler.cpp:919-920 → :938/:971);
+		// the WS path keeps it top-level (:519) and is handled separately.
 		if opts.Warning != "" {
-			response["warning"] = opts.Warning
+			resultObj["warning"] = opts.Warning
 		}
+	}
+	response["result"] = resultObj
+
+	if opts != nil {
 		if len(opts.Warnings) > 0 {
 			response["warnings"] = opts.Warnings
 		}
@@ -754,7 +1025,7 @@ func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *type
 	return response
 }
 
-func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
+func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, request any, result any, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
 	response := buildXrplResponseBody(request, result, rpcErr, opts)
 
 	// Stream-encode straight to the response writer through trimNewlineWriter.
@@ -766,9 +1037,12 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 	// is the only honest signal.
 	//
 	// rpcTOO_BUSY maps to HTTP 503, matching rippled ErrorCodes.cpp:114
-	// (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). All other errors ride on
-	// 200 OK; XRPL clients parse result.error, not the HTTP status.
-	if rpcErr != nil && rpcErr.Code == types.RpcTOO_BUSY {
+	// (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). The per-IP overload rejection is
+	// also a 503 (ServerHandler.cpp:739); the HTTP-single POST path renders its
+	// bare-string body earlier, so this branch only covers the GET extension,
+	// which keeps the result envelope. All other errors ride on 200 OK; XRPL
+	// clients parse result.error, not the HTTP status.
+	if rpcErr != nil && (rpcErr.Code == types.RpcTOO_BUSY || rpcErr.IsOverloaded()) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	} else {
 		w.WriteHeader(http.StatusOK)
@@ -811,8 +1085,8 @@ func (t *trimNewlineWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *Server) writeXrplError(w http.ResponseWriter, method string, request interface{}, errorCode string, message string) {
-	resultObj := map[string]interface{}{
+func (s *Server) writeXrplError(w http.ResponseWriter, request any, errorCode string, message string) {
+	resultObj := map[string]any{
 		"status":        "error",
 		"error":         errorCode,
 		"error_message": message,
@@ -821,7 +1095,7 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 		resultObj["request"] = request
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"result": resultObj,
 	}
 
@@ -837,16 +1111,12 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 }
 
 // ExecuteMethod implements types.MethodDispatcher, allowing the 'json' RPC
-// method to forward calls through the same method registry.
-func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *types.RpcError) {
-	ctx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleGuest,
-		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    false,
-		PeerSource: s.loadPeerSource(),
-		Services:   s.services,
-	}
+// method to forward calls through the same method registry. The caller's
+// context is reused so the forwarded method keeps the request's timeout,
+// role, client IP and api version, and is charged for load under the real
+// client IP (a fresh guest/empty-IP context previously let `json` callers
+// dodge per-IP charging and escape the request timeout).
+func (s *Server) ExecuteMethod(ctx *types.RpcContext, method string, params []byte) (any, *types.RpcError) {
 	return s.executeMethod(method, json.RawMessage(params), ctx)
 }
 
@@ -932,8 +1202,8 @@ func forwardedForHeader(r *http.Request) string {
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		first := xff
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			first = xff[:i]
+		if before, _, ok := strings.Cut(xff, ","); ok {
+			first = before
 		}
 		return extractIPAddrFromField(first)
 	}

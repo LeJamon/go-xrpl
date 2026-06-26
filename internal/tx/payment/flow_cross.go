@@ -3,8 +3,46 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// FlowCrossParams groups the offer-crossing options and amendment flags passed
+// to FlowCross. The ledger view, taker account, traded amounts, and transaction
+// context stay as regular FlowCross parameters; everything that is essentially
+// "configuration" (crossing mode, ledger fees/timing, and amendment gating)
+// lives here so the call site is not dominated by a long positional bool list.
+type FlowCrossParams struct {
+	// Passive crosses only against strictly-better-quality offers.
+	Passive bool
+	// Sell delivers the maximum (sell all input regardless of output).
+	Sell bool
+	// FillOrKill makes the flow run with partialPayment disabled, mirroring
+	// rippled flowCross which passes partialPayment=!(txFlags & tfFillOrKill).
+	// Under partialPayment=false an under-filled crossing returns
+	// tecPATH_PARTIAL and its (discarded) partial-walk grooming never reaches
+	// the applied sandbox, so a killed FillOrKill offer leaves only the fee.
+	FillOrKill bool
+
+	ParentCloseTime  uint32
+	ReserveBase      uint64
+	ReserveIncrement uint64
+
+	// Amendment flags governing offer-quality and AMM behavior.
+	FixReducedOffersV1         bool
+	FixReducedOffersV2         bool
+	FixRmSmallIncreasedQOffers bool
+	FixFillOrKill              bool
+	FlowSortStrands            bool
+	FixAMMv1_1                 bool
+	FixAMMv1_2                 bool
+	FixAMMOverflowOffer        bool
+	// Fix1781 gates XRP-endpoint loop detection in strand building.
+	Fix1781 bool
+
+	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
+	DomainID *[32]byte
+}
 
 // FlowCrossResult contains the result of an offer crossing operation
 type FlowCrossResult struct {
@@ -22,11 +60,24 @@ type FlowCrossResult struct {
 	// Sandbox contains the state changes from the crossing
 	Sandbox *PaymentSandbox
 
-	// RemovableOffers contains offer keys that should be removed
+	// RemovableOffers contains every offer key the crossing groomed away,
+	// including those that merely "became unfunded" or "became tiny" during the
+	// cross. These are erased from the crossing sandbox so the applied book
+	// matches the post-cross state.
 	RemovableOffers map[[32]byte]bool
 
+	// PermRemovableOffers is the subset of RemovableOffers that rippled records
+	// in FlowOfferStream::permToRemove — offers that were already unfunded, tiny,
+	// bad, frozen, out-of-domain, expired, self-crossed, or unauthorized in the
+	// PRISTINE view, independent of this crossing. Only this subset survives a
+	// discarded crossing (a FillOrKill/IoC kill that applies the cancel sandbox),
+	// matching rippled where flowCross erases result.removableOffers (= the perm
+	// set returned by the engine) into psbCancel. Reference: rippled StrandFlow.h
+	// removableOffers = ofrsToRmOnFail = union of strand permToRemove.
+	PermRemovableOffers map[[32]byte]bool
+
 	// Result is the transaction result code
-	Result tx.Result
+	Result ter.Result
 }
 
 // FlowCross executes offer crossing for an OfferCreate transaction.
@@ -47,7 +98,7 @@ type FlowCrossResult struct {
 //   - takerPays: Amount the taker wants to buy (what they'll receive)
 //   - txHash: Current transaction hash for metadata
 //   - ledgerSeq: Current ledger sequence
-//   - passive: If true, only cross offers with STRICTLY better quality
+//   - params: Crossing options and amendment flags (see FlowCrossParams)
 //
 // Returns: FlowCrossResult with the amounts traded and state changes
 func FlowCross(
@@ -56,19 +107,7 @@ func FlowCross(
 	takerGets, takerPays tx.Amount,
 	txHash [32]byte,
 	ledgerSeq uint32,
-	passive bool,
-	sell bool,
-	parentCloseTime uint32,
-	reserveBase, reserveIncrement uint64,
-	fixReducedOffersV1 bool,
-	fixReducedOffersV2 bool,
-	fixRmSmallIncreasedQOffers bool,
-	flowSortStrands bool,
-	fixAMMv1_1 bool,
-	fixAMMv1_2 bool,
-	fixAMMOverflowOffer bool,
-	fix1781 bool,
-	domainID ...*[32]byte,
+	params FlowCrossParams,
 ) FlowCrossResult {
 	// Create sandbox for tracking changes
 	sandbox := NewPaymentSandbox(view)
@@ -86,7 +125,7 @@ func FlowCross(
 	// 3. Limit to available balance
 	//
 	// sendMax = min(takerGets * transferRate, balance)
-	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, reserveBase, reserveIncrement)
+	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
 
 	sendMax := ToEitherAmount(takerGets)
 
@@ -120,13 +159,12 @@ func FlowCross(
 	// For passive offers, increment the quality threshold so we only cross
 	// against offers with STRICTLY better quality (not equal)
 	// Reference: rippled CreateOffer.cpp lines 362-364
-	if passive {
+	if params.Passive {
 		takerQuality = takerQuality.Increment()
 	}
 
 	// Now cap sendMax to available balance (AFTER threshold calculation)
 	// Reference: rippled CreateOffer.cpp lines 367-368
-	// Reference: rippled CreateOffer.cpp line 367-368
 	availableBalance := ToEitherAmount(inStartBalance)
 	if sendMax.Compare(availableBalance) > 0 {
 		sendMax = availableBalance
@@ -137,7 +175,7 @@ func FlowCross(
 	// Reference: rippled CreateOffer.cpp lines 382-401 (after threshold at line 358, after cap at 367)
 	// Note: In FlowCross, takerPays = the deliver currency (what gets delivered to the taker),
 	// so we check takerPays.IsNative() to determine the deliver type (XRP vs IOU).
-	if sell {
+	if params.Sell {
 		if takerPays.IsNative() {
 			// Reference: rippled STAmount::cMaxNative = 9000000000000000000
 			deliver = NewXRPEitherAmount(9000000000000000000)
@@ -166,17 +204,17 @@ func FlowCross(
 
 	strands, strandResult := ToStrands(
 		sandbox,
-		takerAccount, // src (taker)
-		takerAccount, // dst (taker - payment to self)
-		takerPays,    // dstAmt (what we want to receive / deliver to self)
-		&takerGets,   // srcAmt (what we're paying, for issue info)
-		paths,        // explicit paths (XRP bridge for IOU-IOU)
-		true,         // addDefaultPath
-		true,         // offerCrossing - skip trust line checks, create lines on demand
-		fix1781,      // fix1781 - gate XRP endpoint loop detection
+		takerAccount,   // src (taker)
+		takerAccount,   // dst (taker - payment to self)
+		takerPays,      // dstAmt (what we want to receive / deliver to self)
+		&takerGets,     // srcAmt (what we're paying, for issue info)
+		paths,          // explicit paths (XRP bridge for IOU-IOU)
+		true,           // addDefaultPath
+		true,           // offerCrossing - skip trust line checks, create lines on demand
+		params.Fix1781, // fix1781 - gate XRP endpoint loop detection
 	)
 
-	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
+	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
 		// No valid strands - no crossing possible
 		return FlowCrossResult{
 			TakerGot:        zeroCrossAmount(takerPays),
@@ -184,7 +222,7 @@ func FlowCross(
 			TakerPaidNet:    zeroCrossAmount(takerGets),
 			Sandbox:         sandbox,
 			RemovableOffers: nil,
-			Result:          tx.TecPATH_DRY,
+			Result:          ter.TecPATH_DRY,
 		}
 	}
 
@@ -194,8 +232,8 @@ func FlowCross(
 
 	// Initialize AMM liquidity on BookSteps.
 	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
-	configureAMMOnBookSteps(sandbox, strands, ammCtx, parentCloseTime,
-		fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer)
+	configureAMMOnBookSteps(sandbox, strands, ammCtx, params.ParentCloseTime,
+		params.FixAMMv1_1, params.FixAMMv1_2, params.FixAMMOverflowOffer)
 
 	// Set multiPath after strands are built
 	ammCtx.SetMultiPath(len(strands) > 1)
@@ -205,22 +243,31 @@ func FlowCross(
 	// 2. Enable offer crossing mode on DirectSteps (ignores trust line limits/quality,
 	//    allows trust line creation during crossing)
 	// Reference: rippled uses DirectIOfferCrossingStep instead of DirectIPaymentStep
-	configureStrandsForOfferCrossing(strands, &takerQuality, parentCloseTime, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers)
+	configureStrandsForOfferCrossing(strands, &takerQuality, params.ParentCloseTime, params.FixReducedOffersV1, params.FixReducedOffersV2, params.FixRmSmallIncreasedQOffers)
 
 	// For domain offers, set the domain on book steps so crossing uses the domain book directory.
 	// Reference: rippled CreateOffer.cpp flowCross() passes domainID to flow()
-	if len(domainID) > 0 && domainID[0] != nil {
-		setDomainOnBookSteps(strands, domainID[0])
+	if params.DomainID != nil {
+		setDomainOnBookSteps(strands, params.DomainID)
 	}
 
-	// Execute the flow
+	// Execute the flow.
 	// Reference: rippled flowCross passes partialPayment=!(txFlags & tfFillOrKill)
-	// For now, always allow partial (FoK is handled by caller)
-	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, flowSortStrands)
+	// (CreateOffer.cpp:411). With a FillOrKill offer partialPayment is false, so
+	// an under-filled crossing returns tecPATH_PARTIAL and its partial-walk
+	// grooming is discarded (see the apply gate below), leaving removableOffers
+	// out of the applied sandbox on a kill.
+	partialPayment := !params.FillOrKill
+	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands, true,
+		WithFillOrKill(params.FixFillOrKill, params.Sell))
 
-	// Apply the flow sandbox changes to our root sandbox
-	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)
-	if result.Sandbox != nil {
+	// Apply the flow sandbox changes to our root sandbox only on success.
+	// Reference: rippled finishFlow (Flow.cpp:42-45) applies the flow sandbox
+	// solely on tesSUCCESS; a tecPATH_PARTIAL (only produced under
+	// partialPayment=false, i.e. a FillOrKill under-fill) discards the partial
+	// crossing — mirroring CreateOffer.cpp where flowCross then reports the offer
+	// as uncrossed. removableOffers is still returned so the caller can erase it.
+	if result.Result == ter.TesSUCCESS && result.Sandbox != nil {
 		if err := result.Sandbox.Apply(sandbox); err != nil {
 			return FlowCrossResult{
 				TakerGot:        ZeroXRPEitherAmount(),
@@ -228,7 +275,7 @@ func FlowCross(
 				TakerPaidNet:    ZeroXRPEitherAmount(),
 				Sandbox:         sandbox,
 				RemovableOffers: nil,
-				Result:          tx.TefINTERNAL,
+				Result:          ter.TefINTERNAL,
 			}
 		}
 	}
@@ -255,13 +302,24 @@ func FlowCross(
 		}
 	}
 
+	// Collect the perm-removal subset from the executed strands' book steps.
+	// rippled's flow returns only this set as removableOffers (the rest were
+	// deleted in-band in the flow sandbox); we keep the full set for the crossing
+	// sandbox but expose the perm subset so a discarded crossing (FillOrKill/IoC
+	// kill) only re-erases offers rippled would.
+	permRemovable := make(map[[32]byte]bool)
+	for i := range strands {
+		strandPermRemovals(strands[i], permRemovable)
+	}
+
 	return FlowCrossResult{
-		TakerGot:        result.Out,
-		TakerPaid:       takerPaidGross,
-		TakerPaidNet:    takerPaidNet,
-		Sandbox:         sandbox,
-		RemovableOffers: result.RemovableOffers,
-		Result:          result.Result,
+		TakerGot:            result.Out,
+		TakerPaid:           takerPaidGross,
+		TakerPaidNet:        takerPaidNet,
+		Sandbox:             sandbox,
+		RemovableOffers:     result.RemovableOffers,
+		PermRemovableOffers: permRemovable,
+		Result:              result.Result,
 	}
 }
 
@@ -293,6 +351,10 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				if bookStepCount == 1 {
 					bookStep.qualityLimit = qualityLimit
 				}
+				// crossLimit (rippled qualityThreshold_) is set on EVERY crossing
+				// step, including autobridge legs, and drives AMM-offer threshold
+				// selection in tipQualityThreshold.
+				bookStep.crossLimit = qualityLimit
 				bookStep.parentCloseTime = parentCloseTime
 				bookStep.fixReducedOffersV1 = fixReducedOffersV1
 				bookStep.fixReducedOffersV2 = fixReducedOffersV2
@@ -303,6 +365,10 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				// recipient's amount.
 				// Reference: rippled BookOfferCrossingStep: ownerPaysTransferFee_ = true
 				bookStep.ownerPaysTransferFee = true
+				// offerCrossing selects the BookOfferCrossingStep semantics, independent of
+				// ownerPaysTransferFee. Reference: rippled make_BookStepHelper dispatches on
+				// ctx.offerCrossing, while ownerPaysTransferFee_ is a separate StrandContext field.
+				bookStep.offerCrossing = true
 			}
 			if directStep, ok := step.(*DirectStepI); ok {
 				directStep.offerCrossing = true
@@ -340,21 +406,6 @@ func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
 		return QualityOne
 	}
 	return account.TransferRate
-}
-
-// GetTransferRateByAddress returns the transfer rate for an issuer given its address string.
-// This is a convenience wrapper around GetTransferRate.
-func GetTransferRateByAddress(view tx.LedgerView, issuerAddress string) uint32 {
-	if issuerAddress == "" {
-		return QualityOne
-	}
-
-	issuerID, err := state.DecodeAccountID(issuerAddress)
-	if err != nil {
-		return QualityOne
-	}
-
-	return GetTransferRate(view, issuerID)
 }
 
 // AccountFundsInSandbox returns account funds with BalanceHook applied.

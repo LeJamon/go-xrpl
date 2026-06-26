@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -22,97 +23,62 @@ type DelegateData struct {
 // Extracts Account, Authorize, OwnerNode, and the Permissions array.
 // Reference: rippled DelegateUtils.cpp — sfPermissions array with sfPermissionValue fields
 func ParseDelegate(data []byte) (*DelegateData, error) {
-	hexStr := hex.EncodeToString(data)
-	decoded, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode Delegate: %w", err)
-	}
-
 	entry := &DelegateData{}
 
-	// Parse Account
-	if account, ok := decoded["Account"].(string); ok {
-		accountID, err := DecodeAccountID(account)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Account: %w", err)
-		}
-		entry.Account = accountID
-	}
-
-	// Parse Authorize
-	if authorize, ok := decoded["Authorize"].(string); ok {
-		authorizeID, err := DecodeAccountID(authorize)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Authorize: %w", err)
-		}
-		entry.Authorize = authorizeID
-	}
-
-	// Parse OwnerNode
-	if ownerNode, ok := decoded["OwnerNode"].(string); ok {
-		entry.OwnerNode = parseUint64Hex(ownerNode)
-	}
-
-	// Parse Permissions array
-	// The binary codec decodes this as:
-	//   [{"Permission": {"PermissionValue": <string_or_uint32>}}, ...]
-	// PermissionValue.ToJSON() returns a string name if known, or a uint32.
-	if perms, ok := decoded["Permissions"]; ok {
-		if permsArray, ok := perms.([]interface{}); ok {
-			for _, permWrapper := range permsArray {
-				permMap, ok := permWrapper.(map[string]interface{})
-				if !ok {
-					continue
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				entry.OwnerNode = f.UInt64()
+			}
+		case stAccountID:
+			switch f.FieldCode {
+			case 1: // Account
+				if id, ok := f.AccountID(); ok {
+					entry.Account = id
 				}
-				// Unwrap the "Permission" wrapper
-				var innerMap map[string]interface{}
-				if inner, ok := permMap["Permission"]; ok {
-					innerMap, _ = inner.(map[string]interface{})
-				} else {
-					innerMap = permMap
-				}
-				if innerMap == nil {
-					continue
-				}
-				// Extract PermissionValue
-				if pv, ok := innerMap["PermissionValue"]; ok {
-					permValue := parsePermissionValue(pv)
-					if permValue > 0 {
-						entry.Permissions = append(entry.Permissions, permValue)
-					}
+			case 5: // Authorize
+				if id, ok := f.AccountID(); ok {
+					entry.Authorize = id
 				}
 			}
+		case stArray:
+			if f.FieldCode == 29 { // Permissions
+				perms, err := parseDelegatePermissions(f.Value)
+				if err != nil {
+					return err
+				}
+				entry.Permissions = perms
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode Delegate: %w", err)
 	}
 
 	return entry, nil
 }
 
-// parsePermissionValue converts a decoded PermissionValue to uint32.
-// The binary codec may return:
-// - A string name (e.g., "Payment") which needs to be looked up
-// - A uint32/float64/int numeric value
-func parsePermissionValue(v interface{}) uint32 {
-	switch val := v.(type) {
-	case string:
-		// Look up the string name in the delegatable permissions map.
-		// The definitions package maps "Payment" -> 1, etc.
-		pv, err := definitions.Get().GetDelegatablePermissionValueByName(val)
-		if err == nil {
-			return uint32(pv)
+// parseDelegatePermissions decodes the Permissions STArray content; each element
+// is a Permission STObject carrying a UInt32 PermissionValue. Zero values are
+// skipped.
+func parseDelegatePermissions(content []byte) ([]uint32, error) {
+	var perms []uint32
+	err := WalkFields(content, func(elem Field) error {
+		if elem.TypeCode != stObject || elem.FieldCode != 15 { // Permission
+			return nil
 		}
-		return 0
-	case float64:
-		return uint32(val)
-	case int:
-		return uint32(val)
-	case uint32:
-		return val
-	case int32:
-		return uint32(val)
-	default:
-		return 0
-	}
+		return WalkFields(elem.Value, func(inner Field) error {
+			if inner.TypeCode == stUInt32 && inner.FieldCode == 52 { // PermissionValue
+				if v := inner.UInt32(); v > 0 {
+					perms = append(perms, v)
+				}
+			}
+			return nil
+		})
+	})
+	return perms, err
 }
 
 // SerializeDelegate serializes a Delegate ledger entry.
@@ -159,12 +125,7 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 // Reference: rippled DelegateUtils.cpp checkTxPermission()
 func (d *DelegateData) HasTxPermission(txType uint32) bool {
 	txPermission := txType + 1
-	for _, pv := range d.Permissions {
-		if pv == txPermission {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.Permissions, txPermission)
 }
 
 // LookupPermissionValue converts a permission name (e.g., "Payment") to its

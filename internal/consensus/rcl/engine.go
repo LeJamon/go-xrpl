@@ -117,6 +117,20 @@ type Engine struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// now is the wall-clock source for round/phase DURATION metrics
+	// (StartTime, roundStartTime and their elapsed-time consumers).
+	// Defaults to time.Now; the csf simulation framework injects a
+	// virtual clock so the state machine can be driven deterministically
+	// without real time. Distinct from adaptor.Now() (the offset-adjusted
+	// network clock) — see startRoundLocked for why durations need a
+	// single consistent clock.
+	now func() time.Time
+
+	// manualTick, when set, makes Start skip the internal heartbeat
+	// goroutine so an external driver (csf's discrete-event scheduler)
+	// can advance the state machine synchronously via TimerEntry.
+	manualTick bool
+
 	// Close time consensus
 	haveCloseTimeConsensus  bool
 	closeTimeAvalancheState avalancheState
@@ -149,6 +163,20 @@ type Engine struct {
 	// wrongLedgerID tracks the ledger we're trying to acquire
 	// while in ModeWrongLedger. Prevents spamming handleWrongLedger.
 	wrongLedgerID consensus.LedgerID
+
+	// wrongLedgerAcquireFailures counts how many times an inbound acquisition
+	// of wrongLedgerID has failed cleanly (retry budget exhausted). Once it
+	// reaches wrongLedgerAcquireMaxFailures the engine drops to a degraded
+	// resync rather than staying frozen on an unacquirable ledger.
+	wrongLedgerAcquireFailures int
+
+	// degradedResyncUntil, when in the future, suppresses re-pinning
+	// ModeWrongLedger after a degraded-resync drop so the node keeps closing
+	// ledgers (observer-mode advancement) — and feeding the stall watchdog's
+	// ledger heartbeat — while it retries acquisition (issue #985 part C). The
+	// suppression is engine-global: while the window is open every wrongLedger
+	// pin is skipped, not just one for the hash that degraded.
+	degradedResyncUntil time.Time
 
 	// lastSignTime is the monotonic floor for emitted validation
 	// SignTime. If the adaptor clock regresses (NTP step, leap-second
@@ -210,6 +238,12 @@ type Engine struct {
 	// the consumer can't keep up; this counter surfaces that pressure
 	// so stalls don't hide. Read via MissedHeartbeats().
 	missedHeartbeats atomic.Uint64
+
+	// stallPing, when set, is called once per run-loop iteration so the
+	// out-of-band stall watchdog can observe that this loop is still
+	// servicing its heartbeat. Carried via an atomic pointer so the run
+	// goroutine reads it lock-free; nil disables the ping.
+	stallPing atomic.Pointer[func()]
 
 	// deferBroadcasts is incremented on entry to timerEntry / StartRound
 	// (the entry points that drive proposal/validation emission under
@@ -333,10 +367,29 @@ const (
 // (Validations.h:79).
 const validationSetExpires = 10 * time.Minute
 
+// defaultInMemoryLedgers bounds the validation tracker's retention when
+// no on-disk archive is configured. Without it, ExpireOld never runs and
+// the per-ledger validation maps grow for the process lifetime. Matches
+// the archive's own default window (config.ValidationArchive default
+// in_memory_ledgers) so behavior is identical with or without the
+// archive wired — the archive only adds persistence, not a different
+// retention horizon.
+const defaultInMemoryLedgers = uint32(256)
+
 // Config holds RCL engine configuration.
 type Config struct {
 	Timing     consensus.Timing
 	Thresholds consensus.Thresholds
+
+	// Clock overrides the wall-clock source for round/phase duration
+	// metrics. Nil means time.Now (production behavior, byte-identical).
+	// The csf simulation framework injects a virtual clock tied to its
+	// scheduler so consensus runs deterministically.
+	Clock func() time.Time
+
+	// ManualTick disables the internal heartbeat goroutine; the caller
+	// drives the state machine via TimerEntry instead. Used by csf.
+	ManualTick bool
 }
 
 // DefaultConfig returns the default RCL configuration.
@@ -364,9 +417,23 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		parms:           consensus.DefaultConsensusParms(),
 		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
 		deadNodes:       make(map[consensus.NodeID]struct{}),
+		now:             config.Clock,
+		manualTick:      config.ManualTick,
+	}
+	if e.now == nil {
+		e.now = time.Now
 	}
 	e.modeAtomic.Store(int32(e.mode))
 	return e
+}
+
+// TimerEntry runs one heartbeat dispatch synchronously — the phase-work
+// the internal goroutine would otherwise drive each ledgerGRANULARITY.
+// Intended for ManualTick mode: an external driver (csf's scheduler)
+// advances the state machine deterministically. Mirrors rippled's
+// Consensus::timerEntry.
+func (e *Engine) TimerEntry() {
+	e.timerEntry()
 }
 
 // SetArchive wires an on-disk validation archive into the engine. May
@@ -410,6 +477,18 @@ func (e *Engine) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
 	if e.validationTracker != nil {
 		e.validationTracker.SetLedgerAncestryProvider(p)
 	}
+}
+
+// SetStallPing installs the out-of-band stall watchdog's heartbeat callback,
+// invoked once per run-loop iteration. Safe before or after Start; nil disables
+// it. The callback must be cheap and non-blocking — it runs inside the
+// consensus loop.
+func (e *Engine) SetStallPing(ping func()) {
+	if ping == nil {
+		e.stallPing.Store(nil)
+		return
+	}
+	e.stallPing.Store(&ping)
 }
 
 // Start begins the consensus engine.
@@ -469,17 +548,28 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 		// Drive the in-memory retention window. ExpireOld fires the
 		// onStale callback for each evicted validation, so the archive
-		// captures it before the tracker drops it. ExpireOld takes
-		// vt.mu but does NOT touch e.mu, so calling it from inside
+		// (when wired) captures it before the tracker drops it. ExpireOld
+		// takes vt.mu but does NOT touch e.mu, so calling it from inside
 		// a held e.mu write lock does not deadlock.
-		if inMem > 0 && seq > inMem {
-			tracker.ExpireOld(seq - inMem)
+		//
+		// Retention runs regardless of the archive: a node with no
+		// relational DB / disabled [validation_archive] still needs the
+		// per-ledger maps bounded. The archive's InMemoryLedgers override
+		// retention when set; otherwise fall back to defaultInMemoryLedgers.
+		retention := inMem
+		if retention == 0 {
+			retention = defaultInMemoryLedgers
+		}
+		if seq > retention {
+			tracker.ExpireOld(seq - retention)
 		}
 	})
 
-	// Start the main loop
-	e.wg.Add(1)
-	go e.run()
+	// Start the main loop, unless an external driver advances ticks.
+	if !e.manualTick {
+		e.wg.Add(1)
+		go e.run()
+	}
 
 	return nil
 }
@@ -549,12 +639,12 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	}
 
 	// Initialize round state.
-	// StartTime must be wall-clock (time.Now) because shouldCloseLedger
-	// reads it via time.Since at engine.go:873 — same class of bug as the
-	// roundStartTime fix below, and the same rationale applies. PhaseStart
-	// stays on adaptor.Now because its consumer (checkConvergence) reads
-	// it via adaptor.Now().Sub(), which keeps the offset-adjusted pair
-	// balanced.
+	// StartTime uses e.now() (wall-clock in production, virtual under csf)
+	// because its consumers measure elapsed time via e.now().Sub() — both
+	// ends share one clock so the difference stays meaningful, the same
+	// rationale as the roundStartTime capture below. PhaseStart stays on
+	// adaptor.Now because its consumer (checkConvergence) reads it via
+	// adaptor.Now().Sub(), which keeps the offset-adjusted pair balanced.
 	e.state = &consensus.RoundState{
 		Round:          round,
 		Mode:           e.mode,
@@ -562,7 +652,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		Proposals:      make(map[consensus.NodeID]*consensus.Proposal),
 		Disputed:       make(map[consensus.TxID]*consensus.DisputedTx),
 		CloseTimes:     consensus.CloseTimes{Peers: make(map[time.Time]int)},
-		StartTime:      time.Now(),
+		StartTime:      e.now(),
 		PhaseStart:     e.adaptor.Now(),
 		HaveCorrectLCL: true,
 	}
@@ -585,16 +675,16 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	e.currentRoundTime = 0
 	e.haveCloseTimeConsensus = false
 	e.closeTimeAvalancheState = avalancheInit
-	// Internal duration metric — use the wall clock. Do NOT use
-	// adaptor.Now() here: adaptor.Now returns time.Now().Add(closeOffset),
-	// where closeOffset drifts as AdjustCloseTime pulls us toward the
-	// network's average close time. The consumers of roundStartTime
-	// measure elapsed wall time via time.Since (prevRoundTime,
-	// phaseEstablish timeout, convergePercent weighting). Mixing
-	// offset-adjusted captures with wall-clock-subtracted reads
-	// produces -closeOffset as the measured duration — exactly the
-	// negative-converge-time artifact visible in server_info.last_close.
-	e.roundStartTime = time.Now()
+	// Internal duration metric — use e.now(), NOT adaptor.Now():
+	// adaptor.Now returns time.Now().Add(closeOffset), where closeOffset
+	// drifts as AdjustCloseTime pulls us toward the network's average
+	// close time. The consumers of roundStartTime measure elapsed time via
+	// e.now().Sub() (prevRoundTime, phaseEstablish timeout, convergePercent
+	// weighting); pairing both ends on e.now() keeps the measurement
+	// consistent. Mixing an offset-adjusted capture with an e.now()-based
+	// read would produce -closeOffset as the measured duration — exactly
+	// the negative-converge-time artifact visible in server_info.last_close.
+	e.roundStartTime = e.now()
 
 	// Set phase
 	e.setPhase(consensus.PhaseOpen)
@@ -721,19 +811,35 @@ func (e *Engine) driveNegativeUNLNewValidatorsLocked() {
 // Passed through to RelayProposal so we can exclude the originator from
 // the gossip forward.
 func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Verify signature first (before buffering).
+	// Verify the signature before taking e.mu. secp256k1 verification is a
+	// pure function of the message; running it under the engine write lock
+	// serializes gossip-rate verifies behind timerEntry and round driving.
+	// Mirrors rippled verifying in the PeerImp job queue (jtPROPOSAL_t)
+	// before the consensus mutex.
 	if err := e.adaptor.VerifyProposal(proposal); err != nil {
 		return fmt.Errorf("invalid proposal signature: %w", err)
 	}
 
-	// Always buffer proposals for future playback, even between rounds.
-	// Matches rippled's recentPeerPositions_ (Consensus.h:754): cap at
-	// 10 positions per node. The earlier 5-entry cap drifted from
-	// rippled's value and would truncate a trusted validator's
-	// cross-round trail under sustained gossip.
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Drop untrusted proposals outright. rippled never feeds untrusted
+	// proposals to the consensus object — checkPropose calls
+	// processTrustedProposal only when isTrusted, for every value of
+	// RELAY_UNTRUSTED_PROPOSALS (which gates relay, not processing, and
+	// defaults to 0) — so recentPeerPositions_ stays bounded by UNL size.
+	// Buffering them here would let a peer minting throwaway keypairs grow
+	// recentProposals and e.proposals without bound — one entry per key,
+	// never pruned — and feed phantom proposers into the convergence counts.
+	if !e.adaptor.IsTrusted(proposal.NodeID) {
+		return nil
+	}
+
+	// Buffer proposals for future playback, even between rounds. Matches
+	// rippled's recentPeerPositions_ (Consensus.h:754): cap at 10 positions
+	// per node. The earlier 5-entry cap drifted from rippled's value and
+	// would truncate a trusted validator's cross-round trail under
+	// sustained gossip.
 	positions := e.recentProposals[proposal.NodeID]
 	if len(positions) >= 10 {
 		positions = positions[1:] // drop oldest
@@ -783,9 +889,6 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		return nil
 	}
 
-	// Check if from trusted validator
-	trusted := e.adaptor.IsTrusted(proposal.NodeID)
-
 	// Store proposal
 	existing, exists := e.proposals[proposal.NodeID]
 	if !exists || proposal.Position > existing.Position {
@@ -794,25 +897,20 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 
 	// Record close time only from initial proposals (Position == 0),
 	// matching rippled's rawCloseTimes_.peers tracking (Consensus.h:825-830).
-	if proposal.Position == 0 && trusted {
+	if proposal.Position == 0 {
 		e.state.CloseTimes.Peers[proposal.CloseTime]++
 	}
 
 	// Emit event
 	e.eventBus.Publish(&consensus.ProposalReceivedEvent{
 		Proposal:  proposal,
-		Trusted:   trusted,
+		Trusted:   true,
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Relay to other peers, excluding the originating peer. Untrusted
-	// proposals are not relayed to limit gossip amplification of spam —
-	// matches rippled's relay-only-trusted heuristic.
-	if trusted {
-		e.adaptor.RelayProposal(proposal, originPeer)
-	}
+	e.adaptor.RelayProposal(proposal, originPeer)
 
-	if trusted {
+	{
 		var ourTxSet consensus.TxSetID
 		ourTxLen := -1
 		if e.ourTxSet != nil {
@@ -882,32 +980,56 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 // Passed through to RelayValidation so we can exclude the originator
 // from the gossip forward.
 func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint64) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Verify signature
+	// Verify the signature before taking e.mu — see OnProposal. Mirrors
+	// rippled verifying in the PeerImp job queue (jtVALIDATION_t) before
+	// the consensus mutex.
 	if err := e.adaptor.VerifyValidation(validation); err != nil {
 		return fmt.Errorf("invalid validation signature: %w", err)
 	}
 
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	// Check if from trusted validator
 	trusted := e.adaptor.IsTrusted(validation.NodeID)
 
-	// Store validation. Also cap to trusted-only to bound memory under
-	// adversarial validator spam — an untrusted key can send us
-	// arbitrary validations and the map would grow unbounded.
+	// Same-seq Byzantine detection (Validations.h:637-681): a trusted
+	// validator must not sign two different ledgers — or re-sign the same
+	// ledger at a different time / with a different cookie — for one
+	// sequence. Compare against the tracker's latest tip for this node
+	// (advanced strictly by seq) before it is overwritten. On conflict,
+	// mirror rippled (RCLValidations.cpp:214-247, NetworkOPs.cpp:2625-2627,
+	// PeerImp.cpp:3022-3064): keep it out of quorum/trie (don't store or
+	// count it) but STILL relay it — rippled "especially wants to forward
+	// such validations, so that our peers will also observe them" — and
+	// charge nobody for delivering it. The returned error only tells the
+	// router this was not a normal accept (skip the catch-up acquire); it
+	// is not grounds to penalise the innocent relaying peer.
+	if trusted && e.validationTracker != nil {
+		if reason, conflict := validationConflict(
+			e.validationTracker.GetLatestValidation(validation.NodeID),
+			validation,
+		); conflict {
+			e.adaptor.RelayValidation(validation, originPeer)
+			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: reason}
+		}
+	}
+
+	// Store validation. Trusted-only to bound memory under adversarial
+	// validator spam — an untrusted key can send us arbitrary validations
+	// and the map would grow unbounded.
 	if trusted {
 		e.validations[validation.NodeID] = validation
 	}
 
 	// Feed into the tracker — this is the gate that advances
-	// server_info.validated_ledger once quorum of trusted validations
-	// accumulates for a given ledger. Trust-gate here as well: the
-	// tracker filters by trusted at quorum-count time, but without
-	// this gate a byNode entry gets created for every untrusted
-	// validator the network gossips, wasting memory on keys that
-	// can never contribute to quorum. Rippled's LedgerMaster.cpp:886
-	// filters on both Full and trusted before Add.
+	// server_info.validated_ledger once a quorum of trusted FULL
+	// validations accumulates for a given ledger. Trusted partials are
+	// tracked too (they steer the trie) but excluded from the quorum count
+	// by the Full filter in countTrustedExcludingNegUNLLocked. Trust-gate
+	// here as well: without it a byNode entry gets created for every
+	// untrusted validator the network gossips, wasting memory on keys that
+	// can never contribute to quorum.
 	if trusted && e.validationTracker != nil {
 		e.validationTracker.Add(validation)
 	}
@@ -928,6 +1050,40 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	}
 
 	return nil
+}
+
+// validationConflict classifies a newly-arrived validation against the
+// most recent one tracked for the same node. It returns a non-empty
+// reason and conflict=true only when the two share a sequence number but
+// disagree, mirroring rippled's Validations::add Byzantine checks
+// (Validations.h:659-678):
+//   - different ledger ID, or same ledger with a different sign time →
+//     "conflicting" (a double-sign — misconfiguration or Byzantine);
+//   - same ledger and sign time but a different cookie → "multiple"
+//     (probably accidental misconfiguration).
+//
+// A nil prev, a different sequence, or a byte-identical resend is not a
+// conflict. Detection covers the node's latest sequence only — go-xrpl
+// keeps one tip per node rather than rippled's full bySequence_ index —
+// which is the advancing frontier that matters for fork detection.
+// rippled's bySequence_ additionally catches a conflicting resend at an
+// earlier, already-passed sequence (until validationSET_EXPIRES); we do
+// not, but such a stale-tip conflict can no longer affect quorum or
+// steering, so the only loss is the log line.
+func validationConflict(prev, v *consensus.Validation) (string, bool) {
+	if prev == nil || prev.LedgerSeq != v.LedgerSeq {
+		return "", false
+	}
+	if prev.LedgerID != v.LedgerID {
+		return "conflicting", true
+	}
+	if !prev.SignTime.Equal(v.SignTime) {
+		return "conflicting", true
+	}
+	if prev.Cookie != v.Cookie {
+		return "multiple", true
+	}
+	return "", false
 }
 
 // OnTxSet handles receiving a transaction set we requested.
@@ -1101,6 +1257,8 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 			slog.Info("Acquired missing ledger, restarting round",
 				"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
 			e.prevLedger = l
+			e.wrongLedgerID = consensus.LedgerID{}
+			e.wrongLedgerAcquireFailures = 0
 			if e.state != nil {
 				e.state.HaveCorrectLCL = true
 			}
@@ -1166,6 +1324,16 @@ func (e *Engine) Phase() consensus.Phase {
 // hot path while ledger.service.s.mu is held — see modeAtomic.
 func (e *Engine) IsProposing() bool {
 	return consensus.Mode(e.modeAtomic.Load()) == consensus.ModeProposing
+}
+
+// IsValidating reports whether the node is issuing validations this round:
+// configured as a validator and synced to OpModeFull (not merely configured),
+// mirroring rippled's dynamic Consensus::validating() flag. Safe on the
+// server_info hot path while ledger.service.s.mu is held — IsValidator reads
+// immutable construction state and GetOperatingMode the operating-mode mirror.
+func (e *Engine) IsValidating() bool {
+	return e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull
 }
 
 // Timing returns the consensus timing parameters.
@@ -1293,11 +1461,8 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 	}
 
 	// validating mirrors rippled's dynamic validating_ flag
-	// (RCLConsensus.cpp:937 → adaptor_.validating()), which is true only
-	// when the node is actually able to validate this round — synced
-	// (OpModeFull) and configured as a validator — not merely configured.
-	ret["validating"] = e.adaptor.IsValidator() &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull
+	// (RCLConsensus.cpp:937 → adaptor_.validating()).
+	ret["validating"] = e.IsValidating()
 	return ret
 }
 
@@ -1452,6 +1617,9 @@ func (e *Engine) run() {
 		case <-e.ctx.Done():
 			return
 		case <-e.heartbeat.C:
+			if ping := e.stallPing.Load(); ping != nil {
+				(*ping)()
+			}
 			now := time.Now()
 			if gap := now.Sub(last); gap > 2*interval {
 				missed := int64(gap/interval) - 1
@@ -1934,6 +2102,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		)
 		e.prevLedger = newLedger
 		e.wrongLedgerID = consensus.LedgerID{}
+		e.wrongLedgerAcquireFailures = 0
 		if e.state != nil {
 			e.state.HaveCorrectLCL = true
 		}
@@ -1945,7 +2114,22 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 			e.adaptor.GetOperatingMode() == consensus.OpModeFull
 		e.startRoundLocked(nextRound, proposing, true)
 	} else {
-		// Not found — enter wrong ledger mode and request from peers
+		// Not found — request from peers. While inside the degraded-resync
+		// cooldown (a recent acquisition of this ledger exhausted its retry
+		// budget, issue #985 part C), stay in the current advancing mode rather
+		// than re-pinning ModeWrongLedger: a pinned node closes no ledgers, so
+		// it would starve the stall watchdog's ledger heartbeat into a fatal
+		// os.Exit. Observer-mode advancement keeps ledgers closing while we
+		// keep retrying acquisition.
+		e.adaptor.RequestLedger(netLedgerID)
+		if e.adaptor.Now().Before(e.degradedResyncUntil) {
+			slog.Info("Retrying network ledger in degraded resync",
+				"t", "consensus",
+				"event", "wrong-lcl-degraded-retry",
+				"hash", fmt.Sprintf("%x", netLedgerID[:8]),
+			)
+			return
+		}
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
 			"t", "consensus",
 			"event", "wrong-lcl",
@@ -1956,7 +2140,69 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		}
 		e.wrongLedgerID = netLedgerID
 		e.setMode(consensus.ModeWrongLedger)
-		e.adaptor.RequestLedger(netLedgerID)
+	}
+}
+
+// wrongLedgerAcquireMaxFailures bounds how many clean acquisition failures of
+// the pinned wrongLedger are tolerated before the engine drops to a degraded
+// resync, and degradedResyncCooldown is how long it then stays unpinned and
+// advancing before allowing a fresh wrongLedger pin.
+const (
+	wrongLedgerAcquireMaxFailures = 3
+	degradedResyncCooldown        = 20 * time.Second
+)
+
+// OnLedgerAcquireFailed reports that an inbound acquisition of id failed cleanly
+// after exhausting its retry budget. If the engine is pinned in wrongLedger
+// mode on id it must not stay frozen — a frozen wrongLedger closes no ledgers,
+// eventually tripping the stall watchdog into a fatal os.Exit. Each failure
+// short of wrongLedgerAcquireMaxFailures simply un-pins so checkLedger
+// re-resolves the (possibly advanced) network ledger and re-issues the
+// acquisition with a fresh peer set / by-hash escalation; reaching that limit
+// drops the node to a degraded observing/tracking
+// resync so ledger closes resume while recovery keeps being attempted.
+func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.mode != consensus.ModeWrongLedger || e.wrongLedgerID != id {
+		return
+	}
+
+	e.wrongLedgerAcquireFailures++
+	// Un-pin so the next checkLedger re-resolves and re-requests instead of
+	// returning early on the stale pin forever.
+	e.wrongLedgerID = consensus.LedgerID{}
+
+	if e.wrongLedgerAcquireFailures < wrongLedgerAcquireMaxFailures {
+		slog.Warn("wrongLedger acquisition failed; will re-attempt",
+			"t", "consensus",
+			"event", "wrong-lcl-retry",
+			"hash", fmt.Sprintf("%x", id[:8]),
+			"failures", e.wrongLedgerAcquireFailures,
+		)
+		return
+	}
+
+	// Persistent failure: the validated ledger is unacquirable from any peer.
+	// Drop to a degraded resync. ModeObserving lets rounds advance (observer-mode
+	// advancement), so ledger closes — and the watchdog ledger heartbeat — resume
+	// while checkLedger keeps retrying recovery each round; demote OpModeFull so
+	// we stop asserting we are fully synced.
+	slog.Warn("wrongLedger ledger unacquirable; dropping to degraded resync",
+		"t", "consensus",
+		"event", "wrong-lcl-degraded",
+		"hash", fmt.Sprintf("%x", id[:8]),
+		"failures", e.wrongLedgerAcquireFailures,
+	)
+	e.wrongLedgerAcquireFailures = 0
+	e.degradedResyncUntil = e.adaptor.Now().Add(degradedResyncCooldown)
+	if e.state != nil {
+		e.state.HaveCorrectLCL = false
+	}
+	e.setMode(consensus.ModeObserving)
+	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
+		e.adaptor.SetOperatingMode(consensus.OpModeTracking)
 	}
 }
 
@@ -2026,7 +2272,7 @@ func (e *Engine) shouldCloseLedger() bool {
 	if e.prevLedger == nil {
 		return false
 	}
-	openTime := time.Since(e.state.StartTime)
+	openTime := e.now().Sub(e.state.StartTime)
 	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
 
 	// Sanity check: if timeSincePrevClose or prevRoundTime are unreasonable,
@@ -2218,7 +2464,7 @@ func (e *Engine) closeLedger() {
 	// phase — mirrors rippled's result_->roundTime.reset(clock_.now()) in
 	// Consensus.h:1446, placed before propose/createDisputes. Wall-clock
 	// rationale at line 571 still applies.
-	e.roundStartTime = time.Now()
+	e.roundStartTime = e.now()
 
 	// If proposing, create and broadcast our proposal
 	if e.mode == consensus.ModeProposing {
@@ -2289,7 +2535,7 @@ func (e *Engine) closeLedger() {
 // (Consensus.h:1366-1430).
 // Caller must hold e.mu.
 func (e *Engine) phaseEstablish() {
-	roundTime := time.Since(e.roundStartTime)
+	roundTime := e.now().Sub(e.roundStartTime)
 
 	// Snapshot round time and convergence percent each tick, before the
 	// pause/accept checks, mirroring rippled's phaseEstablish which stores
@@ -2678,7 +2924,7 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
-	roundTime := time.Since(e.roundStartTime)
+	roundTime := e.now().Sub(e.roundStartTime)
 	agree, disagree := e.countAgreement()
 	total := agree + disagree
 
@@ -3224,7 +3470,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// StartTime is wall-clock (see startRoundLocked); use time.Since
 		// to keep the pair balanced rather than mixing offset-adjusted
 		// adaptor.Now() against it.
-		Duration:  time.Since(e.state.StartTime),
+		Duration:  e.now().Sub(e.state.StartTime),
 		Timestamp: e.adaptor.Now(),
 	})
 
@@ -3312,7 +3558,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// in e.prevRoundTime (which is updated below). Mirrors rippled
 	// RCLConsensus.cpp:803-805 where roundTime is the local
 	// wall-clock measurement passed inline to processClosedLedger.
-	roundTime := time.Since(e.roundStartTime)
+	roundTime := e.now().Sub(e.roundStartTime)
 
 	// Notify adaptor
 	e.adaptor.OnConsensusReached(newLedger, validations, roundTime)
@@ -3540,12 +3786,9 @@ func summarizeCloseTimeVotes(votes map[time.Time]int) string {
 	for t, c := range votes {
 		all = append(all, kv{ct: t.Unix() - protocol.RippleEpochUnix, count: c})
 	}
-	limit := len(all)
-	if limit > 8 {
-		limit = 8
-	}
+	limit := min(len(all), 8)
 	var b strings.Builder
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
@@ -3601,11 +3844,8 @@ func (e *Engine) getCloseTimeNeededWeight() int {
 // as a percentage of the previous round time (min 5s).
 // Matches rippled's convergePercent_ calculation.
 func (e *Engine) convergePercent() int {
-	elapsed := time.Since(e.roundStartTime)
-	prevRound := e.prevRoundTime
-	if prevRound < avMinConsensusTime {
-		prevRound = avMinConsensusTime
-	}
+	elapsed := e.now().Sub(e.roundStartTime)
+	prevRound := max(e.prevRoundTime, avMinConsensusTime)
 	return int(elapsed * 100 / prevRound)
 }
 
@@ -3873,13 +4113,14 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 	e.enqueueValidationBroadcastLocked(validation)
 
-	// Feed our own validation into the tracker. Only Full validations
-	// are accepted by the tracker's Full-gate, so a partial
-	// switchedLedger emission is automatically excluded from our own
-	// quorum view — matching rippled's behavior where switchedLedger
-	// partials don't count toward local checkAccept. In a
-	// 1-validator standalone setup the Full path crosses the
-	// threshold immediately and fires OnLedgerFullyValidated.
+	// Feed our own validation into the tracker. A partial
+	// switchedLedger/observing emission is tracked (it steers our own
+	// trie view) but excluded from the quorum count by the Full filter
+	// in countTrustedExcludingNegUNLLocked — matching rippled, where
+	// switchedLedger partials don't count toward local checkAccept. In a
+	// 1-validator standalone setup we are always proposing, so the Full
+	// path crosses the threshold immediately and fires
+	// OnLedgerFullyValidated.
 	if e.validationTracker != nil {
 		e.validationTracker.Add(validation)
 	}

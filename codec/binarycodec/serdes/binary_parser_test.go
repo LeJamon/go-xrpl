@@ -1,13 +1,9 @@
 package serdes
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,6 +52,17 @@ func TestBinaryParser_ReadVariableLength(t *testing.T) {
 			name:   "pass - length > 240 & length < 255",
 			input:  []byte{242, 112, 78, 95, 115},
 			output: 106767,
+		},
+		{
+			name:        "fail - reserved lead byte 0xFF",
+			input:       []byte{0xFF, 0x01, 0x02},
+			output:      0,
+			expectedErr: ErrInvalidVLPrefix,
+		},
+		{
+			name:   "pass - lead byte 254 (max 3-byte prefix)",
+			input:  []byte{254, 0, 0},
+			output: 12481 + 13*65536,
 		},
 	}
 
@@ -305,90 +312,58 @@ func TestBinaryParser_ReadFieldHeader(t *testing.T) {
 }
 
 func TestBinaryParser_ReadField(t *testing.T) {
+	flags, err := definitions.Get().GetFieldInstanceByFieldName("Flags")
+	require.NoError(t, err)
+
 	testcases := []struct {
 		name        string
 		input       []byte
-		malleate    func() interfaces.Definitions
 		expected    *definitions.FieldInstance
 		expectedErr error
 	}{
 		{
-			name:  "fail - no more bytes",
-			input: []byte{},
-			malleate: func() interfaces.Definitions {
-				return definitions.Get()
-			},
+			name:        "fail - no more bytes",
+			input:       []byte{},
 			expected:    nil,
 			expectedErr: ErrParserOutOfBound,
 		},
 		{
-			name:  "fail - invalid typecode",
-			input: []byte{0, 0},
-			malleate: func() interfaces.Definitions {
-				return definitions.Get()
-			},
+			name:        "fail - invalid typecode",
+			input:       []byte{0, 0},
 			expected:    nil,
 			expectedErr: ErrInvalidTypecode,
 		},
 		{
-			name:  "fail - invalid fieldcode",
-			input: []byte{0, 16},
-			malleate: func() interfaces.Definitions {
-				return definitions.Get()
-			},
+			name:        "fail - invalid fieldcode",
+			input:       []byte{0, 16},
 			expected:    nil,
 			expectedErr: ErrInvalidFieldcode,
 		},
 		{
-			name:  "fail - field not found",
-			input: []byte{30},
-			malleate: func() interfaces.Definitions {
-				defs := testutil.NewMockDefinitions(gomock.NewController(t))
-				defs.EXPECT().GetFieldNameByFieldHeader(gomock.Any()).AnyTimes().Return("", errors.New("field not found"))
-				return defs
-			},
+			name: "fail - field not found",
+			// Structurally valid 3-byte header (TypeCode 200, FieldCode 200)
+			// with no matching field definition.
+			input:       []byte{0, 200, 200},
 			expected:    nil,
-			expectedErr: errors.New("field not found"),
+			expectedErr: &definitions.NotFoundErrorFieldHeader{},
 		},
 		{
-			name:  "fail - field instance not found",
-			input: []byte{30},
-			malleate: func() interfaces.Definitions {
-				defs := testutil.NewMockDefinitions(gomock.NewController(t))
-				defs.EXPECT().GetFieldNameByFieldHeader(gomock.Any()).AnyTimes().Return("AccountRoot", nil)
-				defs.EXPECT().GetFieldInstanceByFieldName(gomock.Any()).AnyTimes().Return(nil, errors.New("field instance not found"))
-				return defs
-			},
-			expected:    nil,
-			expectedErr: errors.New("field instance not found"),
-		},
-		{
-			name:  "pass - returns field instance",
-			input: []byte{30},
-			malleate: func() interfaces.Definitions {
-				defs := testutil.NewMockDefinitions(gomock.NewController(t))
-				defs.EXPECT().GetFieldNameByFieldHeader(gomock.Any()).AnyTimes().Return("AccountRoot", nil)
-				defs.EXPECT().GetFieldInstanceByFieldName(gomock.Any()).AnyTimes().Return(&definitions.FieldInstance{
-					FieldHeader: &definitions.FieldHeader{TypeCode: 9, FieldCode: 11},
-				}, nil)
-				return defs
-			},
-			expected: &definitions.FieldInstance{
-				FieldHeader: &definitions.FieldHeader{TypeCode: 9, FieldCode: 11},
-			},
+			name:        "pass - returns field instance",
+			input:       []byte{0x22}, // Flags: TypeCode 2, FieldCode 2
+			expected:    flags,
 			expectedErr: nil,
 		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			definitions := tc.malleate()
-			p := NewBinaryParser(tc.input, definitions)
+			p := NewBinaryParser(tc.input, definitions.Get())
 			actual, err := p.ReadField()
 			if tc.expectedErr != nil {
 				require.Error(t, err)
 				return
 			}
+			require.NoError(t, err)
 			require.Equal(t, tc.expected, actual)
 		})
 	}

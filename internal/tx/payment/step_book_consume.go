@@ -21,19 +21,16 @@ func (s *BookStep) offerTakerPays(offer *state.LedgerOffer) EitherAmount {
 	return NewIOUEitherAmount(offer.TakerPays)
 }
 
-// offerQuality returns the quality of an offer by extracting it from the BookDirectory key.
-// The quality is stored in the last 8 bytes of the BookDirectory, encoded as big-endian uint64.
-// This is the original quality set when the offer was created, which remains constant
-// even as the offer is partially filled.
-// Reference: rippled's getQuality() in Indexes.cpp
+// offerQuality returns the quality of an offer, taken from its BookDirectory key
+// rather than recomputed from the offer's current TakerPays/TakerGets.
+//
+// The quality is computed when the offer is placed and never changes for its
+// lifetime: subsequent partial fills use the original quality. Recomputing from
+// the partially-filled amounts drifts ~1 ULP from the placement tier, which then
+// feeds the strict crossing round and makes the fill consume a slightly
+// different amount than rippled.
 func (s *BookStep) offerQuality(offer *state.LedgerOffer) Quality {
-	// Compute quality from actual TakerPays/TakerGets for precision.
-	// The BookDirectory quality is a "price tier" for ordering, but for
-	// accurate calculations we need the exact ratio from the offer amounts.
-	// Reference: rippled calculates quality as in/out for flow calculations
-	takerPays := s.offerTakerPays(offer)
-	takerGets := s.offerTakerGets(offer)
-	return QualityFromAmounts(takerPays, takerGets)
+	return QualityFromKey(offer.BookDirectory)
 }
 
 // consumeOffer reduces the offer's amounts by the consumed amounts and transfers funds.
@@ -102,12 +99,13 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 			return err
 		}
 	} else {
-		// Partially consumed — just update the offer amounts.
-		// Do NOT check remaining funding here. Rippled's consume() does not
-		// check funding; the OfferStream handles unfunded detection on the
-		// next step() call.
-		offer.PreviousTxnID = txHash
-		offer.PreviousTxnLgrSeq = ledgerSeq
+		// Partially consumed — just update the offer amounts. Do NOT stamp
+		// PreviousTxnID here: threading is the ApplyStateTable's job and runs
+		// only after the node-changed check, so an offer whose recomputed
+		// amounts round back to byte-identical values is correctly left
+		// untouched instead of emitting a ghost ModifiedNode.
+		// Do NOT check remaining funding here either; the OfferStream handles
+		// unfunded detection on the next step() call.
 		offerData, err := state.SerializeLedgerOffer(offer)
 		if err != nil {
 			return err
@@ -199,4 +197,18 @@ func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amoun
 		return tx.NewXRPAmount(ea.XRP)
 	}
 	return ea.IOU
+}
+
+// retagToIssue returns amt with its currency/issuer set to the given book issue,
+// preserving the numeric magnitude. The flow engine threads amounts whose
+// currency/issuer can carry the strand-destination issue rather than the issue of
+// the book actually being traversed. The CLOB transfer path takes the target
+// Issue explicitly, but the AMM send routes by amount.Issuer, so AMM transfers
+// must be re-tagged to the book's own issue before sending. XRP is returned
+// unchanged.
+func retagToIssue(amt tx.Amount, issue Issue) tx.Amount {
+	if amt.IsNative() || issue.IsXRP() {
+		return amt
+	}
+	return tx.NewIssuedAmount(amt.Mantissa(), amt.Exponent(), issue.Currency, state.EncodeAccountIDSafe(issue.Issuer))
 }

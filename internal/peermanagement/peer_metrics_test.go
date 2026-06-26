@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// tick flushes the rolling-window bucket if a second boundary has
+// elapsed since the last bucket close, without recording new bytes.
+// Production code never needs this because addMessage already runs
+// the flush on activity.
+func (m *byteMetrics) tick() {
+	m.addMessage(0)
+}
+
 // TestByteMetrics_TotalBytesAccumulates pins the cumulative semantics
 // of metrics_.recv.total_bytes() / metrics_.sent.total_bytes()
 // (PeerImp.cpp:3547-3551): every byte ever passed in must be counted,
@@ -63,7 +71,7 @@ func TestByteMetrics_RollingAverageSteadyState(t *testing.T) {
 	m := newByteMetrics(func() time.Time { return clockNow })
 
 	const bps uint64 = 1500
-	for i := 0; i < rollingWindowSeconds; i++ {
+	for range rollingWindowSeconds {
 		m.addMessage(bps)
 		clockNow = clockNow.Add(1 * time.Second)
 		m.tick() // close out the bucket
@@ -91,7 +99,7 @@ func TestByteMetrics_RollingAverageDropsOldest(t *testing.T) {
 	// Seed bucket 0 with a distinctive large value.
 	step(60_000)
 	// Fill the remaining 29 buckets with a steady value.
-	for i := 0; i < rollingWindowSeconds-1; i++ {
+	for range rollingWindowSeconds - 1 {
 		step(1000)
 	}
 	// One more step should evict bucket 0; the steady value must now

@@ -88,8 +88,12 @@ func serializeNFTokenOfferRaw(
 	}
 
 	jsonObj := map[string]any{
-		"LedgerEntryType":  "NFTokenOffer",
-		"Account":          ownerAddress,
+		"LedgerEntryType": "NFTokenOffer",
+		// rippled's NFTokenOffer ledger object uses sfOwner, not sfAccount
+		// (ledger_entries.macro ltNFTOKEN_OFFER; NFTokenUtils.cpp:1074
+		// (*offer)[sfOwner] = acctID). Emitting sfAccount diverges the SLE
+		// bytes (account_hash fork) and the CreatedNode NewFields.
+		"Owner":            ownerAddress,
 		"Amount":           amount,
 		"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
 		"OwnerNode":        fmt.Sprintf("%x", ownerNode),
@@ -115,9 +119,12 @@ func serializeNFTokenOfferRaw(
 
 // serializeNFTokenOffer serializes an NFToken offer from an NFTokenCreateOffer transaction.
 func serializeNFTokenOffer(nftTx *NFTokenCreateOffer, ownerID [20]byte, tokenID [32]byte, sequence uint32, ownerNode uint64, offerNode uint64) ([]byte, error) {
+	// The NFTokenOffer ledger object only carries lsfSellNFToken; the rest of the
+	// transaction's flags (notably tfFullyCanonicalSig) must not leak into its
+	// sfFlags. rippled sets (*offer)[sfFlags] = isSell ? lsfSellNFToken : 0.
 	return serializeNFTokenOfferRaw(
 		ownerID, tokenID,
-		amountToCodecFormat(nftTx.Amount), nftTx.GetFlags(),
+		amountToCodecFormat(nftTx.Amount), nftTx.GetFlags()&NFTokenCreateOfferFlagSellNFToken,
 		ownerNode, offerNode,
 		nftTx.Destination, nftTx.Expiration,
 	)

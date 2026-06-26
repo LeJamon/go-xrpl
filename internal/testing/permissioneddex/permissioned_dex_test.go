@@ -17,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // requireResult asserts the transaction result matches the expected code.
@@ -40,11 +39,6 @@ func xrpUsdEurPath(gw *jtx.Account) [][]payment.PathStep {
 		{Currency: "USD", Issuer: gw.Address},
 		{Currency: "EUR", Issuer: gw.Address},
 	}}
-}
-
-// rippleTimeNow returns the current ledger time as Ripple epoch seconds.
-func rippleTimeNow(env *jtx.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 }
 
 // badDomain is a nonexistent domain ID (hex).
@@ -150,7 +144,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 		env.Close()
 
 		// Issue credential with 20s expiry
-		expiration := rippleTimeNow(env) + 20
+		expiration := env.NowRipple() + 20
 		result := env.Submit(
 			cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).
 				Expiration(expiration).Build(),
@@ -773,7 +767,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 		// (no Close between them), matching rippled's testBookStep behavior where
 		// both are applied before env.close() so only 2 closes happen before the
 		// first payment instead of 3 (which would exceed the 20s expiration).
-		expiration := rippleTimeNow(env) + 20
+		expiration := env.NowRipple() + 20
 		result := env.Submit(
 			cred.CredentialCreate(dex.DomainOwner, devin, dex.CredType).
 				Expiration(expiration).Build(),
@@ -1603,10 +1597,10 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	dex := SetupPermissionedDEX(t, env)
 
-	var offerSeqs []uint32
 	const dirCount = 100
+	offerSeqs := make([]uint32, 0, dirCount)
 
-	for i := 0; i < dirCount; i++ {
+	for range dirCount {
 		bobSeq := env.Seq(dex.Bob)
 		offerSeqs = append(offerSeqs, bobSeq)
 

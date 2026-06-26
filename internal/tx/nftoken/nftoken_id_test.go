@@ -75,8 +75,8 @@ func TestGenerateNFTokenID_KnownVectors(t *testing.T) {
 			issuer:      "B5F762798A53D543A014CAF8B297CFF8F2F937E8",
 			taxon:       0,
 			sequence:    1,
-			flags:       nftFlagBurnable | nftFlagOnlyXRP | nftFlagTransferable, // 0x000B
-			transferFee: 314,                                                    // 0x013A
+			flags:       NFTokenFlagBurnable | NFTokenFlagOnlyXRP | NFTokenFlagTransferable, // 0x000B
+			transferFee: 314,                                                                // 0x013A
 			want:        "000B013AB5F762798A53D543A014CAF8B297CFF8F2F937E816E5DA9C00000001",
 		},
 	}
@@ -199,7 +199,7 @@ func TestGetNFTPageKey(t *testing.T) {
 	id := mustHexID(t, "000B013AB5F762798A53D543A014CAF8B297CFF8F2F937E816E5DA9C00000001")
 	key := getNFTPageKey(id)
 
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if key[i] != 0 {
 			t.Errorf("page key byte %d = %#02x, want 0 (high 160 bits must be zero)", i, key[i])
 		}
@@ -213,7 +213,7 @@ func TestGetNFTPageKey(t *testing.T) {
 	// All-ones low bits, arbitrary high bits → only low 96 bits survive.
 	allOnes := mustHexID(t, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF")
 	k2 := getNFTPageKey(allOnes)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if k2[i] != 0 {
 			t.Errorf("byte %d = %#02x, want 0", i, k2[i])
 		}

@@ -26,7 +26,7 @@ func TestFeatureID(t *testing.T) {
 }
 
 func TestFeatureRegistry(t *testing.T) {
-	count := FeatureCount()
+	count := len(AllFeatures())
 	if count < 80 {
 		t.Errorf("Expected at least 80 features, got %d", count)
 	}
@@ -127,53 +127,25 @@ func TestAmendmentTableVoting(t *testing.T) {
 		t.Error("AMM should be vetoed")
 	}
 
-	// Vetoed amendments should not be in desired list
-	desired := table.GetDesired()
-	for _, id := range desired {
-		if id == FeatureAMM {
-			t.Error("AMM should not be in desired list when vetoed")
-		}
-	}
-
 	// Unveto
 	table.Unveto(FeatureAMM)
 	if table.IsVetoed(FeatureAMM) {
 		t.Error("AMM should not be vetoed after Unveto()")
 	}
 
-	// UpVote an amendment
+	// UpVote an amendment; this also clears any veto.
 	table.UpVote(FeatureAMM)
 	if !table.IsUpVoted(FeatureAMM) {
 		t.Error("AMM should be upvoted")
 	}
-
-	// UpVoted amendments should be in desired list
-	desired = table.GetDesired()
-	found := false
-	for _, id := range desired {
-		if id == FeatureAMM {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("AMM should be in desired list when upvoted")
+	if table.IsVetoed(FeatureAMM) {
+		t.Error("UpVote should clear any veto")
 	}
 }
 
-func TestRetiredFeaturesExcludedFromDesired(t *testing.T) {
-	// A fresh table has an empty enabled set, so retired features must be
-	// excluded from GetDesired() by their Obsolete vote alone — not by the
-	// enabled-set escape. Otherwise GetDesired() would re-propose amendments
-	// whose pre-amendment code no longer exists.
-	table := NewAmendmentTable()
-	desired := table.GetDesired()
-
-	desiredSet := make(map[[32]byte]bool, len(desired))
-	for _, id := range desired {
-		desiredSet[id] = true
-	}
-
+func TestRetiredFeaturesVoteObsolete(t *testing.T) {
+	// Retired features must vote Obsolete so the consensus adaptor's vote policy
+	// never re-proposes amendments whose pre-amendment code no longer exists.
 	for _, f := range AllFeatures() {
 		if !f.Retired {
 			continue
@@ -184,24 +156,6 @@ func TestRetiredFeaturesExcludedFromDesired(t *testing.T) {
 		if !f.IsObsolete() {
 			t.Errorf("retired feature %s IsObsolete() should be true", f.Name)
 		}
-		if desiredSet[f.ID] {
-			t.Errorf("retired feature %s must not appear in GetDesired()", f.Name)
-		}
-	}
-}
-
-func TestAmendmentTableWithEnabled(t *testing.T) {
-	enabledIDs := [][32]byte{FeatureFlow, FeatureChecks}
-	table := NewAmendmentTableWithEnabled(enabledIDs)
-
-	if !table.IsEnabled(FeatureFlow) {
-		t.Error("Flow should be enabled")
-	}
-	if !table.IsEnabled(FeatureChecks) {
-		t.Error("Checks should be enabled")
-	}
-	if table.IsEnabled(FeatureAMM) {
-		t.Error("AMM should not be enabled")
 	}
 }
 
@@ -233,14 +187,8 @@ func TestRules(t *testing.T) {
 	if !rules.Enabled(FeatureFlow) {
 		t.Error("Flow should be enabled")
 	}
-	if !rules.FlowEnabled() {
-		t.Error("FlowEnabled() should return true")
-	}
 	if !rules.Enabled(FeatureChecks) {
 		t.Error("Checks should be enabled")
-	}
-	if !rules.ChecksEnabled() {
-		t.Error("ChecksEnabled() should return true")
 	}
 	if rules.Enabled(FeatureAMM) {
 		t.Error("AMM should not be enabled")
@@ -254,18 +202,18 @@ func TestGenesisRules(t *testing.T) {
 	rules := GenesisRules()
 
 	// Genesis rules should include all VoteDefaultYes features
-	if !rules.FlowEnabled() {
+	if !rules.Enabled(FeatureFlow) {
 		t.Error("Genesis rules should have Flow enabled")
 	}
-	if !rules.ChecksEnabled() {
+	if !rules.Enabled(FeatureChecks) {
 		t.Error("Genesis rules should have Checks enabled")
 	}
-	if !rules.DepositAuthEnabled() {
+	if !rules.Enabled(FeatureDepositAuth) {
 		t.Error("Genesis rules should have DepositAuth enabled")
 	}
 
 	// Should not include VoteDefaultNo features
-	if rules.AMMEnabled() {
+	if rules.Enabled(FeatureAMM) {
 		t.Error("Genesis rules should not have AMM enabled")
 	}
 }
@@ -276,7 +224,7 @@ func TestEmptyRules(t *testing.T) {
 	if rules.EnabledCount() != 0 {
 		t.Errorf("Empty rules should have 0 enabled, got %d", rules.EnabledCount())
 	}
-	if rules.FlowEnabled() {
+	if rules.Enabled(FeatureFlow) {
 		t.Error("Empty rules should not have Flow enabled")
 	}
 }
@@ -285,10 +233,10 @@ func TestAllSupportedRules(t *testing.T) {
 	rules := AllSupportedRules()
 
 	// Should include all supported features
-	if !rules.FlowEnabled() {
+	if !rules.Enabled(FeatureFlow) {
 		t.Error("AllSupported rules should have Flow enabled")
 	}
-	if !rules.AMMEnabled() {
+	if !rules.Enabled(FeatureAMM) {
 		t.Error("AllSupported rules should have AMM enabled")
 	}
 
@@ -306,26 +254,11 @@ func TestRulesBuilder(t *testing.T) {
 		DisableByName("Flow").
 		Build()
 
-	if !rules.AMMEnabled() {
+	if !rules.Enabled(FeatureAMM) {
 		t.Error("Builder should have enabled AMM")
 	}
-	if rules.FlowEnabled() {
+	if rules.Enabled(FeatureFlow) {
 		t.Error("Builder should have disabled Flow")
-	}
-}
-
-func TestRulesFromTable(t *testing.T) {
-	table := NewAmendmentTable()
-	table.Enable(FeatureFlow)
-	table.Enable(FeatureAMM)
-
-	rules := NewRulesFromTable(table)
-
-	if !rules.FlowEnabled() {
-		t.Error("Rules from table should have Flow enabled")
-	}
-	if !rules.AMMEnabled() {
-		t.Error("Rules from table should have AMM enabled")
 	}
 }
 

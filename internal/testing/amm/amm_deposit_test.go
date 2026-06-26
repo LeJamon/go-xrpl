@@ -511,6 +511,7 @@ func TestAMMDepositWithFrozenAssets(t *testing.T) {
 	t.Run("SingleAsset_NonFrozen_WithoutAMMClawback", func(t *testing.T) {
 		env := setupFrozenAMM(t)
 		env.DisableFeature("AMMClawback")
+		env.Close()
 
 		depositTx := amm.AMMDeposit(env.Alice, amm.XRP(), env.USD).
 			Amount(amm.XRPAmount(100)).

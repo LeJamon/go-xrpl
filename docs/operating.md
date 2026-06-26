@@ -71,7 +71,7 @@ the example configuration:
 | WebSocket (public) | `ws://0.0.0.0:6005` | Guest-role WS + subscriptions |
 | Peer protocol | `0.0.0.0:51235` | XRPL peer overlay |
 | Health check | `/health` on an HTTP port | Liveness probe |
-| gRPC (optional) | `127.0.0.1:50051` | Clio integration (uncomment `[port_grpc]`) |
+| gRPC (optional) | `127.0.0.1:50051` | Clio integration (uncomment `[port_grpc]` and add it to `[server].ports`) |
 
 A port gets **admin** role when its `admin` field lists the client's IP (CIDR
 supported); a port with no `admin` field is public and all clients get the
@@ -108,8 +108,6 @@ keys to precede any `[section]` header.
 | `relay_validations` | `"all"` | `all`, `trusted`, or `drop_untrusted`. |
 | `ledger_history` | `256` | Ledgers to retain: integer, `"full"`, or `"none"`. |
 | `fetch_depth` | `"full"` | Back-fill depth: integer, `"full"`, or `"none"` (values < 10 clamp to 10). |
-| `path_search` / `_fast` / `_max` / `_old` | `2`/`2`/`3`/`2` | Pathfinding search-effort bounds. |
-| `workers` / `io_workers` / `prefetch_workers` | `0` | Worker-pool sizes (`0` = auto-detect from CPU count). |
 | `network_id` | `"main"` | `"main"`, `"testnet"`, `"devnet"`, or an integer. |
 | `ledger_replay` | `0` | `0` = disabled, `1` = enabled. |
 
@@ -117,15 +115,12 @@ keys to precede any `[section]` header.
 
 | Key | Example | Meaning |
 |-----|---------|---------|
-| `ssl_verify` | `1` | Verify TLS on outbound HTTPS client requests (`0`/`1`). |
 | `database_path` | `/var/lib/xrpld/db` | Base directory for SQLite databases. |
 | `debug_logfile` | `/var/log/xrpld/debug.log` | Debug log path. |
 | `node_size` | `"medium"` | Resource sizing: `tiny`, `small`, `medium`, `large`, `huge`. |
-| `signing_support` | `false` | Allow the `sign`/`sign_for` RPCs (key handling on the server). |
 | `beta_rpc_api` | `0` | Expose the beta API version. |
 | `validators_file` | — | Path to `validators.toml`/`.txt`. Optional. |
 | `genesis_file` | — | Custom genesis; omit for built-in defaults. Optional. |
-| `rpc_startup` | list | RPC commands run at startup (e.g. set `log_level`). |
 
 ### `[server]` and `[port_*]`
 
@@ -167,13 +162,14 @@ List IPs in `admin` to grant those clients admin role.
 
 ### `[transaction_queue]`
 
-Governs fee escalation and queueing. Keys map directly to the
-`config.TransactionQueueConfig` accessors documented in godoc: `ledgers_in_queue`,
-`minimum_queue_size`, `retry_sequence_percent`, `minimum_escalation_multiplier`,
+Governs fee escalation and queueing (EXPERIMENTAL). Every key is optional;
+omit one to use rippled's `TxQ::Setup` default, or set it explicitly
+(including `0`). Keys: `ledgers_in_queue`, `minimum_queue_size`,
+`retry_sequence_percent`, `minimum_escalation_multiplier`,
 `minimum_txn_in_ledger`, `minimum_txn_in_ledger_standalone`, `target_txn_in_ledger`,
 `maximum_txn_in_ledger` (`0` = no maximum), `normal_consensus_increase_percent`,
 `slow_consensus_decrease_percent`, `maximum_txn_per_account`,
-`minimum_last_ledger_buffer`, `zero_basefee_transaction_feelevel`.
+`minimum_last_ledger_buffer`.
 
 ### Optional sections
 
@@ -186,8 +182,6 @@ Governs fee escalation and queueing. Keys map directly to the
   an amendment (rippled's `[amendments]` stanza); `veto` refuses to vote for it
   (rippled's `[veto_amendments]`). Names match the amendment registry; an amendment
   must not appear in both lists.
-- **`[perf]`**, **`[crawl]`**, **`[vl]`** — performance logging, crawler endpoint,
-  and validator-list endpoint toggles.
 
 ### Validation
 

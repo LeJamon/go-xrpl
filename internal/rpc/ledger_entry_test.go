@@ -83,15 +83,15 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Valid 256-bit hex index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"ledger_index": "validated",
 			},
@@ -106,7 +106,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "validated")
 				assert.Contains(t, resp, "node")
@@ -116,7 +116,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 		},
 		{
 			name: "Request index with binary=true",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"binary":       true,
 				"ledger_index": "validated",
@@ -134,13 +134,13 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "node_binary")
 			},
 		},
 		{
 			name: "Invalid hex format - too short",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "A33EC6BB85FB5674074C4A3A43373BB17645308F",
 				"ledger_index": "validated",
 			},
@@ -149,7 +149,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 		},
 		{
 			name: "Invalid hex format - contains non-hex chars",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B21GH",
 				"ledger_index": "validated",
 			},
@@ -158,7 +158,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 		},
 		{
 			name: "Entry not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"ledger_index": "validated",
 			},
@@ -196,7 +196,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -226,15 +226,15 @@ func TestLedgerEntryCheck(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request check by ID - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"check":        checkIndex,
 				"ledger_index": "validated",
 			},
@@ -249,14 +249,14 @@ func TestLedgerEntryCheck(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 			},
 		},
 		{
 			name: "Invalid check - too short hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"check":        "A33EC6BB85FB5674",
 				"ledger_index": "validated",
 			},
@@ -265,7 +265,7 @@ func TestLedgerEntryCheck(t *testing.T) {
 		},
 		{
 			name: "Check entry not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"check":        checkIndex,
 				"ledger_index": "validated",
 			},
@@ -302,7 +302,7 @@ func TestLedgerEntryCheck(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -332,15 +332,15 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request payment channel by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"payment_channel": payChanIndex,
 				"ledger_index":    "validated",
 			},
@@ -355,14 +355,14 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 			},
 		},
 		{
 			name: "Invalid payment_channel - too short",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"payment_channel": "A33EC6BB",
 				"ledger_index":    "validated",
 			},
@@ -371,7 +371,7 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 		},
 		{
 			name: "Payment channel not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"payment_channel": "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
 				"ledger_index":    "validated",
 			},
@@ -408,7 +408,7 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -439,15 +439,15 @@ func TestLedgerEntryDirectory(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Locate directory by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"directory":    dirRootIndex,
 				"ledger_index": "validated",
 			},
@@ -462,14 +462,14 @@ func TestLedgerEntryDirectory(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 			},
 		},
 		{
 			name: "Invalid directory - too short hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"directory":    "A33EC6BB85FB56",
 				"ledger_index": "validated",
 			},
@@ -478,7 +478,7 @@ func TestLedgerEntryDirectory(t *testing.T) {
 		},
 		{
 			name: "Directory not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"directory":    dirRootIndex,
 				"ledger_index": "validated",
 			},
@@ -515,7 +515,7 @@ func TestLedgerEntryDirectory(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -544,15 +544,15 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request NFT page by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_page":     nftPageIndex,
 				"ledger_index": "validated",
 			},
@@ -567,14 +567,14 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 			},
 		},
 		{
 			name: "Invalid NFT page index - not hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_page":     "not-a-hex-string",
 				"ledger_index": "validated",
 			},
@@ -583,7 +583,7 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 		},
 		{
 			name: "NFT page not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_page":     "B33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 				"ledger_index": "validated",
 			},
@@ -620,7 +620,7 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -647,15 +647,15 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		params map[string]interface{}
+		params map[string]any
 	}{
 		{
 			name:   "Empty params - must specify object type",
-			params: map[string]interface{}{},
+			params: map[string]any{},
 		},
 		{
 			name: "Only ledger_index specified - must specify object type",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"ledger_index": "validated",
 			},
 		},
@@ -697,14 +697,14 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "ledger_index: validated",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"ledger_index": "validated",
 			},
@@ -719,13 +719,13 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, true, resp["validated"])
 			},
 		},
 		{
 			name: "ledger_index: current",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"ledger_index": "current",
 			},
@@ -740,13 +740,13 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 			},
 		},
 		{
 			name: "ledger_index: closed",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"ledger_index": "closed",
 			},
@@ -764,7 +764,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 		},
 		{
 			name: "ledger_index: integer sequence number",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        validIndex,
 				"ledger_index": 2,
 			},
@@ -779,7 +779,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				ledgerIndex := resp["ledger_index"]
 				switch v := ledgerIndex.(type) {
 				case float64:
@@ -793,7 +793,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 		},
 		{
 			name: "ledger_hash: valid hash",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":       validIndex,
 				"ledger_hash": "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
 			},
@@ -808,13 +808,13 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "ledger_hash")
 			},
 		},
 		{
 			name: "Default ledger_index when not specified",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index": validIndex,
 			},
 			setupMock: func() {
@@ -828,7 +828,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Should default to validated and succeed
 				assert.Contains(t, resp, "index")
 			},
@@ -857,7 +857,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -894,7 +894,7 @@ func TestLedgerEntryResponseFields(t *testing.T) {
 		}
 		mock.ledgerEntryErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"index":        validIndex,
 			"ledger_index": "validated",
 		}
@@ -907,7 +907,7 @@ func TestLedgerEntryResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -931,7 +931,7 @@ func TestLedgerEntryResponseFields(t *testing.T) {
 		}
 		mock.ledgerEntryErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"index":        validIndex,
 			"binary":       true,
 			"ledger_index": "validated",
@@ -945,7 +945,7 @@ func TestLedgerEntryResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -969,7 +969,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 			Services:   nil,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"index": "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -991,7 +991,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 			Services:   &types.ServiceContainer{Ledger: nil},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"index": "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1053,7 +1053,7 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 		}
 		mock.ledgerEntryErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"index":        indexValue,
 			"check":        checkValue,
 			"ledger_index": "validated",
@@ -1067,7 +1067,7 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1094,7 +1094,7 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 	}
 
 	t.Run("account_root by address", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account_root": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"ledger_index": "validated",
 		}
@@ -1108,8 +1108,8 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 	})
 
 	t.Run("offer by account and seq", func(t *testing.T) {
-		params := map[string]interface{}{
-			"offer": map[string]interface{}{
+		params := map[string]any{
+			"offer": map[string]any{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"seq":     5,
 			},
@@ -1124,8 +1124,8 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 	})
 
 	t.Run("escrow by owner and seq", func(t *testing.T) {
-		params := map[string]interface{}{
-			"escrow": map[string]interface{}{
+		params := map[string]any{
+			"escrow": map[string]any{
 				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"seq":   5,
 			},
@@ -1140,8 +1140,8 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 	})
 
 	t.Run("ticket by account and ticket_seq", func(t *testing.T) {
-		params := map[string]interface{}{
-			"ticket": map[string]interface{}{
+		params := map[string]any{
+			"ticket": map[string]any{
 				"account":    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"ticket_seq": 5,
 			},
@@ -1156,8 +1156,8 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 	})
 
 	t.Run("directory by owner", func(t *testing.T) {
-		params := map[string]interface{}{
-			"directory": map[string]interface{}{
+		params := map[string]any{
+			"directory": map[string]any{
 				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			"ledger_index": "validated",
@@ -1188,47 +1188,47 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		expectedError string
 	}{
 		{
 			name: "Index with empty hex string",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index": "",
 			},
 			expectedError: "Invalid index",
 		},
 		{
 			name: "Index with non-hex characters",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index": "ZZZEC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			},
 			expectedError: "Invalid index",
 		},
 		{
 			name: "Check with wrong length",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"check": "A33EC6BB85FB5674",
 			},
 			expectedError: "Invalid check",
 		},
 		{
 			name: "Payment channel with invalid hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"payment_channel": "not-valid-hex-at-all",
 			},
 			expectedError: "Invalid payment_channel",
 		},
 		{
 			name: "Directory with invalid hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"directory": "invalid-directory-hex",
 			},
 			expectedError: "Invalid directory",
 		},
 		{
 			name: "NFT page with wrong length",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_page": "A33EC6BB",
 			},
 			expectedError: "Invalid nft_page",
@@ -1266,7 +1266,7 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 
 	mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"index":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 		"ledger_index": "validated",
 	}
@@ -1301,15 +1301,15 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request account root by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        accountRootIndex,
 				"ledger_index": "validated",
 			},
@@ -1324,7 +1324,7 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, accountRootIndex, resp["index"])
@@ -1332,7 +1332,7 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 		},
 		{
 			name: "Request account root by index with binary=true",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        accountRootIndex,
 				"binary":       true,
 				"ledger_index": "validated",
@@ -1350,13 +1350,13 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "node_binary")
 			},
 		},
 		{
 			name: "Account root not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1393,7 +1393,7 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -1423,15 +1423,15 @@ func TestLedgerEntryEscrow(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request escrow by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        escrowIndex,
 				"ledger_index": "validated",
 			},
@@ -1446,7 +1446,7 @@ func TestLedgerEntryEscrow(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, escrowIndex, resp["index"])
@@ -1454,7 +1454,7 @@ func TestLedgerEntryEscrow(t *testing.T) {
 		},
 		{
 			name: "Escrow not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1491,7 +1491,7 @@ func TestLedgerEntryEscrow(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -1521,15 +1521,15 @@ func TestLedgerEntryOffer(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request offer by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        offerIndex,
 				"ledger_index": "validated",
 			},
@@ -1544,7 +1544,7 @@ func TestLedgerEntryOffer(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, offerIndex, resp["index"])
@@ -1552,7 +1552,7 @@ func TestLedgerEntryOffer(t *testing.T) {
 		},
 		{
 			name: "Offer not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1589,7 +1589,7 @@ func TestLedgerEntryOffer(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -1619,15 +1619,15 @@ func TestLedgerEntryRippleState(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request ripple_state by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        rippleStateIndex,
 				"ledger_index": "validated",
 			},
@@ -1642,7 +1642,7 @@ func TestLedgerEntryRippleState(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, rippleStateIndex, resp["index"])
@@ -1650,7 +1650,7 @@ func TestLedgerEntryRippleState(t *testing.T) {
 		},
 		{
 			name: "RippleState not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1687,7 +1687,7 @@ func TestLedgerEntryRippleState(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -1717,15 +1717,15 @@ func TestLedgerEntryTicket(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request ticket by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        ticketIndex,
 				"ledger_index": "validated",
 			},
@@ -1740,7 +1740,7 @@ func TestLedgerEntryTicket(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, ticketIndex, resp["index"])
@@ -1748,7 +1748,7 @@ func TestLedgerEntryTicket(t *testing.T) {
 		},
 		{
 			name: "Ticket not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1785,7 +1785,7 @@ func TestLedgerEntryTicket(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -1815,15 +1815,15 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request deposit_preauth by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        depositPreauthIndex,
 				"ledger_index": "validated",
 			},
@@ -1838,7 +1838,7 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, depositPreauthIndex, resp["index"])
@@ -1846,7 +1846,7 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 		},
 		{
 			name: "DepositPreauth not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1883,7 +1883,7 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -1913,15 +1913,15 @@ func TestLedgerEntryAMM(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
-		validateResp  func(t *testing.T, resp map[string]interface{})
+		validateResp  func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Request AMM by index - success",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        ammIndex,
 				"ledger_index": "validated",
 			},
@@ -1936,7 +1936,7 @@ func TestLedgerEntryAMM(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
 				assert.Contains(t, resp, "node")
 				assert.Equal(t, ammIndex, resp["index"])
@@ -1944,7 +1944,7 @@ func TestLedgerEntryAMM(t *testing.T) {
 		},
 		{
 			name: "AMM not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000001",
 				"ledger_index": "validated",
 			},
@@ -1981,7 +1981,7 @@ func TestLedgerEntryAMM(t *testing.T) {
 				if tc.validateResp != nil {
 					resultJSON, err := json.Marshal(result)
 					require.NoError(t, err)
-					var respMap map[string]interface{}
+					var respMap map[string]any
 					err = json.Unmarshal(resultJSON, &respMap)
 					require.NoError(t, err)
 					tc.validateResp(t, respMap)
@@ -2011,14 +2011,15 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
+		expectedToken string
 	}{
 		{
 			name: "Missing ledger_hash results in lgrNotFound",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":       validIndex,
 				"ledger_hash": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 			},
@@ -2026,11 +2027,12 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = svcerr.ErrLedgerNotFound
 			},
 			expectError:   true,
-			expectedError: "not found",
+			expectedError: "ledgerNotFound",
+			expectedToken: "lgrNotFound",
 		},
 		{
 			name: "Zero index is invalid",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index":        "0000000000000000000000000000000000000000000000000000000000000000",
 				"ledger_index": "validated",
 			},
@@ -2059,6 +2061,9 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 				require.NotNil(t, rpcErr, "Expected RPC error for test: %s", tc.name)
 				if tc.expectedError != "" {
 					assert.Contains(t, rpcErr.Message, tc.expectedError)
+				}
+				if tc.expectedToken != "" {
+					assert.Equal(t, tc.expectedToken, rpcErr.ErrorString)
 				}
 			} else {
 				require.Nil(t, rpcErr, "Expected no RPC error")
@@ -2101,7 +2106,7 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 		mock.ledgerEntryErr = nil
 
 		// Using check field but providing an AccountRoot index
-		params := map[string]interface{}{
+		params := map[string]any{
 			"check":        accountRootIndex,
 			"ledger_index": "validated",
 		}
@@ -2144,7 +2149,7 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 	mock.ledgerEntryErr = nil
 
 	t.Run("First valid entry type is used (index has priority)", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"index":        index1,
 			"check":        index2,
 			"ledger_index": "validated",
@@ -2159,7 +2164,7 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -2186,47 +2191,47 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		expectedError string
 	}{
 		{
 			name: "Index as integer should fail",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index": 12345,
 			},
 			expectedError: "Invalid index",
 		},
 		{
 			name: "Index as array should fail",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"index": []string{"A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"},
 			},
 			expectedError: "Invalid index",
 		},
 		{
 			name: "Check as integer should fail",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"check": 12345,
 			},
 			expectedError: "Invalid check",
 		},
 		{
 			name: "Payment channel as boolean should fail",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"payment_channel": true,
 			},
 			expectedError: "Invalid payment_channel",
 		},
 		{
 			name: "Directory as null should fail",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"directory": nil,
 			},
 			expectedError: "Invalid directory",
 		},
 		{
 			name: "NFT page as empty string should fail",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_page": "",
 			},
 			expectedError: "Invalid nft_page",
@@ -2278,7 +2283,7 @@ func TestLedgerEntryAPIVersions(t *testing.T) {
 				Services:   services,
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"index":        validIndex,
 				"ledger_index": "validated",
 			}
@@ -2440,7 +2445,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 				mock.ledgerEntryErr = nil
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				tc.paramName:   tc.paramValue,
 				"ledger_index": "validated",
 			}
@@ -2503,7 +2508,7 @@ func TestLedgerEntryHexFallback(t *testing.T) {
 			mock.ledgerEntryResult = nil
 			mock.ledgerEntryErr = nil
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				entryType:      validHex,
 				"ledger_index": "validated",
 			}
@@ -2519,7 +2524,7 @@ func TestLedgerEntryHexFallback(t *testing.T) {
 			mock.ledgerEntryResult = nil
 			mock.ledgerEntryErr = nil
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				entryType:      "INVALID_NOT_HEX_STRING",
 				"ledger_index": "validated",
 			}
@@ -2552,7 +2557,7 @@ func TestLedgerEntryVault(t *testing.T) {
 	vaultHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
 
 	t.Run("vault by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"vault":        vaultHex,
 			"ledger_index": "validated",
 		}
@@ -2565,8 +2570,8 @@ func TestLedgerEntryVault(t *testing.T) {
 	})
 
 	t.Run("vault by owner and seq", func(t *testing.T) {
-		params := map[string]interface{}{
-			"vault": map[string]interface{}{
+		params := map[string]any{
+			"vault": map[string]any{
 				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"seq":   5,
 			},
@@ -2581,8 +2586,8 @@ func TestLedgerEntryVault(t *testing.T) {
 	})
 
 	t.Run("vault with invalid owner", func(t *testing.T) {
-		params := map[string]interface{}{
-			"vault": map[string]interface{}{
+		params := map[string]any{
+			"vault": map[string]any{
 				"owner": "not-a-valid-address",
 				"seq":   5,
 			},
@@ -2613,7 +2618,7 @@ func TestLedgerEntryDelegate(t *testing.T) {
 	delegateHex := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
 
 	t.Run("delegate by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"delegate":     delegateHex,
 			"ledger_index": "validated",
 		}
@@ -2626,8 +2631,8 @@ func TestLedgerEntryDelegate(t *testing.T) {
 	})
 
 	t.Run("delegate by account and authorize", func(t *testing.T) {
-		params := map[string]interface{}{
-			"delegate": map[string]interface{}{
+		params := map[string]any{
+			"delegate": map[string]any{
 				"account":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"authorize": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
@@ -2642,8 +2647,8 @@ func TestLedgerEntryDelegate(t *testing.T) {
 	})
 
 	t.Run("delegate missing authorize", func(t *testing.T) {
-		params := map[string]interface{}{
-			"delegate": map[string]interface{}{
+		params := map[string]any{
+			"delegate": map[string]any{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			"ledger_index": "validated",
@@ -2671,7 +2676,7 @@ func TestLedgerEntryBridge(t *testing.T) {
 	}
 
 	t.Run("bridge by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"bridge":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
 		}
@@ -2684,7 +2689,7 @@ func TestLedgerEntryBridge(t *testing.T) {
 	})
 
 	t.Run("bridge invalid hex", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"bridge":       "TOOSHORT",
 			"ledger_index": "validated",
 		}
@@ -2711,7 +2716,7 @@ func TestLedgerEntryXChainClaimID(t *testing.T) {
 	}
 
 	t.Run("xchain_owned_claim_id by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"xchain_owned_claim_id": "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index":          "validated",
 		}
@@ -2724,7 +2729,7 @@ func TestLedgerEntryXChainClaimID(t *testing.T) {
 	})
 
 	t.Run("xchain_owned_create_account_claim_id by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"xchain_owned_create_account_claim_id": "B33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index":                         "validated",
 		}
@@ -2754,8 +2759,8 @@ func TestLedgerEntryTicketConformance(t *testing.T) {
 	}
 
 	t.Run("ticket by account and ticket_seq", func(t *testing.T) {
-		params := map[string]interface{}{
-			"ticket": map[string]interface{}{
+		params := map[string]any{
+			"ticket": map[string]any{
 				"account":    "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"ticket_seq": 5,
 			},
@@ -2770,7 +2775,7 @@ func TestLedgerEntryTicketConformance(t *testing.T) {
 	})
 
 	t.Run("ticket by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ticket":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
 		}
@@ -2807,7 +2812,7 @@ func TestLedgerEntryUppercaseHex(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"index":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 		"ledger_index": "validated",
 	}
@@ -2818,7 +2823,7 @@ func TestLedgerEntryUppercaseHex(t *testing.T) {
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
 
-	resultMap, ok := result.(map[string]interface{})
+	resultMap, ok := result.(map[string]any)
 	require.True(t, ok)
 
 	ledgerHash, ok := resultMap["ledger_hash"].(string)
@@ -2848,7 +2853,7 @@ func TestLedgerEntryEscrowHexFallback(t *testing.T) {
 	}
 
 	t.Run("escrow by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"escrow":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
 		}
@@ -2861,8 +2866,8 @@ func TestLedgerEntryEscrowHexFallback(t *testing.T) {
 	})
 
 	t.Run("escrow by owner and seq (object form)", func(t *testing.T) {
-		params := map[string]interface{}{
-			"escrow": map[string]interface{}{
+		params := map[string]any{
+			"escrow": map[string]any{
 				"owner": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"seq":   5,
 			},
@@ -2893,7 +2898,7 @@ func TestLedgerEntryOfferHexFallback(t *testing.T) {
 	}
 
 	t.Run("offer by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"offer":        "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
 		}
@@ -2906,8 +2911,8 @@ func TestLedgerEntryOfferHexFallback(t *testing.T) {
 	})
 
 	t.Run("offer by account and seq (object form)", func(t *testing.T) {
-		params := map[string]interface{}{
-			"offer": map[string]interface{}{
+		params := map[string]any{
+			"offer": map[string]any{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"seq":     5,
 			},
@@ -2938,7 +2943,7 @@ func TestLedgerEntryOracleHexFallback(t *testing.T) {
 	}
 
 	t.Run("oracle by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"oracle":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
 		}
@@ -2951,8 +2956,8 @@ func TestLedgerEntryOracleHexFallback(t *testing.T) {
 	})
 
 	t.Run("oracle by account and document_id (object form)", func(t *testing.T) {
-		params := map[string]interface{}{
-			"oracle": map[string]interface{}{
+		params := map[string]any{
+			"oracle": map[string]any{
 				"account":            "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"oracle_document_id": 1,
 			},
@@ -2983,7 +2988,7 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 	}
 
 	t.Run("amm by hex string", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"amm":          "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
 		}
@@ -2996,10 +3001,10 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 	})
 
 	t.Run("amm by asset pair (object form)", func(t *testing.T) {
-		params := map[string]interface{}{
-			"amm": map[string]interface{}{
-				"asset":  map[string]interface{}{"currency": "XRP"},
-				"asset2": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		params := map[string]any{
+			"amm": map[string]any{
+				"asset":  map[string]any{"currency": "XRP"},
+				"asset2": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			"ledger_index": "validated",
 		}
@@ -3012,9 +3017,9 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 	})
 
 	t.Run("amm object missing asset2", func(t *testing.T) {
-		params := map[string]interface{}{
-			"amm": map[string]interface{}{
-				"asset": map[string]interface{}{"currency": "XRP"},
+		params := map[string]any{
+			"amm": map[string]any{
+				"asset": map[string]any{"currency": "XRP"},
 			},
 			"ledger_index": "validated",
 		}

@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -26,6 +25,17 @@ type PayChannelData struct {
 	OwnerNode       uint64
 	DestinationNode uint64
 	HasDestNode     bool
+
+	// Transaction threading fields. PayChannel is an unconditionally threaded
+	// type, so these must survive a parse→serialize round-trip. Dropping them
+	// makes a write-back of unchanged logical state differ from the original
+	// bytes only in the threading fields, defeating the engine's
+	// bytes.Equal(Original, Current) no-op-modify drop
+	// (ApplyStateTable.cpp:156-157) and producing a ghost ModifiedNode whose
+	// PreviousTxnID is then bumped — a tx + state fork. Mirrors the
+	// DirectoryNode fix in this package.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // SerializePayChannelFromData serializes a PayChannel ledger entry from data
@@ -69,6 +79,12 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 	if channel.HasDestNode {
 		jsonObj["DestinationNode"] = fmt.Sprintf("%x", channel.DestinationNode)
 	}
+	// Preserve threading fields across the round-trip. PreviousTxnLgrSeq is
+	// only meaningful alongside PreviousTxnID, so gate both on the id.
+	if channel.PreviousTxnID != ([32]byte{}) {
+		jsonObj["PreviousTxnID"] = fmt.Sprintf("%X", channel.PreviousTxnID[:])
+		jsonObj["PreviousTxnLgrSeq"] = channel.PreviousTxnLgrSeq
+	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
@@ -81,135 +97,70 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 // ParsePayChannel parses a PayChannel ledger entry from binary data
 func ParsePayChannel(data []byte) (*PayChannelData, error) {
 	channel := &PayChannelData{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return channel, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return channel, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 39: // SettleDelay (nth=39)
-				channel.SettleDelay = value
+				channel.SettleDelay = f.UInt32()
 			case 36: // CancelAfter (nth=36)
-				channel.CancelAfter = value
+				channel.CancelAfter = f.UInt32()
 			case 10: // Expiration (nth=10)
-				channel.Expiration = value
+				channel.Expiration = f.UInt32()
 			case 3: // SourceTag
-				channel.SourceTag = value
+				channel.SourceTag = f.UInt32()
 				channel.HasSourceTag = true
 			case 14: // DestinationTag
-				channel.DestinationTag = value
+				channel.DestinationTag = f.UInt32()
 				channel.HasDestTag = true
+			case 5: // PreviousTxnLgrSeq
+				channel.PreviousTxnLgrSeq = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return channel, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
+		case stUInt64:
+			switch f.FieldCode {
 			case 4: // OwnerNode (nth=4)
-				channel.OwnerNode = value
+				channel.OwnerNode = f.UInt64()
 			case 9: // DestinationNode (nth=9)
-				channel.DestinationNode = value
+				channel.DestinationNode = f.UInt64()
 				channel.HasDestNode = true
 			}
 
-		case FieldTypeAmount:
-			if offset+8 > len(data) {
-				return channel, nil
+		case stAmount:
+			// PayChannel's Amount/Balance are native XRP (8 bytes).
+			switch f.FieldCode {
+			case 1: // Amount (nth=1)
+				channel.Amount = xrpDrops(f.Value)
+			case 2: // Balance (nth=2)
+				channel.Balance = xrpDrops(f.Value)
 			}
-			rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-			amount := rawAmount & 0x3FFFFFFFFFFFFFFF
-			if fieldCode == 1 { // Amount (nth=1)
-				channel.Amount = amount
-			} else if fieldCode == 2 { // Balance (nth=2)
-				channel.Balance = amount
-			}
-			offset += 8
 
-		case FieldTypeAccountID:
-			if offset+21 > len(data) {
-				return channel, nil
-			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				switch fieldCode {
+		case stAccountID:
+			if id, ok := f.AccountID(); ok {
+				switch f.FieldCode {
 				case 1: // Account
-					copy(channel.Account[:], data[offset:offset+20])
+					channel.Account = id
 				case 3: // Destination
-					copy(channel.DestinationID[:], data[offset:offset+20])
+					channel.DestinationID = id
 				}
-				offset += 20
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return channel, nil
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				channel.PreviousTxnID = f.Hash256()
 			}
-			offset += 32
 
-		case FieldTypeBlob:
-			if offset >= len(data) {
-				return channel, nil
+		case stBlob:
+			if f.FieldCode == 1 { // PublicKey (Blob, nth=1)
+				channel.PublicKey = hex.EncodeToString(f.VLBytes())
 			}
-			length := int(data[offset])
-			offset++
-			if offset+length > len(data) {
-				return channel, nil
-			}
-			if fieldCode == 1 { // PublicKey (Blob, nth=1)
-				channel.PublicKey = hex.EncodeToString(data[offset : offset+length])
-			}
-			offset += length
-
-		default:
-			return channel, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return channel, nil
-}
-
-// ParsePayChannelFromBytes is an alias for ParsePayChannel
-func ParsePayChannelFromBytes(data []byte) (*PayChannelData, error) {
-	return ParsePayChannel(data)
 }

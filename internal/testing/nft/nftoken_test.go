@@ -6,6 +6,7 @@ package nft_test
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -29,8 +30,8 @@ func TestDiagnosticMultiPage(t *testing.T) {
 	env.Close()
 
 	const nftCount = 33 // Just enough to trigger one page split
-	var nftIDs []string
-	for i := 0; i < nftCount; i++ {
+	nftIDs := make([]string, 0, nftCount)
+	for i := range nftCount {
 		id := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 		result := env.Submit(nft.NFTokenMint(alice, 0).Build())
 		if !result.Success {
@@ -162,6 +163,7 @@ func TestEnabled(t *testing.T) {
 		// Disable NFT amendments
 		env.DisableFeature("NonFungibleTokensV1")
 		env.DisableFeature("NonFungibleTokensV1_1")
+		env.Close()
 
 		// Verify initial counts
 		jtx.RequireOwnerCount(t, env, alice, 0)
@@ -331,7 +333,7 @@ func TestMintReserve(t *testing.T) {
 		jtx.RequireMintedCount(t, env, alice, 33)
 
 		// Burn all 33 NFTs
-		for i := uint32(0); i < 33; i++ {
+		for range uint32(33) {
 			nftBurnID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 			_ = nftBurnID
 		}
@@ -1412,7 +1414,7 @@ func TestCreateOfferExpiration(t *testing.T) {
 		env.Close()
 
 		// Advance time past expiration
-		for i := 0; i < 30; i++ {
+		for range 30 {
 			env.Close()
 		}
 
@@ -1800,7 +1802,7 @@ func TestNFTokenDeleteAccount(t *testing.T) {
 	env.Close()
 
 	// Allow enough ledgers to pass so any of these accounts can be deleted.
-	for i := 0; i < 300; i++ {
+	for range 300 {
 		env.Close()
 	}
 
@@ -1833,7 +1835,7 @@ func TestNFTokenDeleteAccount(t *testing.T) {
 
 	// Let enough ledgers pass so the account delete transactions are
 	// not retried.
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		env.Close()
 	}
 
@@ -1887,7 +1889,7 @@ func TestNFTokenDeleteAccount(t *testing.T) {
 
 	// Let enough ledgers pass so the account delete transactions are
 	// not retried.
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		env.Close()
 	}
 
@@ -2591,12 +2593,7 @@ func TestFixNFTokenRemint(t *testing.T) {
 
 	// Helper: check if an ID is in a list of IDs
 	containsID := func(ids []string, id string) bool {
-		for _, v := range ids {
-			if v == id {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(ids, id)
 	}
 
 	// Block 1: Test if NFTokenIDs can be duplicated by re-creation of an account.
@@ -2717,8 +2714,8 @@ func TestFixNFTokenRemint(t *testing.T) {
 			env.Close()
 
 			// minter mints 500 NFTs for alice
-			var nftIDs []string
-			for i := 0; i < 500; i++ {
+			nftIDs := make([]string, 0, 500)
+			for range 500 {
 				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 				nftIDs = append(nftIDs, nftokenID)
 				result = env.Submit(nft.NFTokenMint(minter, 0).Issuer(alice).Build())
@@ -2874,8 +2871,8 @@ func TestFixNFTokenRemint(t *testing.T) {
 			jtx.RequireOwnerCount(t, env, alice, 100)
 
 			// alice mints 50 NFTs using tickets
-			var nftIDs []string
-			for i := 0; i < 50; i++ {
+			nftIDs := make([]string, 0, 50)
+			for range 50 {
 				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 				nftIDs = append(nftIDs, nftokenID)
 				mintTx := nft.NFTokenMint(alice, 0).Build()
@@ -3039,8 +3036,8 @@ func TestFixNFTokenRemint(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, minter, 100)
 
 		// minter mints 50 NFTs for alice using tickets
-		var nftIDs []string
-		for i := 0; i < 50; i++ {
+		nftIDs := make([]string, 0, 50)
+		for range 50 {
 			nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 			nftIDs = append(nftIDs, nftokenID)
 			mintTx := nft.NFTokenMint(minter, 0).Issuer(alice).Build()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -294,6 +295,23 @@ type Aggregator struct {
 	// 1300-1351. Read under a.mu so a SetCacheDir call doesn't race
 	// with an in-flight writeCacheLocked.
 	cacheDir string
+
+	// pendingCacheWrites holds marshaled cache-file mutations produced
+	// under a.mu by writeCacheLocked / removeCacheLocked, keyed by
+	// publisher so only the latest mutation per publisher is retained.
+	// flushCacheWrites drains and applies them to disk after a.mu is
+	// released, so cache disk I/O never stalls VL ingest or the validators
+	// RPC read path. cacheWriteSeq is a monotonic stamp (guarded by a.mu)
+	// used to order mutations across concurrent flushers.
+	pendingCacheWrites map[PublisherKey]pendingCacheWrite
+	cacheWriteSeq      uint64
+
+	// cacheWriteMu serializes the disk syscalls in flushCacheWrites;
+	// cacheWritten records the highest cacheWriteSeq already persisted per
+	// publisher so a superseded mutation is dropped. Both guarded by
+	// cacheWriteMu, never by a.mu.
+	cacheWriteMu sync.Mutex
+	cacheWritten map[PublisherKey]uint64
 }
 
 // Config carries Aggregator construction parameters. All fields are
@@ -368,14 +386,16 @@ func New(cfg Config) (*Aggregator, error) {
 		return nil, fmt.Errorf("threshold %d exceeds publisher count %d", threshold, len(publishers))
 	}
 	return &Aggregator{
-		publishers: publishers,
-		state:      state,
-		sites:      sites,
-		manifests:  cfg.Manifests,
-		threshold:  threshold,
-		clock:      clock,
-		logger:     logger,
-		peerSeq:    make(map[uint64]map[PublisherKey]uint32),
+		publishers:         publishers,
+		state:              state,
+		sites:              sites,
+		manifests:          cfg.Manifests,
+		threshold:          threshold,
+		clock:              clock,
+		logger:             logger,
+		peerSeq:            make(map[uint64]map[PublisherKey]uint32),
+		pendingCacheWrites: make(map[PublisherKey]pendingCacheWrite),
+		cacheWritten:       make(map[PublisherKey]uint64),
 	}, nil
 }
 
@@ -450,6 +470,7 @@ func (a *Aggregator) IsUNLBlocked() bool {
 // emit-on-time entry point).
 func (a *Aggregator) PublisherSnapshot() []PublisherState {
 	a.mu.Lock()
+	defer a.flushCacheWrites()
 	defer a.mu.Unlock()
 	now := a.clock()
 	for _, s := range a.state {
@@ -723,6 +744,7 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	validUntil := time.Unix(rippleSecondsToUnix(parsedBlob.Expiration), 0).UTC()
 
 	a.mu.Lock()
+	defer a.flushCacheWrites()
 	defer a.mu.Unlock()
 
 	// New() pre-populates state[pubKey] for every trusted publisher and
@@ -793,32 +815,18 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	return Accepted, pubKey, parsedBlob.Sequence
 }
 
-// applyAcceptedLocked materializes the parsed blob into the
-// publisher's state. Caller must hold a.mu. Does NOT emit OnChange —
-// that's done by recomputeAndEmitLocked once the caller has decided
-// the disposition warrants a trusted-set recompute.
-//
-// rawManifest / rawBlob / rawSignature are the wire-form bytes from
-// the original TMValidatorList / envelope; they are copied (not
-// referenced) so the caller may reuse its slices safely. Used later
-// by BroadcastLatest to re-emit the canonical accepted form to peers.
-func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32, rawManifest, rawBlob, rawSignature []byte) bool {
-	prevCount := len(s.Validators)
-	s.Sequence = blob.Sequence
-	s.Effective = validFrom
-	s.EffectiveSet = blob.EffectiveSet
-	s.Expiration = validUntil
-	s.SigningKey = signingKey
-	s.SiteURI = siteURI
-	s.LastUpdate = now
-	s.Status = StatusAvailable
-	if version > s.Version {
-		s.Version = version
-	}
-	s.RawManifest = append(s.RawManifest[:0], rawManifest...)
-	s.RawBlob = append(s.RawBlob[:0], rawBlob...)
-	s.RawSignature = append(s.RawSignature[:0], rawSignature...)
+// updateRawBytes refreshes the retained wire-form bytes, reusing the
+// existing backing arrays so the caller may keep its own slices.
+func (s *PublisherState) updateRawBytes(manifest, blob, signature []byte) {
+	s.RawManifest = append(s.RawManifest[:0], manifest...)
+	s.RawBlob = append(s.RawBlob[:0], blob...)
+	s.RawSignature = append(s.RawSignature[:0], signature...)
+}
 
+// extractValidatorKeys decodes and canonically sorts the validator
+// master keys from a parsed blob. logMsg is the debug message emitted
+// for skipped entries.
+func (a *Aggregator) extractValidatorKeys(blob *blobJSON, logMsg string) [][33]byte {
 	keys := make([][33]byte, 0, len(blob.Validators))
 	for i, v := range blob.Validators {
 		raw, err := hex.DecodeString(v.ValidationPublicKey)
@@ -826,7 +834,7 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 			// Mirrors rippled ValidatorList.cpp:1250-1273 which logs
 			// `Invalid node identity` and silently skips the entry
 			// rather than rejecting the surrounding blob.
-			a.logger.Debug("validator list: skipping invalid validator entry",
+			a.logger.Debug(logMsg,
 				"index", i,
 				"pubkey", v.ValidationPublicKey)
 			continue
@@ -838,6 +846,33 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	sort.Slice(keys, func(i, j int) bool {
 		return string(keys[i][:]) < string(keys[j][:])
 	})
+	return keys
+}
+
+// applyAcceptedLocked materializes the parsed blob into the
+// publisher's state. Caller must hold a.mu. Does NOT emit OnChange —
+// that's done by recomputeAndEmitLocked once the caller has decided
+// the disposition warrants a trusted-set recompute.
+//
+// rawManifest / rawBlob / rawSignature are the wire-form bytes from
+// the original TMValidatorList / envelope; they are copied (not
+// referenced) so the caller may reuse its slices safely. Used later
+// by BroadcastLatest to re-emit the canonical accepted form to peers.
+func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, signingKey [33]byte, validFrom, validUntil time.Time, siteURI string, now time.Time, version uint32, rawManifest, rawBlob, rawSignature []byte) {
+	s.Sequence = blob.Sequence
+	s.Effective = validFrom
+	s.EffectiveSet = blob.EffectiveSet
+	s.Expiration = validUntil
+	s.SigningKey = signingKey
+	s.SiteURI = siteURI
+	s.LastUpdate = now
+	s.Status = StatusAvailable
+	if version > s.Version {
+		s.Version = version
+	}
+	s.updateRawBytes(rawManifest, rawBlob, rawSignature)
+
+	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry")
 	s.Validators = keys
 
 	// Also seed any embedded validator manifests into the manifest
@@ -885,7 +920,6 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	}
 
 	a.writeCacheLocked(s)
-	return prevCount != len(keys)
 }
 
 // applyPendingLocked stores a future-dated blob in the publisher's
@@ -918,22 +952,7 @@ func (a *Aggregator) applyPendingLocked(s *PublisherState, blob *blobJSON, signi
 		return KnownSequence
 	}
 
-	keys := make([][33]byte, 0, len(blob.Validators))
-	for i, v := range blob.Validators {
-		raw, err := hex.DecodeString(v.ValidationPublicKey)
-		if err != nil || !validatorKeyValid(raw) {
-			a.logger.Debug("validator list: skipping invalid validator entry in pending blob",
-				"index", i,
-				"pubkey", v.ValidationPublicKey)
-			continue
-		}
-		var k [33]byte
-		copy(k[:], raw)
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return string(keys[i][:]) < string(keys[j][:])
-	})
+	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry in pending blob")
 
 	if s.Remaining == nil {
 		s.Remaining = make(map[uint32]*PendingList, 2)
@@ -974,15 +993,15 @@ func (a *Aggregator) applyPendingLocked(s *PublisherState, blob *blobJSON, signi
 // to recompute (typically immediately after the call when invoked at
 // ingest, or via Tick → recomputeAndEmitLocked on the time-driven
 // path).
-func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (promoted bool) {
+func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) {
 	if len(s.Remaining) == 0 {
-		return false
+		return
 	}
 	seqs := make([]uint32, 0, len(s.Remaining))
 	for seq := range s.Remaining {
 		seqs = append(seqs, seq)
 	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	slices.Sort(seqs)
 
 	// Find the LAST entry that is ready to promote.
 	pickIdx := -1
@@ -995,7 +1014,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 		break
 	}
 	if pickIdx < 0 {
-		return false
+		return
 	}
 
 	chosen := s.Remaining[seqs[pickIdx]]
@@ -1008,9 +1027,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 	if chosen.Version > s.Version {
 		s.Version = chosen.Version
 	}
-	s.RawManifest = append(s.RawManifest[:0], chosen.RawManifest...)
-	s.RawBlob = append(s.RawBlob[:0], chosen.RawBlob...)
-	s.RawSignature = append(s.RawSignature[:0], chosen.RawSignature...)
+	s.updateRawBytes(chosen.RawManifest, chosen.RawBlob, chosen.RawSignature)
 	s.Validators = append([][33]byte(nil), chosen.Validators...)
 	s.Status = StatusAvailable
 	// Mirrors rippled ValidatorList.cpp:1970 — if the promoted list is
@@ -1030,7 +1047,6 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 		s.Remaining = nil
 	}
 	a.writeCacheLocked(s)
-	return true
 }
 
 // Tick performs a time-driven promotion sweep across every publisher
@@ -1043,6 +1059,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 // Safe to call from any goroutine. Briefly takes the aggregator lock.
 func (a *Aggregator) Tick() {
 	a.mu.Lock()
+	defer a.flushCacheWrites()
 	defer a.mu.Unlock()
 	now := a.clock()
 	for _, s := range a.state {
@@ -1057,6 +1074,7 @@ func (a *Aggregator) Tick() {
 // the retained wire bytes so a revoked publisher is never rebroadcast.
 func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	a.mu.Lock()
+	defer a.flushCacheWrites()
 	defer a.mu.Unlock()
 	s, ok := a.state[pubKey]
 	if !ok {
@@ -1072,6 +1090,35 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	s.MaxSequence = 0
 	s.MaxSequenceSet = false
 	a.recomputeAndEmitLocked()
+}
+
+// computeValidatorCountsLocked counts, per validator master key, how many
+// publishers with a live (available, effective, unexpired) list carry
+// it. Caller must hold a.mu and filters by threshold afterwards.
+func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]int {
+	counts := make(map[[33]byte]int, 64)
+	for _, s := range a.state {
+		if s.Status != StatusAvailable {
+			continue
+		}
+		if !s.Expiration.IsZero() && !s.Expiration.After(now) {
+			continue
+		}
+		if !s.Effective.IsZero() && s.Effective.After(now) {
+			continue
+		}
+		// Use a set per publisher so duplicate entries in one
+		// publisher's list don't double-count toward the threshold.
+		seen := make(map[[33]byte]struct{}, len(s.Validators))
+		for _, k := range s.Validators {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			counts[k]++
+		}
+	}
+	return counts
 }
 
 // recomputeAndEmitLocked walks the per-publisher state, computes the
@@ -1121,28 +1168,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 		a.unlBlocked = false
 	}
 
-	counts := make(map[[33]byte]int, 64)
-	for _, s := range a.state {
-		if s.Status != StatusAvailable {
-			continue
-		}
-		if !s.Expiration.IsZero() && !s.Expiration.After(now) {
-			continue
-		}
-		if !s.Effective.IsZero() && s.Effective.After(now) {
-			continue
-		}
-		// Use a set per publisher so duplicate entries in one
-		// publisher's list don't double-count toward the threshold.
-		seen := make(map[[33]byte]struct{}, len(s.Validators))
-		for _, k := range s.Validators {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			counts[k]++
-		}
-	}
+	counts := a.computeValidatorCountsLocked(now)
 
 	trusted := make([][33]byte, 0, len(counts))
 	for k, c := range counts {
@@ -1163,7 +1189,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 		a.unlBlocked = true
 	}
 
-	if mastersEqual(trusted, a.lastEmitted) {
+	if slices.Equal(trusted, a.lastEmitted) {
 		return
 	}
 	a.lastEmitted = trusted
@@ -1189,6 +1215,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 // Mirrors rippled's ValidatorList::getQuorumKeys() shape.
 func (a *Aggregator) TrustedValidators() ([]consensus.NodeID, [][33]byte) {
 	a.mu.Lock()
+	defer a.flushCacheWrites()
 	defer a.mu.Unlock()
 
 	if a.threshold <= 0 || len(a.publishers) == 0 {
@@ -1203,26 +1230,7 @@ func (a *Aggregator) TrustedValidators() ([]consensus.NodeID, [][33]byte) {
 	for _, s := range a.state {
 		a.promoteRemainingLocked(s, now)
 	}
-	counts := make(map[[33]byte]int, 64)
-	for _, s := range a.state {
-		if s.Status != StatusAvailable {
-			continue
-		}
-		if !s.Expiration.IsZero() && !s.Expiration.After(now) {
-			continue
-		}
-		if !s.Effective.IsZero() && s.Effective.After(now) {
-			continue
-		}
-		seen := make(map[[33]byte]struct{}, len(s.Validators))
-		for _, k := range s.Validators {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			counts[k]++
-		}
-	}
+	counts := a.computeValidatorCountsLocked(now)
 
 	masters := make([][33]byte, 0, len(counts))
 	for k, c := range counts {
@@ -1295,12 +1303,7 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 }
 
 func isSupportedVersion(v uint32) bool {
-	for _, sv := range SupportedVersions {
-		if sv == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SupportedVersions, v)
 }
 
 // RecordPeerSequence remembers that `peerID` has at least sequence
@@ -1408,7 +1411,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
 		}
-		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
 			collBlobs = append(collBlobs, BroadcastBlob{
@@ -1420,10 +1423,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 			}
 		}
 	}
-	collVersion := blobVersion
-	if collVersion < 2 {
-		collVersion = 2
-	}
+	collVersion := max(blobVersion, 2)
 	logger := a.logger
 	a.mu.Unlock()
 
@@ -1483,19 +1483,4 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 			"remaining", len(collBlobs)-1,
 			"peers_sent", sent)
 	}
-}
-
-// mastersEqual reports whether two sorted master-key slices contain
-// the same elements in the same order. Used to short-circuit no-op
-// OnChange emissions.
-func mastersEqual(a, b [][33]byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

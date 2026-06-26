@@ -1108,63 +1108,6 @@ func TestParseProtocolCtlFeatures(t *testing.T) {
 	}
 }
 
-// TestPeerFeatureEnabled tests combined local/remote feature negotiation
-func TestPeerFeatureEnabled(t *testing.T) {
-	tests := []struct {
-		name         string
-		header       string
-		feature      string
-		value        string
-		localEnabled bool
-		want         bool
-	}{
-		{
-			name:         "both_enabled",
-			header:       "compr=lz4",
-			feature:      "compr",
-			value:        "lz4",
-			localEnabled: true,
-			want:         true,
-		},
-		{
-			name:         "local_disabled",
-			header:       "compr=lz4",
-			feature:      "compr",
-			value:        "lz4",
-			localEnabled: false,
-			want:         false,
-		},
-		{
-			name:         "remote_disabled",
-			header:       "",
-			feature:      "compr",
-			value:        "lz4",
-			localEnabled: true,
-			want:         false,
-		},
-		{
-			name:         "value_mismatch",
-			header:       "compr=gzip",
-			feature:      "compr",
-			value:        "lz4",
-			localEnabled: true,
-			want:         false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			headers := http.Header{}
-			if tt.header != "" {
-				headers.Set(HeaderProtocolCtl, tt.header)
-			}
-
-			got := PeerFeatureEnabled(headers, tt.feature, tt.value, tt.localEnabled)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // newTestOverlayWithPeers returns a partially-initialised Overlay
 // whose only valid surface is the peers map + peersMu — enough to
 // drive PeersWithClosedLedger / PeersJSON in tests that don't need a
@@ -1689,7 +1632,7 @@ func TestHandshake_MalformedLedgerHashRejected(t *testing.T) {
 // match rippled `1 + rand_int(prng, MAX_UINT64 - 1)`, which uses a
 // closed interval and so includes MAX_UINT64. Only 0 is excluded.
 func TestInstanceCookie_GeneratorRange(t *testing.T) {
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		v, err := generateInstanceCookie()
 		require.NoError(t, err)
 		assert.NotZero(t, v, "cookie must never be zero")

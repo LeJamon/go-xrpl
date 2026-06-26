@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -364,7 +365,7 @@ func decodeIOUValue(data []byte) (string, error) {
 			buf = append(buf, '-')
 		}
 		buf = append(buf, mTrimmed...)
-		for i := 0; i < scale; i++ {
+		for range scale {
 			buf = append(buf, '0')
 		}
 		return string(buf), nil
@@ -404,9 +405,10 @@ func boolToInt(b bool) int {
 
 // decodeCurrencyCode mirrors codec/binarycodec/types/amount.go's
 // deserializeCurrencyCode without the strings.ToUpper(hex.EncodeToString(...))
-// double allocation. Returns "XRP" for the all-zero sentinel, the uppercased
-// 3-char ISO code when the 12/3/5-byte standard layout matches the IOU
-// charset, and the upper-hex 40-char form for any non-standard 20-byte code.
+// double allocation. Returns "XRP" for the all-zero sentinel, the 3-char ISO
+// code (preserving its original case — codes are case-sensitive and must
+// round-trip byte-for-byte) when the 12/3/5-byte standard layout matches the
+// IOU charset, and the upper-hex 40-char form for any non-standard 20-byte code.
 func decodeCurrencyCode(data []byte) (string, error) {
 	if len(data) != 20 {
 		return "", errors.New("ledgerfields: currency code must be 20 bytes")
@@ -424,7 +426,7 @@ func decodeCurrencyCode(data []byte) (string, error) {
 	}
 
 	standardLayout := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if data[i] != 0 {
 			standardLayout = false
 			break
@@ -446,11 +448,8 @@ func decodeCurrencyCode(data []byte) (string, error) {
 		}
 		var iso [3]byte
 		ok := true
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			b := data[12+i]
-			if b >= 'a' && b <= 'z' {
-				b -= 'a' - 'A'
-			}
 			iso[i] = b
 			if !isValidIOUCodeByte(b) {
 				ok = false
@@ -470,6 +469,8 @@ func isValidIOUCodeByte(b byte) bool {
 		return true
 	case b >= 'A' && b <= 'Z':
 		return true
+	case b >= 'a' && b <= 'z':
+		return true
 	}
 	switch b {
 	case '?', '!', '@', '#', '$', '%', '^', '&', '*',
@@ -479,10 +480,12 @@ func isValidIOUCodeByte(b byte) bool {
 	return false
 }
 
-// readMPTAmount decodes a 33-byte MPToken Amount inline. verifyMPTValue
-// constrains |value| ≤ 2^63-1, so the 8-byte mantissa fits in a uint64 and
-// no big.Int math is required. The returned map shape matches the codec's
-// deserializeMPTAmount: {value, mpt_issuance_id}.
+// readMPTAmount decodes a 33-byte MPToken Amount inline. An MPT magnitude
+// must fit in int64 (max 2^63-1); a larger mantissa is rejected so an
+// out-of-range value can never surface as a bogus decimal string. The 8-byte
+// mantissa therefore fits in a uint64 and no big.Int math is required. The
+// returned map shape matches the codec's deserializeMPTAmount:
+// {value, mpt_issuance_id}.
 func (r *streamReader) readMPTAmount() (map[string]any, error) {
 	if r.pos+33 > len(r.data) {
 		return nil, errors.New("ledgerfields: out of bounds reading MPT Amount")
@@ -492,6 +495,9 @@ func (r *streamReader) readMPTAmount() (map[string]any, error) {
 
 	positive := data[0]&0x40 != 0
 	mant := binary.BigEndian.Uint64(data[1:9])
+	if mant > math.MaxInt64 {
+		return nil, errors.New("ledgerfields: MPT amount exceeds max int64")
+	}
 
 	var value string
 	if positive {
@@ -538,7 +544,9 @@ func (r *streamReader) readVector256() ([]string, error) {
 // BinaryParser allocation per compound field, paid only on ledger entries
 // that carry one (AMM, SignerList, NFTokenPage, Vault, …).
 func (r *streamReader) readSTObject() (map[string]any, error) {
-	v, err := r.decodeViaCodec(&types.STObject{}, -1)
+	// Depth 1: the object is a nested field of the entry, so the nesting-depth
+	// cap counts it as one level in (STVar.cpp:122).
+	v, err := r.decodeViaCodec(&types.STObject{}, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +558,9 @@ func (r *streamReader) readSTObject() (map[string]any, error) {
 }
 
 func (r *streamReader) readSTArray() ([]any, error) {
-	v, err := r.decodeViaCodec(&types.STArray{}, -1)
+	// Depth 1: the array is a nested field of the entry, so the nesting-depth
+	// cap counts it as one level in (STVar.cpp:122).
+	v, err := r.decodeViaCodec(&types.STArray{}, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -566,10 +576,10 @@ func (r *streamReader) readIssue() (any, error) {
 	return r.decodeViaCodec(&types.Issue{}, -1)
 }
 
-// readXChainBridge reads a fixed-size 80-byte XChainBridge.
+// readXChainBridge reads an XChainBridge (two VL-prefixed door accounts, each
+// followed by a 20/40-byte issue); the codec determines the length itself.
 func (r *streamReader) readXChainBridge() (any, error) {
-	const xChainBridgeLength = 80
-	return r.decodeViaCodec(&types.XChainBridge{}, xChainBridgeLength)
+	return r.decodeViaCodec(&types.XChainBridge{}, -1)
 }
 
 // readNumber reads a 12-byte Number.

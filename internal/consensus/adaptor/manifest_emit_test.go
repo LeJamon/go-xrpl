@@ -107,7 +107,7 @@ func routerWithCache(t *testing.T, sender manifestSender, seedKey byte, seq uint
 		}
 	}
 
-	router := NewRouter(&mockEngine{}, ad, nil, nil)
+	router := NewRouter(&mockEngine{}, ad, nil)
 	router.manifests = cache
 	router.overrideManifestSender = sender
 	return router, cache, id

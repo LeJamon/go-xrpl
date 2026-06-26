@@ -23,8 +23,6 @@ func init() {
 type MPToken struct {
 	present           uint64
 	Account           string // AccountID (base58)
-	Issuer            string // AccountID (base58)
-	Sequence          uint32
 	MPTokenIssuanceID string
 	MPTAmount         string // UInt64 (decimal string, sMD_BaseTen)
 	LockedAmount      string // UInt64 (decimal string, sMD_BaseTen)
@@ -36,8 +34,6 @@ type MPToken struct {
 
 const (
 	mptokenBitAccount uint64 = 1 << iota
-	mptokenBitIssuer
-	mptokenBitSequence
 	mptokenBitMPTokenIssuanceID
 	mptokenBitMPTAmount
 	mptokenBitLockedAmount
@@ -79,9 +75,6 @@ func (m *MPToken) Decode(data []byte) error {
 			case 2:
 				m.Flags = val
 				m.present |= mptokenBitFlags
-			case 4:
-				m.Sequence = val
-				m.present |= mptokenBitSequence
 			case 5:
 				m.PreviousTxnLgrSeq = val
 				m.present |= mptokenBitPreviousTxnLgrSeq
@@ -135,9 +128,6 @@ func (m *MPToken) Decode(data []byte) error {
 			case 1:
 				m.Account = val
 				m.present |= mptokenBitAccount
-			case 4:
-				m.Issuer = val
-				m.present |= mptokenBitIssuer
 			default:
 				return newErrUnknownField("MPToken", typeCode, fieldCode)
 			}
@@ -166,12 +156,6 @@ func (m *MPToken) Decode(data []byte) error {
 func (m *MPToken) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenBitAccount != 0 && !(skipDefault && m.Account == "") {
 		out["Account"] = m.Account
-	}
-	if m.present&mptokenBitIssuer != 0 && !(skipDefault && m.Issuer == "") {
-		out["Issuer"] = m.Issuer
-	}
-	if m.present&mptokenBitSequence != 0 && !(skipDefault && m.Sequence == 0) {
-		out["Sequence"] = m.Sequence
 	}
 	if m.present&mptokenBitMPTokenIssuanceID != 0 && !(skipDefault && isZeroHexString(m.MPTokenIssuanceID)) {
 		out["MPTokenIssuanceID"] = m.MPTokenIssuanceID
@@ -205,18 +189,16 @@ func (m *MPToken) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*MPToken)
-	if !ok || p == nil {
+	prv, ok := prev.(*MPToken)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, m.Account, p.present&mptokenBitAccount, m.present&mptokenBitAccount)
-	emitIfChangedString(out, "Issuer", p.Issuer, m.Issuer, p.present&mptokenBitIssuer, m.present&mptokenBitIssuer)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, m.Sequence, p.present&mptokenBitSequence, m.present&mptokenBitSequence)
-	emitIfChangedString(out, "MPTokenIssuanceID", p.MPTokenIssuanceID, m.MPTokenIssuanceID, p.present&mptokenBitMPTokenIssuanceID, m.present&mptokenBitMPTokenIssuanceID)
-	emitIfChangedString(out, "MPTAmount", p.MPTAmount, m.MPTAmount, p.present&mptokenBitMPTAmount, m.present&mptokenBitMPTAmount)
-	emitIfChangedString(out, "LockedAmount", p.LockedAmount, m.LockedAmount, p.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, m.OwnerNode, p.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, m.Flags, p.present&mptokenBitFlags, m.present&mptokenBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, m.Account, prv.present&mptokenBitAccount, m.present&mptokenBitAccount)
+	emitIfChangedString(out, "MPTokenIssuanceID", prv.MPTokenIssuanceID, m.MPTokenIssuanceID, prv.present&mptokenBitMPTokenIssuanceID, m.present&mptokenBitMPTokenIssuanceID)
+	emitIfChangedString(out, "MPTAmount", prv.MPTAmount, m.MPTAmount, prv.present&mptokenBitMPTAmount, m.present&mptokenBitMPTAmount)
+	emitIfChangedString(out, "LockedAmount", prv.LockedAmount, m.LockedAmount, prv.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, m.OwnerNode, prv.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenBitFlags, m.present&mptokenBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -227,12 +209,6 @@ func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 func (m *MPToken) EmitChangeOrigFields(out map[string]any) {
 	if m.present&mptokenBitAccount != 0 {
 		out["Account"] = m.Account
-	}
-	if m.present&mptokenBitIssuer != 0 {
-		out["Issuer"] = m.Issuer
-	}
-	if m.present&mptokenBitSequence != 0 {
-		out["Sequence"] = m.Sequence
 	}
 	if m.present&mptokenBitMPTokenIssuanceID != 0 {
 		out["MPTokenIssuanceID"] = m.MPTokenIssuanceID
@@ -292,12 +268,6 @@ func (m *MPToken) ToMap() map[string]any {
 	}
 	if m.present&mptokenBitAccount != 0 {
 		out["Account"] = m.Account
-	}
-	if m.present&mptokenBitIssuer != 0 {
-		out["Issuer"] = m.Issuer
-	}
-	if m.present&mptokenBitSequence != 0 {
-		out["Sequence"] = m.Sequence
 	}
 	if m.present&mptokenBitMPTokenIssuanceID != 0 {
 		out["MPTokenIssuanceID"] = m.MPTokenIssuanceID

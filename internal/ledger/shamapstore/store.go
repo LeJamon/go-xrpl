@@ -1,19 +1,19 @@
-// Package shamapstore implements go-xrpl's advisory-delete state — the subset
-// of rippled's SHAMapStore (src/xrpld/app/misc/SHAMapStore.h) that the
-// can_delete RPC reads and writes.
+// Package shamapstore implements go-xrpl's online-delete subsystem — the
+// go-xrpl equivalent of rippled's SHAMapStore (src/xrpld/app/misc/SHAMapStore.h).
 //
-// It tracks two ledger sequences, gated by the node_db advisory_delete config
-// flag and persisted across restarts (mirroring rippled's SavedStateDB):
+// Two pieces live here:
 //
-//   - canDelete   the advisory boundary: all ledgers at or below this seq are
-//     unprotected and online delete may remove them.
-//   - lastRotated the most recent ledger online delete has rotated; 0 until
-//     the first rotation.
-//
-// The background rotation that consumes canDelete to actually delete old
-// ledger nodes (rippled SHAMapStoreImp's run loop) is a separate subsystem and
-// is intentionally not part of this state layer — can_delete only manages the
-// advisory boundary, exactly as rippled's CanDelete.cpp does.
+//   - Store, the advisory-delete state the can_delete RPC reads and writes. It
+//     tracks two ledger sequences, gated by the node_db advisory_delete config
+//     flag and persisted across restarts (mirroring rippled's SavedStateDB):
+//     canDelete (the advisory boundary: ledgers at or below it are unprotected
+//     and online delete may remove them) and lastRotated (the most recent
+//     ledger online delete has rotated; 0 until the first rotation).
+//   - Rotator, the background job that consumes those boundaries to actually
+//     reclaim disk: every node_db online_delete validated ledgers it deletes
+//     complete ledgers below the rotation boundary from the node store and the
+//     relational index, advancing lastRotated (rippled SHAMapStoreImp's run
+//     loop).
 package shamapstore
 
 import (
@@ -93,9 +93,9 @@ func (s *Store) GetLastRotated() uint32 {
 	return s.lastRotated
 }
 
-// SetLastRotated records the last rotated ledger and persists it. Reserved for
-// the online-delete rotation subsystem (rippled SHAMapStoreImp); can_delete
-// never advances lastRotated.
+// SetLastRotated records the last rotated ledger and persists it. Advanced by
+// the online-delete rotation subsystem (see Rotator); can_delete never advances
+// lastRotated.
 func (s *Store) SetLastRotated(seq uint32) error {
 	s.mu.Lock()
 	s.lastRotated = seq

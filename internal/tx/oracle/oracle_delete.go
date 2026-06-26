@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -51,7 +52,7 @@ func (o *OracleDelete) RequiredAmendments() [][32]byte {
 // Apply applies an OracleDelete transaction to the ledger state.
 // Combines rippled's DeleteOracle::preclaim() and DeleteOracle::doApply().
 // Reference: rippled DeleteOracle.cpp
-func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+func (o *OracleDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("oracle delete apply",
 		"account", o.Account,
 		"oracleDocumentID", o.OracleDocumentID,
@@ -65,13 +66,13 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("oracle delete: oracle not found",
 			"oracleDocumentID", o.OracleDocumentID,
 		)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	oracle, err := state.ParseOracle(oracleData)
 	if err != nil {
 		ctx.Log.Error("oracle delete: failed to parse oracle", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// --- doApply ---
@@ -83,12 +84,12 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 // This is a shared helper used by both OracleDelete.Apply() and AccountDelete cascade.
 // If ownerCount is nil, the OwnerCount adjustment is skipped (account deletion case).
 // Reference: rippled DeleteOracle.cpp deleteOracle()
-func DeleteOracleFromView(view state.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) tx.Result {
+func DeleteOracleFromView(view state.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) ter.Result {
 	// DirRemove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
 	_, err := state.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)
 	if err != nil {
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 
 	// Adjust OwnerCount
@@ -104,8 +105,8 @@ func DeleteOracleFromView(view state.LedgerView, oracleKey keylet.Keylet, oracle
 
 	// Erase oracle SLE
 	if err := view.Erase(oracleKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

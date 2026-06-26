@@ -12,9 +12,12 @@ import (
 )
 
 // MethodDispatcher allows forwarding RPC calls to the method registry.
-// Used by the 'json' RPC method to proxy calls.
+// Used by the 'json' RPC method to proxy calls. The caller's RpcContext is
+// threaded through so the forwarded method keeps the request's timeout,
+// role, client IP and api version — without it a guest could wrap a heavy
+// method in `json` to escape per-IP load charging.
 type MethodDispatcher interface {
-	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
+	ExecuteMethod(ctx *RpcContext, method string, params []byte) (any, *RpcError)
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the
@@ -231,6 +234,13 @@ type ServiceContainer struct {
 	// (rippled getJson at ValidatorList.cpp:1737-1744). Nil-safe.
 	NegativeUNLBase58 func() []string
 
+	// BetaRPCAPI reports whether the operator enabled the beta RPC API
+	// (beta_rpc_api config knob, rippled Config::BETA_RPC_API). When set,
+	// requests may use api_version up to BetaApiVersion; otherwise the
+	// accepted range is capped at MaxSupportedApiVersion. The `version`
+	// method reports `last` accordingly.
+	BetaRPCAPI bool
+
 	// TxQMetrics returns the current transaction-queue metrics used by
 	// server_info for the load_factor_fee_* triple. Nil until the
 	// ledger service is wired (standalone tests, pre-startup) —
@@ -243,14 +253,14 @@ type ServiceContainer struct {
 	// rippled's idle-state defaults.
 	TxQFeeMetrics func() TxQFeeMetrics
 
-	// JqTransOverflow returns the cumulative inbound TMTransaction
-	// frames the overlay refused at the router-dispatch boundary
-	// because the in-flight tx ceiling was already met. This is
-	// goxrpl's analog of rippled's OverlayImpl::getJqTransOverflow
-	// (bumped at PeerImp.cpp:1353 when
-	// `getJobCount(jtTRANSACTION) > MAX_TRANSACTIONS`) and drives
-	// server_info.jq_trans_overflow. Nil in standalone / RPC-only
-	// configurations (no overlay) — handler reads zero.
+	// JqTransOverflow returns the cumulative inbound transactions shed
+	// under saturation, summed across the two sequential drop stages: the
+	// overlay ingress gate (the in-flight tx ceiling) and the consensus
+	// worker pool. A frame is shed by at most one stage, so the sum does not
+	// double-count. This is goxrpl's analog of rippled's single
+	// jq_trans_overflow counter and drives server_info.jq_trans_overflow.
+	// Nil in standalone / RPC-only configurations (no overlay) — handler
+	// reads zero.
 	JqTransOverflow func() uint64
 
 	// PeerDisconnects returns cumulative peer-disconnect counters
@@ -394,6 +404,68 @@ type ServiceContainer struct {
 	// wired — the handler then returns notEnabled, matching rippled's
 	// advisoryDelete() gate.
 	AdvisoryDeleteState AdvisoryDeleteStore
+
+	// URLSubscriptions backs rippled's url-based (RPCSub) admin
+	// subscriptions: subscribe/unsubscribe requests carrying a url are
+	// routed here instead of to a per-connection subscription. Populated by
+	// the WebSocket server, which owns the registry so url subscribers share
+	// the broadcast fan-out with WebSocket connections. Nil when no
+	// WebSocket server is wired — the handlers then report notSupported.
+	URLSubscriptions URLSubscriptionService
+
+	// QueueAccountTxs returns the transactions currently queued in the TxQ
+	// for one account, sorted by SeqProxy. Backs account_info's queue_data
+	// (rippled TxQ::getAccountTxs → AccountInfo.cpp:193-283). Nil in
+	// standalone / RPC-only configurations (no TxQ) — the handler then
+	// reports an empty queue.
+	QueueAccountTxs func(account [20]byte) []QueuedTxInfo
+
+	// QueueAllTxs returns every transaction currently in the TxQ, ordered by
+	// fee level. Backs the ledger method's queue_data dump (rippled
+	// TxQ::getTxs → LedgerToJson.cpp fillJsonQueue). Nil-safe like
+	// QueueAccountTxs.
+	QueueAllTxs func() []QueuedTxInfo
+}
+
+// URLSubscriptionService is the url-keyed subscription registry mirroring
+// rippled's RPCSub/mRpcSubMap: each url maps to one long-lived subscriber
+// whose events are delivered as outbound JSON-RPC "event" calls with per-url
+// sequence numbers and basic auth. Callers gate on role before invoking —
+// both methods are admin-only in rippled's handlers.
+type URLSubscriptionService interface {
+	// Subscribe registers (or extends) the url subscription and returns the
+	// same ack payload a WebSocket subscriber gets (current ledger info for
+	// the ledger stream, book snapshots).
+	Subscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+	// Unsubscribe removes the listed streams/accounts/books from the url
+	// subscription and drops the registry entry once no stream
+	// subscriptions remain. An unknown url is silent success.
+	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+}
+
+// QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by
+// the queue_data sections of account_info and the ledger method. It mirrors
+// the fields rippled reads off TxQ::TxDetails (AccountInfo.cpp:218-261,
+// LedgerToJson.cpp:292-316). Fee and MaxSpendDrops are drop amounts;
+// FeeLevel is the queue fee level on the same scale server_info reports.
+type QueuedTxInfo struct {
+	Account          [20]byte
+	TxID             [32]byte
+	SeqValue         uint32
+	IsTicket         bool
+	FeeLevel         uint64
+	LastValid        uint32
+	Fee              uint64
+	MaxSpendDrops    uint64
+	AuthChange       bool
+	RetriesRemaining int
+	PreflightResult  string
+	LastResult       string
+	HasLastResult    bool
+	// TxJSON is the flattened transaction, included verbatim in the ledger
+	// queue dump's per-entry tx / tx_json field. Nil for account_info, which
+	// does not echo the transaction body.
+	TxJSON map[string]any
 }
 
 // AdvisoryDeleteStore is the advisory-delete state facet backing the
@@ -476,9 +548,9 @@ type TxReduceRelayMetrics struct {
 // JSON renders the metrics in rippled's tx_reduce_relay wire shape: the txr_*
 // keys with decimal-string values (rippled uses std::to_string), matching
 // TxMetrics::json() (TxMetrics.cpp:117-148).
-func (m TxReduceRelayMetrics) JSON() map[string]interface{} {
+func (m TxReduceRelayMetrics) JSON() map[string]any {
 	s := func(v uint64) string { return strconv.FormatUint(v, 10) }
-	return map[string]interface{}{
+	return map[string]any{
 		"txr_tx_cnt":           s(m.TxCnt),
 		"txr_tx_sz":            s(m.TxSz),
 		"txr_have_txs_cnt":     s(m.HaveTxCnt),
@@ -624,6 +696,17 @@ type LedgerAccessor interface {
 	IsAmendmentBlocked() bool
 }
 
+// TxTablesProvider reports whether the node maintains the transaction
+// tables backing tx-history RPCs. Mirrors rippled config().useTxTables():
+// tx, account_tx and tx_history must return rpcNOT_ENABLED before any
+// parameter validation when the tables are unavailable (AccountTx.cpp,
+// TxHistory.cpp, Tx.cpp all gate as their first statement). A ledger
+// service that does not implement it is assumed to have history
+// available.
+type TxTablesProvider interface {
+	UseTxTables() bool
+}
+
 // TransactionSubmitter handles transaction submission and retrieval.
 // FailHardSubmitter is the optional rippled-faithful surface for
 // submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
@@ -646,16 +729,18 @@ type TransactionSubmitter interface {
 	// GetAutofillFee returns the Fee a transaction should carry to enter
 	// the open ledger. Mirrors rippled getCurrentNetworkFee
 	// (TransactionSign.cpp:839-877): max(scaleFeeLoad(feeDefault),
-	// escalatedFee) with a feeDefault * mult / div ceiling. On ceiling
-	// overflow handlers map to rpcINTERNAL; on exceedance the returned
-	// error is a *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee) also
-	// matches). Includes per-tx-type adjustments (multisign, AccountDelete,
-	// AMMCreate, LedgerStateFix). Never reads the source account.
+	// escalatedFee) with a feeDefault * mult / div ceiling, where mult /
+	// div are the caller's fee_mult_max / fee_div_max (default 10 / 1).
+	// On ceiling overflow handlers map to rpcINTERNAL; on exceedance the
+	// returned error is a *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee)
+	// also matches). Includes per-tx-type adjustments (multisign,
+	// AccountDelete, AMMCreate, LedgerStateFix). Never reads the source
+	// account.
 	//
 	// unlimited mirrors rippled's isUnlimited(role) carve-out: admin /
 	// identified callers skip local-only load below 4x remote. The
 	// ceiling check still applies (rippled enforces it post-scale).
-	GetAutofillFee(txJSON []byte, unlimited bool) (fee uint64, err error)
+	GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (fee uint64, err error)
 
 	// GetAutofillSequence returns the Sequence a transaction should
 	// carry. Mirrors rippled getAutofillSequence (Simulate.cpp:37-69):
@@ -669,12 +754,12 @@ type TransactionSubmitter interface {
 // AccountQuerier provides account-related read operations.
 type AccountQuerier interface {
 	GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfo, error)
-	GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error)
-	GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error)
+	GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*AccountLinesResult, error)
+	GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountOffersResult, error)
 	GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *AccountTxMarker, forward bool) (*AccountTxResult, error)
-	GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error)
+	GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*AccountChannelsResult, error)
 	GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error)
-	GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error)
+	GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error)
 	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
 }
 
@@ -697,6 +782,17 @@ type LedgerService interface {
 	// NFT operations
 	GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
 	GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+}
+
+// LedgerViewSource is an optional LedgerService facet for handlers that need
+// direct state-view access to a specific ledger (e.g. ripple_path_find with
+// an explicit ledger_index/ledger_hash). The returned LedgerReader carries
+// the metadata (sequence, hash, validated) merged into the RPC response.
+// Production and rpcenv adapters implement it; mocks may omit it, in which
+// case handlers report lgrNotFound for explicit ledger selectors.
+type LedgerViewSource interface {
+	GetLedgerViewBySeq(seq uint32) (LedgerStateView, LedgerReader, error)
+	GetLedgerViewByHash(hash [32]byte) (LedgerStateView, LedgerReader, error)
 }
 
 // LedgerStateView provides low-level read access to ledger state.
@@ -956,12 +1052,12 @@ type AccountLinesResult struct {
 
 // AccountOffer represents an offer from account_offers RPC
 type AccountOffer struct {
-	Flags      uint32      `json:"flags"`
-	Seq        uint32      `json:"seq"`
-	TakerGets  interface{} `json:"taker_gets"`
-	TakerPays  interface{} `json:"taker_pays"`
-	Quality    string      `json:"quality"`
-	Expiration uint32      `json:"expiration,omitempty"`
+	Flags      uint32 `json:"flags"`
+	Seq        uint32 `json:"seq"`
+	TakerGets  any    `json:"taker_gets"`
+	TakerPays  any    `json:"taker_pays"`
+	Quality    string `json:"quality"`
+	Expiration uint32 `json:"expiration,omitempty"`
 }
 
 // AccountOffersResult contains the result of account_offers RPC
@@ -979,25 +1075,25 @@ type AccountOffersResult struct {
 // fields (quality, owner_funds, taker_gets_funded, taker_pays_funded) that
 // NetworkOPsImp::getBookPage layers on top.
 type BookOffer struct {
-	Account           string                   `json:"Account"`
-	BookDirectory     string                   `json:"BookDirectory"`
-	BookNode          string                   `json:"BookNode"`
-	Expiration        uint32                   `json:"Expiration,omitempty"`
-	Flags             uint32                   `json:"Flags"`
-	LedgerEntryType   string                   `json:"LedgerEntryType"`
-	OwnerNode         string                   `json:"OwnerNode"`
-	PreviousTxnID     string                   `json:"PreviousTxnID"`
-	PreviousTxnLgrSeq uint32                   `json:"PreviousTxnLgrSeq"`
-	Sequence          uint32                   `json:"Sequence"`
-	TakerGets         interface{}              `json:"TakerGets"`
-	TakerPays         interface{}              `json:"TakerPays"`
-	DomainID          string                   `json:"DomainID,omitempty"`
-	AdditionalBooks   []map[string]interface{} `json:"AdditionalBooks,omitempty"`
-	Index             string                   `json:"index"`
-	Quality           string                   `json:"quality"`
-	OwnerFunds        string                   `json:"owner_funds,omitempty"`
-	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	Account           string           `json:"Account"`
+	BookDirectory     string           `json:"BookDirectory"`
+	BookNode          string           `json:"BookNode"`
+	Expiration        uint32           `json:"Expiration,omitempty"`
+	Flags             uint32           `json:"Flags"`
+	LedgerEntryType   string           `json:"LedgerEntryType"`
+	OwnerNode         string           `json:"OwnerNode"`
+	PreviousTxnID     string           `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32           `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32           `json:"Sequence"`
+	TakerGets         any              `json:"TakerGets"`
+	TakerPays         any              `json:"TakerPays"`
+	DomainID          string           `json:"DomainID,omitempty"`
+	AdditionalBooks   []map[string]any `json:"AdditionalBooks,omitempty"`
+	Index             string           `json:"index"`
+	Quality           string           `json:"quality"`
+	OwnerFunds        string           `json:"owner_funds,omitempty"`
+	TakerGetsFunded   any              `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   any              `json:"taker_pays_funded,omitempty"`
 	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
 	// hex) for the offer's ledger entry when the request set proof=true.
 	// Verify against ledger.account_hash with shamap.VerifyProofPath.
@@ -1230,13 +1326,13 @@ type NoRippleProblem struct {
 
 // SuggestedTransaction represents a suggested transaction to fix NoRipple issues
 type SuggestedTransaction struct {
-	TransactionType string                 `json:"TransactionType"`
-	Account         string                 `json:"Account"`
-	Fee             string                 `json:"Fee"`
-	Sequence        uint32                 `json:"Sequence"`
-	SetFlag         uint32                 `json:"SetFlag,omitempty"`
-	Flags           uint32                 `json:"Flags,omitempty"`
-	LimitAmount     map[string]interface{} `json:"LimitAmount,omitempty"`
+	TransactionType string         `json:"TransactionType"`
+	Account         string         `json:"Account"`
+	Fee             string         `json:"Fee"`
+	Sequence        uint32         `json:"Sequence"`
+	SetFlag         uint32         `json:"SetFlag,omitempty"`
+	Flags           uint32         `json:"Flags,omitempty"`
+	LimitAmount     map[string]any `json:"LimitAmount,omitempty"`
 }
 
 // NoRippleCheckResult contains the result of noripple_check RPC
@@ -1250,12 +1346,12 @@ type NoRippleCheckResult struct {
 
 // NFTOfferInfo represents an individual NFToken offer for nft_buy_offers/nft_sell_offers RPC
 type NFTOfferInfo struct {
-	NFTOfferIndex string      `json:"nft_offer_index"`
-	Flags         uint32      `json:"flags"`
-	Owner         string      `json:"owner"`
-	Amount        interface{} `json:"amount"`                // Can be string (XRP drops) or object (IOU)
-	Destination   string      `json:"destination,omitempty"` // Optional
-	Expiration    uint32      `json:"expiration,omitempty"`  // Optional
+	NFTOfferIndex string `json:"nft_offer_index"`
+	Flags         uint32 `json:"flags"`
+	Owner         string `json:"owner"`
+	Amount        any    `json:"amount"`                // Can be string (XRP drops) or object (IOU)
+	Destination   string `json:"destination,omitempty"` // Optional
+	Expiration    uint32 `json:"expiration,omitempty"`  // Optional
 }
 
 // NFTOffersResult contains the result of nft_buy_offers/nft_sell_offers RPC

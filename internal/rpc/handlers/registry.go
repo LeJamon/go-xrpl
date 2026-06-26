@@ -91,14 +91,12 @@ func RegisterAll(registry *types.MethodRegistry) {
 	registry.Register("amm_info", &AMMInfoMethod{})
 	registry.Register("vault_info", &VaultInfoMethod{})
 	registry.Register("get_aggregate_price", &GetAggregatePriceMethod{})
-}
 
-// RegisterWebSocketOnly registers commands that only make sense on a
-// persistent WebSocket session. The HTTP server intentionally does NOT
-// call this — clients hitting subscribe / unsubscribe over HTTP get
-// methodNotFound (matching rippled), which is a clearer discovery
-// signal than "method exists, returns notSupported".
-func RegisterWebSocketOnly(registry *types.MethodRegistry) {
+	// subscribe/unsubscribe are in the common table like rippled's
+	// Handler.cpp: over plain JSON-RPC they serve the no-infoSub gating
+	// (invalidParams / noPermission / notSupported); the WebSocket
+	// dispatch intercepts both commands before registry lookup and runs
+	// the real subscription implementation.
 	registry.Register("subscribe", &SubscribeMethod{})
 	registry.Register("unsubscribe", &UnsubscribeMethod{})
 }

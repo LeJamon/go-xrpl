@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -20,10 +21,8 @@ import (
 // It provides a simplified interface for creating accounts, funding them,
 // submitting transactions, and verifying results.
 type TestEnv struct {
-	// t is the active testing.TB used for Helper / Fatalf / Cleanup.
-	// Captured at construction; use WithT to retarget at a subtest's *testing.T
-	// so that failures attribute to the running subtest rather than the parent.
-	// testing.TB is an interface so both *testing.T and *testing.B work.
+	// t is the active testing.TB used for Helper / Fatalf / Cleanup, captured at
+	// construction. testing.TB is an interface so both *testing.T and *testing.B work.
 	t        testing.TB
 	ledger   *ledger.Ledger
 	clock    *ManualClock
@@ -58,12 +57,17 @@ type TestEnv struct {
 	// Reference: rippled's FeatureBitset in test/jtx/Env.h
 	rulesBuilder *amendment.RulesBuilder
 
-	// pendingAmendments stores amendment names that take effect on next Close().
-	// Matches rippled where enableFeature/disableFeature require close() for
-	// changes to take effect.
+	// pendingAmendments / pendingEnable / pendingDisable stage amendment changes
+	// that take effect on the next Close(), matching rippled where
+	// enableFeature/disableFeature require close() for changes to take effect.
+	// pendingAmendments (set by SetAmendments) REPLACES the whole rule set;
+	// pendingEnable/pendingDisable (set by EnableFeature/DisableFeature) are
+	// deltas applied on top of the current set. All are validated at call time.
 	// Reference: rippled Env.cpp: "Env::close() must be called for feature
 	// enable to take place."
 	pendingAmendments []string
+	pendingEnable     []string
+	pendingDisable    []string
 
 	// NetworkID for engine configuration (0 = mainnet default, >1024 requires NetworkID in txns)
 	networkID uint32
@@ -105,6 +109,11 @@ type TestEnv struct {
 	// txInLedger tracks the number of transactions applied to the current open
 	// ledger. Reset on Close(). Used by TxQ for fee escalation computation.
 	txInLedger uint32
+
+	// invariantViolationHook, when set, is installed on the per-submit engine
+	// to force an invariant violation. Used by invariant-escalation tests; nil
+	// for every normal submission.
+	invariantViolationHook txengine.InvariantViolationHook
 
 	// closingTxTotal tracks the total transaction count including inner batch
 	// transactions. In rippled, the closed ledger's tx map includes inner
@@ -256,19 +265,11 @@ func NewTestEnvBacked(t testing.TB) *TestEnv {
 	return env
 }
 
-// NewTestEnvWithConfigBacked creates a test environment with custom config and PebbleDB backing.
-func NewTestEnvWithConfigBacked(t testing.TB, cfg genesis.Config) *TestEnv {
-	t.Helper()
-	env := NewTestEnvWithConfig(t, cfg)
-	env.enablePebbleBacking(t)
-	return env
-}
-
 // enablePebbleBacking enables PebbleDB-backed SHAMaps on the environment.
 // Must be called before any transactions are submitted.
 func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 	t.Helper()
-	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 200000)
+	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 256, 200000)
 	if err != nil {
 		t.Fatalf("Failed to create state family: %v", err)
 	}
@@ -344,6 +345,14 @@ func (e *TestEnv) SetOpenLedger(open bool) {
 // distinction between apply() (direct, used for setup) and submit() (via TxQ).
 func (e *TestEnv) SetBypassTxQ(bypass bool) {
 	e.bypassTxQ = bypass
+}
+
+// SetInvariantViolationHook installs a test-only hook on every subsequently
+// submitted transaction's engine, forcing the invariant pass to report a
+// violation. Used to exercise the tec→tecINVARIANT_FAILED→tefINVARIANT_FAILED
+// escalation. Pass nil to clear it.
+func (e *TestEnv) SetInvariantViolationHook(hook txengine.InvariantViolationHook) {
+	e.invariantViolationHook = hook
 }
 
 // ResetTxQMaxSize resets the TxQ's maxSize to nil (no limit).
@@ -432,13 +441,4 @@ func (e *TestEnv) syncFeeSettings() {
 // the transaction set. Cleared after use.
 func (e *TestEnv) SetNextCloseSalt(salt [32]byte) {
 	e.nextCloseSalt = &salt
-}
-
-// WithT retargets the env at the given testing.TB. Use this from a subtest
-// so that env-driven Helper / Fatalf calls attribute failures to the subtest
-// rather than the parent test captured at construction.
-func (e *TestEnv) WithT(t testing.TB) *TestEnv {
-	t.Helper()
-	e.t = t
-	return e
 }

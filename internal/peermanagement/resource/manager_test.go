@@ -47,7 +47,7 @@ func TestCharge_WarnThenDrop(t *testing.T) {
 	fee := NewCharge(DropThreshold+1, "synthetic")
 
 	gotWarn := false
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		d := c.Charge(fee, "")
 		if d == Warn {
 			gotWarn = true
@@ -60,7 +60,7 @@ func TestCharge_WarnThenDrop(t *testing.T) {
 	}
 
 	gotDrop := false
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		d := c.Charge(fee, "")
 		if d == Drop {
 			gotDrop = true
@@ -102,7 +102,7 @@ func TestCharge_DecayKeepsHonestPeerBelowDrop(t *testing.T) {
 
 	// One feeInvalidData (400) per decay window — well below the
 	// drop threshold. Should never escalate to Drop or even Warn.
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if d := c.Charge(FeeInvalidData, "low-freq"); d != Ok {
 			t.Fatalf("iter %d: disposition=%v want Ok (balance=%d)", i, d, c.Balance())
 		}
@@ -120,7 +120,7 @@ func TestUnlimited_NeverDrops(t *testing.T) {
 	// also stay at zero — rippled's Consumer::charge short-circuits
 	// for unlimited consumers (Consumer.cpp:106-114), so the entry's
 	// local_balance is never debited.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if d := c.Charge(NewCharge(DropThreshold+1, "huge"), ""); d != Ok {
 			t.Fatalf("unlimited returned %v, want Ok", d)
 		}
@@ -219,11 +219,11 @@ func TestConcurrent_ChargesAreSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var charges atomic.Uint64
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				c.Charge(FeeInvalidData, "")
 				charges.Add(1)
 			}
@@ -291,7 +291,7 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	// is erased and a fresh acquire returns Ok.
 	steps := int(SecondsUntilExpiration/time.Second) + 1
 	readmitted := false
-	for i := 0; i < steps; i++ {
+	for range steps {
 		clk.Advance(time.Second)
 		m.PeriodicActivity()
 		c3 := m.NewInboundEndpoint(addr)
@@ -332,5 +332,95 @@ func TestImport_ReplacesPriorContributionFromSameOrigin(t *testing.T) {
 	defer c2.Release()
 	if got := c2.Balance(); got != 2200 {
 		t.Fatalf("after re-import balance=%d want 2200 (not 3700 — prior contribution must have been subtracted)", got)
+	}
+}
+
+// TestDecay_AgesUnderSubSecondChargeRate guards against the regression
+// where decay anchored on a nanosecond clock: any charge cadence faster
+// than once per second left elapsed-seconds truncating to zero, so the
+// balance never aged and grew as a pure accumulator. With second-
+// truncated anchoring it must reach a bounded steady state instead.
+func TestDecay_AgesUnderSubSecondChargeRate(t *testing.T) {
+	m, clk := newTestManager()
+	c := m.NewInboundEndpoint("192.0.2.100")
+	defer c.Release()
+
+	const cost = 100
+	const charges = 2000 // 200 s at one charge per 100 ms
+
+	for range charges {
+		c.Charge(NewCharge(cost, "sub-second"), "")
+		clk.Advance(100 * time.Millisecond)
+	}
+
+	bal := c.Balance()
+
+	// Without decay the balance would normalize to charges*cost/window.
+	undecayed := charges * cost / DecayWindowSeconds
+	if bal >= undecayed/2 {
+		t.Fatalf("balance=%d did not decay (undecayed accumulation=%d): sub-second charges are not aging", bal, undecayed)
+	}
+	if bal <= 0 {
+		t.Fatalf("balance=%d: a continuously charged consumer must not decay to zero", bal)
+	}
+}
+
+// TestImport_ExpiryReleasesEntries guards against the gossip refcount
+// leak: when an import record expires, every entry it pinned must fall
+// back to refcount 0 and be erased after the normal grace period, not
+// linger in the table forever.
+func TestImport_ExpiryReleasesEntries(t *testing.T) {
+	m, clk := newTestManager()
+
+	g := Gossip{Items: []GossipItem{
+		{Address: "192.0.2.110", Balance: 1500},
+		{Address: "192.0.2.111", Balance: 1800},
+	}}
+	m.ImportConsumers("origin-leak", g)
+	if got := m.EntryCount(); got != 2 {
+		t.Fatalf("after import EntryCount=%d want 2", got)
+	}
+
+	// After GossipExpiration the record is dropped and its entries fall
+	// to refcount 0, but they keep the normal SecondsUntilExpiration
+	// grace window before erasure.
+	clk.Advance(GossipExpiration + time.Second)
+	m.PeriodicActivity()
+	if got := m.EntryCount(); got != 2 {
+		t.Fatalf("entries erased before grace period: EntryCount=%d want 2", got)
+	}
+
+	// Once the grace window lapses they must be gone — a leaked refcount
+	// would pin them at 1 forever.
+	clk.Advance(SecondsUntilExpiration + time.Second)
+	m.PeriodicActivity()
+	if got := m.EntryCount(); got != 0 {
+		t.Fatalf("gossip entries leaked: EntryCount=%d want 0", got)
+	}
+}
+
+// TestImport_ReplacementReleasesDroppedAddress verifies the replacement
+// path also releases through expiry semantics: an address present in a
+// prior snapshot but absent from the next must be allowed to age out,
+// not stranded as a zero-balance, never-erased entry.
+func TestImport_ReplacementReleasesDroppedAddress(t *testing.T) {
+	m, clk := newTestManager()
+
+	m.ImportConsumers("origin-r", Gossip{Items: []GossipItem{
+		{Address: "192.0.2.120", Balance: 1500},
+		{Address: "192.0.2.121", Balance: 1500},
+	}})
+	if got := m.EntryCount(); got != 2 {
+		t.Fatalf("after first import EntryCount=%d want 2", got)
+	}
+
+	// Re-import from the same origin, dropping the second address.
+	m.ImportConsumers("origin-r", Gossip{Items: []GossipItem{
+		{Address: "192.0.2.120", Balance: 1500},
+	}})
+	clk.Advance(SecondsUntilExpiration + time.Second)
+	m.PeriodicActivity()
+	if got := m.EntryCount(); got != 1 {
+		t.Fatalf("dropped gossip address leaked: EntryCount=%d want 1", got)
 	}
 }

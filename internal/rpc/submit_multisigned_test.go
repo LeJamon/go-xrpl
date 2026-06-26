@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -12,8 +13,8 @@ import (
 
 // validMultisignedTxJSON returns a minimal valid multi-signed tx_json for testing.
 // Override individual fields to test specific validation failures.
-func validMultisignedTxJSON() map[string]interface{} {
-	return map[string]interface{}{
+func validMultisignedTxJSON() map[string]any {
+	return map[string]any{
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"TransactionType": "Payment",
 		"Destination":     "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik",
@@ -21,9 +22,9 @@ func validMultisignedTxJSON() map[string]interface{} {
 		"Fee":             "12",
 		"Sequence":        float64(1),
 		"SigningPubKey":   "",
-		"Signers": []interface{}{
-			map[string]interface{}{
-				"Signer": map[string]interface{}{
+		"Signers": []any{
+			map[string]any{
+				"Signer": map[string]any{
 					"Account":       "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik",
 					"SigningPubKey": "0379F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000ED",
 					"TxnSignature":  "3045022100DEADBEEF",
@@ -33,9 +34,9 @@ func validMultisignedTxJSON() map[string]interface{} {
 	}
 }
 
-func makeSubmitMultisignedParams(t *testing.T, txJSON map[string]interface{}) json.RawMessage {
+func makeSubmitMultisignedParams(t *testing.T, txJSON map[string]any) json.RawMessage {
 	t.Helper()
-	request := map[string]interface{}{
+	request := map[string]any{
 		"tx_json": txJSON,
 	}
 	b, err := json.Marshal(request)
@@ -202,9 +203,9 @@ func TestSubmitMultisigned_SelfSigning(t *testing.T) {
 	txAccount := txJSON["Account"].(string)
 
 	// Replace the signer's Account with the transaction source account.
-	signers := txJSON["Signers"].([]interface{})
-	signerWrapper := signers[0].(map[string]interface{})
-	signer := signerWrapper["Signer"].(map[string]interface{})
+	signers := txJSON["Signers"].([]any)
+	signerWrapper := signers[0].(map[string]any)
+	signer := signerWrapper["Signer"].(map[string]any)
 	signer["Account"] = txAccount
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
@@ -226,16 +227,16 @@ func TestSubmitMultisigned_DuplicateSigners(t *testing.T) {
 
 	dupAccount := "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik"
 	txJSON := validMultisignedTxJSON()
-	txJSON["Signers"] = []interface{}{
-		map[string]interface{}{
-			"Signer": map[string]interface{}{
+	txJSON["Signers"] = []any{
+		map[string]any{
+			"Signer": map[string]any{
 				"Account":       dupAccount,
 				"SigningPubKey": "0379F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000ED",
 				"TxnSignature":  "3045022100DEADBEEF",
 			},
 		},
-		map[string]interface{}{
-			"Signer": map[string]interface{}{
+		map[string]any{
+			"Signer": map[string]any{
 				"Account":       dupAccount,
 				"SigningPubKey": "0279F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000EE",
 				"TxnSignature":  "3045022100BEEFDEAD",
@@ -286,6 +287,97 @@ func TestSubmitMultisigned_ValidationOrder_SequenceBeforeTxnSignature(t *testing
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, "Missing field 'tx_json.Sequence'.", rpcErr.Message)
+}
+
+// TestSubmitMultisigned_SrcActMalformed verifies that an unparseable source
+// account is rejected with rpcSRC_ACT_MALFORMED.
+// Matches rippled checkTxJsonFields: "Invalid field 'tx_json.Account'."
+func TestSubmitMultisigned_SrcActMalformed(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	services := newSubmitTestServices(mock)
+
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+
+	txJSON := validMultisignedTxJSON()
+	txJSON["Account"] = "not_an_address"
+
+	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, rpcErr.Code)
+	assert.Equal(t, "srcActMalformed", rpcErr.ErrorString)
+	assert.Equal(t, "Invalid field 'tx_json.Account'.", rpcErr.Message)
+}
+
+// TestSubmitMultisigned_SrcActNotFound verifies that a source account absent
+// from the current ledger is rejected with rpcSRC_ACT_NOT_FOUND.
+// Matches rippled transactionSubmitMultiSigned: the account SLE read
+// (TransactionSign.cpp:1259-1270).
+func TestSubmitMultisigned_SrcActNotFound(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	mock.accountInfoErr = svcerr.ErrAccountNotFound
+	services := newSubmitTestServices(mock)
+
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+
+	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, validMultisignedTxJSON()))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, "srcActNotFound", rpcErr.ErrorString)
+	assert.Equal(t, "Source account not found.", rpcErr.Message)
+}
+
+// TestSubmitMultisigned_ValidationOrder_SrcActNotFoundBeforeTxnSignature
+// verifies that the source-account existence check fires before the
+// post-serialization TxnSignature check, matching rippled's order (the SLE
+// read at TransactionSign.cpp:1259 precedes the serialized-field checks at
+// 1325-1390).
+func TestSubmitMultisigned_ValidationOrder_SrcActNotFoundBeforeTxnSignature(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	mock.accountInfoErr = svcerr.ErrAccountNotFound
+	services := newSubmitTestServices(mock)
+
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+
+	txJSON := validMultisignedTxJSON()
+	txJSON["TxnSignature"] = "DEADBEEF"
+
+	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, rpcErr.Code)
+}
+
+// TestSubmitMultisigned_HappyPath submits a well-formed multi-signed
+// transaction against a ledger where the source account exists and asserts
+// the engine response is surfaced. Signer-list / quorum validation is left
+// to the engine (tefNOT_MULTI_SIGNING / tefBAD_QUORUM), so the RPC layer
+// accepts the submission.
+func TestSubmitMultisigned_HappyPath(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	services := newSubmitTestServices(mock)
+
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+
+	txJSON := validMultisignedTxJSON()
+	// Use addresses that pass base58 decoding so binary encoding succeeds.
+	txJSON["Destination"] = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	signer := txJSON["Signers"].([]any)[0].(map[string]any)["Signer"].(map[string]any)
+	signer["Account"] = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+
+	result, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
+
+	resp, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "tesSUCCESS", resp["engine_result"])
+	assert.NotEmpty(t, resp["tx_blob"])
+	respTxJSON, ok := resp["tx_json"].(map[string]any)
+	require.True(t, ok)
+	assert.NotEmpty(t, respTxJSON["hash"])
 }
 
 // TestSubmitMultisigned_ValidationOrder_TxnSignatureBeforeFee verifies that

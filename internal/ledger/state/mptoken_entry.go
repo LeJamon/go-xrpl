@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -30,6 +29,15 @@ type MPTokenIssuanceData struct {
 	MPTokenMetadata   string  // hex-encoded
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
 	Flags             uint32
+
+	// Threading fields. MPTokenIssuance is a threaded type, so these must
+	// survive a parse→serialize round-trip — otherwise a re-serialize during
+	// MPTokenIssuanceSet drops them, the bytes differ from the original, and a
+	// no-op (e.g. locking an already-locked issuance) emits a spurious
+	// ModifiedNode that rippled drops (*curNode == *origNode). Mirrors the
+	// DirectoryNode threading-field fix. Reference: ApplyStateTable.cpp:156-157.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // MPTokenData holds parsed fields of an MPToken ledger entry.
@@ -41,148 +49,79 @@ type MPTokenData struct {
 	MPTAmount         uint64
 	LockedAmount      *uint64
 	Flags             uint32
+
+	// Threading fields — see MPTokenIssuanceData. Dropping them on round-trip
+	// makes MPTokenIssuanceSet on a holder token (lock/unlock) emit a spurious
+	// ModifiedNode for a no-op.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // ParseMPTokenIssuance parses an MPTokenIssuance ledger entry from binary data.
-// Uses the same TLV parsing pattern as ParseEscrow.
 func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 	issuance := &MPTokenIssuanceData{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt8:
-			if offset+1 > len(data) {
-				return issuance, nil
-			}
-			value := data[offset]
-			offset++
-			switch fieldCode {
-			case 5: // AssetScale (nth=5)
-				issuance.AssetScale = value
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt8:
+			if f.FieldCode == 5 { // AssetScale (nth=5)
+				issuance.AssetScale = f.UInt8()
 			}
 
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return issuance, nil
-			}
-			value := binary.BigEndian.Uint16(data[offset : offset+2])
-			offset += 2
-			switch fieldCode {
-			case 1: // LedgerEntryType - skip
-			case 4: // TransferFee (nth=4)
-				issuance.TransferFee = value
+		case stUInt16:
+			if f.FieldCode == 4 { // TransferFee (nth=4)
+				issuance.TransferFee = f.UInt16()
 			}
 
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return issuance, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 2: // Flags
-				issuance.Flags = value
+				issuance.Flags = f.UInt32()
 			case 4: // Sequence
-				issuance.Sequence = value
+				issuance.Sequence = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				issuance.PreviousTxnLgrSeq = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return issuance, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
+		case stUInt64:
+			switch f.FieldCode {
 			case 4: // OwnerNode (nth=4)
-				issuance.OwnerNode = value
+				issuance.OwnerNode = f.UInt64()
 			case 24: // MaximumAmount (nth=24)
-				v := value
+				v := f.UInt64()
 				issuance.MaximumAmount = &v
 			case 25: // OutstandingAmount (nth=25)
-				issuance.OutstandingAmount = value
+				issuance.OutstandingAmount = f.UInt64()
 			case 29: // LockedAmount (nth=29)
-				v := value
+				v := f.UInt64()
 				issuance.LockedAmount = &v
 			}
 
-		case FieldTypeAccountID:
-			if offset+21 > len(data) {
-				return issuance, nil
-			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				switch fieldCode {
-				case 4: // Issuer (nth=4)
-					copy(issuance.Issuer[:], data[offset:offset+20])
+		case stAccountID:
+			if f.FieldCode == 4 { // Issuer (nth=4)
+				if id, ok := f.AccountID(); ok {
+					issuance.Issuer = id
 				}
-				offset += 20
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return issuance, nil
-			}
-			switch fieldCode {
+		case stHash256:
+			switch f.FieldCode {
+			case 5: // PreviousTxnID
+				issuance.PreviousTxnID = f.Hash256()
 			case 34: // DomainID (nth=34)
-				domainHex := hex.EncodeToString(data[offset : offset+32])
+				domainHex := hex.EncodeToString(f.Value)
 				issuance.DomainID = &domainHex
 			}
-			offset += 32
 
-		case FieldTypeBlob:
-			if offset >= len(data) {
-				return issuance, nil
+		case stBlob:
+			if f.FieldCode == 30 { // MPTokenMetadata (nth=30)
+				issuance.MPTokenMetadata = hex.EncodeToString(f.VLBytes())
 			}
-			length := int(data[offset])
-			offset++
-			if length >= 193 {
-				// VL encoding: 2-byte length for values >= 193
-				if offset >= len(data) {
-					return issuance, nil
-				}
-				length = 193 + ((length-193)*256 + int(data[offset]))
-				offset++
-			}
-			if offset+length > len(data) {
-				return issuance, nil
-			}
-			switch fieldCode {
-			case 30: // MPTokenMetadata (nth=30)
-				issuance.MPTokenMetadata = hex.EncodeToString(data[offset : offset+length])
-			}
-			offset += length
-
-		default:
-			return issuance, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return issuance, nil
@@ -228,6 +167,12 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 		jsonObj["DomainID"] = strings.ToUpper(*issuance.DomainID)
 	}
 
+	var zeroHash [32]byte
+	if issuance.PreviousTxnID != zeroHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(issuance.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = issuance.PreviousTxnLgrSeq
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode MPTokenIssuance: %w", err)
@@ -239,120 +184,49 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 // ParseMPToken parses an MPToken ledger entry from binary data.
 func ParseMPToken(data []byte) (*MPTokenData, error) {
 	token := &MPTokenData{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return token, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return token, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 2: // Flags
-				token.Flags = value
+				token.Flags = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				token.PreviousTxnLgrSeq = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return token, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
+		case stUInt64:
+			switch f.FieldCode {
 			case 4: // OwnerNode (nth=4)
-				token.OwnerNode = value
+				token.OwnerNode = f.UInt64()
 			case 26: // MPTAmount (nth=26)
-				token.MPTAmount = value
+				token.MPTAmount = f.UInt64()
 			case 29: // LockedAmount (nth=29)
-				v := value
+				v := f.UInt64()
 				token.LockedAmount = &v
 			}
 
-		case FieldTypeAccountID:
-			if offset+21 > len(data) {
-				return token, nil
-			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				switch fieldCode {
-				case 1: // Account (nth=1)
-					copy(token.Account[:], data[offset:offset+20])
+		case stAccountID:
+			if f.FieldCode == 1 { // Account (nth=1)
+				if id, ok := f.AccountID(); ok {
+					token.Account = id
 				}
-				offset += 20
 			}
 
-		case FieldTypeHash192:
-			if offset+24 > len(data) {
-				return token, nil
+		case stHash192:
+			if f.FieldCode == 1 { // MPTokenIssuanceID (nth=1)
+				token.MPTokenIssuanceID = f.Hash192()
 			}
-			switch fieldCode {
-			case 1: // MPTokenIssuanceID (nth=1)
-				copy(token.MPTokenIssuanceID[:], data[offset:offset+24])
-			}
-			offset += 24
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return token, nil
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				token.PreviousTxnID = f.Hash256()
 			}
-			offset += 32
-
-		case FieldTypeBlob:
-			if offset >= len(data) {
-				return token, nil
-			}
-			length := int(data[offset])
-			offset++
-			if length >= 193 {
-				if offset >= len(data) {
-					return token, nil
-				}
-				length = 193 + ((length-193)*256 + int(data[offset]))
-				offset++
-			}
-			if offset+length > len(data) {
-				return token, nil
-			}
-			offset += length
-
-		default:
-			return token, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return token, nil
@@ -371,11 +245,22 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 		"Account":           accountAddress,
 		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
 		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
-		"MPTAmount":         fmt.Sprintf("%d", token.MPTAmount),
+	}
+
+	// sfMPTAmount is soeDEFAULT on ltMPTOKEN (ledger_entries.macro), so rippled
+	// omits it when zero; emitting MPTAmount:0 diverges the SLE state (account_hash).
+	if token.MPTAmount != 0 {
+		jsonObj["MPTAmount"] = fmt.Sprintf("%d", token.MPTAmount)
 	}
 
 	if token.LockedAmount != nil && *token.LockedAmount > 0 {
 		jsonObj["LockedAmount"] = fmt.Sprintf("%d", *token.LockedAmount)
+	}
+
+	var zeroHash [32]byte
+	if token.PreviousTxnID != zeroHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(token.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = token.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

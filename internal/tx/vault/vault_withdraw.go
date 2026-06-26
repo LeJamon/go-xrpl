@@ -1,11 +1,10 @@
 package vault
 
 import (
-	"encoding/hex"
-
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // VaultWithdraw withdraws assets from a vault.
@@ -45,49 +44,33 @@ func (v *VaultWithdraw) Validate() error {
 	}
 
 	// Check for invalid flags (universal mask)
-	// Reference: rippled VaultWithdraw.cpp:42-43
 	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
 	// VaultID is required and cannot be zero
-	// Reference: rippled VaultWithdraw.cpp:45-49
 	if v.VaultID == "" {
 		return ErrVaultIDRequired
 	}
-	vaultBytes, err := hex.DecodeString(v.VaultID)
-	if err != nil || len(vaultBytes) != 32 {
-		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
-	}
-	isZero := true
-	for _, b := range vaultBytes {
-		if b != 0 {
-			isZero = false
-			break
+	if _, err := tx.ParseHash256NonZero(v.VaultID); err != nil {
+		if isZeroHash(v.VaultID) {
+			return ErrVaultIDZero
 		}
-	}
-	if isZero {
-		return ErrVaultIDZero
+		return ter.Errorf(ter.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
 
-	// Amount must be positive — rippled VaultWithdraw.cpp:51-52 returns
-	// temBAD_AMOUNT for any sfAmount <= beast::zero (covers default,
-	// explicit zero, and negative), so one check suffices.
-	if v.Amount.Float64() <= 0 {
+	// Amount must be positive — rejects default, explicit zero, and negative.
+	if v.Amount.Signum() <= 0 {
 		return ErrVaultAmountNotPos
 	}
 
-	// Validate Destination if present
-	// Reference: rippled VaultWithdraw.cpp:54-63
+	// A present Destination must not be the zero account. When no Destination
+	// is given, a DestinationTag is meaningless and rejected.
 	if v.Destination != "" {
-		// Destination cannot be zero (empty is handled by field being absent)
-		// In rippled this checks for beast::zero which is all zeros
-		// For our case, if Destination is set but empty, that's an error
-	}
-
-	// DestinationTag without Destination is invalid
-	// Reference: rippled VaultWithdraw.cpp:64-69
-	if v.Destination == "" && v.DestinationTag != nil {
+		if id, err := state.DecodeAccountID(v.Destination); err == nil && id == ([20]byte{}) {
+			return ErrVaultDestZero
+		}
+	} else if v.DestinationTag != nil {
 		return ErrVaultDestTagNoAccount
 	}
 
@@ -102,37 +85,8 @@ func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureSingleAssetVault}
 }
 
-func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("vault withdraw apply",
-		"account", v.Account,
-		"vaultID", v.VaultID,
-		"amount", v.Amount,
-	)
-
-	if v.VaultID == "" || v.Amount.IsZero() {
-		return tx.TemINVALID
-	}
-	vaultBytes, err := hex.DecodeString(v.VaultID)
-	if err != nil || len(vaultBytes) != 32 {
-		return tx.TemINVALID
-	}
-	var vaultKey [32]byte
-	copy(vaultKey[:], vaultBytes)
-	vaultKeylet := keylet.Keylet{Key: vaultKey, Type: 0x0084}
-	_, err = ctx.View.Read(vaultKeylet)
-	if err != nil {
-		return tx.TecNO_ENTRY
-	}
-	if v.Amount.Currency == "" || v.Amount.Currency == "XRP" {
-		amount := uint64(v.Amount.Drops())
-		ctx.Account.Balance += amount
-	}
-
-	ctx.Log.Debug("vault withdraw: shares redeemed",
-		"account", v.Account,
-		"vaultID", v.VaultID,
-		"amount", v.Amount,
-		"shares", v.Amount,
-	)
-	return tx.TesSUCCESS
+// Apply is intentionally unimplemented. See VaultCreate.Apply.
+func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
+	ctx.Log.Trace("vault withdraw apply: not implemented", "account", v.Account)
+	return ter.TefINTERNAL
 }

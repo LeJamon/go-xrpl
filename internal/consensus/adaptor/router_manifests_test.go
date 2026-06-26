@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"testing"
@@ -60,14 +59,13 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 	cache := manifest.NewCache()
 	// Pass nil overlay — the relay step is a no-op; we're only
 	// verifying apply.
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	serialized := buildWireManifest(t, 3, 0x20, 0x21)
@@ -114,12 +112,11 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Start from a valid manifest and corrupt MasterSignature so

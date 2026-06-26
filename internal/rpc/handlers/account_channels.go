@@ -9,10 +9,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountChannelsMethod handles the account_channels RPC method
+// AccountChannelsMethod handles account_channels: it lists the payment
+// channels where the account is the source, optionally filtered by
+// destination_account.
 type AccountChannelsMethod struct{ BaseHandler }
 
-func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -39,10 +41,14 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
+
+	markerStr, mErr := markerString(request.Marker)
+	if mErr != nil {
+		return nil, mErr
 	}
 
 	// Get account channels from the ledger service
@@ -53,22 +59,25 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		request.DestinationAccount,
 		ledgerIndex,
 		limit,
+		markerStr,
 	)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		// Handle malformed destination_account address
-		if len(err.Error()) > 32 && err.Error()[:32] == "invalid destination_account addr" {
-			return nil, types.RpcErrorInvalidParams("Destination account malformed.")
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}
 
 	// Build channels array with proper field handling
-	channels := make([]map[string]interface{}, len(result.Channels))
+	channels := make([]map[string]any, len(result.Channels))
 	for i, ch := range result.Channels {
-		channel := map[string]interface{}{
+		channel := map[string]any{
 			"channel_id":          ch.ChannelID,
 			"account":             ch.Account,
 			"destination_account": ch.DestinationAccount,
@@ -101,13 +110,11 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Build response
-	response := map[string]interface{}{
-		"account":      result.Account,
-		"channels":     channels,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+	response := map[string]any{
+		"account":  result.Account,
+		"channels": channels,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

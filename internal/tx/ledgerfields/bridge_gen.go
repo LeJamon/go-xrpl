@@ -30,6 +30,7 @@ type Bridge struct {
 	XChainAccountCreateCount string // UInt64 (lowercase hex, no leading zeros)
 	XChainAccountClaimCount  string // UInt64 (lowercase hex, no leading zeros)
 	OwnerNode                string // UInt64 (lowercase hex, no leading zeros)
+	Flags                    uint32
 	PreviousTxnID            string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq        uint32
 }
@@ -43,6 +44,7 @@ const (
 	bridgeBitXChainAccountCreateCount
 	bridgeBitXChainAccountClaimCount
 	bridgeBitOwnerNode
+	bridgeBitFlags
 	bridgeBitPreviousTxnID
 	bridgeBitPreviousTxnLgrSeq
 )
@@ -76,6 +78,9 @@ func (b *Bridge) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				b.Flags = val
+				b.present |= bridgeBitFlags
 			case 5:
 				b.PreviousTxnLgrSeq = val
 				b.present |= bridgeBitPreviousTxnLgrSeq
@@ -180,13 +185,13 @@ func (b *Bridge) emitAll(out map[string]any, skipDefault bool) {
 	if b.present&bridgeBitAccount != 0 && !(skipDefault && b.Account == "") {
 		out["Account"] = b.Account
 	}
-	if b.present&bridgeBitSignatureReward != 0 {
+	if b.present&bridgeBitSignatureReward != 0 && !(skipDefault && amountIsDefault(b.SignatureReward)) {
 		out["SignatureReward"] = b.SignatureReward
 	}
-	if b.present&bridgeBitMinAccountCreateAmount != 0 {
+	if b.present&bridgeBitMinAccountCreateAmount != 0 && !(skipDefault && amountIsDefault(b.MinAccountCreateAmount)) {
 		out["MinAccountCreateAmount"] = b.MinAccountCreateAmount
 	}
-	if b.present&bridgeBitXChainBridge != 0 {
+	if b.present&bridgeBitXChainBridge != 0 && !(skipDefault && xchainBridgeIsDefault(b.XChainBridge)) {
 		out["XChainBridge"] = b.XChainBridge
 	}
 	if b.present&bridgeBitXChainClaimID != 0 && !(skipDefault && isZeroHexString(b.XChainClaimID)) {
@@ -200,6 +205,9 @@ func (b *Bridge) emitAll(out map[string]any, skipDefault bool) {
 	}
 	if b.present&bridgeBitOwnerNode != 0 && !(skipDefault && isZeroHexString(b.OwnerNode)) {
 		out["OwnerNode"] = b.OwnerNode
+	}
+	if b.present&bridgeBitFlags != 0 && !(skipDefault && b.Flags == 0) {
+		out["Flags"] = b.Flags
 	}
 }
 
@@ -218,18 +226,19 @@ func (b *Bridge) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Bridge)
-	if !ok || p == nil {
+	prv, ok := prev.(*Bridge)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, b.Account, p.present&bridgeBitAccount, b.present&bridgeBitAccount)
-	emitIfChangedAmount(out, "SignatureReward", p.SignatureReward, b.SignatureReward, p.present&bridgeBitSignatureReward, b.present&bridgeBitSignatureReward)
-	emitIfChangedAmount(out, "MinAccountCreateAmount", p.MinAccountCreateAmount, b.MinAccountCreateAmount, p.present&bridgeBitMinAccountCreateAmount, b.present&bridgeBitMinAccountCreateAmount)
-	emitIfChangedDeep(out, "XChainBridge", p.XChainBridge, b.XChainBridge, p.present&bridgeBitXChainBridge, b.present&bridgeBitXChainBridge)
-	emitIfChangedString(out, "XChainClaimID", p.XChainClaimID, b.XChainClaimID, p.present&bridgeBitXChainClaimID, b.present&bridgeBitXChainClaimID)
-	emitIfChangedString(out, "XChainAccountCreateCount", p.XChainAccountCreateCount, b.XChainAccountCreateCount, p.present&bridgeBitXChainAccountCreateCount, b.present&bridgeBitXChainAccountCreateCount)
-	emitIfChangedString(out, "XChainAccountClaimCount", p.XChainAccountClaimCount, b.XChainAccountClaimCount, p.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, b.OwnerNode, p.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
+	emitIfChangedString(out, "Account", prv.Account, b.Account, prv.present&bridgeBitAccount, b.present&bridgeBitAccount)
+	emitIfChangedAmount(out, "SignatureReward", prv.SignatureReward, b.SignatureReward, prv.present&bridgeBitSignatureReward, b.present&bridgeBitSignatureReward)
+	emitIfChangedAmount(out, "MinAccountCreateAmount", prv.MinAccountCreateAmount, b.MinAccountCreateAmount, prv.present&bridgeBitMinAccountCreateAmount, b.present&bridgeBitMinAccountCreateAmount)
+	emitIfChangedDeep(out, "XChainBridge", prv.XChainBridge, b.XChainBridge, prv.present&bridgeBitXChainBridge, b.present&bridgeBitXChainBridge)
+	emitIfChangedString(out, "XChainClaimID", prv.XChainClaimID, b.XChainClaimID, prv.present&bridgeBitXChainClaimID, b.present&bridgeBitXChainClaimID)
+	emitIfChangedString(out, "XChainAccountCreateCount", prv.XChainAccountCreateCount, b.XChainAccountCreateCount, prv.present&bridgeBitXChainAccountCreateCount, b.present&bridgeBitXChainAccountCreateCount)
+	emitIfChangedString(out, "XChainAccountClaimCount", prv.XChainAccountClaimCount, b.XChainAccountClaimCount, prv.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, b.OwnerNode, prv.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, b.Flags, prv.present&bridgeBitFlags, b.present&bridgeBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -261,6 +270,9 @@ func (b *Bridge) EmitChangeOrigFields(out map[string]any) {
 	}
 	if b.present&bridgeBitOwnerNode != 0 {
 		out["OwnerNode"] = b.OwnerNode
+	}
+	if b.present&bridgeBitFlags != 0 {
+		out["Flags"] = b.Flags
 	}
 }
 
@@ -326,6 +338,9 @@ func (b *Bridge) ToMap() map[string]any {
 	}
 	if b.present&bridgeBitOwnerNode != 0 {
 		out["OwnerNode"] = b.OwnerNode
+	}
+	if b.present&bridgeBitFlags != 0 {
+		out["Flags"] = b.Flags
 	}
 	if b.present&bridgeBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = b.PreviousTxnID

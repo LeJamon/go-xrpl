@@ -1,6 +1,10 @@
 package ledgerfields
 
-import "reflect"
+import (
+	"reflect"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+)
 
 // Helpers shared by all generated entry implementations. They keep the
 // presence-aware change-detection logic in one place so the per-entry-type
@@ -98,6 +102,65 @@ func isZeroHexString(s string) bool {
 	}
 	for i := 0; i < len(s); i++ {
 		if s[i] != '0' {
+			return false
+		}
+	}
+	return true
+}
+
+// amountIsDefault reports whether v is a default STAmount. rippled
+// STAmount::isDefault() is `(mValue == 0) && native()` — only a zero XRP amount
+// is default. An IOU or MPT amount decodes to a map and is never default.
+func amountIsDefault(v any) bool {
+	s, ok := v.(string)
+	return ok && s == "0"
+}
+
+// issueIsDefault reports whether v is a default STIssue. rippled
+// STIssue::isDefault() is `asset_ == xrpIssue()`; the codec decodes the XRP
+// issue as the single-key map {"currency": "XRP"}.
+func issueIsDefault(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	c, _ := m["currency"].(string)
+	return len(m) == 1 && c == "XRP"
+}
+
+// numberIsDefault reports whether v is a default STNumber (zero). rippled
+// STNumber::isDefault() is `value_ == Number()`; the codec decodes a zero
+// Number as the string "0".
+func numberIsDefault(v any) bool {
+	s, ok := v.(string)
+	return ok && s == "0"
+}
+
+// zeroAccountAddr is the base58 encoding of the all-zero AccountID, the value
+// a default STAccount / XChainBridge door decodes to.
+var zeroAccountAddr = func() string {
+	s, _ := addresscodec.Encode(make([]byte, 20), []byte{addresscodec.AccountAddressPrefix}, addresscodec.AccountAddressLength)
+	return s
+}()
+
+// xchainBridgeIsDefault reports whether v is a default STXChainBridge. rippled
+// STXChainBridge::isDefault() requires all four doors/issues to be default
+// (zero account / XRP issue); a real bridge always carries non-zero doors, so
+// this only fires on a genuinely empty bridge. Doors decode to address
+// strings; issues decode to Issue-shaped maps.
+func xchainBridgeIsDefault(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, k := range [...]string{"LockingChainDoor", "IssuingChainDoor"} {
+		s, _ := m[k].(string)
+		if s != zeroAccountAddr {
+			return false
+		}
+	}
+	for _, k := range [...]string{"LockingChainIssue", "IssuingChainIssue"} {
+		if !issueIsDefault(m[k]) {
 			return false
 		}
 	}

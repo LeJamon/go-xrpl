@@ -5,15 +5,15 @@ import (
 	"fmt"
 )
 
-// InvariantError represents an error found during invariant checking.
-type InvariantError struct {
+// invariantError describes a single invariant violation found during a check.
+type invariantError struct {
 	NodeID      NodeID
 	Description string
 	Err         error
 }
 
 // Error implements the error interface.
-func (e *InvariantError) Error() string {
+func (e *invariantError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("invariant violation at %s: %s: %v", e.NodeID.String(), e.Description, e.Err)
 	}
@@ -21,25 +21,25 @@ func (e *InvariantError) Error() string {
 }
 
 // Unwrap returns the underlying error.
-func (e *InvariantError) Unwrap() error {
+func (e *invariantError) Unwrap() error {
 	return e.Err
 }
 
-// InvariantCheckResult contains the results of an invariant check.
-type InvariantCheckResult struct {
-	Errors            []*InvariantError
+// invariantCheckResult contains the results of a detailed invariant check.
+type invariantCheckResult struct {
+	Errors            []*invariantError
 	NodesChecked      int
 	LeavesChecked     int
 	InnerNodesChecked int
 }
 
 // HasErrors returns true if any invariant violations were found.
-func (r *InvariantCheckResult) HasErrors() bool {
+func (r *invariantCheckResult) HasErrors() bool {
 	return len(r.Errors) > 0
 }
 
 // String returns a summary of the invariant check results.
-func (r *InvariantCheckResult) String() string {
+func (r *invariantCheckResult) String() string {
 	if r.HasErrors() {
 		return fmt.Sprintf("InvariantCheck: FAILED - %d errors found (%d nodes checked: %d inner, %d leaves)",
 			len(r.Errors), r.NodesChecked, r.InnerNodesChecked, r.LeavesChecked)
@@ -48,7 +48,7 @@ func (r *InvariantCheckResult) String() string {
 		r.NodesChecked, r.InnerNodesChecked, r.LeavesChecked)
 }
 
-// Invariants performs a comprehensive consistency check on the SHAMap.
+// invariants performs a comprehensive consistency check on the SHAMap.
 // It verifies:
 //   - All node hashes are computed correctly
 //   - All child references are consistent (hash matches actual child)
@@ -57,7 +57,7 @@ func (r *InvariantCheckResult) String() string {
 //   - Tree structure is valid (no cycles, proper depth)
 //
 // Returns an error describing the first inconsistency found, or nil if valid.
-func (sm *SHAMap) Invariants() error {
+func (sm *SHAMap) invariants() error {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -71,68 +71,220 @@ func (sm *SHAMap) invariantsUnsafe() error {
 		if sm.state != StateInvalid {
 			return nil // Empty map is valid
 		}
-		return fmt.Errorf("invalid state with nil root")
+		return fmt.Errorf("%w: invalid state with nil root", ErrInvalidState)
 	}
 
-	// Check root node
-	if err := sm.checkNodeInvariants(sm.root, NewRootNodeID(), true); err != nil {
-		return err
-	}
-
-	return nil
+	var firstErr error
+	sm.walkInvariantsUnsafe(sm.root, NewRootNodeID(), true, false, nil, func(e *invariantError) bool {
+		firstErr = e
+		return false
+	})
+	return firstErr
 }
 
-// checkNodeInvariants recursively checks invariants for a node and its descendants.
-func (sm *SHAMap) checkNodeInvariants(node Node, nodeID NodeID, isRoot bool) error {
-	if node == nil {
+// invariantsDetailed performs a comprehensive invariant check and returns
+// detailed results. Unlike invariants(), this continues checking even after
+// finding errors.
+func (sm *SHAMap) invariantsDetailed() *invariantCheckResult {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	result := &invariantCheckResult{
+		Errors: make([]*invariantError, 0),
+	}
+
+	if sm.root == nil {
+		return result
+	}
+
+	sm.walkInvariantsUnsafe(sm.root, NewRootNodeID(), true, false, result, func(e *invariantError) bool {
+		result.Errors = append(result.Errors, e)
+		return true
+	})
+	return result
+}
+
+// verifyHashes walks the entire tree and verifies all hashes are correct.
+// This is a simpler check than full invariants, focusing only on hash integrity.
+func (sm *SHAMap) verifyHashes() error {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	if sm.root == nil {
 		return nil
 	}
 
-	// Check depth limit
+	var firstErr error
+	sm.walkInvariantsUnsafe(sm.root, NewRootNodeID(), true, true, nil, func(e *invariantError) bool {
+		firstErr = e
+		return false
+	})
+	return firstErr
+}
+
+// walkInvariantsUnsafe is the single recursive invariants walk shared by
+// invariants (stop on first violation), invariantsDetailed (collect all)
+// and verifyHashes (hashOnly: hash integrity checks only). report receives
+// every violation and returns false to stop the walk; res, when non-nil,
+// accumulates node counters. The walk returns false once stopped.
+// Caller must hold the read lock.
+func (sm *SHAMap) walkInvariantsUnsafe(node Node, nodeID NodeID, isRoot, hashOnly bool, res *invariantCheckResult, report func(*invariantError) bool) bool {
+	if node == nil {
+		return true
+	}
+
+	if res != nil {
+		res.NodesChecked++
+	}
+
+	// Check depth limit; a too-deep subtree is not descended into.
 	if nodeID.Depth() > MaxDepth {
-		return &InvariantError{
+		return report(&invariantError{
 			NodeID:      nodeID,
 			Description: fmt.Sprintf("depth %d exceeds maximum %d", nodeID.Depth(), MaxDepth),
-		}
+		})
 	}
 
 	// Check node-specific invariants
-	if err := node.Invariants(isRoot); err != nil {
-		return &InvariantError{
-			NodeID:      nodeID,
-			Description: "node invariants check failed",
-			Err:         err,
+	if !hashOnly {
+		if err := node.Invariants(isRoot); err != nil {
+			if !report(&invariantError{
+				NodeID:      nodeID,
+				Description: "node invariants check failed",
+				Err:         err,
+			}) {
+				return false
+			}
 		}
 	}
 
 	// Verify hash is correctly computed
-	if err := sm.verifyNodeHash(node, nodeID); err != nil {
-		return err
+	if invErr := sm.verifyNodeHash(node, nodeID); invErr != nil {
+		if !report(invErr) {
+			return false
+		}
 	}
 
-	// For inner nodes, recursively check children
-	if !node.IsLeaf() {
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			return &InvariantError{
+	inner, isInner := node.(*innerNode)
+	if !isInner {
+		if res != nil {
+			res.LeavesChecked++
+		}
+		if !hashOnly {
+			if invErr := checkLeafNodeInvariants(node, nodeID); invErr != nil {
+				if !report(invErr) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+
+	if res != nil {
+		res.InnerNodesChecked++
+	}
+
+	childCount := 0
+	for branch := range BranchFactor {
+		hasChild := !inner.IsEmptyBranch(branch)
+		child, err := sm.descend(inner, branch)
+		if err != nil {
+			if !report(&invariantError{
 				NodeID:      nodeID,
-				Description: "node reports IsLeaf()=false but is not InnerNode",
+				Description: fmt.Sprintf("failed to get child at branch %d", branch),
+				Err:         err,
+			}) {
+				return false
+			}
+			continue
+		}
+
+		// Verify bitmap matches actual children. A set bit with a nil child
+		// is legal while syncing and for backed maps (hash-only branches).
+		if !hashOnly {
+			if hasChild && child == nil && sm.state != StateSyncing && !sm.backed {
+				if !report(&invariantError{
+					NodeID:      nodeID,
+					Description: fmt.Sprintf("branch %d marked as non-empty but child is nil", branch),
+				}) {
+					return false
+				}
+			}
+			if !hasChild && child != nil {
+				if !report(&invariantError{
+					NodeID:      nodeID,
+					Description: fmt.Sprintf("branch %d marked as empty but child exists", branch),
+				}) {
+					return false
+				}
 			}
 		}
 
-		return sm.checkInnerNodeInvariants(inner, nodeID)
+		if child == nil {
+			continue
+		}
+		childCount++
+
+		// Verify stored hash matches child's actual hash
+		if !hashOnly {
+			storedHash, err := inner.ChildHash(branch)
+			if err != nil {
+				if !report(&invariantError{
+					NodeID:      nodeID,
+					Description: fmt.Sprintf("failed to get stored hash for branch %d", branch),
+					Err:         err,
+				}) {
+					return false
+				}
+			} else if childHash := child.Hash(); !bytes.Equal(storedHash[:], childHash[:]) {
+				if !report(&invariantError{
+					NodeID:      nodeID,
+					Description: fmt.Sprintf("branch %d: stored hash %x != child hash %x", branch, storedHash[:8], childHash[:8]),
+				}) {
+					return false
+				}
+			}
+		}
+
+		// Recursively check child
+		childNodeID, err := nodeID.ChildNodeID(uint8(branch))
+		if err != nil {
+			if !report(&invariantError{
+				NodeID:      nodeID,
+				Description: fmt.Sprintf("failed to compute child node ID for branch %d", branch),
+				Err:         err,
+			}) {
+				return false
+			}
+			continue
+		}
+
+		if !sm.walkInvariantsUnsafe(child, childNodeID, false, hashOnly, res, report) {
+			return false
+		}
 	}
 
-	// For leaf nodes, check leaf-specific invariants
-	return sm.checkLeafNodeInvariants(node, nodeID)
+	// Non-root inner nodes must have at least one child.
+	// For backed maps, hash-only branches may legitimately have no
+	// in-memory children.
+	if !hashOnly && !nodeID.IsRoot() && childCount == 0 && !sm.backed {
+		if !report(&invariantError{
+			NodeID:      nodeID,
+			Description: "non-root inner node has no children",
+		}) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // verifyNodeHash verifies that a node's hash is correctly computed.
-func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
+func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) *invariantError {
 	// Clone the node and recompute its hash
 	cloned, err := node.Clone()
 	if err != nil {
-		return &InvariantError{
+		return &invariantError{
 			NodeID:      nodeID,
 			Description: "failed to clone node for hash verification",
 			Err:         err,
@@ -140,7 +292,7 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
 	}
 
 	if err := cloned.UpdateHash(); err != nil {
-		return &InvariantError{
+		return &invariantError{
 			NodeID:      nodeID,
 			Description: "failed to recompute hash",
 			Err:         err,
@@ -151,7 +303,7 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
 	recomputedHash := cloned.Hash()
 
 	if !bytes.Equal(originalHash[:], recomputedHash[:]) {
-		return &InvariantError{
+		return &invariantError{
 			NodeID:      nodeID,
 			Description: fmt.Sprintf("hash mismatch: stored %x, computed %x", originalHash[:8], recomputedHash[:8]),
 		}
@@ -163,12 +315,12 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
 	// from emitting it, but the cache must still be reconciled before
 	// ReleaseChildren drops the live child (see updateHashDeep), so fail loud
 	// on the divergence here.
-	if inner, ok := node.(*InnerNode); ok {
+	if inner, ok := node.(*innerNode); ok {
 		inner.mu.RLock()
 		branch, cached, live, stale := inner.firstStalePreimage()
 		inner.mu.RUnlock()
 		if stale {
-			return &InvariantError{
+			return &invariantError{
 				NodeID:      nodeID,
 				Description: fmt.Sprintf("branch %d stale preimage: cached %x, child %x", branch, cached[:8], live[:8]),
 			}
@@ -178,102 +330,19 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
 	return nil
 }
 
-// checkInnerNodeInvariants checks invariants specific to inner nodes.
-func (sm *SHAMap) checkInnerNodeInvariants(inner *InnerNode, nodeID NodeID) error {
-	childCount := 0
-
-	for branch := 0; branch < BranchFactor; branch++ {
-		// Check branch bitmap consistency
-		hasChild := !inner.IsEmptyBranch(branch)
-		child, err := sm.descend(inner, branch)
-		if err != nil {
-			return &InvariantError{
-				NodeID:      nodeID,
-				Description: fmt.Sprintf("failed to get child at branch %d", branch),
-				Err:         err,
-			}
-		}
-
-		// Verify bitmap matches actual children
-		if hasChild && child == nil {
-			// This can happen during sync or for backed maps with hash-only branches
-			if sm.state != StateSyncing && !sm.backed {
-				return &InvariantError{
-					NodeID:      nodeID,
-					Description: fmt.Sprintf("branch %d marked as non-empty but child is nil", branch),
-				}
-			}
-		}
-
-		if !hasChild && child != nil {
-			return &InvariantError{
-				NodeID:      nodeID,
-				Description: fmt.Sprintf("branch %d marked as empty but child exists", branch),
-			}
-		}
-
-		if child != nil {
-			childCount++
-
-			// Verify stored hash matches child's actual hash
-			storedHash, err := inner.ChildHash(branch)
-			if err != nil {
-				return &InvariantError{
-					NodeID:      nodeID,
-					Description: fmt.Sprintf("failed to get stored hash for branch %d", branch),
-					Err:         err,
-				}
-			}
-
-			childHash := child.Hash()
-			if !bytes.Equal(storedHash[:], childHash[:]) {
-				return &InvariantError{
-					NodeID:      nodeID,
-					Description: fmt.Sprintf("branch %d: stored hash %x != child hash %x", branch, storedHash[:8], childHash[:8]),
-				}
-			}
-
-			// Recursively check child
-			childNodeID, err := nodeID.ChildNodeID(uint8(branch))
-			if err != nil {
-				return &InvariantError{
-					NodeID:      nodeID,
-					Description: fmt.Sprintf("failed to compute child node ID for branch %d", branch),
-					Err:         err,
-				}
-			}
-
-			if err := sm.checkNodeInvariants(child, childNodeID, false); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Non-root inner nodes must have at least one child
-	// For backed maps, count includes lazily loaded children
-	if !nodeID.IsRoot() && childCount == 0 && !sm.backed {
-		return &InvariantError{
-			NodeID:      nodeID,
-			Description: "non-root inner node has no children",
-		}
-	}
-
-	return nil
-}
-
 // checkLeafNodeInvariants checks invariants specific to leaf nodes.
-func (sm *SHAMap) checkLeafNodeInvariants(node Node, nodeID NodeID) error {
+func checkLeafNodeInvariants(node Node, nodeID NodeID) *invariantError {
 	leaf, ok := node.(LeafNode)
 	if !ok {
-		return &InvariantError{
+		return &invariantError{
 			NodeID:      nodeID,
-			Description: "node reports IsLeaf()=true but doesn't implement LeafNode",
+			Description: "non-inner node doesn't implement LeafNode",
 		}
 	}
 
 	item := leaf.Item()
 	if item == nil {
-		return &InvariantError{
+		return &invariantError{
 			NodeID:      nodeID,
 			Description: "leaf node has nil item",
 		}
@@ -281,218 +350,10 @@ func (sm *SHAMap) checkLeafNodeInvariants(node Node, nodeID NodeID) error {
 
 	// Validate the item
 	if err := item.Validate(); err != nil {
-		return &InvariantError{
+		return &invariantError{
 			NodeID:      nodeID,
 			Description: "leaf item validation failed",
 			Err:         err,
-		}
-	}
-
-	return nil
-}
-
-// InvariantsDetailed performs a comprehensive invariant check and returns detailed results.
-// Unlike Invariants(), this continues checking even after finding errors.
-func (sm *SHAMap) InvariantsDetailed() *InvariantCheckResult {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	result := &InvariantCheckResult{
-		Errors: make([]*InvariantError, 0),
-	}
-
-	if sm.root == nil {
-		return result
-	}
-
-	sm.checkNodeInvariantsDetailed(sm.root, NewRootNodeID(), true, result)
-	return result
-}
-
-// checkNodeInvariantsDetailed recursively checks invariants and collects all errors.
-func (sm *SHAMap) checkNodeInvariantsDetailed(node Node, nodeID NodeID, isRoot bool, result *InvariantCheckResult) {
-	if node == nil {
-		return
-	}
-
-	result.NodesChecked++
-
-	// Check depth limit
-	if nodeID.Depth() > MaxDepth {
-		result.Errors = append(result.Errors, &InvariantError{
-			NodeID:      nodeID,
-			Description: fmt.Sprintf("depth %d exceeds maximum %d", nodeID.Depth(), MaxDepth),
-		})
-		return
-	}
-
-	// Check node-specific invariants
-	if err := node.Invariants(isRoot); err != nil {
-		result.Errors = append(result.Errors, &InvariantError{
-			NodeID:      nodeID,
-			Description: "node invariants check failed",
-			Err:         err,
-		})
-	}
-
-	// Verify hash
-	if err := sm.verifyNodeHash(node, nodeID); err != nil {
-		if invErr, ok := err.(*InvariantError); ok {
-			result.Errors = append(result.Errors, invErr)
-		}
-	}
-
-	if node.IsLeaf() {
-		result.LeavesChecked++
-		// Check leaf invariants
-		if err := sm.checkLeafNodeInvariants(node, nodeID); err != nil {
-			if invErr, ok := err.(*InvariantError); ok {
-				result.Errors = append(result.Errors, invErr)
-			}
-		}
-	} else {
-		result.InnerNodesChecked++
-		// Check inner node and recurse
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			result.Errors = append(result.Errors, &InvariantError{
-				NodeID:      nodeID,
-				Description: "node reports IsLeaf()=false but is not InnerNode",
-			})
-			return
-		}
-
-		sm.checkInnerNodeInvariantsDetailed(inner, nodeID, result)
-	}
-}
-
-// checkInnerNodeInvariantsDetailed checks inner node invariants and collects all errors.
-func (sm *SHAMap) checkInnerNodeInvariantsDetailed(inner *InnerNode, nodeID NodeID, result *InvariantCheckResult) {
-	childCount := 0
-
-	for branch := 0; branch < BranchFactor; branch++ {
-		hasChild := !inner.IsEmptyBranch(branch)
-		child, err := sm.descend(inner, branch)
-		if err != nil {
-			result.Errors = append(result.Errors, &InvariantError{
-				NodeID:      nodeID,
-				Description: fmt.Sprintf("failed to get child at branch %d", branch),
-				Err:         err,
-			})
-			continue
-		}
-
-		// Check bitmap consistency
-		if hasChild && child == nil && sm.state != StateSyncing && !sm.backed {
-			result.Errors = append(result.Errors, &InvariantError{
-				NodeID:      nodeID,
-				Description: fmt.Sprintf("branch %d marked as non-empty but child is nil", branch),
-			})
-		}
-
-		if !hasChild && child != nil {
-			result.Errors = append(result.Errors, &InvariantError{
-				NodeID:      nodeID,
-				Description: fmt.Sprintf("branch %d marked as empty but child exists", branch),
-			})
-		}
-
-		if child != nil {
-			childCount++
-
-			// Verify stored hash
-			storedHash, err := inner.ChildHash(branch)
-			if err != nil {
-				result.Errors = append(result.Errors, &InvariantError{
-					NodeID:      nodeID,
-					Description: fmt.Sprintf("failed to get stored hash for branch %d", branch),
-					Err:         err,
-				})
-			} else {
-				childHash := child.Hash()
-				if !bytes.Equal(storedHash[:], childHash[:]) {
-					result.Errors = append(result.Errors, &InvariantError{
-						NodeID:      nodeID,
-						Description: fmt.Sprintf("branch %d: stored hash %x != child hash %x", branch, storedHash[:8], childHash[:8]),
-					})
-				}
-			}
-
-			// Recursively check child
-			childNodeID, err := nodeID.ChildNodeID(uint8(branch))
-			if err != nil {
-				result.Errors = append(result.Errors, &InvariantError{
-					NodeID:      nodeID,
-					Description: fmt.Sprintf("failed to compute child node ID for branch %d", branch),
-					Err:         err,
-				})
-				continue
-			}
-
-			sm.checkNodeInvariantsDetailed(child, childNodeID, false, result)
-		}
-	}
-
-	// Non-root inner nodes must have at least one child
-	if !nodeID.IsRoot() && childCount == 0 && !sm.backed {
-		result.Errors = append(result.Errors, &InvariantError{
-			NodeID:      nodeID,
-			Description: "non-root inner node has no children",
-		})
-	}
-}
-
-// VerifyHashes walks the entire tree and verifies all hashes are correct.
-// This is a simpler check than full invariants, focusing only on hash integrity.
-func (sm *SHAMap) VerifyHashes() error {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	if sm.root == nil {
-		return nil
-	}
-
-	return sm.verifyHashesRecursive(sm.root, NewRootNodeID())
-}
-
-// verifyHashesRecursive recursively verifies hashes.
-func (sm *SHAMap) verifyHashesRecursive(node Node, nodeID NodeID) error {
-	if node == nil {
-		return nil
-	}
-
-	// Verify this node's hash
-	if err := sm.verifyNodeHash(node, nodeID); err != nil {
-		return err
-	}
-
-	// Recurse into children for inner nodes
-	if !node.IsLeaf() {
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			return &InvariantError{
-				NodeID:      nodeID,
-				Description: "node is not InnerNode",
-			}
-		}
-
-		for branch := 0; branch < BranchFactor; branch++ {
-			child, err := sm.descend(inner, branch)
-			if err != nil {
-				return err
-			}
-			if child == nil {
-				continue
-			}
-
-			childNodeID, err := nodeID.ChildNodeID(uint8(branch))
-			if err != nil {
-				return err
-			}
-
-			if err := sm.verifyHashesRecursive(child, childNodeID); err != nil {
-				return err
-			}
 		}
 	}
 

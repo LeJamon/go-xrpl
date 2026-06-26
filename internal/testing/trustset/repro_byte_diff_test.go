@@ -46,8 +46,9 @@ func TestReproByteDiff_DirPagination(t *testing.T) {
 
 	src := jtx.NewAccountFromSeed("src", srcSeed)
 	issuers := make([]*jtx.Account, 33)
-	all := []*jtx.Account{src}
-	for i := 0; i < 33; i++ {
+	all := make([]*jtx.Account, 0, 34)
+	all = append(all, src)
+	for i := range 33 {
 		issuers[i] = jtx.NewAccountFromSeed(fmt.Sprintf("iss%02d", i), issuerSeeds[i])
 		all = append(all, issuers[i])
 	}
@@ -58,7 +59,7 @@ func TestReproByteDiff_DirPagination(t *testing.T) {
 	env.Close()
 
 	// 32 TrustSets — fills the first owner dir page (32 entries max).
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		limit := tx.NewIssuedAmountFromFloat64(1000, "USD", issuers[i].Address)
 		r := env.Submit(TrustSet(src, limit).Build())
 		jtx.RequireTxSuccess(t, r)
@@ -198,7 +199,7 @@ func TestReproByteDiff_MultiTrustSetThreading(t *testing.T) {
 
 	src := jtx.NewAccountFromSeed("src", srcSeed)
 	issuers := make([]*jtx.Account, 3)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		issuers[i] = jtx.NewAccountFromSeed(fmt.Sprintf("iss%d", i), issuerSeeds[i])
 	}
 
@@ -209,7 +210,7 @@ func TestReproByteDiff_MultiTrustSetThreading(t *testing.T) {
 	env.Close()
 
 	// 3 sequential TrustSets from src in the same ledger (no env.Close between)
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		limit := tx.NewIssuedAmountFromFloat64(1000, "USD", issuers[i].Address)
 		r := env.Submit(TrustSet(src, limit).Build())
 		jtx.RequireTxSuccess(t, r)

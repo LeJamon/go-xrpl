@@ -59,6 +59,7 @@ type ledgerMock struct {
 	*mockLedgerService
 	getLedgerBySequenceFn func(seq uint32) (types.LedgerReader, error)
 	getLedgerByHashFn     func(hash [32]byte) (types.LedgerReader, error)
+	getLedgerDataFn       func(ledgerIndex string, marker string) (*types.LedgerDataResult, error)
 }
 
 func (m *ledgerMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
@@ -66,6 +67,13 @@ func (m *ledgerMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error)
 		return m.getLedgerBySequenceFn(seq)
 	}
 	return m.mockLedgerService.GetLedgerBySequence(seq)
+}
+
+func (m *ledgerMock) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+	if m.getLedgerDataFn != nil {
+		return m.getLedgerDataFn(ledgerIndex, marker)
+	}
+	return m.mockLedgerService.GetLedgerData(ctx, ledgerIndex, limit, marker)
 }
 
 func (m *ledgerMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
@@ -108,9 +116,13 @@ func TestLedgerBasicRequest(t *testing.T) {
 		mockLedgerService: newMockLedgerService(),
 	}
 	reader := newDefaultLedgerReader(2, true)
+	currentReader := newDefaultLedgerReader(3, false)
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
-		if seq == 2 {
+		switch seq {
+		case 2:
 			return reader, nil
+		case 3:
+			return currentReader, nil
 		}
 		return nil, errors.New("ledger not found")
 	}
@@ -124,7 +136,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("Default params returns validated ledger", func(t *testing.T) {
+	t.Run("Default params returns current ledger", func(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr, "Expected no error, got: %v", rpcErr)
 		require.NotNil(t, result)
@@ -134,11 +146,13 @@ func TestLedgerBasicRequest(t *testing.T) {
 		assert.Contains(t, resp, "ledger_hash")
 		assert.Contains(t, resp, "ledger_index")
 		assert.Contains(t, resp, "validated")
-		assert.Equal(t, true, resp["validated"])
+		// rippled defaults to the current (open) ledger when no ledger is
+		// specified (RPCHelpers.cpp:388-389), so validated is false.
+		assert.Equal(t, false, resp["validated"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": 2,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -149,13 +163,13 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, true, ledger["closed"])
 		assert.Equal(t, "2", ledger["ledger_index"])
 	})
 
 	t.Run("String numeric ledger_index", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "2",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -166,7 +180,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, true, ledger["closed"])
 		assert.Equal(t, "2", ledger["ledger_index"])
 	})
@@ -197,17 +211,17 @@ func TestLedgerBadInput(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		params      interface{}
+		params      any
 		expectError bool
 	}{
 		{
 			name:        "Invalid string ledger_index (potato)",
-			params:      map[string]interface{}{"ledger_index": "potato"},
+			params:      map[string]any{"ledger_index": "potato"},
 			expectError: true,
 		},
 		{
 			name:        "Non-existent ledger_index",
-			params:      map[string]interface{}{"ledger_index": 10},
+			params:      map[string]any{"ledger_index": 10},
 			expectError: true,
 		},
 	}
@@ -251,7 +265,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": "current",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -262,7 +276,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 	require.NotNil(t, result)
 
 	resp := resultToMap(t, result)
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 	assert.Equal(t, false, ledger["closed"])
 	assert.Equal(t, "3", ledger["ledger_index"])
 	// Current ledger should not be validated
@@ -305,7 +319,7 @@ func TestLedgerFullOption(t *testing.T) {
 	}
 
 	t.Run("Transactions true returns tx hashes", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": 2,
 			"transactions": true,
 		}
@@ -317,9 +331,9 @@ func TestLedgerFullOption(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Contains(t, ledger, "transactions")
-		txs := ledger["transactions"].([]interface{})
+		txs := ledger["transactions"].([]any)
 		assert.Equal(t, 2, len(txs))
 		// Without expand, should be hash strings
 		_, isString := txs[0].(string)
@@ -327,7 +341,7 @@ func TestLedgerFullOption(t *testing.T) {
 	})
 
 	t.Run("Transactions true with expand returns objects", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": 2,
 			"transactions": true,
 			"expand":       true,
@@ -340,12 +354,12 @@ func TestLedgerFullOption(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Contains(t, ledger, "transactions")
-		txs := ledger["transactions"].([]interface{})
+		txs := ledger["transactions"].([]any)
 		assert.Equal(t, 2, len(txs))
 		// With expand, should be objects with hash field
-		txObj, isMap := txs[0].(map[string]interface{})
+		txObj, isMap := txs[0].(map[string]any)
 		assert.True(t, isMap, "With expand, transactions should be objects")
 		assert.Contains(t, txObj, "hash")
 	})
@@ -364,31 +378,66 @@ func TestLedgerAccountsOption(t *testing.T) {
 		}
 		return nil, errors.New("not found")
 	}
+	// One account-state node to dump on the permitted path.
+	stateIndex := "00000000000000000000000000000000000000000000000000000000DEADBEEF"
+	accountRootBlob, decErr := hex.DecodeString(
+		"1100612200000000240000000125000000016240000000000F424081140000000000000000000000000000000000000001")
+	require.NoError(t, decErr)
+	mock.getLedgerDataFn = func(ledgerIndex string, marker string) (*types.LedgerDataResult, error) {
+		return &types.LedgerDataResult{
+			LedgerIndex: 2,
+			State: []types.LedgerDataItem{
+				{Index: stateIndex, Data: accountRootBlob},
+			},
+		}, nil
+	}
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+
+	// full implies expand + transactions + accounts, so the state dump is
+	// expanded SLE JSON (LedgerToJson.cpp isFull/isExpanded).
+	params := map[string]any{
+		"ledger_index": 2,
+		"full":         true,
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	// A non-unlimited (guest) role is denied: rippled gates accounts/full
+	// behind isUnlimited else rpcNO_PERMISSION (LedgerHandler.cpp:66-72).
+	guestCtx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
+	_, rpcErr := method.Handle(guestCtx, paramsJSON)
+	require.NotNil(t, rpcErr, "guest must be denied the full/accounts dump")
+	assert.Equal(t, types.RpcNO_PERMISSION, rpcErr.Code)
 
-	// The accounts option requests account state. Even without account state
-	// implementation, the handler should not error.
-	params := map[string]interface{}{
-		"ledger_index": 2,
-		"accounts":     true,
+	// An unlimited (admin) role is permitted and dumps the state into the
+	// ledger object's accountState array.
+	adminCtx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Unlimited:  true,
+		Services:   services,
 	}
-	paramsJSON, err := json.Marshal(params)
-	require.NoError(t, err)
-
-	result, rpcErr := method.Handle(ctx, paramsJSON)
+	result, rpcErr := method.Handle(adminCtx, paramsJSON)
 	require.Nil(t, rpcErr, "Expected no error, got: %v", rpcErr)
 	require.NotNil(t, result)
 
 	resp := resultToMap(t, result)
-	assert.Contains(t, resp, "ledger")
+	ledgerObj, ok := resp["ledger"].(map[string]any)
+	require.True(t, ok, "ledger object present")
+	state, ok := ledgerObj["accountState"].([]any)
+	require.True(t, ok, "accountState array present")
+	require.Len(t, state, 1)
+	entry := state[0].(map[string]any)
+	assert.Equal(t, stateIndex, entry["index"])
+	assert.Equal(t, "AccountRoot", entry["LedgerEntryType"])
 }
 
 // TestLedgerLookupByHash tests ledger lookup by hash
@@ -422,7 +471,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	hashStr := hex.EncodeToString(expectedHash[:])
 
 	t.Run("Valid hash lookup", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": hashStr,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -438,7 +487,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	})
 
 	t.Run("Invalid hash - too long", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "DEADBEEF" + hashStr,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -450,7 +499,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	})
 
 	t.Run("Invalid hash - non-hex characters", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "2E81FC6EC0DD943197EGC7E3FBE9AE307F2775F2F7485BB37307984C3C0F2340",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -462,7 +511,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	})
 
 	t.Run("Valid hash format but not found", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "8C3EEDB3124D92E49E75D81A8826A2E65A75FD71FC3FD6F36FEB803C5F1D812D",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -499,7 +548,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": "validated",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -518,7 +567,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 	assert.Contains(t, resp, "validated")
 
 	// Ledger object fields
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 	assert.Contains(t, ledger, "accepted")
 	assert.Contains(t, ledger, "account_hash")
 	assert.Contains(t, ledger, "close_flags")
@@ -662,7 +711,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	}
 
 	t.Run("closed keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "closed"}
+		params := map[string]any{"ledger_index": "closed"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -675,7 +724,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	})
 
 	t.Run("validated keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "validated"}
+		params := map[string]any{"ledger_index": "validated"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -688,7 +737,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	})
 
 	t.Run("current keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "current"}
+		params := map[string]any{"ledger_index": "current"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -696,12 +745,12 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, "3", ledger["ledger_index"])
 	})
 
 	t.Run("invalid keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "invalid"}
+		params := map[string]any{"ledger_index": "invalid"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -710,7 +759,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	})
 
 	t.Run("Numeric index 1", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": 1}
+		params := map[string]any{"ledger_index": 1}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -718,12 +767,12 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, "1", ledger["ledger_index"])
 	})
 
 	t.Run("Numeric index out of range", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": 7}
+		params := map[string]any{"ledger_index": 7}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -734,11 +783,11 @@ func TestLedgerLookupByIndex(t *testing.T) {
 }
 
 // resultToMap is a test helper that converts a handler result to map[string]interface{}
-func resultToMap(t *testing.T, result interface{}) map[string]interface{} {
+func resultToMap(t *testing.T, result any) map[string]any {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 	return resp

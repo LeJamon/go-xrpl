@@ -1,8 +1,8 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
+	"fmt"
 )
 
 // NFTokenPageData represents an NFToken page ledger entry
@@ -20,9 +20,13 @@ type NFTokenData struct {
 
 // NFTokenOfferData represents an NFToken offer ledger entry
 type NFTokenOfferData struct {
-	Owner            [20]byte
-	NFTokenID        [32]byte
-	Amount           uint64
+	Owner     [20]byte
+	NFTokenID [32]byte
+	Amount    uint64
+	// Negative records the sign of the offer Amount, which Amount (a uint64)
+	// cannot represent. Pre-fixNFTokenNegOffer offers may carry a negative
+	// amount; consumers use this instead of re-scanning the raw SLE bytes.
+	Negative         bool
 	AmountIOU        *NFTIOUAmount // For IOU amounts
 	Flags            uint32
 	Destination      [20]byte
@@ -45,272 +49,121 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 	page := &NFTokenPageData{
 		NFTokens: make([]NFTokenData, 0),
 	}
-	offset := 0
 
-	var currentToken NFTokenData
-	hasToken := false
-
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stHash256:
+			switch f.FieldCode {
+			case 26: // PreviousPageMin
+				page.PreviousPageMin = f.Hash256()
+			case 27: // NextPageMin
+				page.NextPageMin = f.Hash256()
 			}
-			typeCode = data[offset]
-			offset++
-		}
 
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return page, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return page, nil
-			}
-			offset += 4
-
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return page, nil
-			}
-			switch fieldCode {
-			case 26: // PreviousPageMin (nth=26 per definitions.json)
-				copy(page.PreviousPageMin[:], data[offset:offset+32])
-			case 27: // NextPageMin (nth=27 per definitions.json)
-				copy(page.NextPageMin[:], data[offset:offset+32])
-			case 10: // NFTokenID
-				if hasToken {
-					page.NFTokens = append(page.NFTokens, currentToken)
+		case stArray:
+			// NFTokens: each element is an NFToken object carrying an NFTokenID
+			// and (optionally) a URI.
+			return WalkFields(f.Value, func(elem Field) error {
+				if elem.TypeCode != stObject {
+					return nil
 				}
-				copy(currentToken.NFTokenID[:], data[offset:offset+32])
-				currentToken.URI = ""
-				hasToken = true
-			}
-			offset += 32
-
-		case FieldTypeUInt64: // 3
-			if offset+8 > len(data) {
-				return page, nil
-			}
-			offset += 8
-
-		case FieldTypeBlob:
-			if offset >= len(data) {
-				return page, nil
-			}
-			length := int(data[offset])
-			offset++
-			if length > 192 {
-				if offset >= len(data) {
-					return page, nil
+				var tok NFTokenData
+				if err := WalkFields(elem.Value, func(inner Field) error {
+					switch inner.TypeCode {
+					case stHash256:
+						if inner.FieldCode == 10 { // NFTokenID
+							tok.NFTokenID = inner.Hash256()
+						}
+					case stBlob:
+						if inner.FieldCode == 5 { // URI
+							tok.URI = hex.EncodeToString(inner.VLBytes())
+						}
+					}
+					return nil
+				}); err != nil {
+					return err
 				}
-				length = 193 + ((length-193)<<8 | int(data[offset]))
-				offset++
-			}
-			if offset+length > len(data) {
-				return page, nil
-			}
-			if fieldCode == 5 { // URI
-				currentToken.URI = hex.EncodeToString(data[offset : offset+length])
-			}
-			offset += length
-
-		case 8: // AccountID — 20 bytes
-			if offset+20 > len(data) {
-				return page, nil
-			}
-			offset += 20
-
-		case 14, 15:
-			// STObject (14) and STArray (15) structural markers.
-			// These include array/object start field headers (e.g., 0xFA for NFTokens)
-			// and end-of-object (0xE1) / end-of-array (0xF1) markers.
-			// They have no payload — just continue parsing inner fields.
-			continue
-
-		default:
-			if hasToken {
-				page.NFTokens = append(page.NFTokens, currentToken)
-			}
-			return page, nil
+				page.NFTokens = append(page.NFTokens, tok)
+				return nil
+			})
 		}
-	}
-
-	if hasToken {
-		page.NFTokens = append(page.NFTokens, currentToken)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return page, nil
 }
 
-// ParseNFTokenPageFromBytes is an alias for ParseNFTokenPage
-func ParseNFTokenPageFromBytes(data []byte) (*NFTokenPageData, error) {
-	return ParseNFTokenPage(data)
-}
-
 // ParseNFTokenOffer parses an NFToken offer from binary data
 func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 	offer := &NFTokenOfferData{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return offer, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return offer, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 2: // Flags
-				offer.Flags = value
+				offer.Flags = f.UInt32()
 			case 10: // Expiration
-				offer.Expiration = value
+				offer.Expiration = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return offer, nil
+		case stUInt64:
+			switch f.FieldCode {
+			case 4: // OwnerNode
+				offer.OwnerNode = f.UInt64()
+			case 12: // NFTokenOfferNode
+				offer.NFTokenOfferNode = f.UInt64()
 			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			switch fieldCode {
-			case 4: // OwnerNode (UInt64 nth=4)
-				offer.OwnerNode = value
-			case 12: // NFTokenOfferNode (UInt64 nth=12)
-				offer.NFTokenOfferNode = value
-			}
-			offset += 8
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return offer, nil
+		case stHash256:
+			if f.FieldCode == 10 { // NFTokenID
+				offer.NFTokenID = f.Hash256()
 			}
-			if fieldCode == 10 { // NFTokenID
-				copy(offer.NFTokenID[:], data[offset:offset+32])
-			}
-			offset += 32
 
-		case FieldTypeAmount:
-			if offset+8 > len(data) {
-				return offer, nil
-			}
-			if data[offset]&0x80 == 0 {
-				rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-				offer.Amount = rawAmount & 0x3FFFFFFFFFFFFFFF
-				offset += 8
-			} else {
-				// IOU amount: 8 bytes value + 20 bytes currency + 20 bytes issuer = 48 bytes
-				if offset+48 > len(data) {
-					return offer, nil
+		case stAmount:
+			// The sign lives in bit 62 of the first value word (1 = positive); a
+			// clear sign with a non-zero magnitude is negative.
+			raw := f.UInt64()
+			switch len(f.Value) {
+			case 8: // XRP
+				value := raw & 0x3FFFFFFFFFFFFFFF
+				offer.Amount = value
+				offer.Negative = (raw&0x4000000000000000) == 0 && value != 0
+			case 48: // IOU
+				offer.Negative = raw&0x4000000000000000 == 0 && raw&0x3FFFFFFFFFFFFFFF != 0
+				iouAmount, err := ParseIOUAmountBinary(f.Value)
+				if err != nil {
+					return fmt.Errorf("NFTokenOffer IOU amount parse failed: %w", err)
 				}
-				iouAmount, err := ParseIOUAmountBinary(data[offset : offset+48])
-				if err == nil {
-					var issuerID [20]byte
-					copy(issuerID[:], data[offset+28:offset+48])
-					offer.AmountIOU = &NFTIOUAmount{
-						Currency: iouAmount.Currency,
-						Issuer:   issuerID,
-						Value:    iouAmount.IOU().String(),
-					}
+				var issuerID [20]byte
+				copy(issuerID[:], f.Value[28:48])
+				offer.AmountIOU = &NFTIOUAmount{
+					Currency: iouAmount.Currency,
+					Issuer:   issuerID,
+					Value:    iouAmount.IOU().String(),
 				}
-				offset += 48
 			}
 
-		case FieldTypeAccountID:
-			if offset+21 > len(data) {
-				return offer, nil
-			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				switch fieldCode {
-				case 1: // Account/Owner
-					copy(offer.Owner[:], data[offset:offset+20])
+		case stAccountID:
+			if id, ok := f.AccountID(); ok {
+				switch f.FieldCode {
+				case 1: // legacy sfAccount → Owner (pre-sfOwner-fix state)
+					offer.Owner = id
+				case 2: // sfOwner
+					offer.Owner = id
 				case 3: // Destination
-					copy(offer.Destination[:], data[offset:offset+20])
+					offer.Destination = id
 					offer.HasDestination = true
 				}
-				offset += 20
 			}
-
-		case FieldTypeBlob: // 7
-			if offset >= len(data) {
-				return offer, nil
-			}
-			length := int(data[offset])
-			offset++
-			if length > 192 {
-				if offset >= len(data) {
-					return offer, nil
-				}
-				length = 193 + ((length-193)<<8 | int(data[offset]))
-				offset++
-			}
-			if offset+length > len(data) {
-				return offer, nil
-			}
-			offset += length
-
-		case 14, 15:
-			// STObject/STArray structural markers — skip
-			continue
-
-		default:
-			return offer, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return offer, nil

@@ -147,7 +147,7 @@ func (d *Delegate) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&delegateBitAuthorize != 0 && !(skipDefault && d.Authorize == "") {
 		out["Authorize"] = d.Authorize
 	}
-	if d.present&delegateBitPermissions != 0 {
+	if d.present&delegateBitPermissions != 0 && !(skipDefault && len(d.Permissions) == 0) {
 		out["Permissions"] = d.Permissions
 	}
 	if d.present&delegateBitOwnerNode != 0 && !(skipDefault && isZeroHexString(d.OwnerNode)) {
@@ -173,15 +173,15 @@ func (d *Delegate) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *Delegate) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Delegate)
-	if !ok || p == nil {
+	prv, ok := prev.(*Delegate)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, d.Account, p.present&delegateBitAccount, d.present&delegateBitAccount)
-	emitIfChangedString(out, "Authorize", p.Authorize, d.Authorize, p.present&delegateBitAuthorize, d.present&delegateBitAuthorize)
-	emitIfChangedDeep(out, "Permissions", p.Permissions, d.Permissions, p.present&delegateBitPermissions, d.present&delegateBitPermissions)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, d.OwnerNode, p.present&delegateBitOwnerNode, d.present&delegateBitOwnerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&delegateBitFlags, d.present&delegateBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, d.Account, prv.present&delegateBitAccount, d.present&delegateBitAccount)
+	emitIfChangedString(out, "Authorize", prv.Authorize, d.Authorize, prv.present&delegateBitAuthorize, d.present&delegateBitAuthorize)
+	emitIfChangedDeep(out, "Permissions", prv.Permissions, d.Permissions, prv.present&delegateBitPermissions, d.present&delegateBitPermissions)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&delegateBitOwnerNode, d.present&delegateBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&delegateBitFlags, d.present&delegateBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

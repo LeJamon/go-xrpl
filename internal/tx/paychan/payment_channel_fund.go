@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -43,10 +44,8 @@ func (p *PaymentChannelFund) Validate() error {
 		return err
 	}
 
-	// Check for invalid flags (tfUniversalMask) - fix1543
-	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversal); err != nil {
-		return err
-	}
+	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
+	// where the amendment rules are available.
 
 	// Channel is required
 	if p.Channel == "" {
@@ -56,7 +55,7 @@ func (p *PaymentChannelFund) Validate() error {
 	// Validate Channel is valid hex (256-bit hash)
 	channelBytes, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelBytes) != 32 {
-		return tx.Errorf(tx.TemMALFORMED, "Channel must be a valid 256-bit hash")
+		return ter.Errorf(ter.TemMALFORMED, "Channel must be a valid 256-bit hash")
 	}
 
 	// Amount is required and must be XRP
@@ -84,8 +83,22 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
 }
 
+// Preclaim performs the rules-aware fix1543 flag check.
+// Reference: rippled PayChan.cpp:332 — stray (non-universal) flags are rejected
+// only once fix1543 is active. rippled runs this check first in preflight; the
+// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
+// after the common preflight/preclaim steps. For a tx malformed in two ways this
+// can surface a different tem code than rippled; the result is tem-only (never
+// enters a ledger) so there is no consensus divergence.
+func (p *PaymentChannelFund) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tx.TfUniversalMask) != 0 {
+		return ter.TemINVALID_FLAG
+	}
+	return ter.TesSUCCESS
+}
+
 // Reference: rippled PayChan.cpp PayChanFund::doApply()
-func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("payment channel fund apply",
 		"account", p.Account,
 		"channel", p.Channel,
@@ -95,7 +108,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse channel ID
 	channelID, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelID) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var channelKeyBytes [32]byte
@@ -108,14 +121,14 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("payment channel fund: channel not found",
 			"channel", p.Channel,
 		)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse channel
 	channel, err := state.ParsePayChannel(channelData)
 	if err != nil {
 		ctx.Log.Error("payment channel fund: failed to parse channel", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Auto-close check: if CancelAfter or Expiration has passed
@@ -130,7 +143,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID, _ := state.DecodeAccountID(p.Account)
 	if channel.Account != accountID {
 		ctx.Log.Warn("payment channel fund: sender is not channel owner")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Handle Expiration extension
@@ -146,7 +159,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// New expiration must be >= minExpiration
 		if *p.Expiration < minExpiration {
-			return tx.TemBAD_EXPIRATION
+			return ter.TemBAD_EXPIRATION
 		}
 
 		channel.Expiration = *p.Expiration
@@ -161,21 +174,21 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 			"balance", ctx.Account.Balance,
 			"reserve", reserve,
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 	if ctx.Account.Balance-reserve < amount {
 		ctx.Log.Warn("payment channel fund: unfunded",
 			"balance", ctx.Account.Balance,
 			"needed", reserve+amount,
 		)
-		return tx.TecUNFUNDED
+		return ter.TecUNFUNDED
 	}
 
 	// Destination must still exist
 	// Reference: rippled PayChan.cpp doApply() lines 389-390
 	destKey := keylet.Account(channel.DestinationID)
 	if exists, _ := ctx.View.Exists(destKey); !exists {
-		return tx.TecNO_DST
+		return ter.TecNO_DST
 	}
 
 	// Deduct from account and add to channel
@@ -186,13 +199,13 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) tx.Result {
 	updatedChannelData, err := state.SerializePayChannelFromData(channel)
 	if err != nil {
 		ctx.Log.Error("payment channel fund: failed to serialize channel", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Update(channelKey, updatedChannelData); err != nil {
 		ctx.Log.Error("payment channel fund: failed to update channel", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

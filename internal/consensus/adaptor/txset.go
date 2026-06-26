@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -12,8 +13,8 @@ import (
 )
 
 // TxSetImpl implements consensus.TxSet backed by a SHAMap of transaction
-// blobs keyed by txID. This mirrors rippled's InboundTransactions: the
-// SHAMap is the canonical storage, and Txs/TxIDs/Bytes derive from it.
+// blobs keyed by txID. The SHAMap is the canonical storage, and
+// Txs/TxIDs/Bytes derive from it.
 //
 // Complexity profile (N = set size):
 //   - Add/Remove/Contains: O(log N) via SHAMap descent + incremental
@@ -31,25 +32,23 @@ import (
 // and StateSyncing.) Contains treats any such error as "fail open"
 // (false); ID treats it as the zero hash, which collides with the
 // canonical hash of the empty SHAMap. Reaching that path is a
-// programmer-error condition that rippled covers with XRPL_ASSERT.
+// programmer-error condition.
 //
 // Aliasing. shamap() (package-internal) exposes the live backing map.
 // Add and Remove mutate it in place — there is no copy-on-write. The
 // only production caller (router.go serveTxSet) takes the pointer and
-// walks it synchronously, so the aliasing is dormant. Rippled avoids
-// this by snapshotting on every MutableTxSet round-trip
-// (RCLCxTx.h:78,119); replicating that would require O(1) SHAMap COW,
-// which the unbacked path here does not yet have (Snapshot does a
-// deep clone). The accessor stays unexported so the aliasing concern
-// cannot leak out of this package.
+// walks it synchronously, so the aliasing is dormant. A snapshot on
+// every round-trip would avoid it but requires O(1) SHAMap COW, which
+// the unbacked path here does not yet have (Snapshot does a deep
+// clone). The accessor stays unexported so the aliasing concern cannot
+// leak out of this package.
 //
 // Concurrency. The backing *shamap.SHAMap is internally lock-protected,
 // but TxSetImpl maintains a shadow `count` field for O(1) Size(); the
 // mutex below brackets every count read (Size, Txs, TxIDs) against
-// Add/Remove writers. Rippled has no parallel counter (RCLTxSet
-// exposes no size method at all — RCLCxTx.h:62-189); the divergence
-// exists because our consensus engine logs and gates on tx counts
-// from hot paths, so we pay the extra field rather than walk the tree.
+// Add/Remove writers. The extra field exists because our consensus
+// engine logs and gates on tx counts from hot paths, so we pay for it
+// rather than walk the tree.
 type TxSetImpl struct {
 	txMap *shamap.SHAMap
 	mu    sync.Mutex
@@ -57,24 +56,18 @@ type TxSetImpl struct {
 }
 
 // NewTxSet creates a TxSet from raw transaction blobs. The ID is the
-// SHAMap root hash, matching rippled's canonical tx-set hashing.
+// canonical SHAMap root hash.
 //
 // Returns an error if shamap.New fails or any blob is rejected by the
-// backing SHAMap. Neither path is reachable today —
-// shamap.New(TypeTransaction) is unconditional (shamap/shamap.go:82-93)
-// and the only blob gate is the goxrpl-specific <12-byte rejection in
-// shamap/leaf_node.go (rippled's SHAMap::addGiveItem has no size
-// check; it validates blobs upstream via STTx). Real transaction
-// blobs are far larger than 12 bytes. We propagate both as errors
-// rather than panicking or silently dropping the blob: a truncated
-// set computes the wrong root hash and would break consensus, and
-// keeping a single error-return contract (no mixed panic/error) means
-// callers who already check err do not have to also wrap recover().
+// backing SHAMap. Neither path is reachable today — shamap.New is
+// unconditional and the only blob gate is the <12-byte rejection, far
+// below any real transaction blob. We propagate both as errors rather
+// than panicking or silently dropping the blob: a truncated set
+// computes the wrong root hash and would break consensus, and keeping
+// a single error-return contract (no mixed panic/error) means callers
+// who already check err do not have to also wrap recover().
 func NewTxSet(txBlobs [][]byte) (*TxSetImpl, error) {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("NewTxSet: shamap.New(TypeTransaction): %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	ts := &TxSetImpl{txMap: txMap}
 	for i, blob := range txBlobs {
 		if err := ts.Add(blob); err != nil {
@@ -122,9 +115,8 @@ func (ts *TxSetImpl) Contains(id consensus.TxID) bool {
 	return err == nil && ok
 }
 
-// Add inserts a transaction blob into the set. Mirrors rippled's
-// RCLTxSet::MutableTxSet::insert which uses tnTRANSACTION_NM only
-// (RCLCxTx.h:90) — there is no untyped fallback.
+// Add inserts a transaction blob into the set, always with the
+// no-metadata node type; there is no untyped fallback.
 //
 // Has errors are propagated (unlike Contains, which fails open) — the
 // mutation path is where SHAMap state transitions surface, and a
@@ -190,10 +182,9 @@ func (ts *TxSetImpl) Size() int {
 // Do not "normalize" this asymmetry without thinking through both
 // invariants.
 //
-// go-xrpl-specific helper with no rippled counterpart; not currently
-// wired to the wire or to disk. If it ever is, consumers must accept
-// the canonical-order framing (insertion order is no longer
-// observable).
+// Not currently wired to the wire or to disk. If it ever is,
+// consumers must accept the canonical-order framing (insertion order
+// is no longer observable).
 func (ts *TxSetImpl) Bytes() []byte {
 	var buf bytes.Buffer
 	_ = ts.txMap.ForEach(func(it *shamap.Item) bool {
@@ -217,26 +208,39 @@ func (ts *TxSetImpl) shamap() *shamap.SHAMap {
 }
 
 // computeTxID computes the SHA-512Half of a transaction blob with the
-// HashPrefix for transactions (TXN\x00). Matches rippled's
-// sha512Half(HashPrefix::transactionID, txBlob).
+// HashPrefix for transactions (TXN\x00).
 func computeTxID(blob []byte) consensus.TxID {
 	return consensus.TxID(common.Sha512Half(protocol.HashPrefixTransactionID[:], blob))
 }
 
-// TxSetCache is a thread-safe cache for transaction sets.
+// txSetCacheTTL bounds how long a transaction set is retained. A set is
+// needed only while its consensus round is live plus a margin to serve
+// catching-up peers; beyond that it is dead weight. The window spans many
+// rounds (mainnet cadence ~4s) so an in-flight round never loses its set,
+// while keeping the cache bounded to a small constant. Without it the map
+// grows by one full SHAMap of tx blobs per BuildTxSet — our own each
+// round plus one per acquired peer set, >20k/day at mainnet — for the
+// process lifetime.
+const txSetCacheTTL = 5 * time.Minute
+
+// TxSetCache is a thread-safe, TTL-expiring cache for transaction sets.
 type TxSetCache struct {
 	mu    sync.RWMutex
 	cache map[consensus.TxSetID]*TxSetImpl
+	added map[consensus.TxSetID]time.Time
+	// now is the clock used for expiry; tests override it. Defaults to
+	// time.Now, matching the router's txSetAcquire sweep.
+	now func() time.Time
 }
 
-// NewTxSetCache creates a new TxSetCache.
 func NewTxSetCache() *TxSetCache {
 	return &TxSetCache{
 		cache: make(map[consensus.TxSetID]*TxSetImpl),
+		added: make(map[consensus.TxSetID]time.Time),
+		now:   time.Now,
 	}
 }
 
-// Get retrieves a TxSet by ID.
 func (c *TxSetCache) Get(id consensus.TxSetID) (*TxSetImpl, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -244,16 +248,31 @@ func (c *TxSetCache) Get(id consensus.TxSetID) (*TxSetImpl, bool) {
 	return ts, ok
 }
 
-// Put stores a TxSet in the cache.
 func (c *TxSetCache) Put(ts *TxSetImpl) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cache[ts.ID()] = ts
+	id := ts.ID()
+	c.cache[id] = ts
+	c.added[id] = c.now()
+	c.sweepLocked()
 }
 
-// Remove deletes a TxSet from the cache.
 func (c *TxSetCache) Remove(id consensus.TxSetID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.cache, id)
+	delete(c.added, id)
+}
+
+// sweepLocked evicts entries older than txSetCacheTTL. Runs opportunistically
+// on Put — frequent enough at round cadence to keep the map bounded without a
+// dedicated timer. Caller holds c.mu.
+func (c *TxSetCache) sweepLocked() {
+	cutoff := c.now().Add(-txSetCacheTTL)
+	for id, t := range c.added {
+		if t.Before(cutoff) {
+			delete(c.cache, id)
+			delete(c.added, id)
+		}
+	}
 }

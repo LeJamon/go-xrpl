@@ -11,6 +11,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // xrpAccountID is the zero AccountID returned by rippled's xrpAccount()
@@ -24,7 +25,7 @@ var (
 
 type BookOffersMethod struct{ BaseHandler }
 
-func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireNotBusyBookOffers(ctx); err != nil {
 		return nil, err
 	}
@@ -79,11 +80,11 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, rpcErr
 	}
 
-	if !isValidCurrencyCode(paysCurrency) {
+	if !keylet.IsValidCurrencyCode(paysCurrency) {
 		return nil, types.RpcErrorSrcCurMalformed(
 			"Invalid field 'taker_pays.currency', bad currency.")
 	}
-	if !isValidCurrencyCode(getsCurrency) {
+	if !keylet.IsValidCurrencyCode(getsCurrency) {
 		return nil, types.RpcErrorDstAmtMalformed(
 			"Invalid field 'taker_gets.currency', bad currency.")
 	}
@@ -194,9 +195,9 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ledger_index: %v", err))
 		}
 	}
-	ledgerIndex := "current"
-	if spec.LedgerIndex != "" {
-		ledgerIndex = spec.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(spec)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
@@ -236,15 +237,16 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	response := map[string]interface{}{
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"offers":       result.Offers,
-		"validated":    result.Validated,
+	response := map[string]any{
+		"offers": result.Offers,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 	if result.Marker != "" {
 		// Pair marker with limit echo, matching rippled's account_offers
 		// convention (AccountOffers.cpp:172-176 emits both fields together).
@@ -252,52 +254,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		response["limit"] = limit
 	}
 	return response, nil
-}
-
-func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
-	var xrpAmount string
-	if err := json.Unmarshal(data, &xrpAmount); err == nil {
-		return types.Amount{Value: xrpAmount}, nil
-	}
-
-	var iouAmount struct {
-		Currency string `json:"currency"`
-		Issuer   string `json:"issuer"`
-		Value    string `json:"value,omitempty"`
-	}
-	if err := json.Unmarshal(data, &iouAmount); err != nil {
-		return types.Amount{}, err
-	}
-
-	return types.Amount{
-		Currency: iouAmount.Currency,
-		Issuer:   iouAmount.Issuer,
-		Value:    iouAmount.Value,
-	}, nil
-}
-
-// isValidCurrencyCode reports whether a currency code is acceptable per
-// rippled rules: empty or "XRP" (native), exactly 3 characters from
-// rippled's isoCharSet (UintTypes.cpp:39-43, :93-96), or exactly 40 hex
-// characters (issued-currency hex form).
-func isValidCurrencyCode(currency string) bool {
-	if currency == "" || currency == "XRP" {
-		return true
-	}
-	if len(currency) == 3 {
-		for _, c := range currency {
-			if !isIsoCurrencyChar(c) {
-				return false
-			}
-		}
-		return true
-	}
-	if len(currency) == 40 {
-		if _, err := hex.DecodeString(currency); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 // readAndValidateIssuer decodes the issuer field for one side of the book and

@@ -89,7 +89,7 @@ func TestLocalTxs_Sweep_ExpiresOldEntries(t *testing.T) {
 
 	// Advance the LCL enough that we can anchor strictly before
 	// view.Sequence() - HoldLedgers.
-	for i := uint32(0); i < localtxs.HoldLedgers+3; i++ {
+	for range localtxs.HoldLedgers + 3 {
 		env.Close()
 	}
 

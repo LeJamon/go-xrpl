@@ -78,7 +78,7 @@ func TestEscrowCreate_DestinationNode_Pagination(t *testing.T) {
 	// both alice's and bob's owner directories.
 	const n = 33
 	var lastSeq uint32
-	for i := 0; i < n; i++ {
+	for range n {
 		lastSeq = env.Seq(alice)
 		r := env.Submit(escrow.EscrowCreate(alice, bob, xrp(1)).
 			FinishTime(env.Now().Add(1 * time.Second)).Build())

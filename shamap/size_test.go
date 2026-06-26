@@ -9,10 +9,7 @@ import (
 
 func TestSize_EmptyMap(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeTransaction)
 	if got := sm.Size(); got != 0 {
 		t.Errorf("Size on empty map = %d, want 0", got)
 	}
@@ -20,10 +17,7 @@ func TestSize_EmptyMap(t *testing.T) {
 
 func TestSize_AfterPutAndDelete(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeTransaction)
 
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
@@ -53,11 +47,8 @@ func TestSize_AfterPutAndDelete(t *testing.T) {
 
 func TestSize_CachedWhenImmutable(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-	for i := 0; i < 5; i++ {
+	sm := New(TypeState)
+	for i := range 5 {
 		k := [32]byte{byte(i)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
 			t.Fatalf("put: %v", err)
@@ -95,11 +86,8 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 
 func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
-	for i := 0; i < 3; i++ {
+	sm := New(TypeState)
+	for i := range 3 {
 		k := [32]byte{byte(i)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
 			t.Fatalf("put: %v", err)
@@ -152,7 +140,7 @@ func (f *failingFamily) StoreBatch(ctx context.Context, entries []FlushEntry) er
 
 func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 	t.Parallel()
-	mem := NewMemoryFamily()
+	mem := newMemoryFamily()
 	sm, err := NewBacked(TypeState, mem)
 	if err != nil {
 		t.Fatalf("new backed: %v", err)
@@ -203,12 +191,12 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 
 func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	t.Parallel()
-	mem := NewMemoryFamily()
+	mem := newMemoryFamily()
 	sm, err := NewBacked(TypeState, mem)
 	if err != nil {
 		t.Fatalf("new backed: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		k := [32]byte{byte(i * 0x11)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i+1))); err != nil {
 			t.Fatalf("put: %v", err)

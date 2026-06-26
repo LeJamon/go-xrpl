@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // RetriesAllowed is the starting retry count for newly queued transactions.
@@ -49,10 +50,9 @@ type Candidate struct {
 	SeqProxy         SeqProxy
 	LastValid        uint32
 	RetriesRemaining int // starts at RetriesAllowed; drops to 0 before removal
-	LastResult       tx.Result
+	LastResult       ter.Result
 	// PreflightResult holds the result from the preflight check.
-	PreflightResult tx.Result
-	Fee             uint64
+	PreflightResult ter.Result
 	Consequences    TxConsequences
 }
 
@@ -82,7 +82,7 @@ func NewCandidate(
 	feeLevel FeeLevel,
 	seqProxy SeqProxy,
 	lastValid uint32,
-	preflightResult tx.Result,
+	preflightResult ter.Result,
 	consequences TxConsequences,
 ) *Candidate {
 	return &Candidate{
@@ -202,6 +202,21 @@ func (aq *AccountQueue) FirstRelevant(acctSeqProx SeqProxy) *Candidate {
 		}
 	}
 	return first
+}
+
+// RelevantSortedCandidates returns the account's candidates with SeqProxy >=
+// acctSeqProx, sorted ascending by SeqProxy. Stale sequence-based entries that
+// slipped into the ledger are excluded, mirroring rippled's lower_bound(
+// acctSeqProx) range (TxQ.cpp:818).
+func (aq *AccountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*Candidate {
+	sorted := aq.GetSortedCandidates()
+	relevant := make([]*Candidate, 0, len(sorted))
+	for _, c := range sorted {
+		if !c.SeqProxy.Less(acctSeqProx) {
+			relevant = append(relevant, c)
+		}
+	}
+	return relevant
 }
 
 // GetSortedCandidates returns all candidates sorted by SeqProxy.

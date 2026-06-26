@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // AccountID struct represents an account ID.
@@ -61,7 +61,7 @@ func (a *AccountID) FromJSON(value any) ([]byte, error) {
 // then encodes the result to an AccountID format.
 // If no length prefix size is given, it returns an ErrNoLengthPrefix error.
 // If the length is 0, it returns an empty string (matching JS behavior for empty AccountIDs).
-func (a *AccountID) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+func (a *AccountID) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	if opts == nil {
 		return nil, ErrNoLengthPrefix
 	}

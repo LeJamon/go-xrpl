@@ -710,39 +710,6 @@ func TestFreeze_CreateFrozenTrustline(t *testing.T) {
 	t.Log("Create frozen trustline test: verified")
 }
 
-// TestFreeze_AMMWhenFrozen tests AMM payments on frozen trust lines.
-// From rippled: testAMMWhenFreeze
-func TestFreeze_AMMWhenFrozen(t *testing.T) {
-	t.Skip("TODO: AMM requires AMM creation support")
-
-	env := xrplgoTesting.NewTestEnv(t)
-
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.Close()
-
-	// Set up trust lines
-	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "10000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "10000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	env.Close()
-
-	// Fund both accounts
-	usd1000 := tx.NewIssuedAmountFromFloat64(1000, "USD", gw.Address)
-	result = env.Submit(PayIssued(gw, alice, usd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	result = env.Submit(PayIssued(gw, bob, usd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
-	env.Close()
-
-	// Gateway creates AMM with XRP(1000) and USD(1000)
-	// TODO: AMM creation
-
-	t.Log("AMM when frozen test: requires AMM creation support")
-}
+// TestFreeze_AMMWhenFrozen (rippled testAMMWhenFreeze) lives in
+// freeze_amm_test.go, in package payment_test, because the AMM builders it
+// needs import this package.

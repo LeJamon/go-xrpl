@@ -31,30 +31,6 @@ type LedgerCloseEvent struct {
 	Validated     bool   `json:"validated,omitempty"`      // Whether this ledger is validated
 }
 
-// NewLedgerCloseEvent creates a new LedgerCloseEvent with required fields
-func NewLedgerCloseEvent(
-	ledgerHash string,
-	ledgerIndex uint32,
-	closeTime time.Time,
-	feeBase, feeRef, reserveBase, reserveInc uint64,
-	txnCount int,
-	validatedLedgers string,
-) *LedgerCloseEvent {
-	return &LedgerCloseEvent{
-		Type:             "ledgerClosed",
-		FeeBase:          feeBase,
-		FeeRef:           feeRef,
-		LedgerHash:       ledgerHash,
-		LedgerIndex:      ledgerIndex,
-		LedgerTime:       ToRippleTime(closeTime),
-		ReserveBase:      reserveBase,
-		ReserveInc:       reserveInc,
-		TxnCount:         txnCount,
-		ValidatedLedgers: validatedLedgers,
-		Validated:        true,
-	}
-}
-
 // TransactionEvent represents a transaction notification sent to subscribers
 // This matches the rippled transaction stream message format
 type TransactionEvent struct {
@@ -73,32 +49,6 @@ type TransactionEvent struct {
 	Status              string          `json:"status,omitempty"`               // Status for proposed transactions
 	// Account subscription specific fields
 	Account string `json:"account,omitempty"` // Account that was affected (for account subscriptions)
-}
-
-// NewTransactionEvent creates a new TransactionEvent
-func NewTransactionEvent(
-	txJSON json.RawMessage,
-	meta json.RawMessage,
-	hash string,
-	ledgerIndex uint32,
-	ledgerHash string,
-	engineResult string,
-	engineResultCode int,
-	engineResultMessage string,
-	validated bool,
-) *TransactionEvent {
-	return &TransactionEvent{
-		Type:                "transaction",
-		Transaction:         txJSON,
-		Meta:                meta,
-		Hash:                hash,
-		LedgerIndex:         ledgerIndex,
-		LedgerHash:          ledgerHash,
-		EngineResult:        engineResult,
-		EngineResultCode:    engineResultCode,
-		EngineResultMessage: engineResultMessage,
-		Validated:           validated,
-	}
 }
 
 // ValidationEvent represents a validation message from a validator
@@ -164,15 +114,6 @@ type ServerStatusEvent struct {
 	LoadFactorFeeReference  int    `json:"load_factor_fee_reference,omitempty"`  // TxQ reference fee level (NetworkOPs.cpp:2345)
 	LoadFactorServer        int    `json:"load_factor_server,omitempty"`         // Server load factor
 	ServerStatus            string `json:"server_status,omitempty"`              // Operating mode (disconnected/connected/syncing/tracking/full)
-}
-
-// NewServerStatusEvent creates a new ServerStatusEvent
-func NewServerStatusEvent(loadBase, loadFactor int) *ServerStatusEvent {
-	return &ServerStatusEvent{
-		Type:       "serverStatus",
-		LoadBase:   loadBase,
-		LoadFactor: loadFactor,
-	}
 }
 
 // ConsensusEvent represents consensus phase changes
@@ -266,15 +207,6 @@ const (
 	PeerStatusShutting   = "SHUTTING"
 )
 
-// NewPeerStatusEvent creates a new PeerStatusEvent
-func NewPeerStatusEvent(action string, date uint32) *PeerStatusEvent {
-	return &PeerStatusEvent{
-		Type:   "peerStatusChange",
-		Action: action,
-		Date:   &date,
-	}
-}
-
 // OrderBookChangeEvent represents changes to an order book
 // This is sent to subscribers of specific order books
 type OrderBookChangeEvent struct {
@@ -295,7 +227,7 @@ type OrderBookChangeEvent struct {
 // This is sent in response to path_find create requests
 type PathFindEvent struct {
 	Type               string            `json:"type"`                // "path_find"
-	ID                 interface{}       `json:"id,omitempty"`        // Request ID
+	ID                 any               `json:"id,omitempty"`        // Request ID
 	SourceAccount      string            `json:"source_account"`      // Source account
 	DestinationAccount string            `json:"destination_account"` // Destination account
 	DestinationAmount  json.RawMessage   `json:"destination_amount"`  // Amount to deliver
@@ -308,15 +240,6 @@ type PathAlternative struct {
 	PathsCanonical [][]types.PathStep `json:"paths_canonical,omitempty"` // Canonical path representation
 	PathsComputed  [][]types.PathStep `json:"paths_computed,omitempty"`  // Computed paths
 	SourceAmount   json.RawMessage    `json:"source_amount"`             // Amount to send
-}
-
-// PathStep represents a step in a payment path
-type PathStepEvent struct {
-	Account  string `json:"account,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
-	Type     int    `json:"type,omitempty"`
-	TypeHex  string `json:"type_hex,omitempty"`
 }
 
 // ProposedTransactionEvent represents a proposed (unvalidated) transaction

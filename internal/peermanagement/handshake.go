@@ -2,14 +2,16 @@ package peermanagement
 
 import (
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,8 +24,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// protocolVersion is a (major, minor) peer-protocol pair. Mirrors
-// rippled ProtocolVersion (rippled/src/xrpld/overlay/detail/ProtocolVersion.h:38).
+// protocolVersion is a (major, minor) peer-protocol pair.
 type protocolVersion struct{ major, minor uint16 }
 
 func (v protocolVersion) String() string {
@@ -37,10 +38,9 @@ func (v protocolVersion) less(o protocolVersion) bool {
 	return v.minor < o.minor
 }
 
-// supportedProtocols mirrors rippled supportedProtocolList
-// (ProtocolVersion.cpp:40-44). Must stay strictly ascending — duplicates
-// are forbidden. Enforced by init() below, mirroring rippled's
-// static_assert (ProtocolVersion.cpp:50-72).
+// supportedProtocols lists the peer-protocol versions go-xrpl
+// advertises. Must stay strictly ascending — duplicates are forbidden;
+// enforced by init() below.
 var supportedProtocols = []protocolVersion{{2, 1}, {2, 2}}
 
 func init() {
@@ -107,7 +107,7 @@ func DefaultHandshakeConfig() HandshakeConfig {
 
 // BuildHandshakeRequest builds an HTTP upgrade request for peer connection.
 func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(context.Background(), "GET", "/", nil)
+	req, err := http.NewRequest("GET", "/", nil) //nolint:noctx // request is serialized via Write to a raw conn, not sent through an http.Client
 	if err != nil {
 		return nil, err
 	}
@@ -155,8 +155,8 @@ func WriteRawHandshakeRequest(w io.Writer, req *http.Request) error {
 	return err
 }
 
-// BuildHandshakeResponse mirrors rippled makeResponse
-// (Handshake.cpp:391-422). `negotiated` is the version returned by
+// BuildHandshakeResponse builds the 101 Switching Protocols response
+// for an inbound handshake. `negotiated` is the version returned by
 // NegotiateProtocolVersion against the inbound request; an empty value
 // falls back to the highest supported version (test convenience).
 func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfig, negotiated string) *http.Response {
@@ -176,7 +176,7 @@ func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfi
 	resp.Header.Set(HeaderUpgrade, negotiated)
 	resp.Header.Set(HeaderConnectAs, "Peer")
 	resp.Header.Set(HeaderCrawl, crawlValue(cfg.CrawlPublic))
-	// rippled reads the Server header via PeerImp::getVersion.
+	// rippled peers read our version string from the Server header.
 	if cfg.UserAgent != "" {
 		resp.Header.Set(HeaderServer, cfg.UserAgent)
 	}
@@ -186,11 +186,11 @@ func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfi
 	return resp
 }
 
-// BuildHandshakeErrorResponse mirrors rippled OverlayImpl::makeErrorResponse
-// (OverlayImpl.cpp:371-386). rippled returns 400 Bad Request — not 426
-// Upgrade Required — with the failure reason embedded in the status
-// line as "Bad Request (<text>)" so a misconfigured peer can read why
-// the upgrade was refused before the connection is closed.
+// BuildHandshakeErrorResponse builds the handshake rejection: 400 Bad
+// Request — not 426 Upgrade Required, matching rippled — with the
+// failure reason embedded in the status line as "Bad Request (<text>)"
+// so a misconfigured peer can read why the upgrade was refused before
+// the connection is closed.
 func BuildHandshakeErrorResponse(userAgent, remoteAddr, text string) *http.Response {
 	resp := &http.Response{
 		StatusCode: http.StatusBadRequest,
@@ -212,6 +212,40 @@ func BuildHandshakeErrorResponse(userAgent, remoteAddr, text string) *http.Respo
 	return resp
 }
 
+// BuildRedirectResponse builds the slot-full rejection: 503 Service
+// Unavailable carrying a JSON body of alternate peer addresses
+// (`{"peer-ips": [...]}`) so a dialer we cannot admit can bootstrap
+// elsewhere instead of being dropped with no signal. peerIPs are
+// "host:port" strings; an empty list still serializes as `[]`.
+func BuildRedirectResponse(userAgent, remoteAddr string, peerIPs []string) *http.Response {
+	if peerIPs == nil {
+		peerIPs = []string{}
+	}
+	body, _ := json.Marshal(struct {
+		PeerIPs []string `json:"peer-ips"`
+	}{PeerIPs: peerIPs})
+
+	resp := &http.Response{
+		StatusCode:    http.StatusServiceUnavailable,
+		Status:        "503 Service Unavailable",
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+	if userAgent != "" {
+		resp.Header.Set(HeaderServer, userAgent)
+	}
+	if remoteAddr != "" {
+		resp.Header.Set("Remote-Address", remoteAddr)
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set(HeaderConnection, "close")
+	return resp
+}
+
 func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg HandshakeConfig) {
 	if cfg.NetworkID > 0 {
 		h.Set(HeaderNetworkID, strconv.FormatUint(uint64(cfg.NetworkID), 10))
@@ -222,7 +256,13 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 	h.Set(HeaderPublicKey, id.EncodedPublicKey())
 
 	sig, err := id.SignDigest(sharedValue)
-	if err == nil {
+	if err != nil {
+		// Omitting Session-Signature makes the remote reject the
+		// handshake with no local signal — surface the cause instead of
+		// silently shipping an unsigned handshake.
+		slog.Warn("handshake: session-signature signing failed; omitting header",
+			"t", "Handshake", "err", err)
+	} else {
 		h.Set(HeaderSessionSignature, base64.StdEncoding.EncodeToString(sig))
 	}
 
@@ -241,7 +281,7 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 	}
 	if cfg.LedgerHintProvider != nil {
 		if hints, ok := cfg.LedgerHintProvider(); ok {
-			// Uppercase hex to match rippled's strHex.
+			// Uppercase hex, matching the format rippled emits.
 			h.Set(HeaderClosedLedger, strings.ToUpper(hex.EncodeToString(hints.Closed[:])))
 			h.Set(HeaderPreviousLedger, strings.ToUpper(hex.EncodeToString(hints.Parent[:])))
 		}
@@ -303,7 +343,8 @@ func isPublicIP(ip net.IP) bool {
 	return true
 }
 
-// parseLedgerHashHeader accepts hex or 32-byte base64 (PeerImp::run does too).
+// parseLedgerHashHeader accepts hex or 32-byte base64 — both forms
+// appear on the wire (rippled accepts both too).
 func parseLedgerHashHeader(s string) ([32]byte, error) {
 	var out [32]byte
 	if len(s) == hex.EncodedLen(32) {
@@ -318,7 +359,7 @@ func parseLedgerHashHeader(s string) ([32]byte, error) {
 	return out, fmt.Errorf("unrecognised ledger hash %q", s)
 }
 
-// VerifyPeerHandshake runs the post-Server-Domain rippled verify chain:
+// VerifyPeerHandshake runs the post-Server-Domain verify chain:
 // Network-ID → Network-Time → Public-Key → Session-Signature →
 // self-connection. Callers must run ValidateServerDomain first.
 func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey string, cfg HandshakeConfig) (*PublicKeyToken, error) {
@@ -399,8 +440,7 @@ func crawlValue(public bool) string {
 }
 
 // SupportedProtocolVersions returns the comma-joined Upgrade header
-// value go-xrpl advertises. Mirrors rippled supportedProtocolVersions()
-// (ProtocolVersion.cpp:158-174).
+// value go-xrpl advertises.
 func SupportedProtocolVersions() string {
 	parts := make([]string, len(supportedProtocols))
 	for i, v := range supportedProtocols {
@@ -410,16 +450,14 @@ func SupportedProtocolVersions() string {
 }
 
 // protocolTokenRe matches a single XRPL/X.Y token: anchored, major ≥ 2,
-// no leading zeros. Mirrors rippled's regex in parseProtocolVersions
-// (ProtocolVersion.cpp:83-93).
+// no leading zeros.
 var protocolTokenRe = regexp.MustCompile(`^XRPL/([2-9]|[1-9][0-9]+)\.(0|[1-9][0-9]*)$`)
 
 // parseProtocolVersions returns the sorted, deduplicated list of valid
-// XRPL versions in a comma-separated header value. Mirrors rippled
-// parseProtocolVersions (ProtocolVersion.cpp:80-125).
+// XRPL versions in a comma-separated header value.
 func parseProtocolVersions(s string) []protocolVersion {
 	var out []protocolVersion
-	for _, tok := range strings.Split(s, ",") {
+	for tok := range strings.SplitSeq(s, ",") {
 		tok = strings.TrimSpace(tok)
 		m := protocolTokenRe.FindStringSubmatch(tok)
 		if m == nil {
@@ -431,7 +469,8 @@ func parseProtocolVersions(s string) []protocolVersion {
 			continue
 		}
 		v := protocolVersion{uint16(maj), uint16(min)}
-		// Round-trip sanity (rippled ProtocolVersion.cpp:115).
+		// Round-trip sanity: reject tokens that don't reserialise
+		// identically.
 		if v.String() != tok {
 			continue
 		}
@@ -449,19 +488,13 @@ func parseProtocolVersions(s string) []protocolVersion {
 }
 
 func isProtocolSupported(v protocolVersion) bool {
-	for _, sv := range supportedProtocols {
-		if sv == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(supportedProtocols, v)
 }
 
 // NegotiateProtocolVersion picks the largest version in the
 // intersection of the peer's offered Upgrade list and supportedProtocols,
 // or "" if no shared version exists. Use on the INBOUND path where the
-// request advertises a list. Mirrors rippled negotiateProtocolVersion
-// (ProtocolVersion.cpp:127-156).
+// request advertises a list.
 func NegotiateProtocolVersion(upgradeHeader string) string {
 	theirs := parseProtocolVersions(upgradeHeader)
 	var (
@@ -491,7 +524,7 @@ func NegotiateProtocolVersion(upgradeHeader string) string {
 // VerifyOutboundProtocolVersion accepts the server's Upgrade response
 // only if it contains exactly one supported version, returning that
 // version's token. Returns "" otherwise (zero, multiple, or
-// unsupported). Mirrors rippled ConnectAttempt.cpp:340-351.
+// unsupported).
 func VerifyOutboundProtocolVersion(upgradeHeader string) string {
 	pvs := parseProtocolVersions(upgradeHeader)
 	if len(pvs) == 1 && isProtocolSupported(pvs[0]) {
@@ -664,7 +697,7 @@ func GetFeatureValue(headers http.Header, feature string) (string, bool) {
 	if headerValue == "" {
 		return "", false
 	}
-	for _, f := range strings.Split(headerValue, FeatureDelimiter) {
+	for f := range strings.SplitSeq(headerValue, FeatureDelimiter) {
 		f = strings.TrimSpace(f)
 		if f == "" {
 			continue
@@ -689,7 +722,7 @@ func IsFeatureValue(headers http.Header, feature, value string) bool {
 	if !found {
 		return false
 	}
-	for _, v := range strings.Split(featureValue, ValueDelimiter) {
+	for v := range strings.SplitSeq(featureValue, ValueDelimiter) {
 		if strings.EqualFold(strings.TrimSpace(v), value) {
 			return true
 		}
@@ -701,13 +734,9 @@ func FeatureEnabled(headers http.Header, feature string) bool {
 	return IsFeatureValue(headers, feature, "1")
 }
 
-func PeerFeatureEnabled(headers http.Header, feature, value string, localEnabled bool) bool {
-	return localEnabled && IsFeatureValue(headers, feature, value)
-}
-
 // HandshakeExtras carries the typed headers ParseHandshakeExtras
 // surfaces. Instance-Cookie / Local-IP / Remote-IP round-trip on the
-// wire but are validated-and-discarded (matching rippled PeerImp).
+// wire but are validated-and-discarded.
 type HandshakeExtras struct {
 	ServerDomain      string
 	NetworkID         string
@@ -715,14 +744,13 @@ type HandshakeExtras struct {
 	PreviousLedger    [32]byte
 	HasClosedLedger   bool
 	HasPreviousLedger bool
-	// Raw version headers; applyHandshakeExtras picks one by direction,
-	// mirroring PeerImp::getVersion (PeerImp.cpp:381-386).
+	// Raw version headers; applyHandshakeExtras picks one by direction.
 	UserAgentHeader string
 	ServerHeader    string
 }
 
-// ValidateServerDomain enforces verifyHandshake's Server-Domain check
-// (Handshake.cpp:235-239). Run first to match rippled's verify order
+// ValidateServerDomain enforces the Server-Domain handshake check.
+// Runs first in the verify order
 // (Server-Domain → Network-ID → Network-Time → Public-Key → ...).
 func ValidateServerDomain(headers http.Header) (string, error) {
 	v := headers.Get(HeaderServerDomain)
@@ -736,13 +764,11 @@ func ValidateServerDomain(headers http.Header) (string, error) {
 	return v, nil
 }
 
-// ParseHandshakeExtras enforces the post-signature checks: ledger-hash
-// malformed (PeerImp.cpp:175-191), Previous-without-Closed
-// (PeerImp.cpp:193-194), Local-IP / Remote-IP consistency
-// (Handshake.cpp:325-359). Server-Domain is validated separately by
-// ValidateServerDomain (which must run first to match rippled's order).
-// Instance-Cookie is emitted on the wire but never parsed (rippled's
-// verifyHandshake doesn't inspect it). peerRemote == nil disables the
+// ParseHandshakeExtras enforces the post-signature checks: malformed
+// ledger hashes, Previous-without-Closed, and Local-IP / Remote-IP
+// consistency. Server-Domain is validated separately by
+// ValidateServerDomain (which must run first). Instance-Cookie is
+// emitted on the wire but never parsed. peerRemote == nil disables the
 // IP comparisons.
 func ParseHandshakeExtras(
 	headers http.Header,
@@ -756,11 +782,10 @@ func ParseHandshakeExtras(
 		out.ServerDomain = v
 	}
 
-	// Network-ID: rippled (Handshake.cpp:241-249) parses-and-validates
-	// the value but stores the raw header on PeerImp::headers_, surfacing
-	// it as a string in PeerImp::json (PeerImp.cpp:411-412). Numeric
-	// validation + mismatch rejection happens upstream in
-	// VerifyPeerHandshake; here we just round-trip the original string.
+	// Network-ID is surfaced as the raw header string (the peers RPC
+	// emits it verbatim). Numeric validation + mismatch rejection
+	// happens upstream in VerifyPeerHandshake; here we just round-trip
+	// the original string.
 	if v := headers.Get(HeaderNetworkID); v != "" {
 		out.NetworkID = v
 	}
@@ -791,8 +816,7 @@ func ParseHandshakeExtras(
 			ErrInvalidHandshake)
 	}
 
-	// Local-IP / Remote-IP are validated and discarded (rippled
-	// doesn't store them on PeerImp).
+	// Local-IP / Remote-IP are validated and discarded.
 	if v := headers.Get(HeaderLocalIP); v != "" {
 		localReported := net.ParseIP(v)
 		if localReported == nil {

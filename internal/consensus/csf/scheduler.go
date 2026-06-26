@@ -1,6 +1,18 @@
-// Package csf provides a Consensus Simulation Framework for testing consensus algorithms.
-// It is a Go port of rippled's csf test framework, enabling deterministic discrete event
-// simulation of consensus behavior without real network or time dependencies.
+// Package csf provides a Consensus Simulation Framework: a deterministic
+// discrete-event scheduler, a simulated peer-to-peer network, a trust graph
+// and a ledger oracle for exercising consensus without real time or sockets.
+// It follows the structure of rippled's csf test harness.
+//
+// EnginePeer (engine_adaptor.go) is the real integration: it implements
+// consensus.Adaptor over these primitives and drives the PRODUCTION engine
+// (internal/consensus/rcl) in ManualTick mode with the engine's clock pinned
+// to the scheduler's virtual time, so the suite validates the real state
+// machine deterministically (see engine_sim_test.go).
+//
+// The older Peer (peer.go) carries a SIMPLIFIED inline state machine rather
+// than the real engine; it remains as a lightweight gossip/topology sandbox
+// for network scenarios (slow peers, partitions, healing) that the
+// engine-driven path does not yet cover, and is being migrated to EnginePeer.
 package csf
 
 import (

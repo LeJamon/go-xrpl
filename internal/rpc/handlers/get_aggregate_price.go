@@ -23,7 +23,7 @@ type PriceDataPoint struct {
 	LastUpdateTime uint32
 }
 
-func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse into raw map first for field-presence detection (matching rippled's
 	// isMember() checks which distinguish "absent" from "present but invalid").
 	var raw map[string]json.RawMessage
@@ -111,17 +111,16 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		_ = json.Unmarshal(params, &ledgerSpec)
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if ledgerSpec.LedgerIndex != "" {
-		ledgerIndex = ledgerSpec.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(ledgerSpec.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// Collect prices from all oracles
 	var prices []PriceDataPoint
 
 	for _, oracleRaw := range oracles {
-		var oracleSpec map[string]interface{}
+		var oracleSpec map[string]any
 		if err := json.Unmarshal(oracleRaw, &oracleSpec); err != nil {
 			return nil, types.RpcErrorOracleMalformed()
 		}
@@ -188,13 +187,13 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 
 		// Find matching price data
-		priceDataSeries, ok2 := oracleDecoded["PriceDataSeries"].([]interface{})
+		priceDataSeries, ok2 := oracleDecoded["PriceDataSeries"].([]any)
 		if !ok2 {
 			continue
 		}
 
 		for _, pd := range priceDataSeries {
-			priceData, ok := pd.(map[string]interface{})
+			priceData, ok := pd.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -313,9 +312,9 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	median := calculateMedian(prices)
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"time": latestTime,
-		"entire_set": map[string]interface{}{
+		"entire_set": map[string]any{
 			"mean":               fmt.Sprintf("%g", entireMean),
 			"size":               uint16(entireSize),
 			"standard_deviation": fmt.Sprintf("%g", entireSD),
@@ -328,7 +327,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		trimCount := len(prices) * int(trimValue) / 100
 		trimmedPrices := prices[trimCount : len(prices)-trimCount]
 		trimmedMean, trimmedSD := calculateStats(trimmedPrices)
-		response["trimmed_set"] = map[string]interface{}{
+		response["trimmed_set"] = map[string]any{
 			"mean":               fmt.Sprintf("%g", trimmedMean),
 			"size":               uint16(len(trimmedPrices)),
 			"standard_deviation": fmt.Sprintf("%g", trimmedSD),
@@ -374,67 +373,15 @@ func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	if s == "" {
 		return "", fmt.Errorf("empty currency")
 	}
-	if !isValidCurrency(s) {
+	if !keylet.IsValidCurrencyCode(s) {
 		return "", fmt.Errorf("invalid currency")
 	}
 	return s, nil
 }
 
-// isValidCurrency validates a currency code matching rippled's to_currency().
-// Accepts:
-//   - "XRP" (system currency code)
-//   - 3-character ISO-like codes using alphanumeric + special chars
-//   - 40-character hex strings (160-bit currency)
-func isValidCurrency(code string) bool {
-	if code == "XRP" || code == "xrp" {
-		return true
-	}
-	if len(code) == 3 {
-		for _, c := range code {
-			if !isIsoCurrencyChar(c) {
-				return false
-			}
-		}
-		return true
-	}
-	// 40-character hex representation of 160-bit currency
-	if len(code) == 40 {
-		for _, c := range code {
-			if !isHexChar(c) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// isIsoCurrencyChar matches rippled's isoCharSet:
-// abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<>(){}[]|?!@#$%^&*
-func isIsoCurrencyChar(c rune) bool {
-	if c >= 'a' && c <= 'z' {
-		return true
-	}
-	if c >= 'A' && c <= 'Z' {
-		return true
-	}
-	if c >= '0' && c <= '9' {
-		return true
-	}
-	switch c {
-	case '<', '>', '(', ')', '{', '}', '[', ']', '|', '?', '!', '@', '#', '$', '%', '^', '&', '*':
-		return true
-	}
-	return false
-}
-
-func isHexChar(c rune) bool {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
-}
-
 // parseOracleDocumentID parses an oracle_document_id from a JSON-decoded interface value.
 // Returns (documentID, true) on success or (0, false) if the value is not a valid uint.
-func parseOracleDocumentID(v interface{}) (uint32, bool) {
+func parseOracleDocumentID(v any) (uint32, bool) {
 	switch val := v.(type) {
 	case float64:
 		// Reject negative, non-integer, NaN

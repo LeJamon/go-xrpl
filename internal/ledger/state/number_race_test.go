@@ -57,11 +57,11 @@ func TestNumberRounding_ConcurrentDeterministic(t *testing.T) {
 	// Writers: mirror the apply goroutine establishing the (constant per ledger)
 	// switchover. Concurrent with the readers below, this would trip -race
 	// against a plain bool global.
-	for w := 0; w < goroutines; w++ {
+	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				SetNumberSwitchover(true)
 			}
 		}()
@@ -70,11 +70,11 @@ func TestNumberRounding_ConcurrentDeterministic(t *testing.T) {
 	// Readers: each independently rounds the same expressions and must agree
 	// with the golden values bit-for-bit.
 	errs := make(chan string, goroutines)
-	for g := 0; g < goroutines; g++ {
+	for range goroutines {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for i := 0; i < iterations; i++ {
+			for range iterations {
 				if a.MulRounded(b, false, RoundToNearest).Compare(wantNearest) != 0 {
 					errs <- "mul to-nearest mismatch"
 					return

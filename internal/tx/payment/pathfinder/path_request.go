@@ -4,17 +4,30 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// DefaultSearchLevel is the default search depth for pathfinding.
-// Matches rippled's PATH_SEARCH default (7).
-const DefaultSearchLevel = 7
+// Pathfinding search levels mirror rippled's config defaults
+// (Config.h: PATH_SEARCH_FAST=2, PATH_SEARCH=2, PATH_SEARCH_MAX=3).
+// A fast update runs at SearchLevelFast and a full update at
+// SearchLevelDefault; repeated updates never exceed SearchLevelMax
+// (PathRequest::doUpdate). Tests ported from rippled's Path_test raise
+// the level to 7, matching that suite's pathTestEnv configuration.
+const (
+	SearchLevelFast    = 2
+	SearchLevelDefault = 2
+	SearchLevelMax     = 3
+)
 
 // PathAlternative represents one possible payment path with its cost.
 type PathAlternative struct {
 	// SourceAmount is the amount the source must send.
 	SourceAmount tx.Amount
+	// DestinationAmount is the amount actually delivered. Only meaningful
+	// to report for convert-all requests, where it is the discovered
+	// maximum instead of the requested amount.
+	DestinationAmount tx.Amount
 	// PathsComputed is the set of paths found for this alternative.
 	PathsComputed [][]payment.PathStep
 }
@@ -23,6 +36,10 @@ type PathAlternative struct {
 type PathRequestResult struct {
 	Alternatives          []PathAlternative
 	DestinationCurrencies []string
+	// SourceCurrencyOverflow reports that auto-discovery found more than
+	// maxAutoSrcCur source currencies. rippled fails the whole update with
+	// rpcINTERNAL in this case (PathRequest::findPaths).
+	SourceCurrencyOverflow bool
 }
 
 // PathRequest represents a single pathfinding request.
@@ -35,6 +52,7 @@ type PathRequest struct {
 	sourceCurrencies []payment.Issue // Explicit source currencies (or auto-discovered)
 	convertAll       bool
 	maxPaths         int
+	searchLevel      int
 }
 
 // NewPathRequest creates a new path request from the given parameters.
@@ -53,7 +71,15 @@ func NewPathRequest(
 		sourceCurrencies: sourceCurrencies,
 		convertAll:       convertAll,
 		maxPaths:         maxReturnedPaths,
+		searchLevel:      SearchLevelDefault,
 	}
+}
+
+// SetSearchLevel overrides the search depth used by Execute. Mirrors
+// raising PATH_SEARCH in rippled's config (e.g. Path_test's pathTestEnv
+// uses 7).
+func (pr *PathRequest) SetSearchLevel(level int) {
+	pr.searchLevel = level
 }
 
 // Execute runs the pathfinding algorithm and returns the result.
@@ -91,6 +117,11 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			if sameAccount && issue.Currency == dstCurrency {
 				continue
 			}
+			// More than maxAutoSrcCur auto-discovered currencies fails the
+			// whole request, matching rippled PathRequest::findPaths.
+			if len(srcCurrencies) >= maxAutoSrcCur {
+				return &PathRequestResult{SourceCurrencyOverflow: true}
+			}
 			// Build issue with source account as issuer (matching rippled)
 			var srcIssue payment.Issue
 			if issue.Currency == "XRP" || issue.Currency == "" {
@@ -99,9 +130,6 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 				srcIssue = payment.Issue{Currency: issue.Currency, Issuer: pr.srcAccount}
 			}
 			srcCurrencies = append(srcCurrencies, srcIssue)
-			if len(srcCurrencies) >= maxAutoSrcCur {
-				break
-			}
 		}
 	}
 
@@ -145,7 +173,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			pr.convertAll,
 		)
 
-		if !pf.FindPaths(DefaultSearchLevel) {
+		if !pf.FindPaths(pr.searchLevel) {
 			continue
 		}
 
@@ -155,15 +183,15 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		bestPaths, fullLiquidityPath := pf.GetBestPaths(pr.maxPaths, extraPaths, srcIssue.Issuer)
 		context[srcIssue] = bestPaths
 
-		if len(bestPaths) == 0 {
-			continue
-		}
+		// An empty path set is still tried: rippled runs rippleCalc with
+		// default paths allowed, so a working default path yields an
+		// alternative with empty paths_computed (PathRequest::findPaths).
 
 		// Validate the paths via RippleCalculate.
 		// Reference: rippled PathRequest::findPaths() line 592 — default paths ARE allowed
 		// (rcInput is only set for convert_all_, otherwise pInputs is null → defaultPathsAllowed=true).
 		// Use effectiveDstAmount (which is largestAmount for convertAll).
-		_, actualOut, _, _, calcResult := payment.RippleCalculate(
+		validateRC := payment.RippleCalculate(
 			ledger,
 			pr.srcAccount, pr.dstAccount,
 			effectiveDstAmount,
@@ -174,12 +202,13 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			false,
 			[32]byte{}, 0,
 		)
+		calcResult := validateRC.Result
 
 		// If insufficient and we have a full-liquidity path, try adding it
 		if !pr.convertAll && len(fullLiquidityPath) > 0 &&
-			(calcResult != tx.TesSUCCESS || actualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
+			(calcResult != ter.TesSUCCESS || validateRC.ActualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
 			bestPaths = append(bestPaths, fullLiquidityPath)
-			_, _, _, _, calcResult = payment.RippleCalculate(
+			calcResult = payment.RippleCalculate(
 				ledger,
 				pr.srcAccount, pr.dstAccount,
 				effectiveDstAmount,
@@ -189,12 +218,12 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 				false,
 				false,
 				[32]byte{}, 0,
-			)
+			).Result
 		}
 
-		if calcResult == tx.TesSUCCESS {
-			// Re-run to get actual source amount
-			actualIn, _, _, _, _ := payment.RippleCalculate(
+		if calcResult == ter.TesSUCCESS {
+			// Re-run to get actual source and delivered amounts
+			finalRC := payment.RippleCalculate(
 				ledger,
 				pr.srcAccount, pr.dstAccount,
 				effectiveDstAmount,
@@ -206,9 +235,22 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 				[32]byte{}, 0,
 			)
 
+			// Set the source amount's issuer the way rippled does
+			// (rc.actualAmountIn.setIssuer(sourceAccount)): the explicit
+			// issue account, or the source account itself for IOUs.
+			sourceAmount := payment.FromEitherAmount(finalRC.ActualIn)
+			if !sourceAmount.IsNative() {
+				if srcIssue.Issuer != ([20]byte{}) {
+					sourceAmount.Issuer = state.EncodeAccountIDSafe(srcIssue.Issuer)
+				} else {
+					sourceAmount.Issuer = state.EncodeAccountIDSafe(pr.srcAccount)
+				}
+			}
+
 			alt := PathAlternative{
-				SourceAmount:  payment.FromEitherAmount(actualIn),
-				PathsComputed: bestPaths,
+				SourceAmount:      sourceAmount,
+				DestinationAmount: payment.FromEitherAmount(finalRC.ActualOut),
+				PathsComputed:     bestPaths,
 			}
 			result.Alternatives = append(result.Alternatives, alt)
 		}

@@ -107,7 +107,7 @@ func TestTxQ_IsFull(t *testing.T) {
 	q.maxSize = &ms // Size for testing percentage math
 
 	// Create test candidates (100 items = 100% full)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		c := &Candidate{
 			TxID:     [32]byte{byte(i)},
 			Account:  [20]byte{byte(i)},
@@ -144,44 +144,6 @@ func TestTxQ_XorHash(t *testing.T) {
 	result := xorHash(a, b)
 	if result != expected {
 		t.Errorf("xorHash result mismatch: got %x, want %x", result[:3], expected[:3])
-	}
-}
-
-// TestTxQ_CompareHashes tests lexicographic hash comparison
-func TestTxQ_CompareHashes(t *testing.T) {
-	tests := []struct {
-		name     string
-		a        [32]byte
-		b        [32]byte
-		expected int
-	}{
-		{
-			name:     "equal",
-			a:        [32]byte{1, 2, 3},
-			b:        [32]byte{1, 2, 3},
-			expected: 0,
-		},
-		{
-			name:     "a < b",
-			a:        [32]byte{1, 2, 3},
-			b:        [32]byte{1, 2, 4},
-			expected: -1,
-		},
-		{
-			name:     "a > b",
-			a:        [32]byte{1, 3, 3},
-			b:        [32]byte{1, 2, 4},
-			expected: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := compareHashes(tt.a, tt.b)
-			if result != tt.expected {
-				t.Errorf("compareHashes() = %d, want %d", result, tt.expected)
-			}
-		})
 	}
 }
 

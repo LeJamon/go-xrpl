@@ -27,7 +27,7 @@ func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
 
 	const numConns = 5
 	clients := make([]*websocket.Conn, 0, numConns)
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
@@ -141,7 +141,7 @@ func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
 	// Send several malformed upgrade requests. Each carries Upgrade: websocket
 	// (so PortMiddleware classifies it as WS and skips its own release) but
 	// omits Sec-WebSocket-Key, so gorilla rejects the upgrade.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
 		if err != nil {
 			t.Fatalf("new request %d: %v", i, err)
@@ -223,7 +223,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	}
 
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		select {
 		case wsConn.sendChannel <- []byte(`{"type":"race-probe"}`):
 		case <-time.After(2 * time.Second):
@@ -245,7 +245,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 // Sanity: ensure we can call NewWebSocketServer concurrently without races.
 func TestWebSocketServer_New_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -253,4 +253,124 @@ func TestWebSocketServer_New_Concurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestWebSocketSubscribeErrorWireEnvelope asserts the full wire envelope a
+// subscribe validation failure produces over a live WebSocket: rippled puts
+// the token in `error`, the numeric code in `error_code` and the
+// ErrorCodes.cpp default text in `error_message` (issue #828 regression —
+// these envelopes previously went out as `"error": ""` with code 31).
+func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	ws.RegisterAllMethods()
+
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = ws.Close(ctx)
+	}()
+
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	tests := []struct {
+		name        string
+		request     map[string]any
+		wantError   string
+		wantCode    float64
+		wantMessage string
+	}{
+		{
+			name:        "unknown stream",
+			request:     map[string]any{"id": 1, "command": "subscribe", "streams": []string{"bogus"}},
+			wantError:   "malformedStream",
+			wantCode:    71,
+			wantMessage: "Stream malformed.",
+		},
+		{
+			name:        "malformed account",
+			request:     map[string]any{"id": 2, "command": "subscribe", "accounts": []string{"nope"}},
+			wantError:   "actMalformed",
+			wantCode:    35,
+			wantMessage: "Account malformed.",
+		},
+		{
+			name: "IOU taker_pays without issuer",
+			request: map[string]any{"id": 3, "command": "subscribe", "books": []map[string]any{{
+				"taker_pays": map[string]any{"currency": "USD"},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			}}},
+			wantError:   "srcIsrMalformed",
+			wantCode:    70,
+			wantMessage: "Source issuer is malformed.",
+		},
+		{
+			name: "same-asset book",
+			request: map[string]any{"id": 4, "command": "subscribe", "books": []map[string]any{{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			}}},
+			wantError:   "badMarket",
+			wantCode:    42,
+			wantMessage: "No such market.",
+		},
+		{
+			name:        "unsubscribe unknown stream",
+			request:     map[string]any{"id": 5, "command": "unsubscribe", "streams": []string{"bogus"}},
+			wantError:   "malformedStream",
+			wantCode:    71,
+			wantMessage: "Stream malformed.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := client.WriteJSON(tc.request); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			client.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var resp map[string]any
+			if err := client.ReadJSON(&resp); err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if got := resp["status"]; got != "error" {
+				t.Fatalf("status = %v, want error (resp %v)", got, resp)
+			}
+			if got := resp["error"]; got != tc.wantError {
+				t.Errorf("error = %v, want %q", got, tc.wantError)
+			}
+			if got := resp["error_code"]; got != tc.wantCode {
+				t.Errorf("error_code = %v, want %v", got, tc.wantCode)
+			}
+			if got := resp["error_message"]; got != tc.wantMessage {
+				t.Errorf("error_message = %v, want %q", got, tc.wantMessage)
+			}
+		})
+	}
+}
+
+// TestSetPingInterval guards the websocket_ping_frequency wiring: a
+// configured cadence must replace the default, and non-positive values
+// must be ignored.
+func TestSetPingInterval(t *testing.T) {
+	ws := NewWebSocketServer(time.Second, nil)
+	if ws.pingInterval != 30*time.Second {
+		t.Fatalf("default pingInterval = %v, want 30s", ws.pingInterval)
+	}
+
+	ws.SetPingInterval(5 * time.Second)
+	if ws.pingInterval != 5*time.Second {
+		t.Errorf("pingInterval = %v, want 5s", ws.pingInterval)
+	}
+
+	ws.SetPingInterval(0)
+	if ws.pingInterval != 5*time.Second {
+		t.Errorf("pingInterval = %v after SetPingInterval(0), want 5s", ws.pingInterval)
+	}
 }

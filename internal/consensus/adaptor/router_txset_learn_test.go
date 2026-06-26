@@ -1,7 +1,6 @@
 package adaptor
 
 import (
-	"context"
 	"encoding/hex"
 	"testing"
 	"time"
@@ -29,9 +28,8 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, nil, inbox)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	router := NewRouter(engine, a, inbox)
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// A real signed payment — the tx carried by the acquired set. The
@@ -49,7 +47,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	require.NoError(t, err)
 	blob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
-	txHash, err := tx.ComputeTxHashTransaction(txn)
+	txHash, err := tx.ComputeTransactionHash(txn)
 	require.NoError(t, err)
 
 	require.False(t, a.HasTx(consensus.TxID(txHash)),
@@ -57,8 +55,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 
 	// Build a complete tx-set SHAMap carrying the tx, keyed by its real
 	// ID, then serialize it to wire nodes the way a peer reply would.
-	sm, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	sm := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, sm.PutWithNodeType(txHash, blob, shamap.NodeTypeTransactionNoMeta))
 	setID, err := sm.Hash()
 	require.NoError(t, err)

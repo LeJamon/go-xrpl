@@ -50,6 +50,18 @@ type PaymentSandbox struct {
 
 	// ledgerSeq is the current ledger sequence (for PreviousTxnLgrSeq updates)
 	ledgerSeq uint32
+
+	// openLedger mirrors rippled's view.open(): true when the transaction is
+	// being applied against the open ledger (local submission / TxQ retry),
+	// false during closed-view consensus apply. It selects the FAILED_PROCESSING
+	// TER variant (tel vs tec) in the XRP-movement balance guards.
+	openLedger bool
+
+	// fundsFailure records that an XRP-movement primitive tripped its
+	// insufficient-balance guard during this sandbox's execution. It carries the
+	// defensive FAILED_PROCESSING condition up to the flow/cross result layer,
+	// playing the role of rippled's Throw<FlowException>(telFAILED_PROCESSING).
+	fundsFailure bool
 }
 
 // DeferredCredits tracks credits that shouldn't be spendable mid-transaction.
@@ -130,6 +142,7 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 		parent:             parent,
 		txHash:             txHash,
 		ledgerSeq:          ledgerSeq,
+		openLedger:         parent.openLedger,
 		view:               nil, // Use parent's view
 		modifications:      make(map[[32]byte][]byte),
 		preImages:          make(map[[32]byte][]byte),
@@ -138,6 +151,58 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 		deletedFinalStates: make(map[[32]byte][]byte),
 		tab:                newDeferredCredits(),
 	}
+}
+
+// IterationBase returns the parent sandbox, which for a per-strand working
+// sandbox is the flow's accumulating view: the ledger state after all prior
+// flow iterations applied but before THIS strand pass's (possibly
+// over-extended) consumption. The trailing-offer groom uses it to tell an
+// offer whose owner was already drained by an earlier iteration (a genuine
+// became-unfunded that survives) from one the current over-walk merely
+// over-consumed (a spurious removal a limiting reset discards). Returns nil for
+// a root sandbox.
+func (s *PaymentSandbox) IterationBase() *PaymentSandbox {
+	return s.parent
+}
+
+// SetOpenLedger records whether this sandbox is applying against the open
+// ledger. It is set once from EngineConfig.IsViewOpen at the flow entry point
+// and propagated to child sandboxes. Mirrors rippled's view.open().
+func (s *PaymentSandbox) SetOpenLedger(open bool) {
+	s.openLedger = open
+}
+
+// IsOpenLedger reports whether this sandbox chain is applying against the open
+// ledger, walking up to the root. Mirrors rippled's view.open().
+func (s *PaymentSandbox) IsOpenLedger() bool {
+	for cur := s; cur != nil; cur = cur.parent {
+		if cur.openLedger {
+			return true
+		}
+	}
+	return false
+}
+
+// markFundsFailure records that an XRP-movement primitive could not move funds
+// because the sender's balance was insufficient. The flag is set on the whole
+// sandbox chain up to the root so it survives even when the child sandbox that
+// tripped the guard is discarded (a dry strand). This propagates the defensive
+// FAILED_PROCESSING condition to the flow/cross result layer.
+func (s *PaymentSandbox) markFundsFailure() {
+	for cur := s; cur != nil; cur = cur.parent {
+		cur.fundsFailure = true
+	}
+}
+
+// HasFundsFailure reports whether an XRP-movement guard tripped anywhere in
+// this sandbox chain.
+func (s *PaymentSandbox) HasFundsFailure() bool {
+	for cur := s; cur != nil; cur = cur.parent {
+		if cur.fundsFailure {
+			return true
+		}
+	}
+	return false
 }
 
 // newDeferredCredits creates a new DeferredCredits instance
@@ -588,10 +653,7 @@ func (dc *DeferredCredits) adjustments(main, other [20]byte, currency string) *A
 
 // ownerCount records the owner count for an account
 func (dc *DeferredCredits) ownerCount(id [20]byte, cur, next uint32) {
-	v := cur
-	if next > v {
-		v = next
-	}
+	v := max(next, cur)
 
 	existing, exists := dc.ownerCounts[id]
 	if !exists {

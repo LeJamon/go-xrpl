@@ -41,8 +41,8 @@ func buildChain(n uint32, tag byte) (*fakeHeader, map[[32]byte]LedgerHeader) {
 
 // newTestProvider constructs a provider backed by a byHash map. Any
 // missing lookup returns a sentinel error.
-func newTestProvider(byHash map[[32]byte]LedgerHeader) *LedgerProvider {
-	return newLedgerProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+func newTestProvider(byHash map[[32]byte]LedgerHeader) *AncestryProvider {
+	return newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
 		if lh, ok := byHash[h]; ok {
 			return lh, nil
 		}
@@ -50,7 +50,7 @@ func newTestProvider(byHash map[[32]byte]LedgerHeader) *LedgerProvider {
 	})
 }
 
-func TestLedgerProvider_BuildsFullAncestry(t *testing.T) {
+func TestAncestryProvider_BuildsFullAncestry(t *testing.T) {
 	tip, byHash := buildChain(5, 'a')
 	p := newTestProvider(byHash)
 
@@ -82,7 +82,7 @@ func TestLedgerProvider_BuildsFullAncestry(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_MissingLinkTruncates(t *testing.T) {
+func TestAncestryProvider_MissingLinkTruncates(t *testing.T) {
 	// When the walk-back hits a missing parent, buildChain returns a
 	// partial chain rather than failing. MinSeq advances to the lowest
 	// seq still reachable; below that Ancestor returns zero. Mirrors
@@ -125,7 +125,7 @@ func TestLedgerProvider_MissingLinkTruncates(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_BoundedAtMaxAncestors(t *testing.T) {
+func TestAncestryProvider_BoundedAtMaxAncestors(t *testing.T) {
 	// Walk depth is capped at maxProviderAncestors (256). For a tip at
 	// seq 1000, MinSeq must be 1000-256=744 — not 0 — and the cache
 	// entry must hold exactly 256 ancestors regardless of available
@@ -158,7 +158,7 @@ func TestLedgerProvider_BoundedAtMaxAncestors(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_AncestorOutOfRangeReturnsZero(t *testing.T) {
+func TestAncestryProvider_AncestorOutOfRangeReturnsZero(t *testing.T) {
 	// Defensive parity with rippled's RCLValidatedLedger::operator[]
 	// (RCLValidations.cpp:79-95): Ancestor of an out-of-range seq must
 	// return the zero LedgerID rather than panicking.
@@ -173,11 +173,11 @@ func TestLedgerProvider_AncestorOutOfRangeReturnsZero(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_LRUEvicts(t *testing.T) {
+func TestAncestryProvider_LRUEvicts(t *testing.T) {
 	// Filling the cache beyond providerCacheCapacity must evict the
 	// oldest entries; the cache stays bounded.
 	tag := byte('g')
-	p := newLedgerProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
 		// Synthesize headers on demand so we don't need to materialize
 		// thousands up front.
 		seq := uint32(h[0]) | uint32(h[1])<<8 | uint32(h[2])<<16
@@ -226,11 +226,11 @@ func TestLedgerProvider_LRUEvicts(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_CachesRepeatedQueries(t *testing.T) {
+func TestAncestryProvider_CachesRepeatedQueries(t *testing.T) {
 	tip, byHash := buildChain(10, 'c')
 
 	var calls int
-	p := newLedgerProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
 		calls++
 		if lh, ok := byHash[h]; ok {
 			return lh, nil
@@ -254,7 +254,7 @@ func TestLedgerProvider_CachesRepeatedQueries(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_SplicesCachedPrefix(t *testing.T) {
+func TestAncestryProvider_SplicesCachedPrefix(t *testing.T) {
 	_, byHash := buildChain(10, 'd')
 
 	// Locate seq-5 as an intermediate tip we'll warm the cache with.
@@ -267,7 +267,7 @@ func TestLedgerProvider_SplicesCachedPrefix(t *testing.T) {
 	}
 
 	var calls int
-	p := newLedgerProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
+	p := newAncestryProviderFromLookup(func(h [32]byte) (LedgerHeader, error) {
 		calls++
 		if lh, ok := byHash[h]; ok {
 			return lh, nil
@@ -301,15 +301,15 @@ func TestLedgerProvider_SplicesCachedPrefix(t *testing.T) {
 	}
 }
 
-func TestLedgerProvider_NilServiceDisables(t *testing.T) {
-	p := NewLedgerProvider(nil)
+func TestAncestryProvider_NilServiceDisables(t *testing.T) {
+	p := NewAncestryProvider(nil)
 	if _, ok := p.LedgerByID(consensus.LedgerID{0x01}); ok {
 		t.Fatal("nil-service provider should always return false")
 	}
 }
 
-func TestLedgerProvider_NilReceiverSafe(t *testing.T) {
-	var p *LedgerProvider
+func TestAncestryProvider_NilReceiverSafe(t *testing.T) {
+	var p *AncestryProvider
 	if _, ok := p.LedgerByID(consensus.LedgerID{0x01}); ok {
 		t.Fatal("nil receiver should return false without panicking")
 	}

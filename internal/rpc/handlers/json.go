@@ -12,7 +12,7 @@ import (
 // Reference: rippled JSON.cpp
 type JsonMethod struct{ BaseHandler }
 
-func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params,omitempty"`
@@ -45,5 +45,5 @@ func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 		}
 	}
 
-	return ctx.Services.Dispatcher.ExecuteMethod(request.Method, forwardParams)
+	return ctx.Services.Dispatcher.ExecuteMethod(ctx, request.Method, forwardParams)
 }

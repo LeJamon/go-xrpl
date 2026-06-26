@@ -12,7 +12,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountObjectsMethod handles the account_objects RPC method
+// AccountObjectsMethod handles account_objects: it enumerates the raw ledger
+// entries owned by the account, with type and deletion_blockers_only filters.
 type AccountObjectsMethod struct{ BaseHandler }
 
 // deletionBlockerTypes lists SLE types that block account deletion.
@@ -97,7 +98,7 @@ var validLedgerEntryTypeNames = map[string]bool{
 	"xchain_owned_create_account_claim_id": true,
 }
 
-func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -118,9 +119,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, err
 	}
 
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
@@ -166,13 +167,23 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit)
+	markerStr, mErr := markerString(request.Marker)
+	if mErr != nil {
+		return nil, mErr
+	}
+
+	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		// rippled AccountObjects.cpp returns invalid_field_error("marker") for a
+		// malformed marker or one whose dirIndex/entryIndex no longer resolves.
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
@@ -181,7 +192,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	// forceEmptyResults is set (deletion_blockers_only intersected with a
 	// non-blocker type), skip enumeration entirely and keep the ledger
 	// metadata from the service response.
-	objects := make([]map[string]interface{}, 0, len(result.AccountObjects))
+	objects := make([]map[string]any, 0, len(result.AccountObjects))
 	if forceEmptyResults {
 		result.AccountObjects = nil
 	}
@@ -198,7 +209,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		decoded, err := binarycodec.Decode(hexData)
 		if err != nil {
 			// Fallback to raw data if decode fails
-			objects = append(objects, map[string]interface{}{
+			objects = append(objects, map[string]any{
 				"index":           strings.ToUpper(obj.Index),
 				"LedgerEntryType": obj.LedgerEntryType,
 				"data":            strings.ToUpper(hexData),
@@ -209,14 +220,12 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		objects = append(objects, decoded)
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":         result.Account,
 		"account_objects": objects,
-		"ledger_hash":     FormatLedgerHash(result.LedgerHash),
-		"ledger_index":    result.LedgerIndex,
-		"validated":       result.Validated,
 		"limit":           limit,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker

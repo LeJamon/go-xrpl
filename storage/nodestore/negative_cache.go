@@ -23,7 +23,7 @@ type NegativeCache struct {
 	}
 
 	maxSize int // Maximum number of entries (0 = unlimited)
-	closed  int64
+	closed  atomic.Bool
 }
 
 // NegativeCacheConfig holds configuration for the negative cache.
@@ -33,17 +33,13 @@ type NegativeCacheConfig struct {
 
 	// MaxSize is the maximum number of entries to cache (0 = unlimited).
 	MaxSize int
-
-	// SweepInterval is how often to sweep expired entries (0 = manual sweep only).
-	SweepInterval time.Duration
 }
 
 // DefaultNegativeCacheConfig returns a NegativeCacheConfig with sensible defaults.
 func DefaultNegativeCacheConfig() *NegativeCacheConfig {
 	return &NegativeCacheConfig{
-		TTL:           5 * time.Minute,
-		MaxSize:       100000, // 100k entries
-		SweepInterval: time.Minute,
+		TTL:     5 * time.Minute,
+		MaxSize: 100000, // 100k entries
 	}
 }
 
@@ -72,12 +68,18 @@ func NewNegativeCacheWithConfig(config *NegativeCacheConfig) *NegativeCache {
 
 // MarkMissing records that a node is not present in the store.
 func (nc *NegativeCache) MarkMissing(hash Hash256) {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return
 	}
 
 	nc.mu.Lock()
 	defer nc.mu.Unlock()
+
+	// Close may have nilled the map between the flag check above and
+	// acquiring the lock.
+	if nc.entries == nil {
+		return
+	}
 
 	// Evict if at capacity
 	if nc.maxSize > 0 && len(nc.entries) >= nc.maxSize {
@@ -95,7 +97,7 @@ func (nc *NegativeCache) MarkMissing(hash Hash256) {
 // IsMissing checks if a node is known to be missing.
 // Returns true if the node is in the negative cache and not expired.
 func (nc *NegativeCache) IsMissing(hash Hash256) bool {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return false
 	}
 
@@ -129,7 +131,7 @@ func (nc *NegativeCache) IsMissing(hash Hash256) bool {
 // Remove removes an entry from the negative cache.
 // This should be called when a node is added to the store.
 func (nc *NegativeCache) Remove(hash Hash256) {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return
 	}
 
@@ -138,16 +140,19 @@ func (nc *NegativeCache) Remove(hash Hash256) {
 	nc.mu.Unlock()
 }
 
-// Clear removes all entries from the negative cache.
+// Clear removes all entries from the negative cache. It is a no-op on a
+// closed cache.
 func (nc *NegativeCache) Clear() {
 	nc.mu.Lock()
-	nc.entries = make(map[Hash256]time.Time)
+	if nc.entries != nil {
+		nc.entries = make(map[Hash256]time.Time)
+	}
 	nc.mu.Unlock()
 }
 
 // Sweep removes all expired entries from the cache.
 func (nc *NegativeCache) Sweep() int {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return 0
 	}
 
@@ -172,10 +177,7 @@ func (nc *NegativeCache) Sweep() int {
 // Must be called with mu held.
 func (nc *NegativeCache) evictOldestLocked() {
 	// Find oldest entries (evict 10% of max size)
-	evictCount := nc.maxSize / 10
-	if evictCount < 1 {
-		evictCount = 1
-	}
+	evictCount := max(nc.maxSize/10, 1)
 
 	// Simple approach: find oldest entries
 	type entry struct {
@@ -237,7 +239,7 @@ func (nc *NegativeCache) SetMaxSize(maxSize int) {
 
 // Close closes the negative cache.
 func (nc *NegativeCache) Close() error {
-	if !atomic.CompareAndSwapInt64(&nc.closed, 0, 1) {
+	if !nc.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}
 
@@ -300,50 +302,4 @@ func (s NegativeCacheStats) String() string {
 		s.Insertions,
 		s.Expirations, s.Evictions,
 		s.TTL)
-}
-
-// NegativeCacheSweeper automatically sweeps expired entries from a negative cache.
-type NegativeCacheSweeper struct {
-	cache    *NegativeCache
-	interval time.Duration
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
-}
-
-// NewNegativeCacheSweeper creates a new sweeper for the given cache.
-func NewNegativeCacheSweeper(cache *NegativeCache, interval time.Duration) *NegativeCacheSweeper {
-	return &NegativeCacheSweeper{
-		cache:    cache,
-		interval: interval,
-		stopCh:   make(chan struct{}),
-	}
-}
-
-// Start starts the sweeper background goroutine.
-func (s *NegativeCacheSweeper) Start() {
-	s.wg.Add(1)
-	go s.run()
-}
-
-// Stop stops the sweeper background goroutine.
-func (s *NegativeCacheSweeper) Stop() {
-	close(s.stopCh)
-	s.wg.Wait()
-}
-
-// run is the sweeper background goroutine.
-func (s *NegativeCacheSweeper) run() {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-s.stopCh:
-			return
-		case <-ticker.C:
-			s.cache.Sweep()
-		}
-	}
 }

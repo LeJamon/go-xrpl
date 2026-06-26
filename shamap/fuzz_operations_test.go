@@ -60,10 +60,7 @@ func FuzzSHAMapOperations(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("New failed: %v", err)
-		}
+		sm := New(TypeState)
 
 		// Oracle: tracks expected state
 		oracle := make(map[[32]byte][]byte)
@@ -94,10 +91,7 @@ func FuzzSHAMapOperations(f *testing.F) {
 				// Read data: consume up to 32 bytes, pad to minimum 12
 				var itemData []byte
 				remaining := len(data) - i
-				take := 32
-				if remaining < take {
-					take = remaining
-				}
+				take := min(remaining, 32)
 				if take > 0 {
 					itemData = make([]byte, take)
 					copy(itemData, data[i:i+take])

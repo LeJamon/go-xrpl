@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"bytes"
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -117,10 +116,9 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Use 16-byte blobs so they satisfy the SHAMap transaction-leaf
@@ -176,23 +174,23 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	for _, b := range rootID {
 		require.Equal(t, byte(0), b,
 			"first node must be SHAMap root (NodeID = 33 zero bytes); "+
-				"pre-order is required so AddRootNode fires before AddKnownNodeUnchecked")
+				"pre-order is required so AddRootNode fires before AddKnownNodeByID")
 	}
 
 	// Round-trip: feed the response back through SHAMap sync
 	// reconstruction (the same path handleTxSetData uses on inbound).
 	// If the wire bytes carry the canonical tx-set, FinishSync
 	// closes cleanly and the resulting root hash matches wantID.
-	reconstructed, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	reconstructed := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, reconstructed.StartSync())
 	require.NoError(t,
 		reconstructed.AddRootNode([32]byte(wantID), resp.Nodes[0].NodeData),
 		"AddRootNode must accept the served root payload")
 	for i := 1; i < len(resp.Nodes); i++ {
-		require.NoError(t,
-			reconstructed.AddKnownNodeUnchecked(resp.Nodes[i].NodeData),
-			"AddKnownNodeUnchecked must accept node[%d]", i)
+		nid, err := shamap.UnmarshalBinary(resp.Nodes[i].NodeID)
+		require.NoError(t, err, "node[%d] NodeID must parse", i)
+		_, err = reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData)
+		require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)
 	}
 	require.NoError(t, reconstructed.FinishSync(),
 		"FinishSync must succeed — if this fails, the served wire bytes "+
@@ -215,10 +213,9 @@ func TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse(t *testing.T) {
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Hash that's intentionally never cached.
@@ -252,10 +249,9 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	adaptor, _ := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Build a real SHAMap of TypeTransaction containing two tx blobs.
@@ -265,8 +261,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 		bytes.Repeat([]byte{0x11}, 16),
 		bytes.Repeat([]byte{0x55}, 16),
 	}
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err, "shamap.New")
+	txMap := shamap.New(shamap.TypeTransaction)
 	for i, blob := range blobs {
 		var key [32]byte
 		key[0] = byte(0x10 + i) // distinct keys to land in different branches
@@ -371,4 +366,60 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 	assert.Len(t, req.NodeIDs[0], 33,
 		"SHAMap node ID is 32 bytes path + 1 byte depth = 33 bytes "+
 			"(SHAMapNodeID::getRawString)")
+}
+
+// TestGetLedger_IndirectQueryType_Wire pins issue #977's wire contract:
+// the acquisition GetLedger builders (RequestStateNodes,
+// RequestTransactionNodes, RequestTxSetMissingNodes) all funnel their
+// query_type through indirectQueryType. A false arg must leave the field
+// absent — the non-relayable first attempt; a true arg must set
+// qtINDIRECT — the relayable retry a peer will forward on our behalf
+// (rippled has_querytype()). The field must survive the encode/decode
+// round-trip onto the wire.
+func TestGetLedger_IndirectQueryType_Wire(t *testing.T) {
+	require.Nil(t, indirectQueryType(false),
+		"a directly-routed first attempt must leave query_type absent")
+	qt := indirectQueryType(true)
+	require.NotNil(t, qt)
+	require.Equal(t, message.QueryTypeIndirect, *qt)
+
+	cases := []struct {
+		name     string
+		infoType message.LedgerInfoType
+		indirect bool
+		wantSet  bool
+	}{
+		{"state-nodes first attempt", message.LedgerInfoAsNode, false, false},
+		{"state-nodes retry", message.LedgerInfoAsNode, true, true},
+		{"tx-nodes retry", message.LedgerInfoTxNode, true, true},
+		{"txset missing-nodes retry", message.LedgerInfoTsCandidate, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Same construction the OverlaySender builders use, threaded
+			// through the shared indirectQueryType helper.
+			msg := &message.GetLedger{
+				InfoType:   tc.infoType,
+				LedgerHash: make([]byte, 32),
+				NodeIDs:    [][]byte{make([]byte, 33)},
+				QueryDepth: 2,
+				QueryType:  indirectQueryType(tc.indirect),
+			}
+			frame, err := encodeFrame(message.TypeGetLedger, msg)
+			require.NoError(t, err)
+
+			_, decoded := decodeFrame(t, frame)
+			got, ok := decoded.(*message.GetLedger)
+			require.True(t, ok)
+
+			if tc.wantSet {
+				require.NotNil(t, got.QueryType,
+					"retry request must carry query_type so peers relay it")
+				assert.Equal(t, message.QueryTypeIndirect, *got.QueryType)
+			} else {
+				assert.Nil(t, got.QueryType,
+					"first-attempt request must NOT carry query_type")
+			}
+		})
+	}
 }

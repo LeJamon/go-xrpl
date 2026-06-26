@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -598,8 +599,7 @@ func TestEngine_StartStop(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Failed to start engine: %v", err)
@@ -966,6 +966,31 @@ func TestEngine_IsProposing(t *testing.T) {
 	}
 }
 
+func TestEngine_IsValidating(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Not configured as a validator: never validating, even when synced.
+	adaptor.validator = false
+	adaptor.opMode = consensus.OpModeFull
+	if engine.IsValidating() {
+		t.Error("non-validator should not be validating")
+	}
+
+	// Configured validator but not yet synced to FULL: not validating.
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeTracking
+	if engine.IsValidating() {
+		t.Error("validator below OpModeFull should not be validating")
+	}
+
+	// Validator synced to FULL: validating.
+	adaptor.opMode = consensus.OpModeFull
+	if !engine.IsValidating() {
+		t.Error("validator synced to OpModeFull should be validating")
+	}
+}
+
 func TestEngine_Timing(t *testing.T) {
 	adaptor := newMockAdaptor()
 	config := DefaultConfig()
@@ -1023,14 +1048,12 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	// keep MinConsensus large enough that the establish phase cannot
 	// accept and cycle back to open before the assertion runs.
 	config.Timing.LedgerMinClose = 10 * time.Millisecond
-	config.Timing.LedgerMaxClose = 100 * time.Millisecond
 	config.Timing.LedgerMinConsensus = 200 * time.Millisecond
 	config.Timing.LedgerIdleInterval = 20 * time.Millisecond
 
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Failed to start engine: %v", err)
 	}
@@ -1074,8 +1097,7 @@ func TestEngine_Subscribe(t *testing.T) {
 	engine.Subscribe(subscriber)
 
 	// Must call Start to start the EventBus
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Failed to start engine: %v", err)
 	}
@@ -1108,8 +1130,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("LedgerMinClose should not be zero")
 	}
 
-	if config.Timing.LedgerMaxClose == 0 {
-		t.Error("LedgerMaxClose should not be zero")
+	if config.Timing.LedgerMaxConsensus == 0 {
+		t.Error("LedgerMaxConsensus should not be zero")
 	}
 
 	if config.Thresholds.EarlyConvergencePct == 0 {
@@ -1146,8 +1168,7 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1378,8 +1399,7 @@ func TestEngine_OnLedger_PromotesToSwitchedLedger(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1466,8 +1486,7 @@ func TestSendValidation_ValidatedHashGatedOnHardenedValidations(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1547,8 +1566,7 @@ func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1606,8 +1624,7 @@ func TestSendValidation_PopulatesLoadFee(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1652,8 +1669,7 @@ func TestSendValidation_LegacyFeeTriple(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1707,8 +1723,7 @@ func TestSendValidation_FeeVoteOnlyOnFlagLedger(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1789,8 +1804,7 @@ func TestSendValidation_PreHardenedValidations_OmitsCookieAndServerVersion(t *te
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1846,8 +1860,7 @@ func TestSendValidation_HardenedValidations_NonVotingLedger_OmitsServerVersion(t
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -1899,8 +1912,7 @@ func TestSendValidation_HardenedValidations_VotingLedger_EmitsBoth(t *testing.T)
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2147,8 +2159,7 @@ func TestSendValidation_ClockRegressionPreservesMonotonic(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2226,8 +2237,7 @@ func TestSendValidation_ClockMonotonic_NormalCase(t *testing.T) {
 	config := DefaultConfig()
 	engine := NewEngine(adaptor, config)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2304,7 +2314,6 @@ func TestConsensus_NoSoftTimeoutAcceptAtLedgerMaxConsensus(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
-	config.Timing.LedgerMaxClose = 15 * time.Second
 	config.Timing.LedgerAbandonConsensus = 120 * time.Second
 	config.Timing.LedgerAbandonConsensusFactor = 10
 
@@ -2312,8 +2321,7 @@ func TestConsensus_NoSoftTimeoutAcceptAtLedgerMaxConsensus(t *testing.T) {
 	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
 	engine.Subscribe(subscriber)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2381,7 +2389,6 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
-	config.Timing.LedgerMaxClose = 15 * time.Second
 	config.Timing.LedgerAbandonConsensus = 120 * time.Second
 	config.Timing.LedgerAbandonConsensusFactor = 10
 
@@ -2390,8 +2397,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
 	engine.Subscribe(subscriber)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2461,13 +2467,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	// bow-out step ran: the adaptor.modeChanges transcript must
 	// contain an Observing transition.
 	adaptor.mu.RLock()
-	sawObserving := false
-	for _, m := range adaptor.modeChanges {
-		if m == consensus.ModeObserving {
-			sawObserving = true
-			break
-		}
-	}
+	sawObserving := slices.Contains(adaptor.modeChanges, consensus.ModeObserving)
 	adaptor.mu.RUnlock()
 	if !sawObserving {
 		t.Errorf("hard abandon: expected bow-out to ModeObserving (rippled leaveConsensus), modeChanges=%v, final mode=%v", adaptor.modeChanges, modeAfter)
@@ -2514,7 +2514,6 @@ func TestConsensus_AbandonRetryGate(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
-	config.Timing.LedgerMaxClose = 15 * time.Second
 	config.Timing.LedgerAbandonConsensus = 120 * time.Second
 	config.Timing.LedgerAbandonConsensusFactor = 10
 
@@ -2522,8 +2521,7 @@ func TestConsensus_AbandonRetryGate(t *testing.T) {
 	subscriber := &testSubscriber{events: make(chan consensus.Event, 32)}
 	engine.Subscribe(subscriber)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2715,7 +2713,7 @@ func TestCheckConsensusState(t *testing.T) {
 		prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
 		e.prevLedger = prev
 		vt := NewValidationTracker(3, e.timing.ValidationFreshness)
-		for i := 0; i < 4; i++ {
+		for i := range 4 {
 			nodeID := consensus.NodeID{byte(0xA0 + i)}
 			vt.trusted[nodeID] = true
 			vt.byNode[nodeID] = &consensus.Validation{
@@ -2782,8 +2780,7 @@ func TestEngine_OnValidation_NoSelfDeadlockOnQuorum(t *testing.T) {
 	// callback (engine.go SetFullyValidatedCallback) — without
 	// Start the tracker is nil and OnValidation skips Add, hiding
 	// the bug. The bug only fires when quorum is actually reached.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2927,8 +2924,7 @@ func TestAcceptLedger_NoCloseTimeConsensus_DeterministicFallback(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -2999,8 +2995,7 @@ func TestAcceptLedger_WrongLedger_EmitsPartial(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3067,8 +3062,7 @@ func TestSendValidation_CanValidateSeq_DedupsSameAndOlderSeq(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3154,8 +3148,7 @@ func TestSendValidation_SeqEnforcerExpiresAfterIdle(t *testing.T) {
 
 	engine := NewEngine(adaptor, DefaultConfig())
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3260,8 +3253,7 @@ func TestAcceptLedger_ConsensusFailSuppressesValidation(t *testing.T) {
 
 			engine := NewEngine(adaptor, DefaultConfig())
 
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
+			ctx := t.Context()
 			if err := engine.Start(ctx); err != nil {
 				t.Fatalf("Start: %v", err)
 			}
@@ -3322,8 +3314,7 @@ func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 		adaptor.proposableOverride = [][]byte{} // distinct from raw pool
 
 		engine := NewEngine(adaptor, DefaultConfig())
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 		if err := engine.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
@@ -3355,8 +3346,7 @@ func TestCloseLedger_ProposingUsesFilteredTxSet(t *testing.T) {
 		adaptor.proposableOverride = [][]byte{}
 
 		engine := NewEngine(adaptor, DefaultConfig())
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
+		ctx := t.Context()
 		if err := engine.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
@@ -3505,8 +3495,7 @@ func TestShouldPause_AheadAndLaggards(t *testing.T) {
 	adaptor.validatedLedgerHashOverride = validatedID
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3551,8 +3540,7 @@ func TestShouldPause_BootstrapEarlyOut(t *testing.T) {
 	adaptor.quorum = 1
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3597,8 +3585,7 @@ func TestShouldPause_HardTimeoutOverride(t *testing.T) {
 	adaptor.validatedLedgerHashOverride = validatedID
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3661,8 +3648,7 @@ func TestAcceptLedger_WrongLedger_IncompatibleBuild_Suppresses(t *testing.T) {
 	adaptor.ledgers[sidePrevID] = sidePrev
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3718,8 +3704,7 @@ func TestAcceptLedger_WrongLedger_CompatibleAhead_EmitsPartial(t *testing.T) {
 	adaptor.validatedLedgerHashOverride = validatedID
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3796,8 +3781,7 @@ func TestShouldPause_StaleValidationCountsAsOffline(t *testing.T) {
 	adaptor.validatedLedgerHashOverride = validatedID
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -3867,8 +3851,7 @@ func TestPhaseEstablish_PauseAndRecover(t *testing.T) {
 	adaptor.validatedLedgerHashOverride = validatedID
 
 	engine := NewEngine(adaptor, DefaultConfig())
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

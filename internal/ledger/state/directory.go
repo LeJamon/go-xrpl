@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 
@@ -33,6 +34,19 @@ type DirectoryNode struct {
 	IndexNext     uint64     // Next page index (0 if none)
 	IndexPrevious uint64     // Previous page index (0 if none)
 
+	// indexNextSet / indexPreviousSet track whether the link fields are
+	// *present* on the page, independent of their value. rippled writes
+	// sfIndexNext / sfIndexPrevious via setFieldU64, which keeps a field present
+	// even at value 0: a directory that grew to several pages and then collapsed
+	// back to a single root carries zero-valued links, whereas a directory that
+	// was only ever one page omits them entirely. Tracking presence lets a
+	// collapsed root re-serialize IndexNext=0 / IndexPrevious=0 instead of
+	// dropping them. Dropping the zero links forked both the SLE (account_hash)
+	// and the ModifiedNode metadata, whose present-field set is parsed back from
+	// these same serialized bytes.
+	indexNextSet     bool
+	indexPreviousSet bool
+
 	// Owner directory specific
 	Owner [20]byte // Account that owns this directory (only for owner dirs)
 
@@ -46,6 +60,32 @@ type DirectoryNode struct {
 	// Optional fields (per rippled ledger_entries.macro)
 	NFTokenID [32]byte // For NFToken offer directories
 	DomainID  [32]byte // For permissioned domain directories
+
+	// Transaction threading fields. DirectoryNode is a threaded type once
+	// the fixPreviousTxnID amendment is enabled, so these must survive a
+	// parse→serialize round-trip. Dropping them caused an in-place
+	// directory modify (dirRemove + dirInsert of the same key, e.g. a
+	// SignerListSet replace) to differ from its pre-tx bytes only in the
+	// threading fields; metadata then emitted a spurious ModifiedNode and
+	// the threaded PreviousTxnID was bumped when rippled left it untouched
+	// (rippled peeks the SLE and mutates sfIndexes in place, preserving
+	// sfPreviousTxnID). Reference: ApplyStateTable.cpp:156-157.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
+}
+
+// SetIndexNext sets the next-page link and marks it present, mirroring
+// rippled's setFieldU64(sfIndexNext): the field then serializes even at value 0.
+func (d *DirectoryNode) SetIndexNext(page uint64) {
+	d.IndexNext = page
+	d.indexNextSet = true
+}
+
+// SetIndexPrevious sets the previous-page link and marks it present, the
+// counterpart to SetIndexNext.
+func (d *DirectoryNode) SetIndexPrevious(page uint64) {
+	d.IndexPrevious = page
+	d.indexPreviousSet = true
 }
 
 // cMinValue is the minimum normalized mantissa value (10^15)
@@ -55,107 +95,68 @@ const cMinValue uint64 = 1000000000000000
 var tenTo17 = new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
 
 // GetRate calculates the quality/exchange rate for an offer.
-// This matches rippled's getRate(offerOut, offerIn) which returns in/out.
-// Reference: rippled STAmount.h line 693-694:
+// This matches rippled's getRate(offerOut, offerIn), which returns
+// divide(offerIn, offerOut) packed into a 64-bit quality code.
+// Reference: rippled STAmount.cpp getRate / STAmount.h line 693-694:
 //
 //	"Rate: smaller is better, the taker wants the most out: in/out"
 //
-// Lower rate value = better for taker (they pay less per unit they get)
-// Returns uint64 encoded as: (exponent+100) << 56 | mantissa
+// Lower rate value = better for taker (they pay less per unit they get).
+// Returns uint64 encoded as: (exponent+100) << 56 | mantissa, or 0 when the
+// offer is "too good" (zero result) or the rate overflows ("very bad offer"),
+// mirroring rippled's try/catch that returns 0 on any divide exception.
 //
-// Uses the same integer arithmetic as rippled's divide() function in STAmount.cpp:
-//
-//	muldiv(numVal, tenTo17, denVal) + 5
-//
-// where muldiv does (a * b) / c with 128-bit precision.
-func GetRate(offerOut, offerIn Amount) uint64 {
-	// Handle zero case - check offerOut since we divide by it
+// The quotient is rounded by the shared divideIOU core, which is gated on
+// fixUniversalNumber: round-to-nearest-ties-to-even on mainnet, truncation in
+// the legacy regime. A blind truncation here diverged from rippled (and from
+// Amount.Div) on roughly half of non-terminating ratios, shifting the
+// ExchangeRate baked into BookDirectory keys.
+func GetRate(offerOut, offerIn Amount) (rate uint64) {
+	// rippled wraps getRate's divide in try/catch and returns 0 on overflow.
+	// divideIOU normalizes through the IOU/Number path, which panics on
+	// exponent overflow, so recover here to reproduce the "very bad offer" 0.
+	defer func() {
+		if recover() != nil {
+			rate = 0
+		}
+	}()
+
 	if offerOut.IsZero() || offerIn.IsZero() {
 		return 0
 	}
 
-	// Get mantissa and exponent for numerator (offerIn)
-	var numVal uint64
-	var numOffset int
-	if offerIn.IsNative() {
-		numVal = uint64(offerIn.Drops())
-		numOffset = 0
-	} else {
-		iou := offerIn.IOU()
-		mantissa := iou.Mantissa()
-		if mantissa < 0 {
-			mantissa = -mantissa
-		}
-		numVal = uint64(mantissa)
-		numOffset = iou.Exponent()
-	}
-
-	// Get mantissa and exponent for denominator (offerOut)
-	var denVal uint64
-	var denOffset int
-	if offerOut.IsNative() {
-		denVal = uint64(offerOut.Drops())
-		denOffset = 0
-	} else {
-		iou := offerOut.IOU()
-		mantissa := iou.Mantissa()
-		if mantissa < 0 {
-			mantissa = -mantissa
-		}
-		denVal = uint64(mantissa)
-		denOffset = iou.Exponent()
-	}
-
-	// Normalize native amounts to have mantissa in [10^15, 10^16)
-	// This matches rippled's divide() function behavior
-	if offerIn.IsNative() {
-		for numVal < cMinValue && numVal > 0 {
-			numVal *= 10
-			numOffset--
-		}
-	}
-
-	if offerOut.IsNative() {
-		for denVal < cMinValue && denVal > 0 {
-			denVal *= 10
-			denOffset--
-		}
-	}
-
+	numVal, numOffset := rateMantissa(offerIn)
+	denVal, denOffset := rateMantissa(offerOut)
 	if numVal == 0 || denVal == 0 {
 		return 0
 	}
 
-	// Calculate (numVal * 10^17) / denVal using big.Int for 128-bit precision
-	// This matches rippled's muldiv(numVal, tenTo17, denVal)
-	bigNum := new(big.Int).SetUint64(numVal)
-	bigDen := new(big.Int).SetUint64(denVal)
-
-	// product = numVal * 10^17
-	product := new(big.Int).Mul(bigNum, tenTo17)
-
-	// result = product / denVal (truncated integer division)
-	result := new(big.Int).Div(product, bigDen)
-
-	// Add 5 for rounding (matches rippled: muldiv(...) + 5)
-	result.Add(result, big.NewInt(5))
-
-	// Calculate exponent
-	resultOffset := numOffset - denOffset - 17
-
-	// Normalize result to mantissa in [10^15, 10^16)
-	mantissa := result.Uint64()
-	for mantissa < cMinValue && mantissa > 0 {
-		mantissa *= 10
-		resultOffset--
+	r := divideIOU(numVal, numOffset, denVal, denOffset, false, "", "")
+	if r.IsZero() {
+		return 0
 	}
-	for mantissa >= 10*cMinValue {
-		mantissa /= 10
-		resultOffset++
-	}
+	iou := r.IOU()
+	return uint64(iou.Exponent()+100)<<56 | uint64(iou.Mantissa())
+}
 
-	// Encode: upper 8 bits = exponent+100, lower 56 bits = mantissa
-	return uint64(resultOffset+100)<<56 | mantissa
+// rateMantissa returns the unsigned mantissa and exponent of a (non-zero)
+// amount for use in GetRate, lifting a native amount's drops into the IOU
+// mantissa band [10^15, 10^16) exactly as rippled's divide() does.
+func rateMantissa(a Amount) (uint64, int) {
+	if a.IsNative() {
+		v := uint64(a.Drops())
+		offset := 0
+		for v < cMinValue && v > 0 {
+			v *= 10
+			offset--
+		}
+		return v, offset
+	}
+	m := a.IOU().Mantissa()
+	if m < 0 {
+		m = -m
+	}
+	return uint64(m), a.IOU().Exponent()
 }
 
 // SerializeDirectoryNode serializes a DirectoryNode to binary format
@@ -166,20 +167,24 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		"RootIndex":       strings.ToUpper(hex.EncodeToString(dir.RootIndex[:])),
 	}
 
-	// Add Indexes if present
-	if len(dir.Indexes) > 0 {
-		indexes := make([]string, len(dir.Indexes))
-		for i, idx := range dir.Indexes {
-			indexes[i] = strings.ToUpper(hex.EncodeToString(idx[:]))
-		}
-		jsonObj["Indexes"] = indexes
+	// sfIndexes is soeREQUIRED on ltDIR_NODE, so it is always serialized —
+	// even when empty. dirRemove keeps an emptied root page with an empty
+	// Vector256 present (field-ID 0113 + VL 00); omitting it diverges the SLE
+	// state on keepRoot deletions.
+	indexes := make([]string, len(dir.Indexes))
+	for i, idx := range dir.Indexes {
+		indexes[i] = strings.ToUpper(hex.EncodeToString(idx[:]))
 	}
+	jsonObj["Indexes"] = indexes
 
-	// Add pagination fields if set
-	if dir.IndexNext != 0 {
+	// Emit the link fields when present or non-zero. A multi-page directory
+	// that collapses back to a single root keeps zero-valued links present (see
+	// DirectoryNode.indexNextSet); emitting only on non-zero would drop them and
+	// fork the ledger.
+	if dir.IndexNext != 0 || dir.indexNextSet {
 		jsonObj["IndexNext"] = formatUint64Hex(dir.IndexNext)
 	}
-	if dir.IndexPrevious != 0 {
+	if dir.IndexPrevious != 0 || dir.indexPreviousSet {
 		jsonObj["IndexPrevious"] = formatUint64Hex(dir.IndexPrevious)
 	}
 
@@ -217,6 +222,14 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(dir.DomainID[:]))
 	}
 
+	// Preserve threading fields across the round-trip (set by metadata
+	// threading once fixPreviousTxnID is enabled). PreviousTxnLgrSeq is
+	// only meaningful alongside PreviousTxnID, so gate both on the id.
+	if dir.PreviousTxnID != zeroHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(dir.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = dir.PreviousTxnLgrSeq
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, err
@@ -227,81 +240,72 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 
 // ParseDirectoryNode parses a DirectoryNode from binary data
 func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, err
-	}
 	dir := &DirectoryNode{}
 
-	if flags, ok := jsonObj["Flags"].(float64); ok {
-		dir.Flags = uint32(flags)
-	}
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
+			case 2: // Flags
+				dir.Flags = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				dir.PreviousTxnLgrSeq = f.UInt32()
+			}
 
-	if rootIndex, ok := jsonObj["RootIndex"].(string); ok {
-		rootBytes, _ := hex.DecodeString(rootIndex)
-		copy(dir.RootIndex[:], rootBytes)
-	}
+		case stUInt64:
+			switch f.FieldCode {
+			case 1: // IndexNext
+				dir.SetIndexNext(f.UInt64())
+			case 2: // IndexPrevious
+				dir.SetIndexPrevious(f.UInt64())
+			case 6: // ExchangeRate
+				dir.ExchangeRate = f.UInt64()
+			}
 
-	// Handle both []string and []any for Indexes (binary codec may return either)
-	if indexes, ok := jsonObj["Indexes"].([]string); ok {
-		dir.Indexes = make([][32]byte, len(indexes))
-		for i, idxStr := range indexes {
-			idxBytes, _ := hex.DecodeString(idxStr)
-			copy(dir.Indexes[i][:], idxBytes)
-		}
-	} else if indexes, ok := jsonObj["Indexes"].([]any); ok {
-		dir.Indexes = make([][32]byte, len(indexes))
-		for i, idx := range indexes {
-			if idxStr, ok := idx.(string); ok {
-				idxBytes, _ := hex.DecodeString(idxStr)
-				copy(dir.Indexes[i][:], idxBytes)
+		case stHash256:
+			switch f.FieldCode {
+			case 8: // RootIndex
+				dir.RootIndex = f.Hash256()
+			case 10: // NFTokenID
+				dir.NFTokenID = f.Hash256()
+			case 34: // DomainID
+				dir.DomainID = f.Hash256()
+			case 5: // PreviousTxnID
+				dir.PreviousTxnID = f.Hash256()
+			}
+
+		case stHash160:
+			switch f.FieldCode {
+			case 1: // TakerPaysCurrency
+				dir.TakerPaysCurrency = f.Hash160()
+			case 2: // TakerPaysIssuer
+				dir.TakerPaysIssuer = f.Hash160()
+			case 3: // TakerGetsCurrency
+				dir.TakerGetsCurrency = f.Hash160()
+			case 4: // TakerGetsIssuer
+				dir.TakerGetsIssuer = f.Hash160()
+			}
+
+		case stAccountID:
+			if f.FieldCode == 2 { // Owner
+				if id, ok := f.AccountID(); ok {
+					dir.Owner = id
+				}
+			}
+
+		case stVector256:
+			if f.FieldCode == 1 { // Indexes
+				idx, err := f.Vector256()
+				if err != nil {
+					return err
+				}
+				dir.Indexes = idx
 			}
 		}
-	}
-
-	if indexNext, ok := jsonObj["IndexNext"].(string); ok {
-		dir.IndexNext = parseUint64Hex(indexNext)
-	}
-
-	if indexPrev, ok := jsonObj["IndexPrevious"].(string); ok {
-		dir.IndexPrevious = parseUint64Hex(indexPrev)
-	}
-
-	if owner, ok := jsonObj["Owner"].(string); ok {
-		ownerID, _ := decodeAccountID(owner)
-		dir.Owner = ownerID
-	}
-
-	// Parse book directory fields (must preserve these even if not used)
-	if exchangeRate, ok := jsonObj["ExchangeRate"].(string); ok {
-		dir.ExchangeRate = parseUint64Hex(exchangeRate)
-	}
-	if takerPaysCurrency, ok := jsonObj["TakerPaysCurrency"].(string); ok {
-		decoded, _ := hex.DecodeString(takerPaysCurrency)
-		copy(dir.TakerPaysCurrency[:], decoded)
-	}
-	if takerPaysIssuer, ok := jsonObj["TakerPaysIssuer"].(string); ok {
-		decoded, _ := hex.DecodeString(takerPaysIssuer)
-		copy(dir.TakerPaysIssuer[:], decoded)
-	}
-	if takerGetsCurrency, ok := jsonObj["TakerGetsCurrency"].(string); ok {
-		decoded, _ := hex.DecodeString(takerGetsCurrency)
-		copy(dir.TakerGetsCurrency[:], decoded)
-	}
-	if takerGetsIssuer, ok := jsonObj["TakerGetsIssuer"].(string); ok {
-		decoded, _ := hex.DecodeString(takerGetsIssuer)
-		copy(dir.TakerGetsIssuer[:], decoded)
-	}
-
-	// Parse optional Hash256 fields
-	if nfTokenID, ok := jsonObj["NFTokenID"].(string); ok {
-		decoded, _ := hex.DecodeString(nfTokenID)
-		copy(dir.NFTokenID[:], decoded)
-	}
-	if domainID, ok := jsonObj["DomainID"].(string); ok {
-		decoded, _ := hex.DecodeString(domainID)
-		copy(dir.DomainID[:], decoded)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return dir, nil
@@ -312,16 +316,6 @@ func uint64ToBytes(v uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
 	return b
-}
-
-// parseUint64Hex parses a hex string as uint64
-func parseUint64Hex(s string) uint64 {
-	// Pad to 16 chars
-	for len(s) < 16 {
-		s = "0" + s
-	}
-	b, _ := hex.DecodeString(s)
-	return binary.BigEndian.Uint64(b)
 }
 
 // DirInsertResult contains the result of a directory insert operation
@@ -446,6 +440,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		// multiple inserts into the same page, producing different SLE
 		// serializations and consensus forks.
 		if preserveOrder {
+			// rippled's dirAdd checks for a duplicate key in the preserveOrder
+			// (book) branch too, raising LogicError on a double insertion rather
+			// than silently corrupting the book. Reference: ApplyView.cpp:71-74.
+			if slices.Contains(node.Indexes, itemKey) {
+				return nil, fmt.Errorf("dirInsert: double insertion")
+			}
 			node.Indexes = append(node.Indexes, itemKey)
 		} else {
 			sortIndexes(node.Indexes)
@@ -496,19 +496,20 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 	prevRoot := *root
 
 	// Update current node's IndexNext to point to new page
-	node.IndexNext = newPage
+	node.SetIndexNext(newPage)
 
 	// Update root's IndexPrevious to point to new page
-	root.IndexPrevious = newPage
+	root.SetIndexPrevious(newPage)
 
 	// Create new page
 	newPageNode := &DirectoryNode{
 		RootIndex: dirKey.Key,
 		Indexes:   [][32]byte{itemKey},
 	}
-	// Set IndexPrevious on new page (unless it's page 1)
+	// Set IndexPrevious on new page (unless it's page 1, whose previous is the
+	// root: rippled leaves that link absent to save space).
 	if newPage != 1 {
-		newPageNode.IndexPrevious = newPage - 1
+		newPageNode.SetIndexPrevious(newPage - 1)
 	}
 	// Copy book directory fields if applicable
 	if setupFunc != nil {
@@ -572,71 +573,6 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 	return result, nil
 }
 
-// GetCurrencyBytes converts a currency code to 20 bytes
-// For standard 3-char codes: 12 zero bytes + 3 char bytes + 5 zero bytes
-// For XRP: all zeros
-func GetCurrencyBytes(currency string) [20]byte {
-	var result [20]byte
-	if currency == "" || currency == "XRP" {
-		return result // All zeros for XRP
-	}
-
-	// Standard 3-character currency code
-	if len(currency) == 3 {
-		// Format: 12 zero bytes + 3 ASCII bytes + 5 zero bytes
-		copy(result[12:15], []byte(currency))
-	} else if len(currency) == 40 {
-		// Hex-encoded currency (160-bit)
-		decoded, _ := hex.DecodeString(currency)
-		copy(result[:], decoded)
-	}
-	return result
-}
-
-// GetCurrencyString converts a 20-byte currency representation back to string.
-// For standard 3-char codes: reads from bytes 12-15
-// For XRP (all zeros): returns "XRP"
-// For hex currencies (first byte != 0): returns 40-char hex string
-func GetCurrencyString(currency [20]byte) string {
-	// Check if all zeros (XRP)
-	allZeros := true
-	for _, b := range currency {
-		if b != 0 {
-			allZeros = false
-			break
-		}
-	}
-	if allZeros {
-		return "XRP"
-	}
-
-	// Check if it's a hex currency (first byte is non-zero or has special markers)
-	// Standard 3-char currencies have first 12 bytes as zero
-	isHexCurrency := false
-	for i := 0; i < 12; i++ {
-		if currency[i] != 0 {
-			isHexCurrency = true
-			break
-		}
-	}
-	// Also check last 5 bytes for standard currency
-	if !isHexCurrency {
-		for i := 15; i < 20; i++ {
-			if currency[i] != 0 {
-				isHexCurrency = true
-				break
-			}
-		}
-	}
-
-	if isHexCurrency {
-		return strings.ToUpper(hex.EncodeToString(currency[:]))
-	}
-
-	// Standard 3-character currency code
-	return string(currency[12:15])
-}
-
 // GetIssuerBytes converts an issuer address to 20-byte account ID
 func GetIssuerBytes(issuer string) [20]byte {
 	if issuer == "" {
@@ -695,11 +631,18 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 
 	const rootPage uint64 = 0
 
-	// Get the page where the item should be
+	// Get the page where the item should be. Distinguish a real storage error
+	// (propagate it) from a genuinely absent page (nil data → not found,
+	// Success=false). *ledger.Ledger.Read returns (nil, nil) for a missing key,
+	// so the nil-data check is required; without it ParseDirectoryNode(nil) would
+	// surface a misleading codec error.
 	pageKeylet := keylet.DirPage(directory.Key, page)
 	pageData, err := view.Read(pageKeylet)
 	if err != nil {
-		return result, nil // Page not found, return success=false
+		return nil, err
+	}
+	if pageData == nil {
+		return result, nil // Page not found, Success=false
 	}
 	node, err := ParseDirectoryNode(pageData)
 	if err != nil {
@@ -774,8 +717,8 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 
 			if len(lastPage.Indexes) == 0 {
 				// Update root's linked list
-				node.IndexNext = rootPage
-				node.IndexPrevious = rootPage
+				node.SetIndexNext(rootPage)
+				node.SetIndexPrevious(rootPage)
 
 				// Track root modification
 				result.ModifiedNodes = append(result.ModifiedNodes, DirRemoveModifiedNode{
@@ -918,9 +861,9 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 	}
 
 	// Unlink: prev.IndexNext = nextPage
-	prev.IndexNext = nextPage
+	prev.SetIndexNext(nextPage)
 	// Unlink: next.IndexPrevious = prevPage
-	next.IndexPrevious = prevPage
+	next.SetIndexPrevious(prevPage)
 
 	// Track prev modification
 	result.ModifiedNodes = append(result.ModifiedNodes, DirRemoveModifiedNode{
@@ -982,7 +925,7 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 		}
 
 		// Update prev to point to root
-		prev.IndexNext = rootPage
+		prev.SetIndexNext(rootPage)
 		// Re-serialize prev
 		prevData, err := SerializeDirectoryNode(prev, prevIsBookDir)
 		if err != nil {
@@ -1003,7 +946,7 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 			return nil, err
 		}
 		rootPrev := *root
-		root.IndexPrevious = prevPage
+		root.SetIndexPrevious(prevPage)
 
 		result.ModifiedNodes = append(result.ModifiedNodes, DirRemoveModifiedNode{
 			Key:       rootKeylet.Key,
@@ -1046,10 +989,14 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 // is returned. Returns nil if the directory does not exist.
 // Reference: rippled cdirFirst/cdirNext pattern.
 func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte) error) error {
-	// Read root page
+	// Read root page. A real storage error must propagate; only a genuinely
+	// absent root means "directory doesn't exist — nothing to iterate".
 	rootData, err := view.Read(dirKey)
-	if err != nil || rootData == nil {
-		return nil // Directory doesn't exist — nothing to iterate
+	if err != nil {
+		return err
+	}
+	if rootData == nil {
+		return nil
 	}
 
 	root, err := ParseDirectoryNode(rootData)
@@ -1069,7 +1016,10 @@ func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte)
 	for nextPage != 0 {
 		pageKeylet := keylet.DirPage(dirKey.Key, nextPage)
 		pageData, err := view.Read(pageKeylet)
-		if err != nil || pageData == nil {
+		if err != nil {
+			return err
+		}
+		if pageData == nil {
 			break
 		}
 

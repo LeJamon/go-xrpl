@@ -1,7 +1,6 @@
 package binarycodec
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -150,7 +149,14 @@ func EncodeForSigningClaim(json map[string]any) (string, error) {
 
 	// Serialize as 8-byte big-endian uint64
 	amount := make([]byte, 8)
-	binary.BigEndian.PutUint64(amount, drops)
+	amount[0] = byte(drops >> 56)
+	amount[1] = byte(drops >> 48)
+	amount[2] = byte(drops >> 40)
+	amount[3] = byte(drops >> 32)
+	amount[4] = byte(drops >> 24)
+	amount[5] = byte(drops >> 16)
+	amount[6] = byte(drops >> 8)
+	amount[7] = byte(drops)
 
 	return paymentChannelClaimPrefix + hexUpper(channel) + hexUpper(amount), nil
 }
@@ -182,7 +188,7 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 
 	txIDsLengthType := &types.UInt32{}
 	txIDsLength := len(txIDsInterface)
-	if uint64(txIDsLength) > math.MaxUint32 {
+	if txIDsLength > math.MaxUint32 {
 		return "", ErrBatchTxIDsLengthTooLong
 	}
 	txIDsLengthBytes, err := txIDsLengthType.FromJSON(uint32(txIDsLength))

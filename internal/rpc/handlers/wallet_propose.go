@@ -28,7 +28,7 @@ type walletProposeRequest struct {
 	KeyType    string `json:"key_type,omitempty"`
 }
 
-func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request walletProposeRequest
 
 	if params != nil {
@@ -171,7 +171,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Build response matching rippled format
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account_id":      accountID,
 		"key_type":        keyType,
 		"master_key":      masterKey,

@@ -54,7 +54,7 @@ func findRippledMacro() (string, bool) {
 		return "", false
 	}
 	dir := filepath.Dir(file)
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		candidate := filepath.Join(dir, "rippled", "include", "xrpl", "protocol", "detail", "ledger_entries.macro")
 		if _, err := os.Stat(candidate); err == nil {
 			return candidate, true

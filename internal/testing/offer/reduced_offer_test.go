@@ -497,7 +497,7 @@ func testSellPartialCrossOldXrpIouQChange(t *testing.T) {
 			increaseGetsFloat := 0.0
 			step := 0.00000001 // 1e-8
 
-			for i := 0; i < loopCount; i++ {
+			for range loopCount {
 				// alice submits an offer that may become a blocker
 				aliceOfferSeq := env.Seq(alice)
 				// alice's initial offer: USD(2) for drops(3382562)

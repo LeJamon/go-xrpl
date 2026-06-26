@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 const (
@@ -70,7 +70,7 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 // path, and rippled rejects either when that path is empty — so a 0xFF boundary
 // followed straight by a 0x00 terminator is an empty trailing path, not a path
 // the decoder may silently drop. The terminator additionally ends the set.
-func (p PathSet) ToJSON(parser interfaces.BinaryParser, _ ...int) (any, error) {
+func (p PathSet) ToJSON(parser *serdes.BinaryParser, _ ...int) (any, error) {
 	var pathSet []any
 	var path []any
 
@@ -128,7 +128,21 @@ func annotateStepType(step map[string]any) {
 // isPathSet determines if an array represents a valid path set.
 // It checks if the array is either empty or if its first element is a valid path step.
 func isPathSet(v []any) bool {
-	return len(v) == 0 || len(v[0].([]any)) == 0 || isPathStep(v[0].([]any)[0].(map[string]any))
+	if len(v) == 0 {
+		return true
+	}
+	first, ok := v[0].([]any)
+	if !ok {
+		return false
+	}
+	if len(first) == 0 {
+		return true
+	}
+	step, ok := first[0].(map[string]any)
+	if !ok {
+		return false
+	}
+	return isPathStep(step)
 }
 
 // isPathStep determines if a map represents a valid path step.
@@ -234,7 +248,7 @@ func newPathSet(v []any) ([]byte, error) {
 
 // parsePathStep decodes a path step's fields from the parser, given the step's
 // already-read type byte. It returns a map representing the path step, or an error.
-func parsePathStep(parser interfaces.BinaryParser, dataType byte) (map[string]any, error) {
+func parsePathStep(parser *serdes.BinaryParser, dataType byte) (map[string]any, error) {
 	// Reject type bits outside the legal set, as rippled does (STPathSet.cpp:84).
 	// typeNone (0x00) and typeBoundary (0xFF) are handled by the caller, so any
 	// byte reaching here must be a pure step-type bitmask.

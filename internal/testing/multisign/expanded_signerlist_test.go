@@ -12,6 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/signerlist"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
@@ -154,4 +155,76 @@ func TestSignerList_WalletLocator_Persisted(t *testing.T) {
 	require.Len(t, info.SignerEntries, 1)
 	require.Equal(t, testWalletLocator, info.SignerEntries[0].WalletLocator,
 		"WalletLocator must be persisted in the SignerList entry")
+}
+
+// signerAccounts builds n distinct, funded signer accounts.
+func signerAccounts(env *jtx.TestEnv, n int) []*jtx.Account {
+	accts := make([]*jtx.Account, n)
+	for i := range accts {
+		a := jtx.NewAccount(fmt.Sprintf("msigner_%d", i))
+		env.FundAmount(a, uint64(jtx.XRP(1000)))
+		accts[i] = a
+	}
+	return accts
+}
+
+// TestMultiSign_ArrayBound_WithExpandedAmendment asserts the rules-gated cap on
+// a transaction's Signers array: with featureExpandedSignerList enabled a 33-entry
+// array is rejected (cap is 32). The bound is checked in preflight, before the
+// SignerList lookup, so it surfaces as temBAD_SIGNATURE regardless of authorization.
+// Reference: rippled STTx::checkMultiSign -> multiSignHelper size check.
+func TestMultiSign_ArrayBound_WithExpandedAmendment(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	require.True(t, env.FeatureEnabled("ExpandedSignerList"))
+
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	signers := signerAccounts(env, 33)
+	env.Close()
+
+	payTx := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
+	result := env.SubmitMultiSigned(payTx, signers)
+	jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+}
+
+// TestMultiSign_ArrayBound_WithoutExpandedAmendment asserts the cap drops to 8
+// without the amendment: a 9-entry Signers array is rejected, while 8 entries
+// authorized by a matching SignerList pass the full multi-sign pipeline.
+func TestMultiSign_ArrayBound_WithoutExpandedAmendment(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.DisableFeature("ExpandedSignerList")
+	env.Close()
+	require.False(t, env.FeatureEnabled("ExpandedSignerList"))
+
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	signers := signerAccounts(env, 9)
+	env.Close()
+
+	// Nine signers exceed the pre-amendment maximum of 8 — rejected in preflight.
+	payTx := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
+	result := env.SubmitMultiSigned(payTx, signers[:9])
+	jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+
+	// Eight signers are the boundary; with a matching 8-entry signer list and a
+	// met quorum the multi-signed payment succeeds.
+	eight := signers[:8]
+	entries := make([]jtx.TestSigner, len(eight))
+	for i, s := range eight {
+		entries[i] = jtx.TestSigner{Account: s, Weight: 1}
+	}
+	env.SetSignerList(alice, uint32(len(eight)), entries)
+	env.Close()
+
+	payTx2 := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
+	result = env.SubmitMultiSigned(payTx2, eight)
+	jtx.RequireTxSuccess(t, result)
 }

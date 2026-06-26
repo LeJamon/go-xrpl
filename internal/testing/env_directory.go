@@ -3,6 +3,8 @@ package testing
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -71,10 +73,16 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	// Create new page at targetPage with the same entries
 	newPageKey := keylet.DirPage(dirRootKey.Key, targetPage)
 	newPage := &state.DirectoryNode{
-		RootIndex:     dirRootKey.Key,
-		Indexes:       indexes,
-		Owner:         root.Owner,
-		IndexPrevious: prevIndex,
+		RootIndex: dirRootKey.Key,
+		Indexes:   indexes,
+		Owner:     root.Owner,
+	}
+	// Mirror the original last page's link presence: rippled sets IndexPrevious
+	// via setFieldU64 only when non-zero (a page whose previous is the root
+	// leaves it absent), so guard the setter rather than force a present-at-0
+	// link.
+	if prevIndex != 0 {
+		newPage.SetIndexPrevious(prevIndex)
 	}
 	newPageData, err := state.SerializeDirectoryNode(newPage, false)
 	if err != nil {
@@ -85,10 +93,10 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	}
 
 	// Update root's IndexPrevious to point to new page
-	root.IndexPrevious = targetPage
+	root.SetIndexPrevious(targetPage)
 	// If the previous page was root (prevIndex == 0), also update IndexNext
 	if prevIndex == 0 {
-		root.IndexNext = targetPage
+		root.SetIndexNext(targetPage)
 	}
 	rootData, err = state.SerializeDirectoryNode(root, false)
 	if err != nil {
@@ -109,7 +117,7 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		if err != nil {
 			return fmt.Errorf("failed to parse previous page: %v", err)
 		}
-		prevPage.IndexNext = targetPage
+		prevPage.SetIndexNext(targetPage)
 		prevPageData, err = state.SerializeDirectoryNode(prevPage, false)
 		if err != nil {
 			return fmt.Errorf("failed to serialize previous page: %v", err)
@@ -119,31 +127,41 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		}
 	}
 
-	// Adjust the field on each entry that was moved
-	if adjustField != "" {
-		for _, itemKey := range indexes {
-			itemKeylet := keylet.Keylet{Key: itemKey}
-			itemData, err := e.ledger.Read(itemKeylet)
-			if err != nil || itemData == nil {
-				continue // Skip entries that can't be read
-			}
+	// Adjust each moved entry's directory-node field. rippled's bumpLastPage
+	// always runs an adjust callback that rewrites the entry's link to this
+	// directory (adjustOwnerNode for tickets, sfIssuerNode for credentials,
+	// ...), but the fixture recorder does not capture which field the callback
+	// touched. When the fixture names the field, rewrite exactly that one;
+	// otherwise rewrite every *Node field that currently holds the old page
+	// number — that is, the entry's link(s) into the moved page. Leaving the
+	// hint stale would create a state rippled never produces, where a later
+	// dirRemove through the recorded hint fails.
+	for _, itemKey := range indexes {
+		itemKeylet := keylet.Keylet{Key: itemKey}
+		itemData, err := e.ledger.Read(itemKeylet)
+		if err != nil || itemData == nil {
+			continue // Skip entries that can't be read
+		}
 
-			// Decode via binary codec, update the field, re-encode
-			updated, err := updateUint64Field(itemData, adjustField, targetPage)
-			if err != nil {
-				return fmt.Errorf("failed to adjust %s on entry: %v", adjustField, err)
-			}
-			if err := e.ledger.Update(itemKeylet, updated); err != nil {
-				return fmt.Errorf("failed to update entry: %v", err)
-			}
+		updated, err := updateDirNodeFields(itemData, adjustField, lastIndex, targetPage)
+		if err != nil {
+			return fmt.Errorf("failed to adjust directory node field on entry: %v", err)
+		}
+		if err := e.ledger.Update(itemKeylet, updated); err != nil {
+			return fmt.Errorf("failed to update entry: %v", err)
 		}
 	}
 
 	return nil
 }
 
-// updateUint64Field decodes a binary SLE, updates a uint64 field, and re-encodes it.
-func updateUint64Field(data []byte, fieldName string, value uint64) ([]byte, error) {
+// updateDirNodeFields decodes a binary SLE and rewrites its directory page
+// hint(s) from oldPage to newPage, then re-encodes it. When fieldName is
+// non-empty only that field is rewritten (it must be present); otherwise every
+// field named "*Node" whose current value equals oldPage is rewritten, and at
+// least one such field must exist — mirroring rippled's adjust callbacks,
+// which fail the bump when the entry has no link to update.
+func updateDirNodeFields(data []byte, fieldName string, oldPage, newPage uint64) ([]byte, error) {
 	// Decode binary to JSON map (Decode expects hex string)
 	hexStr := hex.EncodeToString(data)
 	jsonMap, err := binarycodec.Decode(hexStr)
@@ -151,8 +169,35 @@ func updateUint64Field(data []byte, fieldName string, value uint64) ([]byte, err
 		return nil, fmt.Errorf("decode failed: %v", err)
 	}
 
-	// Update the field (uint64 fields are encoded as hex strings)
-	jsonMap[fieldName] = tx.FormatUint64Hex(value)
+	// UInt64 fields are encoded as hex strings.
+	newValue := tx.FormatUint64Hex(newPage)
+	adjusted := 0
+	if fieldName != "" {
+		if _, ok := jsonMap[fieldName]; !ok {
+			return nil, fmt.Errorf("field %s not present on moved entry", fieldName)
+		}
+		jsonMap[fieldName] = newValue
+		adjusted++
+	} else {
+		for k, v := range jsonMap {
+			if !strings.HasSuffix(k, "Node") {
+				continue
+			}
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			cur, err := strconv.ParseUint(s, 16, 64)
+			if err != nil || cur != oldPage {
+				continue
+			}
+			jsonMap[k] = newValue
+			adjusted++
+		}
+	}
+	if adjusted == 0 {
+		return nil, fmt.Errorf("no directory node field pointing at page %d on moved entry", oldPage)
+	}
 
 	// Re-encode to binary (Encode returns hex string)
 	encodedHex, err := binarycodec.Encode(jsonMap)
@@ -191,7 +236,7 @@ func (e *TestEnv) ForceOwnerDirEmptyAnchorWithNext(acc *Account, nextPage uint64
 	}
 
 	root.Indexes = nil
-	root.IndexNext = nextPage
+	root.SetIndexNext(nextPage)
 
 	updated, err := state.SerializeDirectoryNode(root, false)
 	if err != nil {

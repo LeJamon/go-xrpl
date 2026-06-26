@@ -102,10 +102,10 @@ func (m *mockAccountCurrenciesLedgerService) GetTransaction(txHash [32]byte) (*t
 func (m *mockAccountCurrenciesLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
@@ -126,10 +126,10 @@ func (m *mockAccountCurrenciesLedgerService) GetLedgerEntry(_ context.Context, e
 func (m *mockAccountCurrenciesLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
@@ -169,7 +169,7 @@ func (m *mockAccountCurrenciesLedgerService) GetNFTSellOffers(_ context.Context,
 func (m *mockAccountCurrenciesLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountCurrenciesLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	return 0, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
@@ -201,22 +201,23 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
+		expectedToken string
 		setupMock     func()
 	}{
 		{
 			// missing account field
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			// test account non-string (integer)
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1,
 			},
 			expectedError: "Invalid parameters:",
@@ -225,7 +226,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 		{
 			// test account non-string (float)
 			name: "Invalid account type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1.1,
 			},
 			expectedError: "Invalid parameters:",
@@ -234,7 +235,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 		{
 			// test account non-string (boolean)
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -244,32 +245,44 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			// invalid base58 characters (llIIOO)
 			// rippled returns rpcACT_MALFORMED for malformed addresses
 			name: "Malformed account - invalid base58 characters",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "llIIOO",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Cannot use a seed as account
 			// rippled returns rpcACT_MALFORMED
 			name: "Malformed account - seed format (actMalformed)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "Bob",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// ask for nonexistent account (actNotFound)
 			name: "Account not found - valid format but not in ledger",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
 				mock.accountCurrenciesErr = svcerr.ErrAccountNotFound
+			},
+		},
+		{
+			name: "Malformed account - service rejects address (actMalformed token)",
+			params: map[string]any{
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			},
+			expectedError: "Account malformed.",
+			expectedCode:  types.RpcACT_MALFORMED,
+			expectedToken: "actMalformed",
+			setupMock: func() {
+				mock.accountCurrenciesErr = svcerr.ErrAccountMalformed
 			},
 		},
 	}
@@ -301,6 +314,10 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"Error message should contain expected text")
 			assert.Equal(t, tc.expectedCode, rpcErr.Code,
 				"Error code should match expected")
+			if tc.expectedToken != "" {
+				assert.Equal(t, tc.expectedToken, rpcErr.ErrorString,
+					"Error token should match expected")
+			}
 		})
 	}
 }
@@ -331,7 +348,7 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 		}
 		mock.accountCurrenciesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -343,12 +360,12 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		receiveCurrencies := resp["receive_currencies"].([]interface{})
-		sendCurrencies := resp["send_currencies"].([]interface{})
+		receiveCurrencies := resp["receive_currencies"].([]any)
+		sendCurrencies := resp["send_currencies"].([]any)
 		assert.Len(t, receiveCurrencies, 0, "Should have no receive currencies")
 		assert.Len(t, sendCurrencies, 0, "Should have no send currencies")
 	})
@@ -369,7 +386,7 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 		}
 		mock.accountCurrenciesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -381,12 +398,12 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		receiveCurrencies := resp["receive_currencies"].([]interface{})
-		sendCurrencies := resp["send_currencies"].([]interface{})
+		receiveCurrencies := resp["receive_currencies"].([]any)
+		sendCurrencies := resp["send_currencies"].([]any)
 		assert.Len(t, receiveCurrencies, 26, "Should have 26 receive currencies")
 		assert.Len(t, sendCurrencies, 0, "Should have no send currencies (no balance)")
 	})
@@ -406,7 +423,7 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 		}
 		mock.accountCurrenciesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -418,12 +435,12 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		receiveCurrencies := resp["receive_currencies"].([]interface{})
-		sendCurrencies := resp["send_currencies"].([]interface{})
+		receiveCurrencies := resp["receive_currencies"].([]any)
+		sendCurrencies := resp["send_currencies"].([]any)
 		assert.Len(t, receiveCurrencies, 26, "Should have 26 receive currencies")
 		assert.Len(t, sendCurrencies, 26, "Should have 26 send currencies")
 	})
@@ -446,7 +463,7 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 		}
 		mock.accountCurrenciesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -458,12 +475,12 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		rcvCurrencies := resp["receive_currencies"].([]interface{})
-		sndCurrencies := resp["send_currencies"].([]interface{})
+		rcvCurrencies := resp["receive_currencies"].([]any)
+		sndCurrencies := resp["send_currencies"].([]any)
 		assert.Len(t, rcvCurrencies, 25, "Should have 25 receive currencies (USA exhausted)")
 		assert.Len(t, sndCurrencies, 26, "Should still have 26 send currencies")
 
@@ -491,7 +508,7 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 		}
 		mock.accountCurrenciesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -503,12 +520,12 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		rcvCurrencies := resp["receive_currencies"].([]interface{})
-		sndCurrencies := resp["send_currencies"].([]interface{})
+		rcvCurrencies := resp["receive_currencies"].([]any)
+		sndCurrencies := resp["send_currencies"].([]any)
 		assert.Len(t, rcvCurrencies, 26, "Should have all 26 receive currencies")
 		assert.Len(t, sndCurrencies, 25, "Should have 25 send currencies (USA has zero balance)")
 
@@ -540,7 +557,7 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 		Validated:         true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -552,7 +569,7 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -574,7 +591,7 @@ func TestAccountCurrenciesServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)

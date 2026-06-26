@@ -36,9 +36,9 @@ func PseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, key [32]byte)
 // computeAMMKeylet computes the AMM keylet from the asset pair.
 func computeAMMKeylet(asset1, asset2 tx.Asset) keylet.Keylet {
 	issuer1 := getIssuerBytes(asset1.Issuer)
-	currency1 := state.GetCurrencyBytes(asset1.Currency)
+	currency1 := keylet.CurrencyBytes(asset1.Currency)
 	issuer2 := getIssuerBytes(asset2.Issuer)
-	currency2 := state.GetCurrencyBytes(asset2.Currency)
+	currency2 := keylet.CurrencyBytes(asset2.Currency)
 
 	return keylet.AMM(issuer1, currency1, issuer2, currency2)
 }
@@ -62,7 +62,7 @@ const maxPseudoAccountAttempts = 256
 // Returns the zero AccountID if all 256 slots are taken.
 // Reference: rippled View.cpp pseudoAccountAddress (line 1067-1081)
 func pseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, pseudoOwnerKey [32]byte) [20]byte {
-	for i := uint16(0); i < maxPseudoAccountAttempts; i++ {
+	for i := range uint16(maxPseudoAccountAttempts) {
 		// sha512Half(i, parentHash, pseudoOwnerKey)
 		iBytes := make([]byte, 2)
 		binary.BigEndian.PutUint16(iBytes, i)

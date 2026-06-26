@@ -73,9 +73,12 @@ func TestAdaptorCreation(t *testing.T) {
 	assert.Equal(t, key, validators[0])
 }
 
-// TestComputeQuorum pins R6b.3 dynamic quorum math. Mirrors
-// rippled's ValidatorList.cpp:2061-2087 ceil(0.8 * (trusted - disabled)).
-// Pre-R6b.3 quorum was frozen at ceil(0.8 * trusted) at Adaptor
+// TestComputeQuorum pins R6b.3 dynamic quorum math. Mirrors rippled's
+// calculateQuorum (ValidatorList.cpp:1906-1907,2061-2087):
+// max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)). The second
+// term is the negative-UNL AbsoluteMinimumQuorum floor — within the 25%
+// negUNL cap the 0.8 term dominates, so the floor only engages beyond the
+// cap. Pre-R6b.3 quorum was frozen at ceil(0.8 * trusted) at Adaptor
 // construction and never recomputed, so partial-UNL outages slowed
 // finality vs. rippled.
 func TestComputeQuorum(t *testing.T) {
@@ -88,9 +91,13 @@ func TestComputeQuorum(t *testing.T) {
 		{"standalone", 0, 0, 0},
 		{"single_validator_no_negunl", 1, 0, 1},
 		{"five_validators_no_negunl", 5, 0, 4},
-		{"five_validators_two_negunl", 5, 2, 3},   // ceil(0.8*3) = 3
-		{"five_validators_four_negunl", 5, 4, 1},  // ceil(0.8*1) = 1
-		{"ten_validators_three_negunl", 10, 3, 6}, // ceil(0.8*7) = 6
+		{"five_validators_two_negunl", 5, 2, 3},   // max(ceil(0.8*3),ceil(0.6*5)) = max(3,3) = 3
+		{"ten_validators_three_negunl", 10, 3, 6}, // max(ceil(0.8*7),ceil(0.6*10)) = max(6,6) = 6
+		// Floor binds: disabled beyond the 25% cap, so ceil(0.6*trusted)
+		// dominates ceil(0.8*effective) — matching rippled's clamp.
+		{"five_validators_four_negunl", 5, 4, 3},         // max(ceil(0.8*1),ceil(0.6*5))  = max(1,3)  = 3
+		{"twenty_validators_ten_negunl", 20, 10, 12},     // max(ceil(0.8*10),ceil(0.6*20)) = max(8,12) = 12
+		{"hundred_validators_forty_negunl", 100, 40, 60}, // max(ceil(0.8*60),ceil(0.6*100)) = max(48,60) = 60
 		// Edge: all trusted on negUNL → unreachable quorum.
 		{"all_disabled", 5, 5, math.MaxInt},
 		// More disabled than trusted (shouldn't happen but must be safe)
@@ -111,7 +118,7 @@ func TestComputeQuorum(t *testing.T) {
 // never zero, so soeDEFAULT serialization always includes the field.
 // Issue #363 E2.
 func TestAdaptor_CookieIsAlwaysNonZero(t *testing.T) {
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		a := newTestAdaptor(t)
 		assert.NotZero(t, a.GetCookie(),
 			"Adaptor.cookie must be non-zero at boot; serializer omits zero (soeDEFAULT)")

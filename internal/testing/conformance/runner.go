@@ -704,7 +704,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "env_reset":
 			r.execEnvReset(i, step)
 		case "enable_amendment":
-			r.env.EnableFeature(step.Amendment)
+			r.env.EnableFeatureNow(step.Amendment)
 		case "modify_state":
 			r.execModifyState(i, step)
 		default:
@@ -814,7 +814,7 @@ func (r *runner) replaySteps(steps []Step, isContinuation bool) {
 			// During replay, the txns were already applied by Close().
 			// Nothing to do here.
 		case "enable_amendment":
-			r.env.EnableFeature(step.Amendment)
+			r.env.EnableFeatureNow(step.Amendment)
 		case "modify_state":
 			r.execModifyState(i, step)
 		case "env_reset":
@@ -876,7 +876,7 @@ func (r *runner) replayTx(step Step) {
 
 	// Register AMM mapping after successful AMMCreate
 	if result.Success && step.TxJSON != nil {
-		var txj map[string]interface{}
+		var txj map[string]any
 		if json.Unmarshal(step.TxJSON, &txj) == nil {
 			if txj["TransactionType"] == "AMMCreate" {
 				r.registerAMMMapping(step)
@@ -1355,7 +1355,7 @@ func (r *runner) execTx(stepIdx int, step Step) {
 		}
 		txType := "unknown"
 		if step.TxJSON != nil {
-			var txj map[string]interface{}
+			var txj map[string]any
 			if json.Unmarshal(step.TxJSON, &txj) == nil {
 				if tt, ok := txj["TransactionType"].(string); ok {
 					txType = tt
@@ -1401,7 +1401,7 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	// After a successful AMMCreate, discover the actual AMM account address
 	// and register the mapping from fixture to actual address.
 	if result.Success && step.TxJSON != nil {
-		var txj map[string]interface{}
+		var txj map[string]any
 		if json.Unmarshal(step.TxJSON, &txj) == nil {
 			if txj["TransactionType"] == "AMMCreate" {
 				r.registerAMMMapping(step)
@@ -1503,7 +1503,7 @@ func (r *runner) execRetryBatch(batch []struct {
 		r.remapAMMAddresses(parsed)
 		seq := uint32(0)
 		if entry.step.TxJSON != nil {
-			var txj map[string]interface{}
+			var txj map[string]any
 			if json.Unmarshal(entry.step.TxJSON, &txj) == nil {
 				if s, ok := txj["Sequence"].(float64); ok {
 					seq = uint32(s)
@@ -1541,7 +1541,7 @@ func (r *runner) execRetryBatch(batch []struct {
 			}
 			txType := "unknown"
 			if retry.step.TxJSON != nil {
-				var txj map[string]interface{}
+				var txj map[string]any
 				if json.Unmarshal(retry.step.TxJSON, &txj) == nil {
 					if tt, ok := txj["TransactionType"].(string); ok {
 						txType = tt
@@ -1630,7 +1630,7 @@ func (r *runner) execModifyState(stepIdx int, step Step) {
 		for i := stepIdx - 1; i >= 0; i-- {
 			s := r.fixtureSteps[i]
 			if s.Op == "tx" && s.TxJSON != nil {
-				var txj map[string]interface{}
+				var txj map[string]any
 				if json.Unmarshal(s.TxJSON, &txj) == nil {
 					if addr, ok := txj["Account"].(string); ok && addr != "" {
 						for _, a := range r.accounts {
@@ -1767,7 +1767,7 @@ func (r *runner) shouldAutoFund(steps []Step) bool {
 		// In rippled test helpers like runTx(), accounts are created by
 		// Payments from master rather than explicit fund() calls.
 		if s.Op == "tx" && s.TxJSON != nil {
-			var txj map[string]interface{}
+			var txj map[string]any
 			if json.Unmarshal(s.TxJSON, &txj) == nil {
 				if txj["TransactionType"] == "Payment" &&
 					txj["Account"] == masterAddr {
@@ -1791,7 +1791,7 @@ func (r *runner) shouldAutoFund(steps []Step) bool {
 			continue
 		}
 
-		var txj map[string]interface{}
+		var txj map[string]any
 		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
 			continue
 		}
@@ -1816,24 +1816,14 @@ func (r *runner) shouldAutoFund(steps []Step) bool {
 //
 // For Credential and similar transaction types, auxiliary accounts (Subject,
 // Issuer, Destination) are also funded when they need to exist for preclaim
-// checks. However, accounts that have explicit fund steps in the fixture are
-// NOT auto-funded as auxiliary accounts — the fixture intends to fund them
-// at a specific time and amount.
+// checks. Auxiliary accounts a fixture deliberately leaves uncreated — detected
+// via an expected tecNO_TARGET/tecNO_ISSUER on the first tx that references them
+// (see findSkipAuxAddresses) — are excluded from auto-funding.
 //
 // Initial funding amounts are derived from the first post_state entry for
 // each account when possible. This is critical for reserve-sensitive tests
 // where the exact balance determines the TER code.
 func (r *runner) autoFundAccounts(steps []Step) {
-	// Build a map of addresses that have explicit fund steps.
-	// These addresses should not be auto-funded as auxiliary accounts because the
-	// fixture deliberately controls when they are created.
-	explicitFundAddrs := make(map[string]bool) // addresses with explicit fund steps
-	for _, s := range steps {
-		if s.Op == "fund" && s.Address != "" {
-			explicitFundAddrs[s.Address] = true
-		}
-	}
-
 	// Derive the initial funding amount for each account from the first
 	// post_state entry. For applied tx results (tesSUCCESS/tec*), the
 	// post_state balance = initial_balance - fees_consumed. By analyzing
@@ -1861,7 +1851,7 @@ func (r *runner) autoFundAccounts(steps []Step) {
 		if s.Op != "tx" || s.TxJSON == nil {
 			continue
 		}
-		var txj map[string]interface{}
+		var txj map[string]any
 		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
 			continue
 		}
@@ -2025,7 +2015,7 @@ func (r *runner) findSkipAuxAddresses(steps []Step) map[string]bool {
 		if s.Op != "tx" || s.TxJSON == nil {
 			continue
 		}
-		var txj map[string]interface{}
+		var txj map[string]any
 		if err := json.Unmarshal(s.TxJSON, &txj); err != nil {
 			continue
 		}
@@ -2071,7 +2061,7 @@ func (r *runner) deriveInitialBalances(steps []Step) map[string]uint64 {
 		if s.Op == "tx" && s.TxJSON != nil {
 			// Count fees for applied results
 			if s.ExpectTER == "tesSUCCESS" || strings.HasPrefix(s.ExpectTER, "tec") {
-				var txj map[string]interface{}
+				var txj map[string]any
 				if err := json.Unmarshal(s.TxJSON, &txj); err == nil {
 					if addr, ok := txj["Account"].(string); ok && addr != "" {
 						fee := uint64(10) // default base fee
@@ -2167,7 +2157,7 @@ func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]b
 
 		// Check tx_json for LP token issuers and all addresses
 		if step.TxJSON != nil {
-			var txj map[string]interface{}
+			var txj map[string]any
 			if json.Unmarshal(step.TxJSON, &txj) == nil {
 				collectLPTokenIssuers(txj, addrs, &pairs)
 				collectAllAddresses(txj, allAddrs)
@@ -2216,7 +2206,7 @@ func prescanAMMAddresses(steps []Step) (map[string]bool, []ammPair, map[string]b
 
 // collectAllAddresses recursively walks a JSON map to collect all string
 // values that look like XRPL addresses (start with 'r', 25-35 chars).
-func collectAllAddresses(obj map[string]interface{}, addrs map[string]bool) {
+func collectAllAddresses(obj map[string]any, addrs map[string]bool) {
 	for key, v := range obj {
 		switch val := v.(type) {
 		case string:
@@ -2225,11 +2215,11 @@ func collectAllAddresses(obj map[string]interface{}, addrs map[string]bool) {
 			if isAddressField(key) && isXRPLAddress(val) {
 				addrs[val] = true
 			}
-		case map[string]interface{}:
+		case map[string]any:
 			collectAllAddresses(val, addrs)
-		case []interface{}:
+		case []any:
 			for _, item := range val {
-				if m, ok := item.(map[string]interface{}); ok {
+				if m, ok := item.(map[string]any); ok {
 					collectAllAddresses(m, addrs)
 				}
 			}
@@ -2262,10 +2252,10 @@ func isLPTokenCurrency(currency string) bool {
 
 // collectLPTokenIssuers recursively walks a JSON map to find amount objects
 // with LP token currencies and collects their issuer addresses and pairs.
-func collectLPTokenIssuers(obj map[string]interface{}, addrs map[string]bool, pairs *[]ammPair) {
+func collectLPTokenIssuers(obj map[string]any, addrs map[string]bool, pairs *[]ammPair) {
 	for _, v := range obj {
 		switch val := v.(type) {
-		case map[string]interface{}:
+		case map[string]any:
 			// Check if this is an amount object with LP token currency
 			if cur, ok := val["currency"].(string); ok && isLPTokenCurrency(cur) {
 				if issuer, ok := val["issuer"].(string); ok && issuer != "" {
@@ -2275,9 +2265,9 @@ func collectLPTokenIssuers(obj map[string]interface{}, addrs map[string]bool, pa
 			}
 			// Recurse into nested objects
 			collectLPTokenIssuers(val, addrs, pairs)
-		case []interface{}:
+		case []any:
 			for _, item := range val {
-				if m, ok := item.(map[string]interface{}); ok {
+				if m, ok := item.(map[string]any); ok {
 					collectLPTokenIssuers(m, addrs, pairs)
 				}
 			}
@@ -2320,7 +2310,7 @@ func (r *runner) registerAMMMapping(step Step) {
 	if step.TxJSON == nil {
 		return
 	}
-	var txj map[string]interface{}
+	var txj map[string]any
 	if json.Unmarshal(step.TxJSON, &txj) != nil {
 		return
 	}
@@ -2429,7 +2419,7 @@ func (r *runner) findUnfundedAMMByProximity(ammCreateStep Step) string {
 
 		// Check tx_json for unfunded addresses
 		if s.TxJSON != nil {
-			var txj map[string]interface{}
+			var txj map[string]any
 			if json.Unmarshal(s.TxJSON, &txj) == nil {
 				addr := r.findFirstUnfundedAddr(txj)
 				if addr != "" {
@@ -2454,7 +2444,7 @@ func (r *runner) findUnfundedAMMByProximity(ammCreateStep Step) string {
 
 // findFirstUnfundedAddr looks through a tx_json for the first address that
 // is unfunded and unmapped. It checks Destination and issuer fields.
-func (r *runner) findFirstUnfundedAddr(txj map[string]interface{}) string {
+func (r *runner) findFirstUnfundedAddr(txj map[string]any) string {
 	// Check Destination first (most common for Payment to AMM)
 	if dest, ok := txj["Destination"].(string); ok {
 		if r.fixtureUnfundedAddrs[dest] {
@@ -2466,7 +2456,7 @@ func (r *runner) findFirstUnfundedAddr(txj map[string]interface{}) string {
 
 	// Check issuers in amount objects
 	for _, field := range []string{"Amount", "LimitAmount", "SendMax", "DeliverMin"} {
-		if amt, ok := txj[field].(map[string]interface{}); ok {
+		if amt, ok := txj[field].(map[string]any); ok {
 			if issuer, ok := amt["issuer"].(string); ok && issuer != "" {
 				if r.fixtureUnfundedAddrs[issuer] {
 					if _, alreadyMapped := r.ammAddrMap[issuer]; !alreadyMapped {
@@ -2492,14 +2482,14 @@ func (r *runner) fixtureAddrSeenWithCurrency(fixtureAddr, lptCurrency string) bo
 }
 
 // extractAsset extracts a tx.Asset from a JSON amount field.
-func extractAsset(txj map[string]interface{}, field string) tx.Asset {
+func extractAsset(txj map[string]any, field string) tx.Asset {
 	val, ok := txj[field]
 	if !ok {
 		return tx.Asset{}
 	}
 
 	switch v := val.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		// IOU amount: {currency, issuer, value}
 		asset := tx.Asset{}
 		if cur, ok := v["currency"].(string); ok {
@@ -2534,7 +2524,7 @@ func (r *runner) remapAMMAddresses(txn tx.Transaction) {
 // Amount.Issuer, Asset.Issuer, and address string fields (Destination, etc.).
 func remapAmountFields(v reflect.Value, addrMap map[string]string) {
 	switch v.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if v.IsNil() {
 			return
 		}

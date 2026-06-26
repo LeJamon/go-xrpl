@@ -6,9 +6,10 @@ import (
 	"errors"
 	"math/big"
 	"regexp"
+	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // Number represents the XRPL Number type (also known as STNumber in JS).
@@ -17,14 +18,13 @@ type Number struct{}
 
 // Constants for mantissa and exponent normalization per XRPL Number spec.
 var (
-	minMantissa        = big.NewInt(1000000000000000) // 10^15
-	maxMantissa        = big.NewInt(9999999999999999) // 10^16 - 1
-	minExponent        = int32(-32768)
-	maxExponent        = int32(32768)
-	defaultZeroExp     = int32(-2147483648) // 0x80000000
-	ErrInvalidNumber   = errors.New("invalid Number string")
-	ErrNumberOverflow  = errors.New("mantissa and exponent are too large")
-	ErrInvalidExponent = errors.New("exponent out of range")
+	minMantissa       = big.NewInt(1000000000000000) // 10^15
+	maxMantissa       = big.NewInt(9999999999999999) // 10^16 - 1
+	minExponent       = int32(-32768)
+	maxExponent       = int32(32768)
+	defaultZeroExp    = int32(-2147483648) // 0x80000000
+	ErrInvalidNumber  = errors.New("invalid Number string")
+	ErrNumberOverflow = errors.New("mantissa and exponent are too large")
 )
 
 // numberRegex matches decimal/float/scientific number strings.
@@ -51,7 +51,7 @@ func (n *Number) FromJSON(value any) ([]byte, error) {
 }
 
 // ToJSON takes a BinaryParser and converts the serialized byte data back to a JSON string.
-func (n *Number) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (n *Number) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(12)
 	if err != nil {
 		return nil, err
@@ -114,10 +114,9 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	}
 
 	if expPart != "" {
-		var expVal int64
-		_, err := parseIntFromString(expPart, &expVal)
+		expVal, err := strconv.ParseInt(expPart, 10, 64)
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, ErrInvalidNumber
 		}
 		exponent += int32(expVal)
 	}
@@ -207,10 +206,8 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 }
 
 // formatScientific formats mantissa and exponent as scientific notation string.
-// Both signs of the exponent collapse to the same shape because itoa already
-// prepends a leading "-" for negatives.
 func formatScientific(mantissa int64, exponent int32) string {
-	return big.NewInt(mantissa).String() + "e" + itoa(int(exponent))
+	return strconv.FormatInt(mantissa, 10) + "e" + strconv.Itoa(int(exponent))
 }
 
 // formatDecimal formats mantissa and exponent as a decimal string.
@@ -227,13 +224,7 @@ func formatDecimal(mantissa int64, exponent int32) string {
 	const padSuffix = 23
 	rawValue := strings.Repeat("0", padPrefix) + mantissaStr + strings.Repeat("0", padSuffix)
 
-	offset := int(exponent) + 43
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(rawValue) {
-		offset = len(rawValue)
-	}
+	offset := min(max(int(exponent)+43, 0), len(rawValue))
 
 	integerPart := strings.TrimLeft(rawValue[:offset], "0")
 	if integerPart == "" {
@@ -270,35 +261,4 @@ func readInt64BE(buf []byte, offset int) int64 {
 
 func readInt32BE(buf []byte, offset int) int32 {
 	return int32(binary.BigEndian.Uint32(buf[offset:]))
-}
-
-func parseIntFromString(s string, result *int64) (bool, error) {
-	n := new(big.Int)
-	_, ok := n.SetString(s, 10)
-	if !ok {
-		return false, ErrInvalidNumber
-	}
-	*result = n.Int64()
-	return true, nil
-}
-
-func itoa(n int) string {
-	if n < 0 {
-		return "-" + uitoa(uint(-n))
-	}
-	return uitoa(uint(n))
-}
-
-func uitoa(n uint) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
 }

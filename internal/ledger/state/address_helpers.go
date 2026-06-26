@@ -17,8 +17,3 @@ func DecodeAccountID(address string) ([20]byte, error) {
 	copy(result[:], accountID)
 	return result, nil
 }
-
-// decodeAccountID is the unexported version of DecodeAccountID
-func decodeAccountID(address string) ([20]byte, error) {
-	return DecodeAccountID(address)
-}

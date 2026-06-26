@@ -6,36 +6,39 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
-// AccountRoot flag constants matching rippled's lsfXxx values
+// AccountRoot flag constants.
 const (
-	lsfPasswordSpent            uint32 = 0x00010000
-	lsfRequireDestTag           uint32 = 0x00020000
-	lsfRequireAuth              uint32 = 0x00040000
-	lsfDisallowXRP              uint32 = 0x00080000
-	lsfDisableMaster            uint32 = 0x00100000
-	lsfNoFreeze                 uint32 = 0x00200000
-	lsfGlobalFreeze             uint32 = 0x00400000
-	lsfDefaultRipple            uint32 = 0x00800000
-	lsfDepositAuth              uint32 = 0x01000000
-	lsfDisallowIncomingNFTOffer uint32 = 0x04000000
-	lsfDisallowIncomingCheck    uint32 = 0x08000000
-	lsfDisallowIncomingPayChan  uint32 = 0x10000000
-	lsfDisallowIncomingTrustln  uint32 = 0x20000000
-	lsfAllowTrustLineClawback   uint32 = 0x80000000
+	lsfPasswordSpent            = entry.LsfPasswordSpent
+	lsfRequireDestTag           = entry.LsfRequireDestTag
+	lsfRequireAuth              = entry.LsfRequireAuth
+	lsfDisallowXRP              = entry.LsfDisallowXRP
+	lsfDisableMaster            = entry.LsfDisableMaster
+	lsfNoFreeze                 = entry.LsfNoFreeze
+	lsfGlobalFreeze             = entry.LsfGlobalFreeze
+	lsfDefaultRipple            = entry.LsfDefaultRipple
+	lsfDepositAuth              = entry.LsfDepositAuth
+	lsfDisallowIncomingNFTOffer = entry.LsfDisallowIncomingNFTokenOffer
+	lsfDisallowIncomingCheck    = entry.LsfDisallowIncomingCheck
+	lsfDisallowIncomingPayChan  = entry.LsfDisallowIncomingPayChan
+	lsfDisallowIncomingTrustln  = entry.LsfDisallowIncomingTrustline
+	lsfAllowTrustLineClawback   = entry.LsfAllowTrustLineClawback
 )
 
 // AccountInfoMethod handles the account_info RPC method.
 type AccountInfoMethod struct{ BaseHandler }
 
-func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse the raw JSON to inspect field types before struct unmarshaling.
 	// This allows us to check for the "ident" alias and validate signer_lists type.
 	var rawFields map[string]json.RawMessage
@@ -50,7 +53,6 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		types.LedgerSpecifier
 		Queue       bool `json:"queue,omitempty"`
 		SignerLists bool `json:"signer_lists,omitempty"`
-		Strict      bool `json:"strict,omitempty"`
 	}
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
@@ -76,12 +78,12 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine ledger index
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	} else if request.LedgerHash != "" {
-		ledgerIndex = "validated"
+	// Determine ledger index. ledger_hash takes precedence over ledger_index
+	// and is threaded through so the service resolves the specific named
+	// ledger, mirroring rippled's ledgerFromRequest.
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// Queue is only valid for the current (open) ledger.
@@ -137,24 +139,15 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	accountFlags["disallowIncomingTrustline"] = flags&lsfDisallowIncomingTrustln != 0
 	accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account_data":  accountData,
 		"account_flags": accountFlags,
-		"ledger_hash":   info.LedgerHash,
-		"ledger_index":  info.LedgerIndex,
-		"validated":     info.Validated,
 	}
+	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
 
 	// Add queue data if requested (only for current/open ledger — validated above)
 	if request.Queue && ledgerIndex == "current" {
-		response["queue_data"] = map[string]interface{}{
-			"auth_change_queued":    false,
-			"highest_sequence":      info.Sequence,
-			"lowest_sequence":       info.Sequence,
-			"max_spend_drops_total": info.Balance,
-			"transactions":          []interface{}{},
-			"txn_count":             0,
-		}
+		response["queue_data"] = buildAccountQueueData(ctx.Services, request.Account)
 	}
 
 	if info.Index != "" {
@@ -180,7 +173,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 // When RawData is available, uses binarycodec.Decode to get all fields
 // (matching rippled's injectSLE → sle.getJson). Falls back to manual
 // construction from the AccountInfo struct fields if RawData is absent.
-func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string]interface{} {
+func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string]any {
 	// Try full SLE decode from raw binary data
 	if len(info.RawData) > 0 {
 		hexData := hex.EncodeToString(info.RawData)
@@ -195,7 +188,7 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 	}
 
 	// Fallback: manually construct from AccountInfo struct fields
-	accountData := map[string]interface{}{
+	accountData := map[string]any{
 		"Account":         info.Account,
 		"Balance":         info.Balance,
 		"Flags":           info.Flags,
@@ -230,14 +223,109 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 	return accountData
 }
 
-// loadSignerLists retrieves signer list objects for an account
-func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []interface{} {
-	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10)
-	if err != nil || len(result.AccountObjects) == 0 {
-		return []interface{}{}
+// buildAccountQueueData assembles the queue_data block for account_info from
+// the live TxQ, mirroring rippled doAccountInfo (AccountInfo.cpp:193-283):
+// per-tx seq/ticket, fee_level, optional LastLedgerSequence, fee,
+// max_spend_drops and auth_change, plus the aggregate counts, sequence/ticket
+// bounds, auth_change_queued and max_spend_drops_total. An empty (or unwired)
+// queue yields {txn_count: 0}.
+func buildAccountQueueData(services *types.ServiceContainer, account string) map[string]any {
+	if services == nil || services.QueueAccountTxs == nil {
+		return map[string]any{"txn_count": 0}
 	}
 
-	var signerLists []interface{}
+	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil || len(idBytes) != 20 {
+		return map[string]any{"txn_count": 0}
+	}
+	var accountID [20]byte
+	copy(accountID[:], idBytes)
+
+	txs := services.QueueAccountTxs(accountID)
+	if len(txs) == 0 {
+		return map[string]any{"txn_count": 0}
+	}
+
+	transactions := make([]any, 0, len(txs))
+	var seqCount, ticketCount uint32
+	var lowestSeq, highestSeq, lowestTicket, highestTicket *uint32
+	anyAuthChanged := false
+	var totalSpend uint64
+
+	for _, tx := range txs {
+		jvTx := map[string]any{}
+		seqVal := tx.SeqValue
+		if tx.IsTicket {
+			jvTx["ticket"] = seqVal
+			ticketCount++
+			if lowestTicket == nil {
+				v := seqVal
+				lowestTicket = &v
+			}
+			h := seqVal
+			highestTicket = &h
+		} else {
+			jvTx["seq"] = seqVal
+			seqCount++
+			if lowestSeq == nil {
+				v := seqVal
+				lowestSeq = &v
+			}
+			h := seqVal
+			highestSeq = &h
+		}
+
+		jvTx["fee_level"] = strconv.FormatUint(tx.FeeLevel, 10)
+		if tx.LastValid != 0 {
+			jvTx["LastLedgerSequence"] = tx.LastValid
+		}
+		jvTx["fee"] = strconv.FormatUint(tx.Fee, 10)
+		spend := tx.MaxSpendDrops
+		jvTx["max_spend_drops"] = strconv.FormatUint(spend, 10)
+		totalSpend += spend
+		if tx.AuthChange {
+			anyAuthChanged = true
+		}
+		jvTx["auth_change"] = tx.AuthChange
+
+		transactions = append(transactions, jvTx)
+	}
+
+	queueData := map[string]any{
+		"txn_count":             len(txs),
+		"transactions":          transactions,
+		"auth_change_queued":    anyAuthChanged,
+		"max_spend_drops_total": strconv.FormatUint(totalSpend, 10),
+	}
+	if seqCount > 0 {
+		queueData["sequence_count"] = seqCount
+	}
+	if ticketCount > 0 {
+		queueData["ticket_count"] = ticketCount
+	}
+	if lowestSeq != nil {
+		queueData["lowest_sequence"] = *lowestSeq
+	}
+	if highestSeq != nil {
+		queueData["highest_sequence"] = *highestSeq
+	}
+	if lowestTicket != nil {
+		queueData["lowest_ticket"] = *lowestTicket
+	}
+	if highestTicket != nil {
+		queueData["highest_ticket"] = *highestTicket
+	}
+	return queueData
+}
+
+// loadSignerLists retrieves signer list objects for an account
+func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []any {
+	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, "")
+	if err != nil || len(result.AccountObjects) == 0 {
+		return []any{}
+	}
+
+	var signerLists []any
 	for _, obj := range result.AccountObjects {
 		// Decode the raw SLE binary to JSON
 		hexData := hex.EncodeToString(obj.Data)
@@ -249,7 +337,7 @@ func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types
 		signerLists = append(signerLists, decoded)
 	}
 	if signerLists == nil {
-		return []interface{}{}
+		return []any{}
 	}
 	return signerLists
 }

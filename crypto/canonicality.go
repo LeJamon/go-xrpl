@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"bytes"
 	"math/big"
 )
 
@@ -19,14 +20,15 @@ const (
 )
 
 var (
-	// secp256k1Order is the order of the secp256k1 curve group.
-	// G = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
+	// secp256k1Order is the order of the secp256k1 curve group, conventionally
+	// written n. (G conventionally names the generator point, not the order.)
+	// n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 	secp256k1Order = func() *big.Int {
 		n, _ := new(big.Int).SetString("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 		return n
 	}()
 
-	// secp256k1HalfOrder is G/2, used to determine full canonicality.
+	// secp256k1HalfOrder is n/2, used to determine full canonicality.
 	secp256k1HalfOrder = new(big.Int).Rsh(secp256k1Order, 1)
 
 	// ed25519Order is the order of the Ed25519 subgroup (L).
@@ -44,11 +46,11 @@ var (
 //
 // A signature is canonical if:
 //   - The DER encoding is valid
-//   - R < curve order (G)
-//   - S < curve order (G)
+//   - R < curve order (n)
+//   - S < curve order (n)
 //
 // A signature is fully canonical if additionally:
-//   - S <= G/2 (low S value)
+//   - S <= n/2 (low S value)
 //
 // Fully canonical signatures prevent signature malleability attacks.
 // See: https://xrpl.org/transaction-malleability.html
@@ -91,17 +93,17 @@ func ECDSACanonicality(sig []byte) Canonicality {
 	r := new(big.Int).SetBytes(rSlice)
 	s := new(big.Int).SetBytes(sSlice)
 
-	// R must be in range [1, G-1]
+	// R must be in range [1, n-1]
 	if r.Sign() <= 0 || r.Cmp(secp256k1Order) >= 0 {
 		return CanonicityNone
 	}
 
-	// S must be in range [1, G-1]
+	// S must be in range [1, n-1]
 	if s.Sign() <= 0 || s.Cmp(secp256k1Order) >= 0 {
 		return CanonicityNone
 	}
 
-	// Check if fully canonical: S <= G/2
+	// Check if fully canonical: S <= n/2
 	if s.Cmp(secp256k1HalfOrder) <= 0 {
 		return CanonicityFullyCanonical
 	}
@@ -163,85 +165,17 @@ func Ed25519Canonical(sig []byte) bool {
 		return false
 	}
 
-	// The S component is in the second half of the signature (bytes 32-63).
-	// It's stored in little-endian format, so we need to reverse it for comparison.
+	// The S component is in the second half of the signature (bytes 32-63),
+	// stored little-endian; reverse it to big-endian for comparison.
 	sLE := sig[32:64]
-
-	// Convert from little-endian to big-endian for comparison
 	sBE := make([]byte, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		sBE[i] = sLE[31-i]
 	}
 
-	// S must be less than the Ed25519 order
-	return bytesLessThan(sBE, ed25519Order)
-}
-
-// bytesLessThan compares two big-endian byte slices.
-// Returns true if a < b.
-func bytesLessThan(a, b []byte) bool {
-	// Ensure equal length by padding
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
-	}
-
-	// Compare from most significant byte
-	for i := 0; i < maxLen; i++ {
-		var aByte, bByte byte
-		if i < len(a) {
-			aByte = a[i]
-		}
-		if i < len(b) {
-			bByte = b[i]
-		}
-		if aByte < bByte {
-			return true
-		}
-		if aByte > bByte {
-			return false
-		}
-	}
-	return false
-}
-
-// MakeSignatureCanonical takes a DER-encoded ECDSA signature and returns
-// a fully canonical version by replacing S with G-S if S > G/2.
-// Returns nil if the signature is invalid.
-func MakeSignatureCanonical(sig []byte) []byte {
-	canonicality := ECDSACanonicality(sig)
-	if canonicality == CanonicityNone {
-		return nil
-	}
-	if canonicality == CanonicityFullyCanonical {
-		// Already fully canonical, return a copy
-		result := make([]byte, len(sig))
-		copy(result, sig)
-		return result
-	}
-
-	// Need to replace S with G-S
-	// Parse the signature
-	if len(sig) < 8 || sig[0] != 0x30 {
-		return nil
-	}
-
-	rSlice, remaining, ok := parseDERInteger(sig[2:])
-	if !ok {
-		return nil
-	}
-	sSlice, _, ok := parseDERInteger(remaining)
-	if !ok {
-		return nil
-	}
-
-	s := new(big.Int).SetBytes(sSlice)
-
-	// Compute G - S
-	newS := new(big.Int).Sub(secp256k1Order, s)
-
-	// Re-encode the signature
-	return encodeDERSignature(new(big.Int).SetBytes(rSlice), newS)
+	// Both sBE and ed25519Order are fixed-width 32-byte big-endian values, so a
+	// direct lexicographic compare gives the numeric ordering. S must be < L.
+	return bytes.Compare(sBE, ed25519Order) < 0
 }
 
 // encodeDERSignature creates a DER-encoded signature from R and S values.

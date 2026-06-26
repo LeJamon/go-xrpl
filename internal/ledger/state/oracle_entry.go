@@ -1,9 +1,9 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -32,16 +32,8 @@ type OraclePriceData struct {
 	HasScale   bool
 }
 
-// Field codes for Oracle-specific fields
+// Field nth values for Oracle fields
 const (
-	// STObject type code
-	fieldTypeSTObject = 14
-	// STArray type code
-	fieldTypeSTArray = 15
-	// Currency type code
-	fieldTypeCurrency = 26
-
-	// Field nth values for Oracle fields
 	fieldLastUpdateTime = 15 // UInt32, nth=15
 	fieldOwnerNode      = 4  // UInt64, nth=4
 	fieldAssetPrice     = 23 // UInt64, nth=23
@@ -52,102 +44,36 @@ const (
 	fieldURI            = 5  // Blob, nth=5
 	fieldBaseAsset      = 1  // Currency, nth=1
 	fieldQuoteAsset     = 2  // Currency, nth=2
-	fieldPriceData      = 32 // STObject, nth=32
 	fieldPriceDataSer   = 24 // STArray, nth=24
 )
 
 // ParseOracle parses an Oracle ledger entry from binary data.
-// Uses the same TLV parsing pattern as ParseEscrow.
 func ParseOracle(data []byte) (*OracleData, error) {
 	oracle := &OracleData{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type code
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field code
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16: // 1
-			if offset+2 > len(data) {
-				return oracle, nil
-			}
-			// LedgerEntryType — skip
-			offset += 2
-
-		case FieldTypeUInt32: // 2
-			if offset+4 > len(data) {
-				return oracle, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 2: // Flags
-				oracle.Flags = value
+				oracle.Flags = f.UInt32()
 			case fieldLastUpdateTime: // 15
-				oracle.LastUpdateTime = value
+				oracle.LastUpdateTime = f.UInt32()
 			}
 
-		case FieldTypeUInt64: // 3
-			if offset+8 > len(data) {
-				return oracle, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
-			case fieldOwnerNode: // 4 — OwnerNode
-				oracle.OwnerNode = value
+		case stUInt64:
+			if f.FieldCode == fieldOwnerNode { // 4
+				oracle.OwnerNode = f.UInt64()
 			}
 
-		case FieldTypeAccountID: // 8
-			if offset+21 > len(data) {
-				return oracle, nil
+		case stAccountID:
+			if id, ok := f.AccountID(); ok && f.FieldCode == fieldOwner { // 2
+				oracle.Owner = id
 			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				switch fieldCode {
-				case fieldOwner: // 2 — Owner
-					copy(oracle.Owner[:], data[offset:offset+20])
-				}
-			}
-			offset += int(length)
 
-		case FieldTypeBlob: // 7
-			if offset >= len(data) {
-				return oracle, nil
-			}
-			length, bytesRead := parseVLLength(data[offset:])
-			offset += bytesRead
-			if offset+length > len(data) {
-				return oracle, nil
-			}
-			blobHex := hex.EncodeToString(data[offset : offset+length])
-			switch fieldCode {
+		case stBlob:
+			blobHex := hex.EncodeToString(f.VLBytes())
+			switch f.FieldCode {
 			case fieldProvider: // 29
 				oracle.Provider = blobHex
 			case fieldAssetClass: // 28
@@ -155,167 +81,74 @@ func ParseOracle(data []byte) (*OracleData, error) {
 			case fieldURI: // 5
 				oracle.URI = blobHex
 			}
-			offset += length
 
-		case fieldTypeSTArray: // 15 — PriceDataSeries
-			if fieldCode == fieldPriceDataSer { // 24
-				var err error
-				oracle.PriceDataSeries, offset, err = parseOraclePriceDataSeries(data, offset)
+		case stArray:
+			if f.FieldCode == fieldPriceDataSer { // 24
+				series, err := parseOraclePriceDataSeries(f.Value)
 				if err != nil {
-					return oracle, err
+					return err
 				}
+				oracle.PriceDataSeries = series
 			}
-
-		case FieldTypeUInt8: // 16
-			if offset >= len(data) {
-				return oracle, nil
-			}
-			offset++ // skip UInt8 fields at top level
-
-		case FieldTypeHash256: // 5
-			if offset+32 > len(data) {
-				return oracle, nil
-			}
-			offset += 32
-
-		default:
-			// Unknown type — stop parsing
-			return oracle, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return oracle, nil
 }
 
-// parseOraclePriceDataSeries parses the PriceDataSeries STArray from binary data.
-// STArray format: repeated [STObject header][fields...][object-end 0xE1] then [array-end 0xF1]
-func parseOraclePriceDataSeries(data []byte, offset int) ([]OraclePriceData, int, error) {
+// parseOraclePriceDataSeries decodes the PriceDataSeries STArray content (as
+// delimited by WalkFields). Each element is a PriceData STObject.
+func parseOraclePriceDataSeries(content []byte) ([]OraclePriceData, error) {
 	var series []OraclePriceData
-
-	for offset < len(data) {
-		// Check for array end marker (0xF1)
-		if data[offset] == 0xF1 {
-			offset++
-			break
+	err := WalkFields(content, func(elem Field) error {
+		if elem.TypeCode != stObject {
+			return nil
 		}
-
-		// Read STObject header for PriceData
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type code
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field code
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			// skip the extended field code byte (not used further)
-			offset++
-		}
-
-		if typeCode != fieldTypeSTObject {
-			// Not an STObject — unexpected
-			break
-		}
-
-		// Parse the inner PriceData object fields
 		pd := OraclePriceData{}
-		for offset < len(data) {
-			// Check for object end marker (0xE1)
-			if data[offset] == 0xE1 {
-				offset++
-				break
-			}
-
-			innerHeader := data[offset]
-			offset++
-
-			innerType := (innerHeader >> 4) & 0x0F
-			innerField := innerHeader & 0x0F
-
-			// Handle extended type code
-			if innerType == 0 {
-				if offset >= len(data) {
-					break
-				}
-				innerType = data[offset]
-				offset++
-			}
-
-			// Handle extended field code
-			if innerField == 0 {
-				if offset >= len(data) {
-					break
-				}
-				innerField = data[offset]
-				offset++
-			}
-
-			switch innerType {
-			case FieldTypeUInt64: // 3 — AssetPrice
-				if offset+8 > len(data) {
-					return series, offset, nil
-				}
-				value := binary.BigEndian.Uint64(data[offset : offset+8])
-				offset += 8
-				if innerField == fieldAssetPrice { // 23
-					pd.AssetPrice = value
+		if err := WalkFields(elem.Value, func(inner Field) error {
+			switch inner.TypeCode {
+			case stUInt64:
+				if inner.FieldCode == fieldAssetPrice { // 23
+					pd.AssetPrice = inner.UInt64()
 					pd.HasPrice = true
 				}
-
-			case FieldTypeUInt8: // 16 — Scale
-				if offset >= len(data) {
-					return series, offset, nil
-				}
-				value := data[offset]
-				offset++
-				if innerField == fieldScale { // 4
-					pd.Scale = value
+			case stUInt8:
+				if inner.FieldCode == fieldScale { // 4
+					pd.Scale = inner.UInt8()
 					pd.HasScale = true
 				}
-
-			case fieldTypeCurrency: // 26 — BaseAsset/QuoteAsset (20 bytes each)
-				if offset+20 > len(data) {
-					return series, offset, nil
-				}
-				currencyBytes := data[offset : offset+20]
-				currStr := parseCurrencyBytes(currencyBytes)
-				offset += 20
-				switch innerField {
+			case stCurrency:
+				currStr := parseCurrencyBytes(inner.Value)
+				switch inner.FieldCode {
 				case fieldBaseAsset: // 1
 					pd.BaseAsset = currStr
 				case fieldQuoteAsset: // 2
 					pd.QuoteAsset = currStr
 				}
-
-			default:
-				// Unknown field type in PriceData — skip safely
-				return series, offset, nil
 			}
+			return nil
+		}); err != nil {
+			return err
 		}
-
 		series = append(series, pd)
-	}
-
-	return series, offset, nil
+		return nil
+	})
+	return series, err
 }
 
 // parseCurrencyBytes converts 20 binary currency bytes to a string.
-// XRP = all zeros. Standard 3-letter ISO codes are at bytes 12-14.
+// XRP = all zeros. Standard 3-letter ISO codes are at bytes 12-14. A
+// non-standard 160-bit code renders as upper-case hex, matching the binary
+// codec's decodeCurrencyCode so the same currency yields an identical string
+// whether it reaches us via tx decode or SLE parse — token-pair keys must
+// compare equal across both paths.
 func parseCurrencyBytes(b []byte) string {
 	if len(b) != 20 {
-		return hex.EncodeToString(b)
+		return strings.ToUpper(hex.EncodeToString(b))
 	}
 
 	// Check if all zeros (XRP)
@@ -332,7 +165,7 @@ func parseCurrencyBytes(b []byte) string {
 
 	// Check if it's a standard 3-letter code (bytes 12-14 non-zero, rest zero)
 	isStandard := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if b[i] != 0 {
 			isStandard = false
 			break
@@ -350,32 +183,7 @@ func parseCurrencyBytes(b []byte) string {
 		return string(b[12:15])
 	}
 
-	return hex.EncodeToString(b)
-}
-
-// parseVLLength parses a variable-length field length prefix.
-// Returns the length and number of bytes consumed for the prefix.
-func parseVLLength(data []byte) (int, int) {
-	if len(data) == 0 {
-		return 0, 0
-	}
-	b1 := int(data[0])
-	if b1 <= 192 {
-		return b1, 1
-	}
-	if b1 <= 240 {
-		if len(data) < 2 {
-			return 0, 1
-		}
-		b2 := int(data[1])
-		return 193 + ((b1 - 193) * 256) + b2, 2
-	}
-	if len(data) < 3 {
-		return 0, 1
-	}
-	b2 := int(data[1])
-	b3 := int(data[2])
-	return 12481 + ((b1 - 241) * 65536) + (b2 * 256) + b3, 3
+	return strings.ToUpper(hex.EncodeToString(b))
 }
 
 // SerializeOracle serializes an Oracle ledger entry to binary format.

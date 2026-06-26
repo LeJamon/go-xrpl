@@ -3,24 +3,26 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerDataMethod handles the ledger_data RPC method
 type LedgerDataMethod struct{ BaseHandler }
 
-func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse parameters
 	var request struct {
 		types.LedgerSpecifier
-		Binary bool        `json:"binary,omitempty"`
-		Limit  uint32      `json:"limit,omitempty"`
-		Marker interface{} `json:"marker,omitempty"`
-		Type   string      `json:"type,omitempty"`
+		Binary bool            `json:"binary,omitempty"`
+		Limit  uint32          `json:"limit,omitempty"`
+		Marker json.RawMessage `json:"marker,omitempty"`
+		Type   string          `json:"type,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -40,34 +42,61 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 	limit := ClampLimit(request.Limit, limitRange, ctx.Unlimited)
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
-	// Parse marker as string
+	// Validate a present marker up front, mirroring rippled's doLedgerData which
+	// runs key.parseHex before touching the view: a present non-string marker
+	// (including JSON null), or a present string parseHex rejects, is "not
+	// valid". parseHex accepts the literal "0" as the all-zero key and otherwise
+	// requires exactly 64 hex chars; the empty string fails its length check. An
+	// absent marker is a fresh first-page query, signalled to the service by the
+	// empty sentinel. Marker stays raw JSON so a present null — which decodes to
+	// a nil any, indistinguishable from an absent marker — is still rejected, as
+	// rippled's isMember + isString checks do.
 	markerStr := ""
 	if request.Marker != nil {
-		if m, ok := request.Marker.(string); ok {
+		var m string
+		if err := json.Unmarshal(request.Marker, &m); err != nil {
+			return nil, types.RpcErrorExpectedField("marker", "valid")
+		}
+		switch m {
+		case "":
+			return nil, types.RpcErrorExpectedField("marker", "valid")
+		case "0":
+			// The all-zero key: iterate from the first entry but, being a
+			// present marker, omit the base-ledger header. Normalize to the
+			// canonical 64-char form the service already parses to that key.
+			markerStr = strings.Repeat("0", 64)
+		default:
 			markerStr = m
 		}
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
+		// rippled's doLedgerData rejects a present-but-unparseable marker with
+		// expected_field_error(jss::marker, "valid").
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorExpectedField("marker", "valid")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}
 
 	// Build state array based on binary flag
-	state := make([]map[string]interface{}, len(result.State))
+	state := make([]map[string]any, len(result.State))
 	for i, item := range result.State {
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
 
 		if request.Binary {
 			// Binary format: data as uppercase hex and index
-			state[i] = map[string]interface{}{
+			state[i] = map[string]any{
 				"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 				"index": upperIndex,
 			}
@@ -76,16 +105,16 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			jsonObj, err := deserializeLedgerEntry(item.Data)
 			if err != nil {
 				// Fallback to binary format if deserialization fails
-				state[i] = map[string]interface{}{
+				state[i] = map[string]any{
 					"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 					"index": upperIndex,
 				}
 			} else {
-				if objMap, ok := jsonObj.(map[string]interface{}); ok {
+				if objMap, ok := jsonObj.(map[string]any); ok {
 					objMap["index"] = upperIndex
 					state[i] = objMap
 				} else {
-					state[i] = map[string]interface{}{
+					state[i] = map[string]any{
 						"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 						"index": upperIndex,
 					}
@@ -94,7 +123,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"state":        state,
@@ -105,13 +134,13 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if result.LedgerHeader != nil {
 		if request.Binary {
 			// Binary format: include ledger_data as hex serialization
-			response["ledger"] = map[string]interface{}{
+			response["ledger"] = map[string]any{
 				"ledger_data": strings.ToUpper(formatLedgerHeaderBinary(result.LedgerHeader)),
 				"closed":      result.LedgerHeader.Closed,
 			}
 		} else {
 			// JSON format: include full ledger header fields
-			response["ledger"] = map[string]interface{}{
+			response["ledger"] = map[string]any{
 				"account_hash":          FormatLedgerHash(result.LedgerHeader.AccountHash),
 				"close_flags":           result.LedgerHeader.CloseFlags,
 				"close_time":            result.LedgerHeader.CloseTime,
@@ -141,7 +170,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 // formatLedgerHeaderBinary creates a hex-encoded binary representation of ledger header
 func formatLedgerHeaderBinary(hdr *types.LedgerHeaderInfo) string {
 	// This is a simplified binary format - real implementation would match rippled's serialization
-	buf := make([]byte, 0, 118)
+	buf := make([]byte, 0, 4+8+len(hdr.ParentHash)+len(hdr.TransactionHash)+len(hdr.AccountHash)+4+4+1+1)
 
 	// Sequence (4 bytes)
 	seqBytes := make([]byte, 4)
@@ -194,7 +223,7 @@ func formatLedgerHeaderBinary(hdr *types.LedgerHeaderInfo) string {
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format
-func deserializeLedgerEntry(data []byte) (interface{}, error) {
+func deserializeLedgerEntry(data []byte) (any, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty data")
 	}

@@ -5,40 +5,27 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfHybrid is the ledger flag for hybrid offers
-const lsfHybrid uint32 = 0x00040000
+// lsfHybrid is the ledger flag for hybrid offers.
+const lsfHybrid = entry.LsfHybrid
 
 // Apply applies an OfferCreate transaction to the ledger state.
-// This implements the full rippled CreateOffer flow:
-// 1. Preflight validation (with amendment rules)
-// 2. Preclaim checks (frozen assets, funds, authorization)
-// 3. Offer crossing via flow engine
-// 4. Offer placement if not fully filled
+// PreflightRules (amendment-gated tem* checks) and Preclaim (frozen assets,
+// funds, authorization) have already run in the engine pipeline before Apply,
+// matching rippled where they precede doApply(). Apply performs offer crossing
+// and placement.
 // Reference: rippled CreateOffer.cpp doApply()
-func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (o *OfferCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("offer create apply",
 		"account", o.Account,
 		"takerPays", o.TakerPays,
 		"takerGets", o.TakerGets,
 		"flags", o.GetFlags(),
 	)
-
-	// Run preflight validation with amendment rules
-	// Reference: rippled CreateOffer.cpp preflight()
-	if err := o.Preflight(ctx.Rules()); err != nil {
-		// Convert preflight error to appropriate TER code
-		return parsePreflightError(err)
-	}
-
-	// Run preclaim checks (frozen assets, authorization, funds, etc.)
-	// Reference: rippled CreateOffer.cpp preclaim()
-	result := o.Preclaim(ctx)
-	if result != tx.TesSUCCESS {
-		return result
-	}
 
 	// Run the main apply logic
 	// Reference: rippled CreateOffer.cpp applyGuts()
@@ -55,7 +42,7 @@ func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 //
 // For FoK offers that don't fully fill, we apply sbCancel instead of sb,
 // ensuring the cancellation happens but the crossing changes are discarded.
-func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
+func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) ter.Result {
 	// Create TWO independent sandboxes from ctx.View
 	// Reference: rippled CreateOffer.cpp lines 938-941
 	sb := payment.NewPaymentSandbox(ctx.View)
@@ -84,7 +71,7 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 		// The account balance will be read from the sandbox after applying.
 	}
 	if err := activeSb.ApplyToView(ctx.View); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Re-read the account from the view to get the sandbox's changes.
@@ -117,7 +104,7 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 // Returns:
 //   - result: the transaction result code
 //   - applyMain: true to apply sb, false to apply sbCancel
-func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.PaymentSandbox) (tx.Result, bool) {
+func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.PaymentSandbox) (ter.Result, bool) {
 	rules := ctx.Rules()
 
 	flags := o.GetFlags()
@@ -136,26 +123,27 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Process cancellation request if specified
 	// Reference: lines 608-621
-	// CRITICAL: Offer cancellation must happen in BOTH sandboxes
-	result := o.processCancelRequest(ctx, sb, sbCancel)
+	// The cancellation is applied to the main sandbox (sb) only; on a kill the
+	// cancel sandbox (sbCancel) is applied instead, discarding the cancellation
+	// — matching rippled, where offerDelete(sb, ...) and its owner-count
+	// adjustment both live in sb and are dropped with it on a kill.
+	result := o.processCancelRequest(ctx, sb)
 
 	// Reference: lines 623-636
-	if hasExpired(ctx, o.Expiration) {
+	if tx.HasExpired(o.Expiration, ctx.Config.ParentCloseTime) {
 		if rules.DepositPreauthEnabled() {
-			return tx.TecEXPIRED, false // Apply cancel sandbox for expired offers
+			return ter.TecEXPIRED, false // Apply cancel sandbox for expired offers
 		}
-		return tx.TesSUCCESS, true
+		return ter.TesSUCCESS, true
 	}
 
 	crossed := false
 
-	// Capture prior balance BEFORE crossing, matching rippled's mPriorBalance.
-	// ctx.Account.Balance has fee already deducted by the engine.
-	// Reconstruct the pre-fee balance to match rippled's mPriorBalance.
-	// Reference: rippled Transactor.cpp: mPriorBalance = mTxnAccount->getFieldAmount(sfBalance).xrp()
-	mPriorBalance := ctx.Account.Balance + parseFee(ctx)
+	// Capture prior balance BEFORE crossing — rippled's mPriorBalance, the
+	// source balance before its own fee was deducted.
+	mPriorBalance := ctx.PriorBalance()
 
-	if result == tx.TesSUCCESS {
+	if result == ter.TesSUCCESS {
 		outcome := o.takerCross(ctx, sb, sbCancel, saTakerPays, saTakerGets, uRate, bPassive, bSell, bFillOrKill)
 		if outcome.terminated {
 			return outcome.result, outcome.applyMain
@@ -168,10 +156,10 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Sanity check: amounts should be positive
 	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result, false
 	}
 
@@ -180,18 +168,18 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	// CRITICAL: For FoK, apply sbCancel to discard crossing changes
 	if bFillOrKill {
 		if rules.Enabled(amendment.FeatureFix1578) {
-			return tx.TecKILLED, false // Apply cancel sandbox
+			return ter.TecKILLED, false // Apply cancel sandbox
 		}
-		return tx.TesSUCCESS, false // Pre-amendment: still apply cancel sandbox
+		return ter.TesSUCCESS, false // Pre-amendment: still apply cancel sandbox
 	}
 
 	// Handle ImmediateOrCancel
 	// Reference: lines 799-809
 	if bImmediateOrCancel {
 		if !crossed && rules.Enabled(amendment.FeatureImmediateOfferKilled) {
-			return tx.TecKILLED, false // No crossing - apply cancel sandbox
+			return ter.TecKILLED, false // No crossing - apply cancel sandbox
 		}
-		return tx.TesSUCCESS, true // Crossing happened - apply main sandbox
+		return ter.TesSUCCESS, true // Crossing happened - apply main sandbox
 	}
 
 	// Reference: rippled CreateOffer.cpp lines 811-834
@@ -208,9 +196,9 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	reserve := ctx.AccountReserve(ownerCount + 1)
 	if mPriorBalance < reserve {
 		if !crossed {
-			return tx.TecINSUF_RESERVE_OFFER, true
+			return ter.TecINSUF_RESERVE_OFFER, true
 		}
-		return tx.TesSUCCESS, true
+		return ter.TesSUCCESS, true
 	}
 
 	return o.placeRemainingOffer(ctx, sb, saTakerPays, saTakerGets, uRate, bPassive, bSell, bHybrid)
@@ -234,30 +222,30 @@ func peekOffer(view tx.LedgerView, accountID [20]byte, sequence uint32) *state.L
 
 // offerDeleteInView removes an offer from the given view without modifying account state.
 // This is used by the two-sandbox pattern to delete offers in both sandboxes.
-func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
+func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) ter.Result {
 	accountID, err := state.DecodeAccountID(offer.Account)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	offerKey := keylet.Offer(accountID, offer.Sequence)
 
 	ownerDirKey := keylet.OwnerDir(accountID)
 	_, err = state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKey.Key, false)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: offer.BookDirectory}
 	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := view.Erase(offerKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // adjustOwnerCountInView adjusts an account's OwnerCount directly through the view.
@@ -268,36 +256,15 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
-// getOfferSequence returns the sequence number to use for a new offer.
-// Reference: rippled CreateOffer.cpp - uses transaction's Sequence or TicketSequence
-func (o *OfferCreate) getOfferSequence() uint32 {
-	// Use the transaction's Sequence field directly
-	// If TicketSequence is used, that becomes the offer's sequence
-	if o.TicketSequence != nil {
-		return *o.TicketSequence
-	}
-	if o.Sequence != nil {
-		return *o.Sequence
-	}
-	return 0
-}
-
-// parseFee extracts the fee from the transaction context.
-func parseFee(ctx *tx.ApplyContext) uint64 {
-	// The fee is already deducted in the engine before Apply is called
-	// Return a reasonable default for reserve calculations
-	return ctx.Config.BaseFee
-}
-
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
+func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount) ter.Result {
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(takerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
 	uRate := state.GetRate(takerGets, takerPays)
@@ -314,11 +281,11 @@ func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state
 		// No DomainID for open book
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	offer.AdditionalBookDirectory = openBookDirKey.Key
 	offer.AdditionalBookNode = bookDirResult.Page
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -24,10 +24,7 @@ func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta 
 		return err
 	}
 	curOC := acct.OwnerCount
-	newOC := int(curOC) + delta
-	if newOC < 0 {
-		newOC = 0
-	}
+	newOC := max(int(curOC)+delta, 0)
 
 	// Record via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
 	sb.AdjustOwnerCount(account, curOC, uint32(newOC))
@@ -117,8 +114,12 @@ func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int6
 			return err
 		}
 
+		// Insufficient-balance guard, mirroring rippled transferXRP
+		// (View.cpp: sender balance < amount). Defensive: the flow caps the
+		// requested amount at the sender's funds, so this should never trip.
 		if int64(fromAccount.Balance) < drops {
-			return errors.New("insufficient XRP balance")
+			sb.markFundsFailure()
+			return errInsufficientFunds
 		}
 
 		// Record the credit via CreditHook BEFORE updating balance

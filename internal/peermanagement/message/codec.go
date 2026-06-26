@@ -35,20 +35,31 @@ func MaxPayloadSizeForType(t MessageType) uint32 {
 		TypeHaveTransactions,
 		TypeCluster:
 		return smallMsgMax
-	case TypeManifests,
-		TypeValidatorList,
-		TypeValidatorListCollection,
-		TypeGetLedger,
-		TypeGetObjects,
+	case TypeGetLedger,
 		TypeProofPathReq,
 		TypeReplayDeltaReq,
 		TypeTransaction:
 		return mediumMsgMax
-	case TypeLedgerData,
-		TypeTransactions,
-		TypeProofPathResponse,
+	case TypeProofPathResponse,
 		TypeReplayDeltaResponse:
 		return largeMsgMax
+	case TypeManifests,
+		TypeValidatorList,
+		TypeValidatorListCollection,
+		TypeLedgerData,
+		TypeGetObjects,
+		TypeTransactions:
+		// Bulk response/broadcast types can legitimately approach
+		// rippled's single 64 MB protocol ceiling, which applies no
+		// per-type cap of its own: a TMLedgerData reply fills up to
+		// softMaxReplyNodes fat nodes, TMGetObjectByHash carries
+		// fetch-pack data on the same type as its queries, a full
+		// TMManifests batches every stored manifest unsplit, and a single
+		// TMValidatorList / TMValidatorListCollection blob is bounded only
+		// by the ceiling. A tighter local cap would tear down a peer
+		// mid-sync, so these rely on the protocol ceiling (enforced in
+		// ReadMessage) rather than a stricter limit.
+		return MaxMessageSize
 	default:
 		return defaultPerTypeMax
 	}
@@ -63,7 +74,10 @@ const (
 	// Format: 4 bytes (flags + size) + 2 bytes (type) + 4 bytes (uncompressed size)
 	HeaderSizeCompressed = 10
 
-	// MaxMessageSize is the maximum allowed message size (64 MB).
+	// MaxMessageSize is the hard protocol ceiling (rippled's single 64 MB
+	// cap). ReadMessage rejects any message whose on-wire or uncompressed
+	// claim exceeds it; the per-type caps above add stricter, type-aware
+	// hardening on top.
 	MaxMessageSize = 64 * 1024 * 1024
 
 	// MaxPayloadSizeBits is the number of bits used for payload size (26 bits).
@@ -104,7 +118,8 @@ type Header struct {
 	MessageType MessageType
 	// Compressed indicates if the message is compressed.
 	Compressed bool
-	// UncompressedSize is the original size before compression (if compressed).
+	// UncompressedSize is the original payload size before compression;
+	// for an uncompressed frame it equals PayloadSize.
 	UncompressedSize uint32
 	// Algorithm is the compression algorithm used.
 	Algorithm CompressionAlgorithm
@@ -113,10 +128,10 @@ type Header struct {
 // CompressionAlgorithm represents a compression algorithm.
 type CompressionAlgorithm uint8
 
-// Algorithm values are the first-byte nibble carried on the wire, matching
-// rippled's compression::Algorithm (Compression.h): None=0x00, LZ4=0x90 (the
-// high bit is the compression flag). Keeping them identical to the wire byte
-// lets the header pack/unpack the algorithm without a separate translation.
+// Algorithm values are the first-byte nibble carried on the wire:
+// None=0x00, LZ4=0x90 (the high bit is the compression flag). Keeping
+// them identical to the wire byte lets the header pack/unpack the
+// algorithm without a separate translation.
 const (
 	// AlgorithmNone means no compression.
 	AlgorithmNone CompressionAlgorithm = 0x00
@@ -140,7 +155,6 @@ func (h *Header) TotalSize() int {
 // EncodeHeader encodes a message header into the provided buffer.
 // For uncompressed messages, buf must be at least 6 bytes.
 // For compressed messages, buf must be at least 10 bytes.
-// Reference: rippled Message.cpp setHeader()
 func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm CompressionAlgorithm, uncompressedSize uint32) error {
 	if payloadSize > MaxPayloadSize {
 		return ErrMessageTooLarge
@@ -158,8 +172,7 @@ func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm
 
 	// First 4 bytes: the top byte holds the algorithm nibble, the low 26 bits
 	// hold the payload size. The algorithm value already carries the
-	// compression flag in its high bit, mirroring rippled setHeader's
-	// `*h |= compression`.
+	// compression flag in its high bit.
 	sizeWithFlags := payloadSize
 	if compressed {
 		sizeWithFlags |= uint32(algorithm) << 24
@@ -188,7 +201,6 @@ func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm
 // DecodeHeader decodes a message header from the provided buffer.
 // The buffer must contain at least 6 bytes. If the message is compressed,
 // an additional 4 bytes will be read.
-// Reference: rippled ProtocolMessage.h
 func DecodeHeader(buf []byte) (*Header, error) {
 	if len(buf) < HeaderSizeUncompressed {
 		return nil, ErrTruncatedMessage
@@ -199,7 +211,7 @@ func DecodeHeader(buf []byte) (*Header, error) {
 	// Parse first 4 bytes
 	firstFour := binary.BigEndian.Uint32(buf[0:4])
 
-	// Validate the framing marker, mirroring rippled's parseMessageHeader.
+	// Validate the framing marker.
 	if buf[0]&0x80 != 0 {
 		if buf[0]&CompressionReservedMask != 0 {
 			return nil, ErrInvalidHeader
@@ -219,12 +231,17 @@ func DecodeHeader(buf []byte) (*Header, error) {
 	// Extract message type (2 bytes)
 	h.MessageType = MessageType(binary.BigEndian.Uint16(buf[4:6]))
 
-	// For compressed messages, read uncompressed size
+	// For compressed messages, read the uncompressed size from the wire;
+	// for uncompressed frames the original size is the on-wire payload
+	// size, mirroring rippled (ProtocolMessage.h:247) so the 64 MB
+	// protocol-ceiling check sees the same value on both fields.
 	if h.Compressed {
 		if len(buf) < HeaderSizeCompressed {
 			return nil, ErrTruncatedMessage
 		}
 		h.UncompressedSize = binary.BigEndian.Uint32(buf[6:10])
+	} else {
+		h.UncompressedSize = h.PayloadSize
 	}
 
 	return h, nil
@@ -252,8 +269,18 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 		return nil, nil, err
 	}
 
-	// Cap both the on-wire and uncompressed claims BEFORE allocating
-	// so a tiny LZ4 frame cannot decompress into a giant slice.
+	// Hard protocol ceiling: rippled drops any message whose on-wire or
+	// uncompressed claim exceeds a single 64 MB cap, on both fields
+	// (ProtocolMessage.h:362-367). This is the absolute upper bound; the
+	// per-type caps below add stricter, type-aware hardening.
+	if header.PayloadSize > MaxMessageSize || header.UncompressedSize > MaxMessageSize {
+		return nil, nil, fmt.Errorf("%w: exceeds protocol max %d bytes",
+			ErrMessageTooLarge, MaxMessageSize)
+	}
+
+	// Cap both the on-wire and uncompressed claims per message type
+	// BEFORE allocating so a tiny LZ4 frame cannot decompress into a
+	// giant slice.
 	maxSize := MaxPayloadSizeForType(header.MessageType)
 	if header.PayloadSize > maxSize {
 		return nil, nil, fmt.Errorf("%w: %d > %d for %s",
@@ -306,10 +333,4 @@ func BuildWireMessage(msgType MessageType, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// PeekHeader reads and returns the header without consuming the payload.
-// Useful for determining message type and size before full read.
-func PeekHeader(buf []byte) (*Header, error) {
-	return DecodeHeader(buf)
 }

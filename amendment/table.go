@@ -5,6 +5,7 @@
 package amendment
 
 import (
+	"maps"
 	"sync"
 )
 
@@ -73,19 +74,6 @@ func NewAmendmentTable() *AmendmentTable {
 	}
 }
 
-// NewAmendmentTableWithEnabled creates a new AmendmentTable with the specified
-// amendments already enabled. This is useful for loading from ledger state.
-func NewAmendmentTableWithEnabled(enabledIDs [][32]byte) *AmendmentTable {
-	t := NewAmendmentTable()
-	for _, id := range enabledIDs {
-		t.enabled[id] = true
-		if !isSupported(id) {
-			t.unsupportedEnabled = true
-		}
-	}
-	return t
-}
-
 // isSupported reports whether the given amendment is recognised and supported
 // by this build.
 func isSupported(featureID [32]byte) bool {
@@ -103,11 +91,7 @@ func (t *AmendmentTable) IsEnabled(featureID [32]byte) bool {
 // IsSupported returns true if the amendment with the given ID is supported
 // by this node's code.
 func (t *AmendmentTable) IsSupported(featureID [32]byte) bool {
-	f := GetFeature(featureID)
-	if f == nil {
-		return false
-	}
-	return f.Supported == SupportedYes
+	return isSupported(featureID)
 }
 
 // Enable marks an amendment as enabled. This should be called when an
@@ -128,18 +112,6 @@ func (t *AmendmentTable) Disable(featureID [32]byte) {
 	delete(t.enabled, featureID)
 }
 
-// EnableMultiple enables multiple amendments at once.
-func (t *AmendmentTable) EnableMultiple(featureIDs [][32]byte) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	for _, id := range featureIDs {
-		t.enabled[id] = true
-		if !isSupported(id) {
-			t.unsupportedEnabled = true
-		}
-	}
-}
-
 // GetEnabled returns a slice of all enabled amendment IDs.
 func (t *AmendmentTable) GetEnabled() [][32]byte {
 	t.mu.RLock()
@@ -149,46 +121,6 @@ func (t *AmendmentTable) GetEnabled() [][32]byte {
 	for id := range t.enabled {
 		result = append(result, id)
 	}
-	return result
-}
-
-// GetDesired returns the list of amendment IDs that this node wants to vote for.
-// This includes:
-// - Amendments with VoteDefaultYes that are not vetoed
-// - Amendments explicitly upvoted by the operator
-// It excludes:
-// - Amendments that are already enabled
-// - Amendments that are vetoed
-// - Unsupported amendments
-func (t *AmendmentTable) GetDesired() [][32]byte {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-
-	result := make([][32]byte, 0)
-
-	for _, f := range AllFeatures() {
-		if t.enabled[f.ID] {
-			continue
-		}
-
-		if f.Supported != SupportedYes {
-			continue
-		}
-
-		if t.vetoed[f.ID] {
-			continue
-		}
-
-		if f.Vote == VoteObsolete {
-			continue
-		}
-
-		// Include if default yes or explicitly upvoted
-		if f.Vote == VoteDefaultYes || t.upVoted[f.ID] {
-			result = append(result, f.ID)
-		}
-	}
-
 	return result
 }
 
@@ -215,13 +147,6 @@ func (t *AmendmentTable) UpVote(featureID [32]byte) {
 	delete(t.vetoed, featureID)
 }
 
-// DownVote removes explicit vote for an amendment (returns to default behavior).
-func (t *AmendmentTable) DownVote(featureID [32]byte) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	delete(t.upVoted, featureID)
-}
-
 // IsVetoed returns true if the amendment is vetoed.
 func (t *AmendmentTable) IsVetoed(featureID [32]byte) bool {
 	t.mu.RLock()
@@ -236,20 +161,15 @@ func (t *AmendmentTable) IsUpVoted(featureID [32]byte) bool {
 	return t.upVoted[featureID]
 }
 
-// HasUnsupportedEnabled returns true if any unsupported amendment is enabled.
-// This indicates the node is running old software and may not be able to
-// properly validate new ledgers.
+// HasUnsupportedEnabled returns the sticky unsupportedEnabled flag: true once an
+// amendment this build does not support has been enabled. It reads the cached
+// flag (the same value DoValidatedLedger uses to engage blocking) rather than
+// re-scanning the enabled set, so the two never disagree. Mirrors rippled's
+// AmendmentTableImpl::unsupportedEnabled_.
 func (t *AmendmentTable) HasUnsupportedEnabled() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-
-	for id := range t.enabled {
-		f := GetFeature(id)
-		if f == nil || f.Supported != SupportedYes {
-			return true
-		}
-	}
-	return false
+	return t.unsupportedEnabled
 }
 
 // GetUnsupportedEnabled returns a slice of enabled amendment IDs that are
@@ -275,14 +195,6 @@ func (t *AmendmentTable) IsBlocked() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.blocked
-}
-
-// SetBlocked marks the node amendment-blocked. Mirrors
-// NetworkOPs::setAmendmentBlocked.
-func (t *AmendmentTable) SetBlocked() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.blocked = true
 }
 
 // FirstUnsupportedExpected returns the projected activation time (XRPL epoch
@@ -311,9 +223,7 @@ func (t *AmendmentTable) SetLastVote(v *LastVote) {
 		Threshold:          v.Threshold,
 		Votes:              make(map[[32]byte]int, len(v.Votes)),
 	}
-	for id, n := range v.Votes {
-		cp.Votes[id] = n
-	}
+	maps.Copy(cp.Votes, v.Votes)
 	t.lastVote = cp
 }
 
@@ -330,9 +240,7 @@ func (t *AmendmentTable) LastVote() *LastVote {
 		Threshold:          t.lastVote.Threshold,
 		Votes:              make(map[[32]byte]int, len(t.lastVote.Votes)),
 	}
-	for id, n := range t.lastVote.Votes {
-		cp.Votes[id] = n
-	}
+	maps.Copy(cp.Votes, t.lastVote.Votes)
 	return cp
 }
 
@@ -427,9 +335,7 @@ func (t *AmendmentTable) Clone() *AmendmentTable {
 			Threshold:          t.lastVote.Threshold,
 			Votes:              make(map[[32]byte]int, len(t.lastVote.Votes)),
 		}
-		for id, n := range t.lastVote.Votes {
-			cp.Votes[id] = n
-		}
+		maps.Copy(cp.Votes, t.lastVote.Votes)
 		clone.lastVote = cp
 	}
 	return clone

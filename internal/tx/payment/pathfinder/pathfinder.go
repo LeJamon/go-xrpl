@@ -814,29 +814,3 @@ func pathHasSeen(path []payment.PathStep, account [20]byte, currency string) boo
 	}
 	return false
 }
-
-// pathHasSeenIssue returns true if the path already visits the given issue.
-func pathHasSeenIssue(path []payment.PathStep, issue payment.Issue) bool {
-	issuerStr := state.EncodeAccountIDSafe(issue.Issuer)
-	for _, step := range path {
-		if step.Currency == issue.Currency {
-			if step.Issuer == issuerStr || step.Account == issuerStr {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// pathsEqual returns true if two paths have the same steps.
-func pathsEqual(a, b []payment.PathStep) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}

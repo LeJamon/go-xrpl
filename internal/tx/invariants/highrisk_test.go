@@ -53,10 +53,13 @@ func acctEntry(t *testing.T, addr string, flags uint32) InvariantEntry {
 func frozenLine(t *testing.T, low, high, beforeVal, afterVal string, flags uint32) InvariantEntry {
 	t.Helper()
 	mk := func(val string) []byte {
+		balanceAmt, _ := state.NewIssuedAmountFromDecimalString(val, "USD", state.AccountOneAddress)
+		lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString("1000", "USD", low)
+		highLimitAmt, _ := state.NewIssuedAmountFromDecimalString("1000", "USD", high)
 		rs := &state.RippleState{
-			Balance:   state.NewIssuedAmountFromDecimalString(val, "USD", state.AccountOneAddress),
-			LowLimit:  state.NewIssuedAmountFromDecimalString("1000", "USD", low),
-			HighLimit: state.NewIssuedAmountFromDecimalString("1000", "USD", high),
+			Balance:   balanceAmt,
+			LowLimit:  lowLimitAmt,
+			HighLimit: highLimitAmt,
 			Flags:     flags,
 		}
 		b, err := state.SerializeRippleState(rs)
@@ -303,15 +306,17 @@ func TestValidClawback_HolderBalanceSign(t *testing.T) {
 	// sign. accountHolds negates the stored balance when holder > issuer, so we
 	// pre-negate to land on the intended sign regardless of address ordering.
 	line := func(negative bool) []byte {
-		bal := state.NewIssuedAmountFromDecimalString("5", "USD", state.AccountOneAddress)
+		bal, _ := state.NewIssuedAmountFromDecimalString("5", "USD", state.AccountOneAddress)
 		holderTermsNegated := state.CompareAccountIDs(holderID, issuerID) > 0
 		if negative != holderTermsNegated {
 			bal = bal.Negate()
 		}
+		lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", "USD", addrHolderA)
+		highLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", "USD", addrIssuer)
 		rs := &state.RippleState{
 			Balance:   bal,
-			LowLimit:  state.NewIssuedAmountFromDecimalString("0", "USD", addrHolderA),
-			HighLimit: state.NewIssuedAmountFromDecimalString("0", "USD", addrIssuer),
+			LowLimit:  lowLimitAmt,
+			HighLimit: highLimitAmt,
 		}
 		b, err := state.SerializeRippleState(rs)
 		if err != nil {
@@ -320,9 +325,10 @@ func TestValidClawback_HolderBalanceSign(t *testing.T) {
 		return b
 	}
 
+	amount, _ := state.NewIssuedAmountFromDecimalString("1", "USD", addrHolderA)
 	tx := clawbackTx{
 		account: addrIssuer,
-		amount:  state.NewIssuedAmountFromDecimalString("1", "USD", addrHolderA),
+		amount:  amount,
 	}
 	entries := func(b []byte) []InvariantEntry {
 		return []InvariantEntry{{EntryType: "RippleState", Before: b, After: b}}
@@ -418,7 +424,7 @@ func TestValidMPTIssuance_UnexpectedChanges(t *testing.T) {
 // so every test token's page bits stay within the page bounds.
 func nftPageKey() [32]byte {
 	var key [32]byte
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		key[i] = 0xAA
 	}
 	for i := 20; i < 32; i++ {

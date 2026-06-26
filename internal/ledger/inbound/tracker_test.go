@@ -17,6 +17,16 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// driveToFailure runs the acquisition's OnTimer retry loop past its budget so it
+// reaches StateFailed, the white-box stand-in for the router's reaper.
+func driveToFailure(il *Ledger) {
+	base := time.Unix(1_700_000_000, 0)
+	il.lastTimer = base
+	for i := 1; i <= ledgerTimeoutRetriesMax+1; i++ {
+		il.OnTimer(base.Add(time.Duration(i) * acquireTimerInterval))
+	}
+}
+
 // encodeHeader serializes a header for the wire and returns the hash a peer
 // answering GetLedger must produce. GotBase recomputes the hash from these exact
 // bytes and rejects a mismatch (mirroring rippled's takeHeader), so tests
@@ -38,13 +48,10 @@ func buildSourceState(t *testing.T) (rootHash [32]byte, rootData []byte, wire []
 // state-tree or transaction-tree acquisition.
 func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootData []byte, wire []message.LedgerNode) {
 	t.Helper()
-	source, err := shamap.New(mapType)
-	if err != nil {
-		t.Fatalf("new source map: %v", err)
-	}
-	for branch := byte(0); branch < 4; branch++ {
-		for sub := byte(0); sub < 4; sub++ {
-			for i := byte(0); i < 4; i++ {
+	source := shamap.New(mapType)
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			for i := range byte(4) {
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4
@@ -55,7 +62,7 @@ func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootD
 			}
 		}
 	}
-	rootHash, err = source.Hash()
+	rootHash, err := source.Hash()
 	if err != nil {
 		t.Fatalf("source hash: %v", err)
 	}
@@ -227,7 +234,7 @@ func TestTracker_TimedOutDemotedToFailure(t *testing.T) {
 	var hash [32]byte
 	hash[0] = 0x11
 	il := New(hash, 500, 4, discardLogger())
-	il.created = time.Now().Add(-2 * acquisitionTimeout) // white-box: force timeout
+	driveToFailure(il) // white-box: exhaust the retry budget
 
 	tr := NewTracker()
 	tr.Track(il)
@@ -388,7 +395,7 @@ func TestTracker_FailedEntryCarriesRichShape(t *testing.T) {
 	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}, {NodeData: txRoot}}); err != nil {
 		t.Fatalf("GotBase: %v", err)
 	}
-	il.created = time.Now().Add(-2 * acquisitionTimeout) // white-box: force timeout
+	driveToFailure(il) // white-box: exhaust the retry budget
 
 	tr := NewTracker()
 	tr.Track(il)

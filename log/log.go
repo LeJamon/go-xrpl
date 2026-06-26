@@ -23,7 +23,9 @@ package log
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"os"
+	"strings"
 	"sync/atomic"
 )
 
@@ -101,27 +103,26 @@ func Error(msg string, args ...any) { Root().Error(msg, args...) }
 // Fatal logs a fatal-level message on the root logger and then exits.
 func Fatal(msg string, args ...any) { Root().Fatal(msg, args...) }
 
-// With returns a new Logger derived from root with the given fields.
-func With(args ...any) Logger { return Root().With(args...) }
-
 // Named returns a new Logger derived from root scoped to the given partition.
 func Named(partition string) Logger { return Root().Named(partition) }
 
-// parseLevel converts a level string to a Level constant.
+// parseLevel converts a level string to a Level constant. Matching is
+// case-insensitive and accepts the same aliases as rippled's
+// Logs::fromString (information, warnings, errors, fatals).
 // Returns LevelInfo and false if the name is unrecognised.
 func parseLevel(s string) (Level, bool) {
-	switch s {
+	switch strings.ToLower(s) {
 	case "trace":
 		return LevelTrace, true
 	case "debug":
 		return LevelDebug, true
-	case "info":
+	case "info", "information":
 		return LevelInfo, true
-	case "warn", "warning":
+	case "warn", "warning", "warnings":
 		return LevelWarn, true
-	case "error":
+	case "error", "errors":
 		return LevelError, true
-	case "fatal":
+	case "fatal", "fatals":
 		return LevelFatal, true
 	default:
 		return LevelInfo, false
@@ -189,9 +190,7 @@ func GetCurrentLevels() (global Level, partitions map[string]Level) {
 	global = cfg.Level
 	if len(cfg.Partitions) > 0 {
 		partitions = make(map[string]Level, len(cfg.Partitions))
-		for k, v := range cfg.Partitions {
-			partitions[k] = v
-		}
+		maps.Copy(partitions, cfg.Partitions)
 	}
 	return
 }

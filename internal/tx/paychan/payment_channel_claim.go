@@ -1,15 +1,14 @@
 package paychan
 
 import (
-	"bytes"
 	"encoding/hex"
-	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -63,14 +62,13 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Validate Channel is valid hex (256-bit hash)
 	channelBytes, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelBytes) != 32 {
-		return tx.Errorf(tx.TemMALFORMED, "Channel must be a valid 256-bit hash")
+		return ter.Errorf(ter.TemMALFORMED, "Channel must be a valid 256-bit hash")
 	}
 
-	// Validate flags - fix1543
+	// The tfPayChanClaimMask flag check is gated on fix1543 and runs in
+	// Preclaim, where the amendment rules are available. The tfClose/tfRenew
+	// conflict check below is NOT gated. Reference: rippled PayChan.cpp:443-447.
 	flags := p.GetFlags()
-	if err := tx.CheckFlags(flags, ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)); err != nil {
-		return err
-	}
 
 	// Cannot set both tfClose and tfRenew
 	if (flags&tfPayChanClose != 0) && (flags&tfPayChanRenew != 0) {
@@ -80,22 +78,22 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Validate Balance if present
 	if p.Balance != nil {
 		if !p.Balance.IsNative() {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance must be XRP")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Balance must be XRP")
 		}
 		balVal := p.Balance.Drops()
 		if balVal <= 0 {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance must be positive")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Balance must be positive")
 		}
 	}
 
 	// Validate Amount if present
 	if p.Amount != nil {
 		if !p.Amount.IsNative() {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be XRP")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be XRP")
 		}
 		amtVal := p.Amount.Drops()
 		if amtVal <= 0 {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 		}
 	}
 
@@ -112,20 +110,15 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Reference: rippled credentials::checkFields()
 	// Use HasField to detect empty arrays from binary parsing where omitempty
 	// causes the Go struct field to be nil even though the field was present.
-	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
-		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(p.CredentialIDs))
-		for _, id := range p.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "duplicates in credentials")
-			}
-			seen[id] = true
-		}
+	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
+	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials"); err != nil {
+		return err
 	}
 
-	// If Signature is provided, PublicKey and Balance must also be provided
+	// If Signature is provided, PublicKey and Balance must also be provided,
+	// and the signature is verified here — entirely from tx fields, before any
+	// ledger access. Reference: rippled PayChan.cpp PayChanClaim::preflight()
+	// lines 450-474.
 	if p.Signature != "" {
 		if p.PublicKey == "" {
 			return ErrPayChanSigNeedsKey
@@ -134,23 +127,28 @@ func (p *PaymentChannelClaim) Validate() error {
 			return ErrPayChanSigNeedsBalance
 		}
 
-		// Validate PublicKey is valid hex, proper length, and valid prefix
+		// Authorized amount: Amount if present, else Balance. Balance may not
+		// exceed it. Reference: PayChan.cpp lines 459-463.
+		authAmt := p.Balance.Drops()
+		if p.Amount != nil {
+			authAmt = p.Amount.Drops()
+		}
+		if p.Balance.Drops() > authAmt {
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Balance exceeds authorized amount")
+		}
+
+		// Validate PublicKey is valid hex with the type rippled's
+		// publicKeyType() accepts: 33 bytes prefixed 0xED / 0x02 / 0x03.
 		// Reference: rippled PayChan.cpp preflight() publicKeyType()
 		pkBytes, err := hex.DecodeString(p.PublicKey)
-		if err != nil {
+		if err != nil || !tx.IsValidPublicKey(pkBytes) {
 			return ErrPayChanPublicKeyInvalid
 		}
-		if len(pkBytes) != 33 && len(pkBytes) != 65 {
-			return ErrPayChanPublicKeyInvalid
-		}
-		if len(pkBytes) == 33 {
-			if pkBytes[0] != 0x02 && pkBytes[0] != 0x03 && pkBytes[0] != 0xED {
-				return ErrPayChanPublicKeyInvalid
-			}
-		} else if len(pkBytes) == 65 {
-			if pkBytes[0] != 0x04 {
-				return ErrPayChanPublicKeyInvalid
-			}
+
+		// Verify the claim signature over the authorized amount.
+		// Reference: PayChan.cpp lines 469-473 serializePayChanAuthorization.
+		if !verifyClaimSignature(p.Channel, uint64(authAmt), p.PublicKey, p.Signature) {
+			return ter.Errorf(ter.TemBAD_SIGNATURE, "invalid claim signature")
 		}
 	}
 
@@ -163,6 +161,22 @@ func (p *PaymentChannelClaim) Flatten() (map[string]any, error) {
 
 func (p *PaymentChannelClaim) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
+}
+
+// Preclaim performs the rules-aware fix1543 flag check. Only the
+// tfPayChanClaimMask check is gated; the tfClose/tfRenew conflict check runs
+// unconditionally in Validate. Reference: rippled PayChan.cpp:443-447. rippled
+// runs the mask check first in preflight; the gate is rules-aware and go-xrpl
+// exposes rules only at Preclaim, so it runs after the common preflight/preclaim
+// steps. For a tx malformed in two ways this can surface a different tem code
+// than rippled; the result is tem-only (never enters a ledger) so there is no
+// consensus divergence.
+func (p *PaymentChannelClaim) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
+	const tfPayChanClaimMask = ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tfPayChanClaimMask) != 0 {
+		return ter.TemINVALID_FLAG
+	}
+	return ter.TesSUCCESS
 }
 
 // SetClose sets the close flag
@@ -188,7 +202,7 @@ func (p *PaymentChannelClaim) IsRenew() bool {
 }
 
 // Reference: rippled PayChan.cpp PayChanClaim::preclaim() + doApply()
-func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("payment channel claim apply",
 		"account", p.Account,
 		"channel", p.Channel,
@@ -202,12 +216,12 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Preclaim: credential checks ---
 	// Reference: rippled PayChan.cpp PayChanClaim::preflight() credential check
 	if len(p.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return tx.TemDISABLED
+		return ter.TemDISABLED
 	}
 
 	// Reference: rippled PayChan.cpp PayChanClaim::preclaim() credentials::valid()
 	if len(p.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -215,7 +229,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse channel ID
 	channelID, err := hex.DecodeString(p.Channel)
 	if err != nil || len(channelID) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var channelKeyBytes [32]byte
@@ -228,14 +242,14 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("payment channel claim: channel not found",
 			"channel", p.Channel,
 		)
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Parse channel
 	channel, err := state.ParsePayChannel(channelData)
 	if err != nil {
 		ctx.Log.Error("payment channel claim: failed to parse channel", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Auto-close on expiration
@@ -253,43 +267,31 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Permission check: must be owner or destination
 	if !isOwner && !isDest {
 		ctx.Log.Warn("payment channel claim: no permission, not owner or destination")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
+
+	// Track whether the claim actually mutates the channel SLE. rippled only
+	// calls view.update(slep) on a real change (PayChan.cpp PayChanClaim::
+	// doApply); a fee-only / no-op claim must leave the channel untouched, so
+	// no ModifiedNode is emitted and its PreviousTxnID is not bumped.
+	channelChanged := false
 
 	// --- Handle Balance claim ---
 	if p.Balance != nil {
 		claimBalance := uint64(p.Balance.Drops())
 
 		// Destination claiming without signature
-		// Reference: rippled PayChan.cpp doApply() lines 480-481
+		// Reference: rippled PayChan.cpp doApply() line 529
 		if isDest && !isOwner && p.Signature == "" {
-			return tx.TemBAD_SIGNATURE
+			return ter.TemBAD_SIGNATURE
 		}
 
-		// Signature verification
-		// Reference: rippled PayChan.cpp doApply() lines 483-501
+		// The signature itself is verified in Validate(); here we only confirm
+		// the supplied PublicKey matches the channel's stored key, which needs
+		// ledger state. Reference: rippled PayChan.cpp doApply() lines 532-537.
 		if p.Signature != "" {
-			// Determine authorized amount: use Amount if present, else Balance
-			var authAmt uint64
-			if p.Amount != nil {
-				authAmt = uint64(p.Amount.Drops())
-			} else {
-				authAmt = claimBalance
-			}
-
-			// Balance must not exceed authorized amount
-			if claimBalance > authAmt {
-				return tx.TemBAD_AMOUNT
-			}
-
-			// PublicKey must match the channel's PublicKey
 			if !strings.EqualFold(p.PublicKey, channel.PublicKey) {
-				return tx.TemBAD_SIGNER
-			}
-
-			// Verify the signature
-			if !verifyClaimSignature(p.Channel, authAmt, p.PublicKey, p.Signature) {
-				return tx.TemBAD_SIGNATURE
+				return ter.TemBAD_SIGNER
 			}
 		}
 
@@ -300,7 +302,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 				"claimBalance", claimBalance,
 				"channelAmount", channel.Amount,
 			)
-			return tx.TecUNFUNDED_PAYMENT
+			return ter.TecUNFUNDED_PAYMENT
 		}
 
 		// Must make progress (claim must be > current balance)
@@ -310,19 +312,19 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 				"claimBalance", claimBalance,
 				"channelBalance", channel.Balance,
 			)
-			return tx.TecUNFUNDED_PAYMENT
+			return ter.TecUNFUNDED_PAYMENT
 		}
 
 		// Read destination account
 		destKey := keylet.Account(channel.DestinationID)
 		destData, err := ctx.View.Read(destKey)
 		if err != nil || destData == nil {
-			return tx.TecNO_DST
+			return ter.TecNO_DST
 		}
 
 		destAccount, err := state.ParseAccountRoot(destData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// DisallowXRP check — bug compatibility, only when DepositAuth is NOT enabled
@@ -330,14 +332,14 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		depositAuth := rules.Enabled(amendment.FeatureDepositAuth)
 		if !depositAuth && isOwner && !isDest {
 			if destAccount.Flags&state.LsfDisallowXRP != 0 {
-				return tx.TecNO_TARGET
+				return ter.TecNO_TARGET
 			}
 		}
 
 		// DepositAuth check — when DepositAuth IS enabled
 		// Reference: rippled PayChan.cpp doApply() lines 553-563
 		if depositAuth {
-			if result := verifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
+			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -353,14 +355,15 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 			destAccount.Balance += transferAmount
 			destUpdatedData, err := state.SerializeAccountRoot(destAccount)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			if err := ctx.View.Update(destKey, destUpdatedData); err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 		}
 
 		channel.Balance = claimBalance
+		channelChanged = true
 	}
 
 	// --- Handle tfRenew ---
@@ -368,10 +371,16 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 	flags := p.GetFlags()
 	if flags&PaymentChannelClaimFlagRenew != 0 {
 		if !isOwner {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
-		// Clear expiration
-		channel.Expiration = 0
+		// Clear expiration. rippled always calls view.update(slep) here but
+		// relies on its own no-op-modify drop (ApplyStateTable.cpp:156-157)
+		// when the expiration was already absent; we update only on a real
+		// change for the same net result.
+		if channel.Expiration != 0 {
+			channel.Expiration = 0
+			channelChanged = true
+		}
 	}
 
 	// --- Handle tfClose ---
@@ -388,183 +397,34 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		settleExpiration := closeTime + channel.SettleDelay
 		if channel.Expiration == 0 || channel.Expiration > settleExpiration {
 			channel.Expiration = settleExpiration
+			channelChanged = true
 		}
+	}
+
+	// Match rippled PayChanClaim::doApply: only write the channel SLE when the
+	// claim actually changed it (Balance claim, tfRenew clearing an
+	// expiration, or tfClose setting one). A fee-only / no-op claim leaves the
+	// channel untouched — no ModifiedNode, no PreviousTxnID bump — so the
+	// metadata carries only the submitter's AccountRoot (the fee).
+	if !channelChanged {
+		return ter.TesSUCCESS
 	}
 
 	updatedChannelData, err := state.SerializePayChannelFromData(channel)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Update(channelKey, updatedChannelData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // ApplyOnTec implements TecApplier for PaymentChannelClaim.
 // When tecEXPIRED is returned, expired credentials must still be deleted from the ledger.
 // Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
-func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	if len(p.CredentialIDs) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	closeTime := ctx.Config.ParentCloseTime
-	for _, credIDHex := range p.CredentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			continue
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-
-		// Only delete if actually expired
-		if credEntry.Expiration != nil && closeTime > *credEntry.Expiration {
-			credential.DeleteSLE(ctx.View, credKey, credEntry)
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// validateCredentials implements rippled's credentials::valid() preclaim check.
-// Reference: rippled CredentialHelpers.cpp credentials::valid()
-func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Subject must match the transaction sender
-		if credEntry.Subject != ctx.AccountID {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Credential must be accepted
-		if (credEntry.Flags & credential.LsfCredentialAccepted) == 0 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		if credEntry.Expiration != nil && ctx.Config.ParentCloseTime >= *credEntry.Expiration {
-			return tx.TecEXPIRED
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// verifyDepositPreauth implements rippled's verifyDepositPreauth() from CredentialHelpers.cpp.
-// Reference: rippled CredentialHelpers.cpp verifyDepositPreauth() lines 357-391
-func verifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src [20]byte, dst [20]byte, destAccount *state.AccountRoot) tx.Result {
-	// Only check if destination has lsfDepositAuth set
-	if (destAccount.Flags & state.LsfDepositAuth) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	// Self-deposits don't need preauth
-	if src == dst {
-		return tx.TesSUCCESS
-	}
-
-	preauthKey := keylet.DepositPreauth(dst, src)
-	if exists, _ := ctx.View.Exists(preauthKey); exists {
-		return tx.TesSUCCESS
-	}
-
-	// No account-based preauth — check credential-based
-	if len(credentialIDs) > 0 && ctx.Rules().Enabled(amendment.FeatureCredentials) {
-		return authorizedDepositPreauth(ctx, credentialIDs, dst)
-	}
-
-	return tx.TecNO_PERMISSION
-}
-
-// authorizedDepositPreauth implements rippled's credentials::authorizedDepositPreauth().
-// Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
-	type credPair struct {
-		issuer   [20]byte
-		credType []byte
-	}
-
-	pairs := make([]credPair, 0, len(credentialIDs))
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TefINTERNAL
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TefINTERNAL
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		pairs = append(pairs, credPair{
-			issuer:   credEntry.Issuer,
-			credType: credEntry.CredentialType,
-		})
-	}
-
-	// Sort pairs by (issuer, credType) for deterministic lookup
-	sort.Slice(pairs, func(i, j int) bool {
-		cmp := bytes.Compare(pairs[i].issuer[:], pairs[j].issuer[:])
-		if cmp != 0 {
-			return cmp < 0
-		}
-		return bytes.Compare(pairs[i].credType, pairs[j].credType) < 0
-	})
-
-	sortedCreds := make([]keylet.CredentialPair, len(pairs))
-	for i, p := range pairs {
-		sortedCreds[i] = keylet.CredentialPair{
-			Issuer:         p.issuer,
-			CredentialType: p.credType,
-		}
-	}
-
-	// Check if credential-based DepositPreauth exists
-	dpKey := keylet.DepositPreauthCredentials(dst, sortedCreds)
-	if exists, _ := ctx.View.Exists(dpKey); !exists {
-		return tx.TecNO_PERMISSION
-	}
-
-	return tx.TesSUCCESS
+func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) {
+	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
 }

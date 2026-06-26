@@ -164,13 +164,13 @@ func (r *RippleState) emitAll(out map[string]any, skipDefault bool) {
 	if r.present&ripplestateBitFlags != 0 && !(skipDefault && r.Flags == 0) {
 		out["Flags"] = r.Flags
 	}
-	if r.present&ripplestateBitBalance != 0 {
+	if r.present&ripplestateBitBalance != 0 && !(skipDefault && amountIsDefault(r.Balance)) {
 		out["Balance"] = r.Balance
 	}
-	if r.present&ripplestateBitLowLimit != 0 {
+	if r.present&ripplestateBitLowLimit != 0 && !(skipDefault && amountIsDefault(r.LowLimit)) {
 		out["LowLimit"] = r.LowLimit
 	}
-	if r.present&ripplestateBitHighLimit != 0 {
+	if r.present&ripplestateBitHighLimit != 0 && !(skipDefault && amountIsDefault(r.HighLimit)) {
 		out["HighLimit"] = r.HighLimit
 	}
 	if r.present&ripplestateBitLowNode != 0 && !(skipDefault && isZeroHexString(r.LowNode)) {
@@ -208,20 +208,20 @@ func (r *RippleState) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (r *RippleState) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*RippleState)
-	if !ok || p == nil {
+	prv, ok := prev.(*RippleState)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Flags", p.Flags, r.Flags, p.present&ripplestateBitFlags, r.present&ripplestateBitFlags)
-	emitIfChangedAmount(out, "Balance", p.Balance, r.Balance, p.present&ripplestateBitBalance, r.present&ripplestateBitBalance)
-	emitIfChangedAmount(out, "LowLimit", p.LowLimit, r.LowLimit, p.present&ripplestateBitLowLimit, r.present&ripplestateBitLowLimit)
-	emitIfChangedAmount(out, "HighLimit", p.HighLimit, r.HighLimit, p.present&ripplestateBitHighLimit, r.present&ripplestateBitHighLimit)
-	emitIfChangedString(out, "LowNode", p.LowNode, r.LowNode, p.present&ripplestateBitLowNode, r.present&ripplestateBitLowNode)
-	emitIfChangedString(out, "HighNode", p.HighNode, r.HighNode, p.present&ripplestateBitHighNode, r.present&ripplestateBitHighNode)
-	emitIfChangedUint32(out, "LowQualityIn", p.LowQualityIn, r.LowQualityIn, p.present&ripplestateBitLowQualityIn, r.present&ripplestateBitLowQualityIn)
-	emitIfChangedUint32(out, "LowQualityOut", p.LowQualityOut, r.LowQualityOut, p.present&ripplestateBitLowQualityOut, r.present&ripplestateBitLowQualityOut)
-	emitIfChangedUint32(out, "HighQualityIn", p.HighQualityIn, r.HighQualityIn, p.present&ripplestateBitHighQualityIn, r.present&ripplestateBitHighQualityIn)
-	emitIfChangedUint32(out, "HighQualityOut", p.HighQualityOut, r.HighQualityOut, p.present&ripplestateBitHighQualityOut, r.present&ripplestateBitHighQualityOut)
+	emitIfChangedUint32(out, "Flags", prv.Flags, r.Flags, prv.present&ripplestateBitFlags, r.present&ripplestateBitFlags)
+	emitIfChangedAmount(out, "Balance", prv.Balance, r.Balance, prv.present&ripplestateBitBalance, r.present&ripplestateBitBalance)
+	emitIfChangedAmount(out, "LowLimit", prv.LowLimit, r.LowLimit, prv.present&ripplestateBitLowLimit, r.present&ripplestateBitLowLimit)
+	emitIfChangedAmount(out, "HighLimit", prv.HighLimit, r.HighLimit, prv.present&ripplestateBitHighLimit, r.present&ripplestateBitHighLimit)
+	emitIfChangedString(out, "LowNode", prv.LowNode, r.LowNode, prv.present&ripplestateBitLowNode, r.present&ripplestateBitLowNode)
+	emitIfChangedString(out, "HighNode", prv.HighNode, r.HighNode, prv.present&ripplestateBitHighNode, r.present&ripplestateBitHighNode)
+	emitIfChangedUint32(out, "LowQualityIn", prv.LowQualityIn, r.LowQualityIn, prv.present&ripplestateBitLowQualityIn, r.present&ripplestateBitLowQualityIn)
+	emitIfChangedUint32(out, "LowQualityOut", prv.LowQualityOut, r.LowQualityOut, prv.present&ripplestateBitLowQualityOut, r.present&ripplestateBitLowQualityOut)
+	emitIfChangedUint32(out, "HighQualityIn", prv.HighQualityIn, r.HighQualityIn, prv.present&ripplestateBitHighQualityIn, r.present&ripplestateBitHighQualityIn)
+	emitIfChangedUint32(out, "HighQualityOut", prv.HighQualityOut, r.HighQualityOut, prv.present&ripplestateBitHighQualityOut, r.present&ripplestateBitHighQualityOut)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

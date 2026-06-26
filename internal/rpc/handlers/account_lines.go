@@ -9,10 +9,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountLinesMethod handles the account_lines RPC method
+// AccountLinesMethod handles account_lines: it returns the account's trust
+// lines, optionally filtered by peer; ignore_default drops lines that are in
+// default state on the account's side.
 type AccountLinesMethod struct{ BaseHandler }
 
-func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -40,20 +42,27 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
+
+	markerStr, mErr := markerString(request.Marker)
+	if mErr != nil {
+		return nil, mErr
 	}
 
 	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit)
+	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit, markerStr)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    19, // actNotFound
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
 	}
@@ -74,9 +83,9 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	}
 
 	// Build lines array with quality_in/quality_out always included (rippled always emits them)
-	jsonLines := make([]map[string]interface{}, 0, len(lines))
+	jsonLines := make([]map[string]any, 0, len(lines))
 	for _, line := range lines {
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"account":     line.Account,
 			"balance":     line.Balance,
 			"currency":    line.Currency,
@@ -108,13 +117,11 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	}
 
 	// Build response
-	response := map[string]interface{}{
-		"account":      result.Account,
-		"lines":        jsonLines,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+	response := map[string]any{
+		"account": result.Account,
+		"lines":   jsonLines,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

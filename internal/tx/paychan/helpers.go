@@ -13,6 +13,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -67,15 +68,19 @@ func serializePayChannel(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, a
 // closeChannel closes a payment channel: removes from directories, returns remaining funds
 // to owner, decrements OwnerCount, and erases the channel SLE.
 // Reference: rippled PayChan.cpp closeChannel() (lines 116-164)
-func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData) tx.Result {
+func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData) ter.Result {
 	// 1. Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(channel.Account)
-	state.DirRemove(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key, false)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key); result != ter.TesSUCCESS {
+		return result
+	}
 
 	// 2. Remove from destination directory (if fixPayChanRecipientOwnerDir was active when created)
 	if channel.HasDestNode {
 		destDirKey := keylet.OwnerDir(channel.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key, false)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// 3. Return remaining funds to owner and decrement OwnerCount
@@ -92,11 +97,11 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state
 		ownerKey := keylet.Account(channel.Account)
 		ownerData, err := ctx.View.Read(ownerKey)
 		if err != nil || ownerData == nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		ownerAccount, err := state.ParseAccountRoot(ownerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		ownerAccount.Balance += remaining
 		if ownerAccount.OwnerCount > 0 {
@@ -104,19 +109,19 @@ func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state
 		}
 		ownerUpdated, err := state.SerializeAccountRoot(ownerAccount)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(ownerKey, ownerUpdated); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
 	// 4. Erase channel
 	if err := ctx.View.Erase(channelKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // verifyClaimSignature verifies a payment channel claim signature.

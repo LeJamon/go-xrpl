@@ -47,16 +47,16 @@ func DeserializeFromPrefix(data []byte) (Node, error) {
 // parseInnerNodeFromPrefix deserializes an inner node from prefix format.
 // Format: [4-byte prefix][16 x 32-byte child hashes] = 516 bytes
 // Children are hash-only (pointers nil) — they are loaded lazily.
-func parseInnerNodeFromPrefix(data []byte) (*InnerNode, error) {
+func parseInnerNodeFromPrefix(data []byte) (*innerNode, error) {
 	const expectedSize = 4 + BranchFactor*32 // 4 + 512 = 516
 	if len(data) != expectedSize {
 		return nil, fmt.Errorf("invalid inner node prefix data size: expected %d, got %d", expectedSize, len(data))
 	}
 
-	node := &InnerNode{} // dirty=false by default (zero value)
+	node := &innerNode{} // dirty=false by default (zero value)
 
 	// Skip 4-byte prefix, read 16 child hashes
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		start := 4 + i*32
 		end := start + 32
 
@@ -80,15 +80,13 @@ func parseInnerNodeFromPrefix(data []byte) (*InnerNode, error) {
 
 // parseAccountStateLeafFromPrefix deserializes an account state leaf from prefix format.
 // Format: [4-byte prefix][state_data][32-byte key]
-func parseAccountStateLeafFromPrefix(data []byte) (*AccountStateLeafNode, error) {
+func parseAccountStateLeafFromPrefix(data []byte) (*leafNode, error) {
 	if len(data) < 4+32 {
 		return nil, fmt.Errorf("account state prefix data too short: %d bytes", len(data))
 	}
 
-	// Skip 4-byte prefix
 	nodeData := data[4:]
 
-	// Extract key from last 32 bytes
 	keyStart := len(nodeData) - 32
 	var key [32]byte
 	copy(key[:], nodeData[keyStart:])
@@ -100,47 +98,43 @@ func parseAccountStateLeafFromPrefix(data []byte) (*AccountStateLeafNode, error)
 	stateData := nodeData[:keyStart]
 	item := NewItem(key, stateData)
 
-	node, err := NewAccountStateLeafNode(item)
+	node, err := newAccountStateLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false // loaded from store
+	node.SetDirty(false)
 	return node, nil
 }
 
 // parseTransactionLeafFromPrefix deserializes a transaction leaf from prefix format.
 // Format: [4-byte prefix][tx_data]
-func parseTransactionLeafFromPrefix(data []byte) (*TransactionLeafNode, error) {
+func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
 	if len(data) <= 4 {
 		return nil, fmt.Errorf("transaction prefix data too short: %d bytes", len(data))
 	}
 
-	// Skip 4-byte prefix
 	txData := data[4:]
 
-	// Key is derived from hashing the data (same as wire format)
 	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
 	item := NewItem(key, txData)
 
-	node, err := NewTransactionLeafNode(item)
+	node, err := newTransactionLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false // loaded from store
+	node.SetDirty(false)
 	return node, nil
 }
 
 // parseTransactionWithMetaLeafFromPrefix deserializes a tx+meta leaf from prefix format.
 // Format: [4-byte prefix][tx+meta_data][32-byte key]
-func parseTransactionWithMetaLeafFromPrefix(data []byte) (*TransactionWithMetaLeafNode, error) {
+func parseTransactionWithMetaLeafFromPrefix(data []byte) (*leafNode, error) {
 	if len(data) < 4+32 {
 		return nil, fmt.Errorf("transaction+meta prefix data too short: %d bytes", len(data))
 	}
 
-	// Skip 4-byte prefix
 	nodeData := data[4:]
 
-	// Extract key from last 32 bytes
 	keyStart := len(nodeData) - 32
 	var key [32]byte
 	copy(key[:], nodeData[keyStart:])
@@ -148,10 +142,10 @@ func parseTransactionWithMetaLeafFromPrefix(data []byte) (*TransactionWithMetaLe
 	txData := nodeData[:keyStart]
 	item := NewItem(key, txData)
 
-	node, err := NewTransactionWithMetaLeafNode(item)
+	node, err := newTransactionWithMetaLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false // loaded from store
+	node.SetDirty(false)
 	return node, nil
 }

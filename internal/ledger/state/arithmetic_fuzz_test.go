@@ -191,10 +191,7 @@ func orcRun(fn func()) (panicked bool) {
 // decade).
 func orcWithin(t *testing.T, label string, got XRPLNumber, want *big.Rat, we, maxUlps int) {
 	t.Helper()
-	scale := we
-	if got.exponent > scale {
-		scale = got.exponent
-	}
+	scale := max(got.exponent, we)
 	diff := new(big.Rat).Sub(orcValueRat(got.mantissa, got.exponent), want)
 	diff.Abs(diff)
 	ulp := new(big.Rat)

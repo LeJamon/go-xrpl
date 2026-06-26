@@ -13,12 +13,9 @@ import (
 
 // handleValidatorList ingests an inbound TMValidatorList frame, feeds
 // it into the publisher-trust aggregator, and — when the disposition
-// permits — rebroadcasts the original frame to other peers.
-//
-// Mirrors rippled's PeerImp::onMessage(TMValidatorList) at
-// PeerImp.cpp:2248-2274 plus the shared onValidatorListMessage helper
-// at PeerImp.cpp:2033-2245 (feature gate, hash-suppression dedup,
-// charge-by-disposition, broadcast-on-fresh).
+// permits — rebroadcasts the original frame to other peers. It runs the
+// feature gate, hash-suppression dedup, charge-by-disposition, and
+// broadcast-on-fresh steps.
 //
 // When no aggregator is wired (standalone / no publisher trust
 // configured) the frame is silently dropped — gossip carries lists for
@@ -29,9 +26,8 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Peer-feature gate. Mirrors PeerImp.cpp:2252-2260: peers that did
-	// not negotiate ValidatorListPropagation should not be pushing
-	// these frames; rippled charges feeUselessData and returns.
+	// Peer-feature gate: peers that did not negotiate
+	// ValidatorListPropagation should not be pushing these frames.
 	if !r.peerSupportsValidatorListFeature(msg.PeerID) {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-unsupported-peer")
 		return
@@ -49,17 +45,15 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Semantic dedup. Rippled keys this by `sha512Half(manifest, blobs,
-	// version)` (PeerImp.cpp:2051) — semantic content, not wire bytes,
-	// so two peers gossiping the same blob via different protobuf
-	// encodings both suppress on the second arrival.
+	// Semantic dedup keyed by sha512Half(manifest, blobs, version) —
+	// semantic content, not wire bytes, so two peers gossiping the same
+	// blob via different protobuf encodings both suppress on the second
+	// arrival.
 	if r.messageSeen != nil {
 		hash := common.Sha512Half(validatorListSemanticHash(vl))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
 			// Stamp the sender on the existing hash entry so downstream
-			// rebroadcast paths skip them. Mirrors rippled
-			// HashRouter::addSuppressionPeer's peer-set extension on a
-			// duplicate (HashRouter.cpp:51-79).
+			// rebroadcast paths skip them.
 			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-duplicate")
 			return
@@ -78,9 +72,7 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	chargePeerForDisposition(r, msg.PeerID, "vl", disp)
 
 	// Record what the peer demonstrably has so subsequent broadcasts
-	// from any source skip them. Mirrors rippled PeerImp.cpp:2102-2110
-	// which updates publisherListSequences_[pubKey] for accepted /
-	// expired / pending / same_sequence / known_sequence dispositions.
+	// from any source skip them.
 	if pubKey != (validatorlist.PublisherKey{}) && seq > 0 && disp.ShouldRelay() {
 		r.validatorList.RecordPeerSequence(uint64(msg.PeerID), pubKey, seq)
 	}
@@ -88,8 +80,7 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	// Relay the latest STORED accepted blob (not necessarily the
 	// inbound frame) via the aggregator-owned broadcast path. The
 	// aggregator skips peers already at this sequence and the
-	// originating peer. Mirrors rippled applyListsAndBroadcast →
-	// broadcastBlobs at ValidatorList.cpp:872-937.
+	// originating peer.
 	if disp.ShouldRelay() && pubKey != (validatorlist.PublisherKey{}) {
 		r.validatorList.BroadcastLatest(pubKey, uint64(msg.PeerID))
 	}
@@ -103,18 +94,14 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 // Bad-data attribution uses the worst per-blob disposition — a
 // collection with one Invalid blob and several Accepted blobs gets the
 // peer charged once for vl-coll-invalid rather than several times.
-// Mirrors rippled's PeerImp.cpp:2141-2183 worstDisposition logic.
 func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessage) {
 	if r.validatorList == nil {
 		return
 	}
 
-	// Peer-protocol gate. Mirrors rippled PeerImp.cpp:2282-2290 which
-	// gates TMValidatorListCollection on
-	// `supportsFeature(ValidatorList2Propagation)`. That feature is
-	// implicit at protocol >= 2.2 (PeerImp.cpp:511-514). A peer that
-	// only negotiated v2.1 may send TMValidatorList (v1) but MUST NOT
-	// send the collection frame.
+	// Peer-protocol gate on ValidatorList2Propagation, which is implicit
+	// at peer protocol >= 2.2. A peer that only negotiated v2.1 may send
+	// TMValidatorList (v1) but MUST NOT send the collection frame.
 	if !r.peerSupportsValidatorList2(msg.PeerID) {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-unsupported-peer")
 		return
@@ -132,25 +119,22 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 		return
 	}
 
-	// Reject v1 collections upfront, matching rippled PeerImp.cpp:2291-2299
-	// (feeInvalidData "wrong version"). Decoding once and inspecting the
-	// version on the decoded message avoids the original code's
-	// double-decode.
+	// Reject v1 collections upfront ("wrong version"). Decoding once and
+	// inspecting the version on the decoded message avoids a double-decode.
 	if coll.Version < 2 {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-wrong-version")
 		return
 	}
 
-	// Empty-blobs guard. Rippled charges feeHeavyBurdenPeer "no blobs"
-	// at PeerImp.cpp:2042-2049 — the heaviest tier, reserved for severe
-	// protocol violations.
+	// Empty-blobs guard. An empty collection is the heaviest tier of
+	// protocol violation.
 	//
-	// go-xrpl's IncPeerBadData does not yet expose tiered fee weights:
-	// every label increments the same counter. Two labels are used to
-	// make the rippled tier difference visible in metrics so operators
-	// can wire alerting on heavy-tier abuse separately, even before the
-	// underlying weight machinery exists:
-	//   - "vl-coll-heavy-no-blobs"   → rippled feeHeavyBurdenPeer
+	// IncPeerBadData does not yet expose tiered fee weights: every label
+	// increments the same counter. Two labels are used to make the tier
+	// difference visible in metrics so operators can wire alerting on
+	// heavy-tier abuse separately, even before the underlying weight
+	// machinery exists:
+	//   - "vl-coll-heavy-no-blobs"   → heaviest tier
 	//   - "vl-coll-no-blobs"          → general counter retained for
 	//                                   backwards-compatible dashboards
 	if len(coll.Blobs) == 0 {
@@ -196,8 +180,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	}
 
 	// Record per-peer sequence using the highest blob sequence observed
-	// across the collection (mirrors rippled PeerImp.cpp:2110 which
-	// uses applyResult.sequence == bestDisposition's max sequence).
+	// across the collection.
 	if pubKey != (validatorlist.PublisherKey{}) && maxSeq > 0 && anyRelay {
 		r.validatorList.RecordPeerSequence(uint64(msg.PeerID), pubKey, maxSeq)
 	}
@@ -207,10 +190,9 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	}
 }
 
-// peerSupportsValidatorListFeature mirrors rippled's
-// supportsFeature(ProtocolFeature::ValidatorListPropagation) check at
-// PeerImp.cpp:2252. When the overlay is unavailable (tests) we err on
-// the side of accepting the frame — matching the pre-fix behaviour.
+// peerSupportsValidatorListFeature reports whether the peer negotiated
+// ValidatorListPropagation. When the overlay is unavailable (tests) we
+// err on the side of accepting the frame.
 func (r *Router) peerSupportsValidatorListFeature(peer peermanagement.PeerID) bool {
 	if r.overlay == nil {
 		return true
@@ -218,12 +200,11 @@ func (r *Router) peerSupportsValidatorListFeature(peer peermanagement.PeerID) bo
 	return r.overlay.PeerSupports(peer, peermanagement.FeatureValidatorListPropagation)
 }
 
-// peerSupportsValidatorList2 mirrors rippled's
-// supportsFeature(ProtocolFeature::ValidatorList2Propagation) at
-// PeerImp.cpp:511-514: returns true iff the peer's negotiated
+// peerSupportsValidatorList2 reports whether the peer supports
+// ValidatorList2Propagation: true iff the peer's negotiated
 // peer-protocol version is at least 2.2. Used to gate
 // TMValidatorListCollection ingress; v2.1 peers that send a collection
-// are charged feeUselessData "unsupported peer".
+// are charged as an unsupported peer.
 //
 // When the overlay is unavailable (tests) we err on the side of
 // accepting the frame.
@@ -237,13 +218,10 @@ func (r *Router) peerSupportsValidatorList2(peer peermanagement.PeerID) bool {
 // validatorListSemanticHash builds a canonical byte stream the local
 // message-seen cache uses to dedup TMValidatorList frames whose wire
 // bytes happened to differ across protobuf re-encodings. The shape is
-// deliberately simple (length-prefixed big-endian) and is NOT
-// byte-equivalent to rippled's `sha512Half(manifest, blobs, version)`
-// at PeerImp.cpp:2051 — rippled's hash flows through C++ `hash_append`
-// overloads. Cross-node equivalence is not required because each node
-// runs an independent seen-hash cache; the only invariant is that two
-// semantically-identical inputs hash to the same value within THIS
-// process.
+// deliberately simple (length-prefixed big-endian). Cross-node
+// equivalence is not required because each node runs an independent
+// seen-hash cache; the only invariant is that two semantically-identical
+// inputs hash to the same value within THIS process.
 func validatorListSemanticHash(vl *message.ValidatorList) []byte {
 	out := make([]byte, 0, 4+len(vl.Manifest)+len(vl.Blob)+len(vl.Signature))
 	out = appendUint32BE(out, vl.Version)
@@ -254,11 +232,10 @@ func validatorListSemanticHash(vl *message.ValidatorList) []byte {
 }
 
 // validatorListCollectionSemanticHash is the collection counterpart of
-// validatorListSemanticHash — same local-only dedup contract, not
-// byte-equivalent to rippled's hash. Per-blob fields are concatenated
-// in the order the collection presents them — that order is also what
-// ApplyCollection iterates, so semantically-identical collections hash
-// the same within this process.
+// validatorListSemanticHash — same local-only dedup contract. Per-blob
+// fields are concatenated in the order the collection presents them —
+// that order is also what ApplyCollection iterates, so
+// semantically-identical collections hash the same within this process.
 func validatorListCollectionSemanticHash(coll *message.ValidatorListCollection) []byte {
 	out := make([]byte, 0, 4+len(coll.Manifest)+64*len(coll.Blobs))
 	out = appendUint32BE(out, coll.Version)
@@ -283,15 +260,13 @@ func appendLengthPrefixed(out, data []byte) []byte {
 	return out
 }
 
-// chargePeerForDisposition maps a Disposition's rippled fee tier
-// (Disposition.Charge) into a distinct IncPeerBadData label. Mirrors
-// PeerImp.cpp:2141-2183:
+// chargePeerForDisposition maps a Disposition's fee tier
+// (Disposition.Charge) into a distinct IncPeerBadData label so operators
+// get per-tier metrics:
 //
-//	feeUselessData     -> "<prefix>-useless-<disposition>"
-//	feeInvalidData     -> "<prefix>-baddata-<disposition>"
-//	feeInvalidSignature -> "<prefix>-badsig-<disposition>"
-//
-// Operators get per-tier metrics matching rippled's accounting.
+//	useless data      -> "<prefix>-useless-<disposition>"
+//	invalid data      -> "<prefix>-baddata-<disposition>"
+//	invalid signature -> "<prefix>-badsig-<disposition>"
 func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix string, d validatorlist.Disposition) {
 	var tag string
 	switch d.Charge() {
@@ -310,10 +285,9 @@ func chargePeerForDisposition(r *Router, peer peermanagement.PeerID, prefix stri
 }
 
 // peerSite formats a peer-sourced site URI for the aggregator's
-// per-publisher SiteURI field. Mirrors rippled's
-// `remote_address_.to_string()` used at PeerImp.cpp:2072 — emits a
-// "host:port" string when the overlay is available, falling back to
-// "peer:<id>" for tests or transient peer lookups.
+// per-publisher SiteURI field — emits a "host:port" string when the
+// overlay is available, falling back to "peer:<id>" for tests or
+// transient peer lookups.
 func (r *Router) peerSite(peerID peermanagement.PeerID) string {
 	if r.overlay != nil {
 		if addr := r.overlay.PeerRemoteAddr(peerID); addr != "" {
@@ -339,27 +313,13 @@ type RouterBroadcaster struct {
 	// SendList / SendCollection record each (hash, peer) pair after a
 	// successful send so future inbound from that peer with the same
 	// hash maps to a "known sender" path and the broadcast loop can
-	// skip peers already known to have the content. Mirrors rippled's
-	// `hashRouter.addSuppressionPeer(hash, peer->id())` at
-	// rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:781 + 932.
+	// skip peers already known to have the content.
 	suppression *messageSuppression
 }
 
-// NewRouterBroadcaster wires the overlay (for peer enumeration +
-// feature lookup) and the sender (for per-peer SendToPeer). Passing
-// nil for either degrades the broadcaster to a silent no-op so tests
-// without an overlay don't crash. Direct callers that pass through
-// this constructor get a broadcaster without hash-suppression
-// tracking; route through Router.NewValidatorListBroadcaster to
-// plumb the shared suppression registry.
-func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
-	return &RouterBroadcaster{overlay: overlay, sender: sender}
-}
-
 // NewValidatorListBroadcaster constructs a RouterBroadcaster bound to
-// the Router's suppression registry so SendList / SendCollection
-// stamp the hash→peer association expected by rippled's HashRouter
-// model.
+// the Router's suppression registry so SendList / SendCollection stamp
+// the hash→peer association.
 func (r *Router) NewValidatorListBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
 	return &RouterBroadcaster{overlay: overlay, sender: sender, suppression: r.messageSeen}
 }
@@ -385,9 +345,9 @@ func (b *RouterBroadcaster) PeerSupportsVL(peerID uint64) bool {
 	return b.overlay.PeerSupports(peermanagement.PeerID(peerID), peermanagement.FeatureValidatorListPropagation)
 }
 
-// PeerSupportsV2 implements validatorlist.PeerBroadcaster. Mirrors
-// rippled's `supportsFeature(ProtocolFeature::ValidatorList2Propagation)`
-// at PeerImp.cpp:511-514 which gates on negotiated protocol >= 2.2.
+// PeerSupportsV2 implements validatorlist.PeerBroadcaster. Reports
+// ValidatorList2Propagation support, gated on negotiated peer protocol
+// >= 2.2.
 func (b *RouterBroadcaster) PeerSupportsV2(peerID uint64) bool {
 	if b == nil || b.overlay == nil {
 		return false
@@ -418,9 +378,6 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 	hash := common.Sha512Half(validatorListSemanticHash(vl))
 	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
 		// Peer already has this content. Skip the redundant send.
-		// Mirrors rippled's "skip peers already in the hash's
-		// suppression peer-set" optimisation at
-		// ValidatorList.cpp:909 (`if (toSkip->count(peer->id()) == 0)`).
 		return nil
 	}
 	if err := b.sender.SendToPeer(peerID, frame); err != nil {

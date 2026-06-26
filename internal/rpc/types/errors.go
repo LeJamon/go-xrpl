@@ -33,12 +33,63 @@ type RpcError struct {
 	// rippled's bare path writes neither error_code nor error_message, so the
 	// wire emitters omit both when this is set.
 	bareToken bool
+
+	// invalidApiVersion marks the unsupported-api_version rejection, which
+	// rippled emits at the ServerHandler transport layer — never through the
+	// error_code_i enum — with a shape that differs per transport
+	// (ServerHandler.cpp:443-468, 685-697): HTTP single is a bare-string 400,
+	// each batch element is a make_json_error JSON-RPC object, and WS is a lone
+	// `error` token. Transport writers special-case this flag so go-xrpl mirrors
+	// each path exactly without disturbing the table-driven error model.
+	invalidApiVersion bool
+
+	// overloaded marks the per-IP resource-overload admission rejection, which
+	// rippled emits before doCommand (usage.disconnect(), ServerHandler.cpp:735)
+	// with a shape that differs per transport: HTTP single is a bare-string 503
+	// "Server is overloaded", each batch element is a make_json_error JSON-RPC
+	// object (server_overloaded = -32604), and WS carries the rpcSLOW_DOWN
+	// envelope. Transport writers special-case this flag the same way they do
+	// invalidApiVersion / forbidden.
+	overloaded bool
 }
 
 // IsBareToken reports whether this error mirrors a rippled bare-token response
-// (only the `error` field on the wire, no error_code / error_message).
+// (only the `error` field on the wire, no error_code / error_message). The
+// invalid-api_version rejection is bare on every transport that still carries
+// a JSON-RPC result envelope (WS, batch-via-result), so it counts as one.
 func (e RpcError) IsBareToken() bool {
-	return e.bareToken
+	return e.bareToken || e.invalidApiVersion
+}
+
+// IsInvalidApiVersion reports whether this error is the unsupported-api_version
+// rejection, whose wire shape rippled varies by transport (HTTP single → 400
+// bare string; batch element → make_json_error object; WS → bare token).
+func (e RpcError) IsInvalidApiVersion() bool {
+	return e.invalidApiVersion
+}
+
+// IsForbidden reports whether this error is the dispatch-layer admin-gate
+// denial (rpcFORBIDDEN): an admin-only command invoked by a non-admin caller.
+// rippled resolves it at the role layer (Role::FORBID) ahead of the handler and
+// renders it per transport — HTTP single → 403 "Forbidden"; batch element →
+// make_json_error(forbidden, "Forbidden"); WS → rpcError(rpcFORBIDDEN) in the
+// result envelope (ServerHandler.cpp:482-486, 750-762) — so the transport
+// writers special-case it. It is distinct from the in-handler rpcNO_PERMISSION
+// rejection, which rides the normal result envelope on every transport.
+func (e RpcError) IsForbidden() bool {
+	return e.Code == RpcFORBIDDEN
+}
+
+// IsOverloaded reports whether this error is the per-IP resource-overload
+// admission rejection. rippled consults usage.disconnect() in
+// ServerHandler::processRequest ahead of the FORBID gate and doCommand
+// (ServerHandler.cpp:735), rendering it per transport — HTTP single → 503
+// "Server is overloaded"; batch element → make_json_error(server_overloaded,
+// "Server is overloaded"); WS → rpcError(rpcSLOW_DOWN) — so the transport
+// writers special-case it. It is distinct from the post-dispatch warning:"load"
+// path, which rides the normal result envelope.
+func (e RpcError) IsOverloaded() bool {
+	return e.overloaded
 }
 
 func (e RpcError) Error() string {
@@ -54,8 +105,8 @@ func (e RpcError) Error() string {
 // error must be embedded as a value inside an otherwise-successful result
 // (e.g. owner_info's per-ledger sections, where rippled assigns rpcError(...)
 // directly), rather than marshalling the struct.
-func (e RpcError) ErrorObject() map[string]interface{} {
-	return map[string]interface{}{
+func (e RpcError) ErrorObject() map[string]any {
+	return map[string]any{
 		"error":         e.ErrorString,
 		"error_code":    e.Code,
 		"error_message": e.Message,
@@ -174,12 +225,11 @@ const (
 	// slot 38 to stay distinct from every real rippled code.
 	RpcINVALID_API_VERSION = 38
 
-	// RpcNOT_STANDALONE / RpcSHUT_DOWN have no rippled enum entry. rippled's
-	// ledger_accept handler emits a bare "notStandAlone" token with no numeric
-	// code (LedgerAccept.cpp:40); these map to RpcUNKNOWN (-1), rippled's
-	// "code not listed in this enumeration".
+	// RpcNOT_STANDALONE has no rippled enum entry. rippled's ledger_accept
+	// handler emits a bare "notStandAlone" token with no numeric code
+	// (LedgerAccept.cpp:40); it maps to RpcUNKNOWN (-1), rippled's "code not
+	// listed in this enumeration".
 	RpcNOT_STANDALONE = RpcUNKNOWN
-	RpcSHUT_DOWN      = RpcUNKNOWN
 )
 
 // Standard error constructors
@@ -221,6 +271,18 @@ func RpcErrorTxnNotFound(message string) *RpcError {
 	return NewRpcError(RpcTXN_NOT_FOUND, "txnNotFound", "txnNotFound", message)
 }
 
+// RpcErrorIssueMalformed matches rippled rpcISSUE_MALFORMED (code 93, token
+// "issueMalformed"), returned for an unparseable asset/asset2 issue object.
+func RpcErrorIssueMalformed() *RpcError {
+	return NewRpcError(RpcISSUE_MALFORMED, "issueMalformed", "issueMalformed", "Issue is malformed.")
+}
+
+// RpcErrorInvalidHotWallet matches rippled rpcINVALID_HOTWALLET (code 30,
+// token "invalidHotWallet", message "Invalid hotwallet.").
+func RpcErrorInvalidHotWallet() *RpcError {
+	return NewRpcError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
+}
+
 func RpcErrorInternal(message string) *RpcError {
 	return NewRpcError(RpcINTERNAL, "internal", "internal", message)
 }
@@ -230,13 +292,15 @@ func RpcErrorNoPermission(method string) *RpcError {
 		"You don't have permission for this command.")
 }
 
-// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden").
-// Used by the WebSocket pre-dispatch admin gate, mirroring rippled
+// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden",
+// message "Bad credentials." per the ErrorCodes.cpp errorInfo table). Used by
+// the WebSocket pre-dispatch admin gate, mirroring rippled
 // ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
-// requestRole returns Role::FORBID for an admin-required command.
+// requestRole returns Role::FORBID for an admin-required command. (The HTTP
+// single and batch transports render their own literal "Forbidden" strings,
+// not this message.)
 func RpcErrorForbidden(method string) *RpcError {
-	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden",
-		"You don't have permission for this command.")
+	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden", "Bad credentials.")
 }
 
 // RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
@@ -251,6 +315,18 @@ func RpcErrorSlowDown(message string) *RpcError {
 	return NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
 }
 
+// RpcErrorOverloaded is the per-IP resource-overload admission rejection
+// consulted before doCommand (rippled usage.disconnect(), ServerHandler.cpp:735).
+// It carries rpcSLOW_DOWN with rippled's canonical slowDown message so the WS /
+// result-envelope path renders rippled's WS overload code, and sets the
+// overloaded flag so the HTTP single (503 "Server is overloaded") and batch
+// (make_json_error(server_overloaded, ...)) writers can special-case it.
+func RpcErrorOverloaded() *RpcError {
+	e := RpcErrorSlowDown("You are placing too much load on the server.")
+	e.overloaded = true
+	return e
+}
+
 // RpcErrorNotStandalone mirrors rippled's ledger_accept handler
 // (LedgerAccept.cpp:40), which emits a bare "notStandAlone" token with no
 // numeric code or message when the node is not in standalone mode.
@@ -260,12 +336,27 @@ func RpcErrorNotStandalone(message string) *RpcError {
 	return e
 }
 
-func RpcErrorShutDown(message string) *RpcError {
-	return NewRpcError(RpcSHUT_DOWN, "shutDown", "shutDown", message)
-}
+// InvalidApiVersionToken is the literal rippled writes for an unsupported
+// api_version (jss::invalid_API_version). rippled emits it bare — no numeric
+// code, no message — on every transport; only the envelope differs
+// (ServerHandler.cpp:454-455, 689, 694-695).
+const InvalidApiVersionToken = "invalid_API_version" //nolint:gosec // G101: error-code/name string, not a credential
 
+// WrongVersionJSONRPCCode is the JSON-RPC error code rippled attaches to an
+// invalid-api_version batch element via make_json_error (ServerHandler.cpp:608,
+// wrong_version = -32606).
+const WrongVersionJSONRPCCode = -32606
+
+// RpcErrorInvalidApiVersion reports an unsupported api_version. rippled rejects
+// this at the ServerHandler transport layer, never through the error_code_i
+// enum, so the token is the bare jss::invalid_API_version and the per-transport
+// wire shape is finalized by the transport writers (see IsInvalidApiVersion).
+// The internal code stays at the go-xrpl slot 38 to keep this distinct from
+// every real rippled code; it is not emitted on the wire.
 func RpcErrorInvalidApiVersion(version string) *RpcError {
-	return NewRpcError(RpcINVALID_API_VERSION, "invalidApiVersion", "invalidApiVersion", "Invalid API version: "+version)
+	e := NewRpcError(RpcINVALID_API_VERSION, InvalidApiVersionToken, InvalidApiVersionToken, "")
+	e.invalidApiVersion = true
+	return e
 }
 
 // RpcErrorNotEnabled returns rippled's rpcNOT_ENABLED (code 12, token
@@ -437,6 +528,16 @@ func RpcErrorTransactionNotFound(message string) *RpcError {
 	return e
 }
 
+// RpcErrorNotYetImplemented returns the error rippled's transaction_entry
+// handler emits when the resolved ledger is the open (current) one
+// (TransactionEntry.cpp:50-56, "We don't work on ledger current"): a bare
+// "notYetImplemented" token with no numeric code and no error_message.
+func RpcErrorNotYetImplemented() *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "notYetImplemented", "notYetImplemented", "")
+	e.bareToken = true
+	return e
+}
+
 // RpcErrorUnknownOption returns an error when no valid selector is provided
 // (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RpcErrorUnknownOption(message string) *RpcError {
@@ -501,11 +602,52 @@ func RpcErrorDstIsrMalformed(message string) *RpcError {
 	return NewRpcError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
 }
 
+// RpcErrorDstActMissing returns an error when the destination account is not
+// provided (matches rippled rpcDST_ACT_MISSING, code 49, token
+// "dstActMissing").
+func RpcErrorDstActMissing(message string) *RpcError {
+	return NewRpcError(RpcDST_ACT_MISSING, "dstActMissing", "dstActMissing", message)
+}
+
+// RpcErrorDstActMalformed returns an error when the destination account
+// address is malformed (matches rippled rpcDST_ACT_MALFORMED, code 48, token
+// "dstActMalformed").
+func RpcErrorDstActMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_ACT_MALFORMED, "dstActMalformed", "dstActMalformed", message)
+}
+
+// RpcErrorDstAmtMissing returns an error when the destination amount is not
+// provided (matches rippled rpcDST_AMT_MISSING, code 52, token
+// "dstAmtMissing").
+func RpcErrorDstAmtMissing(message string) *RpcError {
+	return NewRpcError(RpcDST_AMT_MISSING, "dstAmtMissing", "dstAmtMissing", message)
+}
+
+// RpcErrorSendMaxMalformed returns an error when send_max is malformed
+// (matches rippled rpcSENDMAX_MALFORMED, code 64, token "sendMaxMalformed").
+func RpcErrorSendMaxMalformed(message string) *RpcError {
+	return NewRpcError(RpcSENDMAX_MALFORMED, "sendMaxMalformed", "sendMaxMalformed", message)
+}
+
 // RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
 // returned when taker_pays and taker_gets describe the same asset.
 // Reference: ErrorCodes.cpp:62 "No such market.".
 func RpcErrorBadMarket() *RpcError {
 	return NewRpcError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
+}
+
+// RpcErrorMalformedStream matches rippled rpcSTREAM_MALFORMED (code 71, token
+// "malformedStream", message "Stream malformed."), returned for an unknown
+// stream name in subscribe/unsubscribe.
+func RpcErrorMalformedStream() *RpcError {
+	return NewRpcError(RpcSTREAM_MALFORMED, "malformedStream", "malformedStream", "Stream malformed.")
+}
+
+// RpcErrorBadIssuer matches rippled rpcBAD_ISSUER (code 41, token "badIssuer",
+// message "Issuer account malformed."), returned when a book subscription's
+// taker does not parse as an account (Subscribe.cpp:301-305).
+func RpcErrorBadIssuer() *RpcError {
+	return NewRpcError(RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed.")
 }
 
 // RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
@@ -524,4 +666,27 @@ func RpcErrorDomainMalformed(message string) *RpcError {
 // (matches rippled rpcDST_ACT_NOT_FOUND, code 50, token "dstActNotFound").
 func RpcErrorDstActNotFound(message string) *RpcError {
 	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
+}
+
+// RpcErrorWrongNetwork matches rippled rpcWRONG_NETWORK (code 4, token
+// "wrongNetwork"). The tx handler passes the rippled message that names the
+// CTID's network id (Tx.cpp:317-320); an empty message defaults to the
+// ErrorCodes.cpp:99 "Wrong network." string.
+func RpcErrorWrongNetwork(message string) *RpcError {
+	if message == "" {
+		message = "Wrong network."
+	}
+	return NewRpcError(RpcWRONG_NETWORK, "wrongNetwork", "wrongNetwork", message)
+}
+
+// RpcErrorInvalidLgrRange matches rippled rpcINVALID_LGR_RANGE (code 79, token
+// "invalidLgrRange", message "Ledger range is invalid.").
+func RpcErrorInvalidLgrRange() *RpcError {
+	return NewRpcError(RpcINVALID_LGR_RANGE, "invalidLgrRange", "invalidLgrRange", "Ledger range is invalid.")
+}
+
+// RpcErrorExcessiveLgrRange matches rippled rpcEXCESSIVE_LGR_RANGE (code 78,
+// token "excessiveLgrRange", message "Ledger range exceeds 1000.").
+func RpcErrorExcessiveLgrRange() *RpcError {
+	return NewRpcError(RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "excessiveLgrRange", "Ledger range exceeds 1000.")
 }

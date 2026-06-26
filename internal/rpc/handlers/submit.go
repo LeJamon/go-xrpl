@@ -4,25 +4,19 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SubmitMethod handles the submit RPC method.
 // Supports both tx_blob (pre-signed hex) and tx_json submissions.
 type SubmitMethod struct{}
 
-func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Parse fee_mult_max / fee_div_max first with proper type validation,
-	// matching rippled's checkFee() in TransactionSign.cpp.
-	feeOpts, feeErr := parseFeeOptions(params)
-	if feeErr != nil {
-		return nil, feeErr
-	}
-
+func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		TxBlob     string          `json:"tx_blob,omitempty"`
 		TxJson     json.RawMessage `json:"tx_json,omitempty"`
@@ -49,7 +43,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	}
 
 	var txJSON []byte
-	var txJsonMap map[string]interface{}
+	var txJsonMap map[string]any
 	var txBlobHex string
 
 	// Determine if this is a sign-and-submit request (tx_json + credentials)
@@ -78,7 +72,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			SeedHex:    request.SeedHex,
 			Passphrase: request.Passphrase,
 			KeyType:    request.KeyType,
-		}, request.Offline, ctx.ApiVersion, feeOpts)
+		}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -97,15 +91,17 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		txJSON = request.TxJson
 
 		if err := json.Unmarshal(txJSON, &txJsonMap); err != nil {
-			txJsonMap = map[string]interface{}{}
+			return nil, types.RpcErrorExpectedField("tx_json", "object")
 		}
 	}
 
 	// Ensure we have the tx_blob hex for both submission and hash calculation
 	if txBlobHex == "" {
-		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {
-			txBlobHex = encoded
+		encoded, err := binarycodec.Encode(txJsonMap)
+		if err != nil {
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode tx_json: %v", err))
 		}
+		txBlobHex = encoded
 	}
 
 	// Submit the transaction with the original signed blob.
@@ -129,8 +125,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	if submitErr != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", submitErr))
 	}
-	hash, _ := protocol.ComputeTxHashString(txBlobHex)
-	txHashStr := hash.Hex()
+	txHashStr := CalculateTxHash(txBlobHex)
 
 	// Store transaction for later lookup if applied. The submit response is
 	// still successful even when persistence fails — the tx is already in the
@@ -142,7 +137,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			copy(txHash[:], txHashBytes)
 			storedTx := StoredTransaction{
 				TxJSON: txJsonMap,
-				Meta: map[string]interface{}{
+				Meta: map[string]any{
 					"TransactionResult": result.EngineResult,
 					"TransactionIndex":  0,
 				},
@@ -171,7 +166,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Build response with independent boolean fields matching rippled's
 	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
-	response := map[string]interface{}{
+	response := map[string]any{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,
@@ -209,6 +204,22 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	}
 
 	return response, nil
+}
+
+// CalculateTxHash calculates the hash of a signed transaction
+func CalculateTxHash(txBlobHex string) string {
+	// The transaction hash is SHA512Half of prefix + transaction blob
+	// Prefix is "TXN\x00" = 0x54584E00
+	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // prealloc: static 4-byte composite literal followed by a single append
+
+	txBytes, err := hex.DecodeString(txBlobHex)
+	if err != nil {
+		return ""
+	}
+
+	data := append(prefix, txBytes...)
+	hash := common.Sha512Half(data)
+	return strings.ToUpper(hex.EncodeToString(hash[:]))
 }
 
 func (m *SubmitMethod) RequiredRole() types.Role {

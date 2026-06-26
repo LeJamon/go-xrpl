@@ -198,7 +198,7 @@ func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 	// Insert an unknown UINT32 field (type=2, field=15 = 0x2F) before the last field.
 	// Find sfSigningPubKey (0x73) position and insert before it.
 	var modified []byte
-	for i := 0; i < len(blob); i++ {
+	for i := range blob {
 		if blob[i] == 0x73 {
 			// Insert unknown UINT32 field before sfSigningPubKey.
 			// But wait, we must maintain canonical order. type=2 fields come before
@@ -210,9 +210,9 @@ func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 
 	// Simpler approach: append an unknown Hash256 field (type=5, field=15 → 0x5F)
 	// right before sfSigningPubKey in the blob.
-	modified = nil //nolint:prealloc
+	modified = nil //nolint:prealloc // prealloc: insertion-driven builder, no static capacity
 	insertPos := -1
-	for i := 0; i < len(blob); i++ {
+	for i := range blob {
 		if blob[i] == 0x73 {
 			insertPos = i
 			break

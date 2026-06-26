@@ -10,10 +10,9 @@ import (
 )
 
 // GenerateNegativeUNLPseudoTx produces the UNLModify pseudo-tx blobs
-// to inject on a NegativeUNL-enabled voting ledger. Mirrors rippled's
-// NegativeUNLVote::doVoting (NegativeUNLVote.cpp:36-108) wired through
-// the adaptor: read the parent NegativeUNL SLE, build the score table
-// from the last FlagLedgerInterval validation snapshots, delegate to
+// to inject on a NegativeUNL-enabled voting ledger: read the parent
+// NegativeUNL SLE, build the score table from the last
+// FlagLedgerInterval validation snapshots, delegate to
 // negativeunlvote.Voter for candidate selection, and return the
 // serialized [][]byte (zero, one, or two blobs).
 //
@@ -28,9 +27,12 @@ import (
 //     local view too narrow to trust
 //   - no candidates qualify
 //
-// All zero-vote paths are silent; an operator running a validator on
-// a NegativeUNL-enabled network sees neither errors nor warnings when
-// the round simply has nothing to do.
+// These normal zero-vote paths are silent — an operator on a
+// NegativeUNL-enabled network sees no errors or warnings when the round
+// simply has nothing to do. The sole exception is the impossible
+// above-window case (local count > FlagLedgerInterval), which DoVoting
+// surfaces as ErrLocalCountExceedsWindow and is logged at Error here as
+// a likely duplicate-validation bug.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	a.mu.Lock()
 	voter := a.negUNLVoter
@@ -60,7 +62,7 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 		return nil
 	}
 
-	scoreTable, ok := a.buildNegativeUNLScoreTable(concrete, historian, voter.MyID())
+	scoreTable, ok := a.buildNegativeUNLScoreTable(concrete, historian)
 	if !ok {
 		return nil
 	}
@@ -71,8 +73,8 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	prevSeq := concrete.Sequence()
 	prevHash := concrete.Hash()
 
-	voter.PurgeNewValidators(prevSeq + 1)
-
+	// DoVoting owns the new-validator purge and the local-participation
+	// gate; don't duplicate either here.
 	blobs, err := voter.DoVoting(prevSeq, prevHash, unlKeys, state, scoreTable)
 	if err != nil {
 		if errors.Is(err, negativeunlvote.ErrLocalCountExceedsWindow) {
@@ -95,20 +97,13 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 // set with the NegativeUNL voter's grace-period table. `upcomingSeq` is
 // the sequence of the round being started (i.e. `prevLedger.Seq() + 1`);
 // `nowTrusted` is the *delta* — validators added since the previous
-// round, NOT the full UNL. Mirrors rippled's preStartRound branch:
-//
-//	if (prevLgr.ledger_->rules().enabled(featureNegativeUNL) &&
-//	    !nowTrusted.empty())
-//	    nUnlVote_.newValidators(prevLgr.seq() + 1, nowTrusted);
-//
-// at RCLConsensus.cpp:1041-1043. The caller (engine.startRoundLocked)
-// owns the feature-gate and delta computation, matching rippled where
-// the gate and the `nowTrusted` set both originate outside the voter.
+// round, NOT the full UNL. The caller (engine.startRoundLocked) owns
+// the feature-gate and delta computation, so the gate and the
+// `nowTrusted` set both originate outside the voter.
 //
 // Does NOT purge — purge is owned by the voting path inside
-// GenerateNegativeUNLPseudoTx (see NegativeUNLVote.cpp:339-355, called
-// from doVoting only). Calling it here would diverge from rippled and
-// double-run the purge once the engine drives this per round.
+// GenerateNegativeUNLPseudoTx. Calling it here would double-run the
+// purge once the engine drives this per round.
 //
 // No-op when `nowTrusted` is empty, or when the adaptor was constructed
 // without a Voter (no identity or master keys plumbed in — fixtures,
@@ -144,11 +139,11 @@ func (a *Adaptor) negativeUNLState(l interface {
 	if n := len(parsed.DisabledValidators); n > 0 {
 		state.DisabledKeys = make([][33]byte, 0, n)
 		for _, v := range parsed.DisabledValidators {
-			if len(v) != 33 {
+			if len(v.PublicKey) != 33 {
 				continue
 			}
 			var k [33]byte
-			copy(k[:], v)
+			copy(k[:], v.PublicKey)
 			state.DisabledKeys = append(state.DisabledKeys, k)
 		}
 	}
@@ -165,28 +160,26 @@ func (a *Adaptor) negativeUNLState(l interface {
 	return state, nil
 }
 
-// buildNegativeUNLScoreTable mirrors rippled's
-// NegativeUNLVote::buildScoreTable (NegativeUNLVote.cpp:173-244):
+// buildNegativeUNLScoreTable builds the per-validator score table:
 //
 //  1. Read the parent ledger's rolling skip-list of the previous
 //     FlagLedgerInterval ledger hashes.
 //  2. For each ancestor, look up the trusted validations that named
 //     it and increment a per-NodeID counter.
-//  3. Enforce the local-node participation gate
-//     ([MinLocalValsToVote, FlagLedgerInterval]) — outside that range
-//     return ok=false so the producer abstains.
 //
-// Returns (nil, false) when the parent's skip-list is shorter than
-// FlagLedgerInterval (early ledgers) or when local participation is
-// out of range. A successful return guarantees every trusted
-// validator the Voter consults will fall back to score 0 (rippled's
-// invariant at NegativeUNLVote.cpp:197-200, enforced inside DoVoting).
+// Returns (nil, false) only when the parent's skip-list is shorter
+// than FlagLedgerInterval (early ledgers near genesis). The
+// local-participation gate ([MinLocalValsToVote, FlagLedgerInterval])
+// is NOT enforced here — it lives solely in DoVoting, which abstains on
+// low participation and surfaces ErrLocalCountExceedsWindow on the
+// impossible above-window case so the caller can log at error severity.
+// DoVoting also restricts this table to the UNL, so an over-populated
+// table (NodeIDs that have since left the UNL) is harmless.
 func (a *Adaptor) buildNegativeUNLScoreTable(
 	prev interface {
 		SkipListHashes() ([][32]byte, error)
 	},
 	historian consensus.ValidationHistorian,
-	myID consensus.NodeID,
 ) (map[consensus.NodeID]uint32, bool) {
 	ancestors, err := prev.SkipListHashes()
 	if err != nil || uint32(len(ancestors)) < consensus.FlagLedgerInterval {
@@ -196,16 +189,11 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 	n := uint32(len(ancestors))
 	window := consensus.FlagLedgerInterval
 	scoreTable := make(map[consensus.NodeID]uint32)
-	for i := uint32(0); i < window; i++ {
+	for i := range window {
 		ledgerHash := ancestors[n-1-i]
 		for _, v := range historian.GetTrustedValidations(consensus.LedgerID(ledgerHash)) {
 			scoreTable[v.NodeID]++
 		}
-	}
-
-	myCount := scoreTable[myID]
-	if myCount < negativeunlvote.MinLocalValsToVote || myCount > window {
-		return nil, false
 	}
 	return scoreTable, true
 }

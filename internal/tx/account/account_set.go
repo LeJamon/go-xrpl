@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -15,10 +16,6 @@ const qualityOne uint32 = 1000000000
 
 func isZeroHash256(s string) bool {
 	return strings.Trim(s, "0") == ""
-}
-
-func isValidPublicKey(key []byte) bool {
-	return tx.IsValidPublicKey(key)
 }
 
 // AccountSet modifies the properties of an account in the XRP Ledger.
@@ -156,13 +153,21 @@ func (a *AccountSet) Validate() error {
 	// Check for invalid transaction flags
 	// Reference: rippled SetAccount.cpp:71-75
 	if txFlags&AccountSetTxFlagMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid transaction flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid transaction flags")
 	}
 
-	// Cannot set and clear the same flag
+	// Cannot set and clear the same non-zero flag. SetFlag/ClearFlag of 0
+	// (or both absent, which reads as 0) is a valid no-op.
 	// Reference: rippled SetAccount.cpp:80-84
-	if a.SetFlag != nil && a.ClearFlag != nil && *a.SetFlag == *a.ClearFlag {
-		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear the same flag")
+	var uSetFlag, uClearFlag uint32
+	if a.SetFlag != nil {
+		uSetFlag = *a.SetFlag
+	}
+	if a.ClearFlag != nil {
+		uClearFlag = *a.ClearFlag
+	}
+	if uSetFlag != 0 && uSetFlag == uClearFlag {
+		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set and clear the same flag")
 	}
 
 	// Check for contradictory RequireAuth flags
@@ -172,7 +177,7 @@ func (a *AccountSet) Validate() error {
 	clearRequireAuth := (txFlags&AccountSetTxFlagOptionalAuth != 0) ||
 		(a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagRequireAuth)
 	if setRequireAuth && clearRequireAuth {
-		return tx.Errorf(tx.TemINVALID_FLAG, "contradictory RequireAuth flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "contradictory RequireAuth flags")
 	}
 
 	// Check for contradictory RequireDest flags
@@ -182,7 +187,7 @@ func (a *AccountSet) Validate() error {
 	clearRequireDest := (txFlags&AccountSetTxFlagOptionalDestTag != 0) ||
 		(a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagRequireDest)
 	if setRequireDest && clearRequireDest {
-		return tx.Errorf(tx.TemINVALID_FLAG, "contradictory RequireDest flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "contradictory RequireDest flags")
 	}
 
 	// Check for contradictory DisallowXRP flags
@@ -192,7 +197,7 @@ func (a *AccountSet) Validate() error {
 	clearDisallowXRP := (txFlags&AccountSetTxFlagAllowXRP != 0) ||
 		(a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagDisallowXRP)
 	if setDisallowXRP && clearDisallowXRP {
-		return tx.Errorf(tx.TemINVALID_FLAG, "contradictory DisallowXRP flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "contradictory DisallowXRP flags")
 	}
 
 	// TransferRate validation
@@ -200,10 +205,10 @@ func (a *AccountSet) Validate() error {
 	if a.TransferRate != nil {
 		tr := *a.TransferRate
 		if tr != 0 && tr < protocol.TransferRateMin {
-			return tx.Errorf(tx.TemBAD_TRANSFER_RATE, "transfer rate too small")
+			return ter.Errorf(ter.TemBAD_TRANSFER_RATE, "transfer rate too small")
 		}
 		if tr > protocol.TransferRateMax {
-			return tx.Errorf(tx.TemBAD_TRANSFER_RATE, "transfer rate too large")
+			return ter.Errorf(ter.TemBAD_TRANSFER_RATE, "transfer rate too large")
 		}
 	}
 
@@ -212,7 +217,7 @@ func (a *AccountSet) Validate() error {
 	if a.TickSize != nil {
 		ts := *a.TickSize
 		if ts != 0 && (ts < protocol.TickSizeMin || ts > protocol.TickSizeMax) {
-			return tx.Errorf(tx.TemBAD_TICK_SIZE, "tick size must be 0 or 3-16")
+			return ter.Errorf(ter.TemBAD_TICK_SIZE, "tick size must be 0 or 3-16")
 		}
 	}
 
@@ -221,8 +226,8 @@ func (a *AccountSet) Validate() error {
 	// If present and non-empty, must be a valid public key (ed25519 or secp256k1).
 	if a.MessageKey != nil && *a.MessageKey != "" {
 		mkBytes, err := hex.DecodeString(*a.MessageKey)
-		if err != nil || !isValidPublicKey(mkBytes) {
-			return tx.Errorf(tx.TelBAD_PUBLIC_KEY, "invalid message key specified")
+		if err != nil || !tx.IsValidPublicKey(mkBytes) {
+			return ter.Errorf(ter.TelBAD_PUBLIC_KEY, "invalid message key specified")
 		}
 	}
 
@@ -230,23 +235,26 @@ func (a *AccountSet) Validate() error {
 	// Reference: rippled SetAccount.cpp:170-175
 	// Domain is stored as hex, so max hex length is 2*256 = 512
 	if a.Domain != nil && len(*a.Domain) > MaxDomainLength*2 {
-		return tx.Errorf(tx.TelBAD_DOMAIN, "domain too long")
-	}
-
-	// NFTokenMinter validation
-	// Reference: rippled SetAccount.cpp:177-187
-	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter {
-		if a.NFTokenMinter == "" {
-			return tx.Errorf(tx.TemMALFORMED, "NFTokenMinter required when setting asfAuthorizedNFTokenMinter")
-		}
-	}
-	if a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagAuthorizedNFTokenMinter {
-		if a.NFTokenMinter != "" {
-			return tx.Errorf(tx.TemMALFORMED, "NFTokenMinter must be empty when clearing asfAuthorizedNFTokenMinter")
-		}
+		return ter.Errorf(ter.TelBAD_DOMAIN, "domain too long")
 	}
 
 	return nil
+}
+
+// validateNFTokenMinter enforces the NFTokenMinter field-presence rules for the
+// asfAuthorizedNFTokenMinter flag: the minter must be present when setting the
+// flag and absent when clearing it. rippled gates these checks on
+// featureNonFungibleTokensV1, so callers invoke it only once that amendment is
+// enabled.
+// Reference: rippled SetAccount.cpp:177-187
+func (a *AccountSet) validateNFTokenMinter() ter.Result {
+	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter && a.NFTokenMinter == "" {
+		return ter.TemMALFORMED
+	}
+	if a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagAuthorizedNFTokenMinter && a.NFTokenMinter != "" {
+		return ter.TemMALFORMED
+	}
+	return ter.TesSUCCESS
 }
 
 func (a *AccountSet) Flatten() (map[string]any, error) {
@@ -271,7 +279,7 @@ func (a *AccountSet) EnableDefaultRipple() {
 	a.SetFlag = &flag
 }
 
-func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("account set apply",
 		"account", a.Account,
 		"setFlag", a.SetFlag,
@@ -290,19 +298,38 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		uClearFlag = *a.ClearFlag
 	}
 
+	// NFTokenMinter field presence is validated only once NonFungibleTokensV1 is
+	// enabled, mirroring rippled's amendment-gated preflight check.
+	if ctx.Rules().Enabled(amendment.FeatureNonFungibleTokensV1) {
+		if r := a.validateNFTokenMinter(); r != ter.TesSUCCESS {
+			return r
+		}
+	}
+
+	// Legacy AccountSet flags: RequireAuth, RequireDestTag and DisallowXRP can be
+	// driven by either the asf SetFlag/ClearFlag field or the legacy tx Flags bits.
+	// Reference: rippled SetAccount.cpp doApply() lines 326-339
+	uTxFlags := a.GetFlags()
+	bSetRequireDest := (uTxFlags&AccountSetTxFlagRequireDestTag != 0) || uSetFlag == AccountSetFlagRequireDest
+	bClearRequireDest := (uTxFlags&AccountSetTxFlagOptionalDestTag != 0) || uClearFlag == AccountSetFlagRequireDest
+	bSetRequireAuth := (uTxFlags&AccountSetTxFlagRequireAuth != 0) || uSetFlag == AccountSetFlagRequireAuth
+	bClearRequireAuth := (uTxFlags&AccountSetTxFlagOptionalAuth != 0) || uClearFlag == AccountSetFlagRequireAuth
+	bSetDisallowXRP := (uTxFlags&AccountSetTxFlagDisallowXRP != 0) || uSetFlag == AccountSetFlagDisallowXRP
+	bClearDisallowXRP := (uTxFlags&AccountSetTxFlagAllowXRP != 0) || uClearFlag == AccountSetFlagDisallowXRP
+
 	// Clawback / NoFreeze mutual exclusion preclaim checks
 	// Reference: rippled SetAccount.cpp preclaim() lines 281-307
 	if ctx.Rules().Enabled(amendment.FeatureClawback) {
 		if uSetFlag == AccountSetFlagAllowTrustLineClawback {
 			if uFlagsIn&state.LsfNoFreeze != 0 {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 			if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
-				return tx.TecOWNERS
+				return ter.TecOWNERS
 			}
 		}
 		if uSetFlag == AccountSetFlagNoFreeze && uFlagsIn&state.LsfAllowTrustLineClawback != 0 {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -314,31 +341,29 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// and tecOWNERS (claim fee) otherwise. go-xrpl has no open-ledger retry mechanism
 	// (tapRETRY), so we always return tecOWNERS — equivalent to the closed-ledger
 	// (consensus) path in rippled.
-	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||
-		uSetFlag == AccountSetFlagRequireAuth
 	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
 		if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
-			return tx.TecOWNERS
+			return ter.TecOWNERS
 		}
 		uFlagsOut |= state.LsfRequireAuth
 	}
-	if uClearFlag == AccountSetFlagRequireAuth && (uFlagsIn&state.LsfRequireAuth) != 0 {
+	if bClearRequireAuth && (uFlagsIn&state.LsfRequireAuth) != 0 {
 		uFlagsOut &^= state.LsfRequireAuth
 	}
 
 	// RequireDestTag
-	if uSetFlag == AccountSetFlagRequireDest && (uFlagsIn&state.LsfRequireDestTag) == 0 {
+	if bSetRequireDest && (uFlagsIn&state.LsfRequireDestTag) == 0 {
 		uFlagsOut |= state.LsfRequireDestTag
 	}
-	if uClearFlag == AccountSetFlagRequireDest && (uFlagsIn&state.LsfRequireDestTag) != 0 {
+	if bClearRequireDest && (uFlagsIn&state.LsfRequireDestTag) != 0 {
 		uFlagsOut &^= state.LsfRequireDestTag
 	}
 
 	// DisallowXRP
-	if uSetFlag == AccountSetFlagDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) == 0 {
+	if bSetDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) == 0 {
 		uFlagsOut |= state.LsfDisallowXRP
 	}
-	if uClearFlag == AccountSetFlagDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) != 0 {
+	if bClearDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) != 0 {
 		uFlagsOut &^= state.LsfDisallowXRP
 	}
 
@@ -348,14 +373,14 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Must use master key to disable master key.
 		// Reference: rippled SetAccount.cpp:404-408
 		if !ctx.SignedWithMaster {
-			return tx.TecNEED_MASTER_KEY
+			return ter.TecNEED_MASTER_KEY
 		}
 		// Account has no regular key or multi-signer signer list.
 		// Reference: rippled SetAccount.cpp:410-415
 		hasRegularKey := account.RegularKey != ""
 		hasSignerList, _ := ctx.View.Exists(keylet.SignerList(ctx.AccountID))
 		if !hasRegularKey && !hasSignerList {
-			return tx.TecNO_ALTERNATIVE_KEY
+			return ter.TecNO_ALTERNATIVE_KEY
 		}
 		uFlagsOut |= state.LsfDisableMaster
 	}
@@ -375,7 +400,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Must be signed with master key (unless master is already disabled)
 	if uSetFlag == AccountSetFlagNoFreeze {
 		if !ctx.SignedWithMaster && (uFlagsIn&state.LsfDisableMaster) == 0 {
-			return tx.TecNEED_MASTER_KEY
+			return ter.TecNEED_MASTER_KEY
 		}
 		uFlagsOut |= state.LsfNoFreeze
 	}
@@ -540,7 +565,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		account.Flags = uFlagsOut
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // ownerDirIsEmpty reports whether the account's owner directory has no

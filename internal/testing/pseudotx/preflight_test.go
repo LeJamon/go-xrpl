@@ -7,17 +7,20 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
+	"github.com/stretchr/testify/require"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/stretchr/testify/require"
 )
 
 // closedEngine builds an engine pinned to a closed-ledger view, which is the
 // only configuration under which ApplyPseudo legally executes per rippled
 // Change::preclaim.
-func closedEngine(t *testing.T, rules *amendment.Rules) (*tx.Engine, *jtx.TestEnv) {
+func closedEngine(t *testing.T, rules *amendment.Rules) (*txengine.Engine, *jtx.TestEnv) {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	cfg := tx.EngineConfig{
@@ -29,7 +32,7 @@ func closedEngine(t *testing.T, rules *amendment.Rules) (*tx.Engine, *jtx.TestEn
 		OpenLedger:                false,
 		Rules:                     rules,
 	}
-	return tx.NewEngine(env.Ledger(), cfg), env
+	return txengine.NewEngine(env.Ledger(), cfg), env
 }
 
 func newAmendmentTx() *pseudo.EnableAmendment {
@@ -70,16 +73,19 @@ func TestPseudoPreflight_AccountMustBeZero(t *testing.T) {
 	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
 }
 
-// TestPseudoPreflight_RejectsEmptyAccount confirms that an Account string that
-// rippled would never see (omitted from the wire blob) is rejected at the
-// Go-API boundary rather than silently treated as the zero AccountID.
-func TestPseudoPreflight_RejectsEmptyAccount(t *testing.T) {
+// TestPseudoPreflight_AcceptsEmptyAccount confirms an empty Account passes the
+// account gate. A replayed on-ledger UNL_MODIFY parses to an empty Account
+// because its default-valued sfAccount serializes as a zero-length blob; rippled
+// reads it as getAccountID(sfAccount) == beast::zero, identical to the canonical
+// zero address, so it must not be rejected.
+// Reference: Change.cpp:43-48 (account != beast::zero passes for absent/zero).
+func TestPseudoPreflight_AcceptsEmptyAccount(t *testing.T) {
 	engine, _ := closedEngine(t, amendment.AllSupportedRules())
 	tx := newAmendmentTx()
 	tx.Common.Account = ""
 	result := engine.ApplyPseudo(tx)
-	require.False(t, result.Applied)
-	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
+	require.NotEqual(t, "temBAD_SRC_ACCOUNT", result.Result.String(),
+		"empty Account (absent sfAccount → zero) must pass the preflight account gate")
 }
 
 // TestPseudoPreflight_FeeMustBeZero rejects a pseudo-tx with a non-zero fee.
@@ -259,7 +265,7 @@ func TestSetFee_PreclaimRejectsUnparseableBaseFee(t *testing.T) {
 
 // closedEngineWithNetwork mirrors closedEngine but lets the test pin
 // EngineConfig.NetworkID so the NetworkID branch of preflight0 fires.
-func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uint32) *tx.Engine {
+func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uint32) *txengine.Engine {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	cfg := tx.EngineConfig{
@@ -272,7 +278,7 @@ func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uin
 		Rules:                     rules,
 		NetworkID:                 networkID,
 	}
-	return tx.NewEngine(env.Ledger(), cfg)
+	return txengine.NewEngine(env.Ledger(), cfg)
 }
 
 // TestPseudoPreflight_TfInnerBatchTxnRejected rejects a pseudo-tx carrying

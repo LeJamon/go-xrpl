@@ -1,6 +1,8 @@
 package invariants
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -59,6 +61,12 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 	// Phase 1: visitEntry — collect AccountRoot possible issuers and
 	// RippleState balance changes.
 
+	// The checker only enforces under featureDeepFreeze. A parse failure on a
+	// type-confirmed SLE signals a serialization bug; it is a hard invariant
+	// failure when enforcing rather than a silently skipped entry.
+	// Reference: rippled InvariantCheck.cpp lines 706-707.
+	enforce := rules != nil && rules.DeepFreezeEnabled()
+
 	// possibleIssuers maps account address → parsed AccountRoot data.
 	// Used to look up global freeze flag without hitting the view.
 	possibleIssuers := make(map[string]*state.AccountRoot)
@@ -82,12 +90,21 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 		// --- isValidEntry ---
 
 		// Check type from afterData.
-		afterType := getLedgerEntryType(afterData)
+		afterType := state.EntryType(afterData)
 
 		if afterType == "AccountRoot" {
 			// Store as possible issuer for finalize phase.
 			acct, err := state.ParseAccountRoot(afterData)
-			if err == nil && acct.Account != "" {
+			if err != nil {
+				if enforce {
+					return &InvariantViolation{
+						Name:    "TransfersNotFrozen",
+						Message: fmt.Sprintf("could not parse AccountRoot SLE: %v", err),
+					}
+				}
+				continue
+			}
+			if acct.Account != "" {
 				possibleIssuers[acct.Account] = acct
 			}
 			continue
@@ -100,7 +117,7 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 		// If before exists, verify it's also a RippleState.
 		// Reference: rippled line 761-762
 		if e.Before != nil {
-			beforeType := getLedgerEntryType(e.Before)
+			beforeType := state.EntryType(e.Before)
 			if beforeType != "RippleState" {
 				continue
 			}
@@ -111,6 +128,12 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 		// in Go, for deletions we use Before).
 		afterRS, err := state.ParseRippleState(afterData)
 		if err != nil {
+			if enforce {
+				return &InvariantViolation{
+					Name:    "TransfersNotFrozen",
+					Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
+				}
+			}
 			continue
 		}
 
@@ -126,10 +149,16 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 
 		if e.Before != nil {
 			beforeRS, err := state.ParseRippleState(e.Before)
-			if err == nil {
-				balanceBefore = beforeRS.Balance
-			} else {
+			if err != nil {
+				if enforce {
+					return &InvariantViolation{
+						Name:    "TransfersNotFrozen",
+						Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
+					}
+				}
 				balanceBefore = zeroBalance
+			} else {
+				balanceBefore = beforeRS.Balance
 			}
 		} else {
 			// New trust line — starting balance is zero.
@@ -144,10 +173,16 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 			if e.After != nil {
 				// Use the actual after data (not the "before" fallback).
 				actualAfterRS, err := state.ParseRippleState(e.After)
-				if err == nil {
-					balanceAfter = actualAfterRS.Balance
-				} else {
+				if err != nil {
+					if enforce {
+						return &InvariantViolation{
+							Name:    "TransfersNotFrozen",
+							Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
+						}
+					}
 					balanceAfter = zeroBalance
+				} else {
+					balanceAfter = actualAfterRS.Balance
 				}
 			} else {
 				balanceAfter = afterRS.Balance
@@ -174,16 +209,6 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 			}
 		}
 
-		// Skip trust lines where LowLimit.Issuer == HighLimit.Issuer.
-		// In rippled, the low and high accounts are always different.
-		// In the Go codebase, a serialization quirk in TrustSet may store
-		// the same account on both sides (e.g., when the issuer sets a limit
-		// for a holder, the LimitAmount.Issuer = holder, not the issuer).
-		// We can't determine transfer direction for such entries, so skip.
-		if afterRS.LowLimit.Issuer == afterRS.HighLimit.Issuer {
-			continue
-		}
-
 		// From low account's perspective: Issue = {currency, HighLimit.Issuer},
 		// sign = balanceChangeSign.
 		// From high account's perspective: Issue = {currency, LowLimit.Issuer},
@@ -203,10 +228,6 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 	}
 
 	// Phase 2: finalize — validate each issuer's changes.
-
-	// Determine enforcement.
-	// Reference: rippled lines 706-707 — enforce = featureDeepFreeze enabled.
-	enforce := rules != nil && rules.DeepFreezeEnabled()
 
 	for issueKey, changes := range balanceChanges {
 		// Find the issuer's AccountRoot.

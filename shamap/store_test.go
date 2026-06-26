@@ -71,49 +71,49 @@ func flushToFamily(sm *SHAMap, family *memoryFamily) error {
 // TestDirtyFlag_NewNodes verifies that newly created nodes are marked dirty.
 func TestDirtyFlag_NewNodes(t *testing.T) {
 	// Inner node
-	inner := NewInnerNode()
+	inner := newInnerNode()
 	if !inner.IsDirty() {
-		t.Error("NewInnerNode should be dirty")
+		t.Error("newInnerNode should be dirty")
 	}
 
 	// Account state leaf
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	item := NewItem(key, intToBytes(1))
-	leaf, err := NewAccountStateLeafNode(item)
+	leaf, err := newAccountStateLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !leaf.IsDirty() {
-		t.Error("NewAccountStateLeafNode should be dirty")
+		t.Error("newAccountStateLeafNode should be dirty")
 	}
 
 	// Transaction leaf
-	txLeaf, err := NewTransactionLeafNode(item)
+	txLeaf, err := newTransactionLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !txLeaf.IsDirty() {
-		t.Error("NewTransactionLeafNode should be dirty")
+		t.Error("newTransactionLeafNode should be dirty")
 	}
 
 	// Transaction+meta leaf
-	txMetaLeaf, err := NewTransactionWithMetaLeafNode(item)
+	txMetaLeaf, err := newTransactionWithMetaLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !txMetaLeaf.IsDirty() {
-		t.Error("NewTransactionWithMetaLeafNode should be dirty")
+		t.Error("newTransactionWithMetaLeafNode should be dirty")
 	}
 }
 
 // TestDirtyFlag_SetChild verifies that SetChild marks the inner node dirty.
 func TestDirtyFlag_SetChild(t *testing.T) {
-	inner := NewInnerNode()
+	inner := newInnerNode()
 	inner.SetDirty(false) // manually clear
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	item := NewItem(key, intToBytes(1))
-	leaf, err := NewAccountStateLeafNode(item)
+	leaf, err := newAccountStateLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestDirtyFlag_SetItem(t *testing.T) {
 	item2 := NewItem(key, intToBytes(2))
 
 	// AccountStateLeafNode
-	leaf, err := NewAccountStateLeafNode(item1)
+	leaf, err := newAccountStateLeafNode(item1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestDirtyFlag_SetItem(t *testing.T) {
 	}
 
 	// TransactionLeafNode
-	txLeaf, err := NewTransactionLeafNode(item1)
+	txLeaf, err := newTransactionLeafNode(item1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestDirtyFlag_SetItem(t *testing.T) {
 	}
 
 	// TransactionWithMetaLeafNode
-	txMetaLeaf, err := NewTransactionWithMetaLeafNode(item1)
+	txMetaLeaf, err := newTransactionWithMetaLeafNode(item1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,10 +179,10 @@ func TestDirtyFlag_SetItem(t *testing.T) {
 // TestDirtyFlag_WireDeserialize verifies that wire-deserialized nodes are NOT dirty.
 func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	// Create an inner node and serialize it
-	inner := NewInnerNode()
+	inner := newInnerNode()
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	item := NewItem(key, intToBytes(1))
-	leaf, err := NewAccountStateLeafNode(item)
+	leaf, err := newAccountStateLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deserialized, err := NewInnerNodeFromWire(wireData)
+	deserialized, err := newInnerNodeFromWire(wireData)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestDirtyFlag_WireDeserialize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deserializedLeaf, err := NewAccountStateLeafFromWire(leafWire)
+	deserializedLeaf, err := newAccountStateLeafFromWire(leafWire)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,10 +220,7 @@ func TestDirtyFlag_WireDeserialize(t *testing.T) {
 // TestFlushDirty_BasicRoundTrip verifies FlushDirty collects all dirty nodes
 // and they can be deserialized back.
 func TestFlushDirty_BasicRoundTrip(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	// Add several items
 	keys := []string{
@@ -293,10 +290,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 
 // TestFlushDirty_Idempotent verifies that flushing twice produces empty batch on second call.
 func TestFlushDirty_Idempotent(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	if err := sMap.Put(key, intToBytes(1)); err != nil {
@@ -324,10 +318,7 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 
 // TestFlushDirty_AfterModification verifies only modified nodes are re-flushed.
 func TestFlushDirty_AfterModification(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
@@ -370,10 +361,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 
 // TestFlushDirty_ReleaseChildren verifies child pointers are released when requested.
 func TestFlushDirty_ReleaseChildren(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	if err := sMap.Put(key, intToBytes(1)); err != nil {
@@ -381,14 +369,14 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 	}
 
 	// Flush with releaseChildren=true
-	_, err = sMap.FlushDirty(true)
+	_, err := sMap.FlushDirty(true)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Verify root's children are nil (released)
-	for i := 0; i < BranchFactor; i++ {
-		child := sMap.root.ChildUnsafe(i)
+	for i := range BranchFactor {
+		child, _, _ := sMap.root.LoadChild(i)
 		if child != nil {
 			t.Errorf("Branch %d child should be nil after release", i)
 		}
@@ -396,9 +384,9 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 
 	// But hashes should still be set for non-empty branches
 	hasNonEmpty := false
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if !sMap.root.IsEmptyBranch(i) {
-			hash := sMap.root.ChildHashUnsafe(i)
+			_, hash, _ := sMap.root.LoadChild(i)
 			if isZeroHash(hash) {
 				t.Errorf("Branch %d has bit set but zero hash after release", i)
 			}
@@ -413,10 +401,10 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 // TestDeserializeFromPrefix_InnerNode tests inner node round-trip via prefix format.
 func TestDeserializeFromPrefix_InnerNode(t *testing.T) {
 	// Create inner node with a child
-	inner := NewInnerNode()
+	inner := newInnerNode()
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	item := NewItem(key, intToBytes(42))
-	leaf, err := NewAccountStateLeafNode(item)
+	leaf, err := newAccountStateLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,9 +426,9 @@ func TestDeserializeFromPrefix_InnerNode(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deserializedInner, ok := node.(*InnerNode)
+	deserializedInner, ok := node.(*innerNode)
 	if !ok {
-		t.Fatal("Expected InnerNode")
+		t.Fatal("Expected innerNode")
 	}
 
 	// Hash should match
@@ -450,13 +438,13 @@ func TestDeserializeFromPrefix_InnerNode(t *testing.T) {
 	}
 
 	// Children should be nil (hash-only)
-	child := deserializedInner.ChildUnsafe(0)
+	child, _, _ := deserializedInner.LoadChild(0)
 	if child != nil {
 		t.Error("Deserialized inner node should have nil children (hash-only)")
 	}
 
 	// But hash should be set
-	childHash := deserializedInner.ChildHashUnsafe(0)
+	_, childHash, _ := deserializedInner.LoadChild(0)
 	if isZeroHash(childHash) {
 		t.Error("Deserialized inner node should have child hash set")
 	}
@@ -472,7 +460,7 @@ func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	item := NewItem(key, intToBytes(42))
 
-	leaf, err := NewAccountStateLeafNode(item)
+	leaf, err := newAccountStateLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,9 +478,9 @@ func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deserializedLeaf, ok := node.(*AccountStateLeafNode)
+	deserializedLeaf, ok := node.(*leafNode)
 	if !ok {
-		t.Fatal("Expected AccountStateLeafNode")
+		t.Fatal("Expected leafNode")
 	}
 
 	if deserializedLeaf.Hash() != originalHash {
@@ -518,10 +506,7 @@ func TestBacked_NewFromRootHash(t *testing.T) {
 	family := newMemoryFamily()
 
 	// Create unbacked map and populate
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
@@ -589,10 +574,7 @@ func TestBacked_LazyLoading(t *testing.T) {
 	family := newMemoryFamily()
 
 	// Create and populate
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
@@ -621,14 +603,14 @@ func TestBacked_LazyLoading(t *testing.T) {
 
 	// Root should have branches with hashes set but children nil (not yet loaded)
 	childrenLoaded := 0
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if !backed.root.IsEmptyBranch(i) {
-			child := backed.root.ChildUnsafe(i)
+			child, _, _ := backed.root.LoadChild(i)
 			if child != nil {
 				childrenLoaded++
 			}
 			// Hash should be set
-			hash := backed.root.ChildHashUnsafe(i)
+			_, hash, _ := backed.root.LoadChild(i)
 			if isZeroHash(hash) {
 				t.Errorf("Branch %d has bit set but zero hash", i)
 			}
@@ -652,8 +634,8 @@ func TestBacked_LazyLoading(t *testing.T) {
 
 	// Now some children should be loaded (the path to key1)
 	childrenLoadedAfter := 0
-	for i := 0; i < BranchFactor; i++ {
-		if backed.root.ChildUnsafe(i) != nil {
+	for i := range BranchFactor {
+		if c, _, _ := backed.root.LoadChild(i); c != nil {
 			childrenLoadedAfter++
 		}
 	}
@@ -664,10 +646,7 @@ func TestBacked_LazyLoading(t *testing.T) {
 
 // TestBacked_DescendUnbacked verifies unbacked maps work identically to before.
 func TestBacked_DescendUnbacked(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	if err := sMap.Put(key, intToBytes(42)); err != nil {
@@ -708,10 +687,7 @@ func TestBacked_FullRoundTrip(t *testing.T) {
 	family := newMemoryFamily()
 
 	// Phase 1: Create and populate
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
@@ -811,10 +787,7 @@ func TestBacked_FullRoundTrip(t *testing.T) {
 func TestBacked_ForEach(t *testing.T) {
 	family := newMemoryFamily()
 
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
@@ -864,10 +837,7 @@ func TestBacked_ForEach(t *testing.T) {
 func TestBacked_DeleteItem(t *testing.T) {
 	family := newMemoryFamily()
 
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
@@ -921,10 +891,7 @@ func TestBacked_DeleteItem(t *testing.T) {
 func TestBacked_IndependentInstances(t *testing.T) {
 	family := newMemoryFamily()
 
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 	if err := sMap.Put(key, intToBytes(1)); err != nil {
@@ -1085,10 +1052,7 @@ func TestBacked_SetFamily(t *testing.T) {
 	family := newMemoryFamily()
 
 	// Start unbacked
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	if sMap.IsBacked() {
 		t.Error("New() should create unbacked map")
@@ -1129,10 +1093,7 @@ func TestBacked_SetFamily(t *testing.T) {
 func TestBacked_Iterator(t *testing.T) {
 	family := newMemoryFamily()
 
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
@@ -1159,7 +1120,7 @@ func TestBacked_Iterator(t *testing.T) {
 	}
 
 	count := 0
-	iter := backed.Begin()
+	iter := backed.begin()
 	for iter.Next() {
 		item := iter.Item()
 		if item == nil {
@@ -1181,15 +1142,12 @@ func TestBacked_Iterator(t *testing.T) {
 func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 	family := newMemoryFamily()
 
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 
 	// Populate several branches at depth 0 so descend has to lazy-load
 	// multiple subtrees from cold.
 	keys := make([][32]byte, 0, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		var k [32]byte
 		for j := range k {
 			k[j] = byte((i*7 + j*11) | 1)
@@ -1218,7 +1176,7 @@ func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(readers)
 	start := make(chan struct{})
-	for r := 0; r < readers; r++ {
+	for range readers {
 		go func() {
 			defer wg.Done()
 			<-start

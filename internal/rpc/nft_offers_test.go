@@ -81,10 +81,10 @@ func (m *mockNFTOffersLedgerService) GetTransaction(txHash [32]byte) (*types.Tra
 func (m *mockNFTOffersLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
@@ -105,10 +105,10 @@ func (m *mockNFTOffersLedgerService) GetLedgerEntry(_ context.Context, entryKey 
 func (m *mockNFTOffersLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+func (m *mockNFTOffersLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
@@ -150,7 +150,7 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(_ context.Context, nftID [
 func (m *mockNFTOffersLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (m *mockNFTOffersLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	return 0, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
@@ -186,7 +186,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
@@ -194,35 +194,35 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 	}{
 		{
 			name:          "Missing nft_id field",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Empty nft_id field",
-			params:        map[string]interface{}{"nft_id": ""},
+			params:        map[string]any{"nft_id": ""},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - too short",
-			params:        map[string]interface{}{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
+			params:        map[string]any{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - not hex",
-			params:        map[string]interface{}{"nft_id": "00081388DC1AB4E7C57F8067A3ABGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"},
+			params:        map[string]any{"nft_id": "00081388DC1AB4E7C57F8067A3ABGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "NFT not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 			},
 			setupMock: func() {
@@ -234,7 +234,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid marker",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 				"marker": "invalid_marker",
 			},
@@ -309,7 +309,7 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 	}
 
@@ -319,7 +319,7 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4", respMap["nft_id"])
@@ -328,7 +328,7 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 	assert.Contains(t, respMap, "ledger_hash")
 	assert.Contains(t, respMap, "validated")
 
-	offers, ok := respMap["offers"].([]map[string]interface{})
+	offers, ok := respMap["offers"].([]map[string]any)
 	require.True(t, ok)
 	assert.Len(t, offers, 2)
 
@@ -376,7 +376,7 @@ func TestNftBuyOffersWithIOUAmount(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 	}
 
@@ -386,10 +386,10 @@ func TestNftBuyOffersWithIOUAmount(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
-	offers, ok := respMap["offers"].([]map[string]interface{})
+	offers, ok := respMap["offers"].([]map[string]any)
 	require.True(t, ok)
 	assert.Len(t, offers, 1)
 
@@ -432,7 +432,7 @@ func TestNftBuyOffersWithPagination(t *testing.T) {
 		Marker:      "BBB588DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F400",
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 		"limit":  50,
 	}
@@ -443,7 +443,7 @@ func TestNftBuyOffersWithPagination(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Contains(t, respMap, "marker")
@@ -469,7 +469,7 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
@@ -477,28 +477,28 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 	}{
 		{
 			name:          "Missing nft_id field",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Empty nft_id field",
-			params:        map[string]interface{}{"nft_id": ""},
+			params:        map[string]any{"nft_id": ""},
 			expectError:   true,
 			expectedError: "Missing field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Invalid nft_id - too short",
-			params:        map[string]interface{}{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
+			params:        map[string]any{"nft_id": "00081388DC1AB4E7C57F8067A3AB"},
 			expectError:   true,
 			expectedError: "Invalid field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "NFT not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 			},
 			setupMock: func() {
@@ -570,7 +570,7 @@ func TestNftSellOffersSuccess(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 	}
 
@@ -580,12 +580,12 @@ func TestNftSellOffersSuccess(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4", respMap["nft_id"])
 
-	offers, ok := respMap["offers"].([]map[string]interface{})
+	offers, ok := respMap["offers"].([]map[string]any)
 	require.True(t, ok)
 	assert.Len(t, offers, 1)
 
@@ -616,7 +616,7 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 	}
 
@@ -626,10 +626,10 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
-	offers, ok := respMap["offers"].([]map[string]interface{})
+	offers, ok := respMap["offers"].([]map[string]any)
 	require.True(t, ok)
 	assert.Len(t, offers, 0)
 }
@@ -646,7 +646,7 @@ func TestNftBuyOffersServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 	}
 
@@ -668,7 +668,7 @@ func TestNftSellOffersServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 	}
 

@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -42,21 +43,21 @@ func (m *MPTokenIssuanceDestroy) Validate() error {
 
 	flags := m.GetFlags()
 	if flags&^tfMPTokenIssuanceDestroyValidMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceDestroy")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceDestroy")
 	}
 
 	// MPTokenIssuanceID is required and must be valid hex
 	if m.MPTokenIssuanceID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID is required")
+		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID is required")
 	}
 
 	// MPTokenIssuanceID should be 48 hex characters (24 bytes / Hash192)
 	if len(m.MPTokenIssuanceID) != 48 {
-		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
+		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
-		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
+		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
 	}
 
 	return nil
@@ -71,7 +72,7 @@ func (m *MPTokenIssuanceDestroy) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled MPTokenIssuanceDestroy.cpp preclaim() + doApply()
-func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
+func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("mptoken issuance destroy apply",
 		"account", m.Account,
 		"issuanceID", m.MPTokenIssuanceID,
@@ -81,7 +82,7 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
 	var mptID [24]byte
 	issuanceIDBytes, err := hex.DecodeString(m.MPTokenIssuanceID)
 	if err != nil || len(issuanceIDBytes) != 24 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 	copy(mptID[:], issuanceIDBytes)
 
@@ -92,20 +93,20 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("mptoken issuance destroy: issuance not found",
 			"issuanceID", m.MPTokenIssuanceID,
 		)
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 
 	// Parse issuance entry
 	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		ctx.Log.Error("mptoken issuance destroy: failed to parse issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Caller must be the issuer
 	if issuance.Issuer != ctx.AccountID {
 		ctx.Log.Warn("mptoken issuance destroy: caller is not issuer")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Cannot destroy with outstanding balances
@@ -113,28 +114,31 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("mptoken issuance destroy: has outstanding obligations",
 			"outstandingAmount", issuance.OutstandingAmount,
 		)
-		return tx.TecHAS_OBLIGATIONS
+		return ter.TecHAS_OBLIGATIONS
 	}
 	if issuance.LockedAmount != nil && *issuance.LockedAmount != 0 {
 		ctx.Log.Warn("mptoken issuance destroy: has locked obligations",
 			"lockedAmount", *issuance.LockedAmount,
 		)
-		return tx.TecHAS_OBLIGATIONS
+		return ter.TecHAS_OBLIGATIONS
 	}
 
 	// doApply: remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	state.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false)
+	if res, err := state.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false); err != nil || !res.Success {
+		ctx.Log.Error("mptoken issuance destroy: failed to remove from owner directory", "error", err)
+		return ter.TefBAD_LEDGER
+	}
 
 	// Erase the issuance
 	if err := ctx.View.Erase(issuanceKey); err != nil {
 		ctx.Log.Error("mptoken issuance destroy: failed to erase issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

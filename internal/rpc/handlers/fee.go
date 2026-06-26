@@ -23,7 +23,7 @@ const (
 	feeLedgersInQueue          = 20
 )
 
-func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -45,18 +45,18 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inter
 	}
 	minimumFee := dropsFromLevel(metrics.MinProcessingFeeLevel, minFeeBase)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"current_ledger_size":  strconv.FormatUint(uint64(metrics.TxInLedger), 10),
 		"current_queue_size":   strconv.FormatUint(uint64(metrics.TxCount), 10),
 		"expected_ledger_size": strconv.FormatUint(uint64(metrics.TxPerLedger), 10),
 		"ledger_current_index": currentLedgerIndex,
-		"levels": map[string]interface{}{
+		"levels": map[string]any{
 			"reference_level":   strconv.FormatUint(metrics.ReferenceFeeLevel, 10),
 			"minimum_level":     strconv.FormatUint(metrics.MinProcessingFeeLevel, 10),
 			"median_level":      strconv.FormatUint(metrics.MedFeeLevel, 10),
 			"open_ledger_level": strconv.FormatUint(metrics.OpenLedgerFeeLevel, 10),
 		},
-		"drops": map[string]interface{}{
+		"drops": map[string]any{
 			"base_fee":        strconv.FormatUint(baseFee, 10),
 			"median_fee":      strconv.FormatUint(medianFee, 10),
 			"minimum_fee":     strconv.FormatUint(minimumFee, 10),

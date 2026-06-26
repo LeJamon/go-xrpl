@@ -37,6 +37,13 @@ type PendingTx struct {
 	// Sequence. LocalTxs.Sweep uses this to switch between the seq-
 	// advance check and the ticket-burn check.
 	IsTicket bool
+	// Parsed is the decoded transaction produced while building this PendingTx.
+	// Ingress carries it through to SubmitDetailed so the apply path reuses this
+	// object instead of re-decoding the blob under the open-ledger apply mutex —
+	// and so any signature verdict prewarmed off-strand reaches the in-strand
+	// check. May be nil for PendingTx values built without ParsePendingTx (e.g.
+	// hand-constructed in tests), in which case SubmitDetailed re-parses.
+	Parsed tx.Transaction
 }
 
 // Result classifies the outcome of applying a single transaction in the
@@ -70,7 +77,7 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		copy(accountID[:], accountBytes)
 	}
 
-	txHash, hashErr := tx.ComputeTxHashTransaction(transaction)
+	txHash, hashErr := tx.ComputeTransactionHash(transaction)
 	if hashErr != nil {
 		return PendingTx{}, hashErr
 	}
@@ -90,6 +97,7 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		LastLedgerSequence:    lastLedger,
 		HasLastLedgerSequence: hasLastLedger,
 		IsTicket:              common.TicketSequence != nil,
+		Parsed:                transaction,
 	}, nil
 }
 
@@ -160,7 +168,7 @@ func CanonicalSort(txs []PendingTx, salt [32]byte) {
 func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 	var key [32]byte
 	copy(key[:20], account[:])
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		key[i] ^= salt[i]
 	}
 	return key
@@ -173,10 +181,7 @@ func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 // CanonicalSort remains deterministic via (sequence, txID) tiebreakers.
 // Reference: rippled RCLConsensus.cpp:512, RCLCxTx.h:62-90.
 func ComputeSalt(txs []PendingTx) [32]byte {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return [32]byte{}
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	for _, ptx := range txs {
 		_ = txMap.PutWithNodeType(ptx.Hash, ptx.Blob, shamap.NodeTypeTransactionNoMeta)
 	}

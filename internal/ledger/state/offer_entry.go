@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -78,24 +77,26 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(offer.DomainID[:]))
 	}
 
+	// Hybrid offers carry the open book they were also placed into as a
+	// single-entry AdditionalBooks STArray of Book inner objects.
+	var zeroBookDir [32]byte
+	if offer.AdditionalBookDirectory != zeroBookDir {
+		jsonObj["AdditionalBooks"] = []any{
+			map[string]any{
+				"Book": map[string]any{
+					"BookDirectory": strings.ToUpper(hex.EncodeToString(offer.AdditionalBookDirectory[:])),
+					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
+				},
+			},
+		}
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Offer: %w", err)
 	}
 
 	return hex.DecodeString(hexStr)
-}
-
-// ParseDropsString parses an XRP drops value from string
-func ParseDropsString(s string) (uint64, error) {
-	var drops uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("invalid drops value")
-		}
-		drops = drops*10 + uint64(c-'0')
-	}
-	return drops, nil
 }
 
 // parseLedgerOffer parses a LedgerOffer from binary data
@@ -105,152 +106,108 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 	}
 
 	offer := &LedgerOffer{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return offer, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return offer, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case fieldCodeFlags:
-				offer.Flags = value
+				offer.Flags = f.UInt32()
 			case 4: // Sequence
-				offer.Sequence = value
-			case 5: // PreviousTxnLgrSeq (nth=5 in sfields.macro)
-				offer.PreviousTxnLgrSeq = value
+				offer.Sequence = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				offer.PreviousTxnLgrSeq = f.UInt32()
 			case 10: // Expiration
-				offer.Expiration = value
+				offer.Expiration = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return offer, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
-			case 3: // BookNode (nth=3 in definitions.json)
-				offer.BookNode = value
-			case 4: // OwnerNode (nth=4 in definitions.json)
-				offer.OwnerNode = value
+		case stUInt64:
+			switch f.FieldCode {
+			case 3: // BookNode
+				offer.BookNode = f.UInt64()
+			case 4: // OwnerNode
+				offer.OwnerNode = f.UInt64()
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return offer, nil
+		case stHash256:
+			switch f.FieldCode {
+			case 16: // BookDirectory
+				offer.BookDirectory = f.Hash256()
+			case 5: // PreviousTxnID
+				offer.PreviousTxnID = f.Hash256()
+			case 34: // DomainID (PermissionedDEX)
+				offer.DomainID = f.Hash256()
 			}
-			switch fieldCode {
-			case 16: // BookDirectory (nth=16 in definitions.json)
-				copy(offer.BookDirectory[:], data[offset:offset+32])
-			case 5: // PreviousTxnID (nth=5 in definitions.json)
-				copy(offer.PreviousTxnID[:], data[offset:offset+32])
-			case 34: // DomainID (nth=34 in definitions.json, PermissionedDEX)
-				copy(offer.DomainID[:], data[offset:offset+32])
-			}
-			offset += 32
 
-		case FieldTypeAmount:
-			// Determine if XRP (8 bytes) or IOU (48 bytes)
-			if offset >= len(data) {
-				return offer, nil
-			}
-			isIOU := (data[offset] & 0x80) != 0
-			if isIOU {
-				if offset+48 > len(data) {
-					return offer, nil
+		case stAmount:
+			var amt Amount
+			switch len(f.Value) {
+			case 48: // IOU
+				a, err := ParseIOUAmountBinary(f.Value)
+				if err != nil {
+					return fmt.Errorf("Offer IOU amount (field %d) parse failed: %w", f.FieldCode, err)
 				}
-				amt, err := ParseIOUAmountBinary(data[offset : offset+48])
-				if err == nil {
-					switch fieldCode {
-					case 4: // TakerPays
-						offer.TakerPays = amt
-					case 5: // TakerGets
-						offer.TakerGets = amt
-					}
-				}
-				offset += 48
-			} else {
-				if offset+8 > len(data) {
-					return offer, nil
-				}
-				drops := binary.BigEndian.Uint64(data[offset:offset+8]) & 0x3FFFFFFFFFFFFFFF
-				amt := NewXRPAmountFromInt(int64(drops))
-				switch fieldCode {
-				case 4: // TakerPays
-					offer.TakerPays = amt
-				case 5: // TakerGets
-					offer.TakerGets = amt
-				}
-				offset += 8
+				amt = a
+			case 8: // XRP
+				amt = NewXRPAmountFromInt(int64(xrpDrops(f.Value)))
+			default:
+				return fmt.Errorf("Offer amount (field %d) unexpected width %d", f.FieldCode, len(f.Value))
+			}
+			switch f.FieldCode {
+			case 4: // TakerPays
+				offer.TakerPays = amt
+			case 5: // TakerGets
+				offer.TakerGets = amt
 			}
 
-		case FieldTypeAccountID:
-			// AccountID is VL-encoded, first byte is length (should be 0x14 = 20)
-			if offset >= len(data) {
-				return offer, nil
+		case stAccountID:
+			if id, ok := f.AccountID(); ok && f.FieldCode == 1 {
+				offer.Account, _ = EncodeAccountID(id)
 			}
-			length := int(data[offset])
-			offset++
-			if length != 20 || offset+20 > len(data) {
-				return offer, nil
-			}
-			var accountID [20]byte
-			copy(accountID[:], data[offset:offset+20])
-			address, _ := EncodeAccountID(accountID)
-			if fieldCode == 1 { // Account (nth=1 in definitions.json)
-				offer.Account = address
-			}
-			offset += 20
 
-		default:
-			// Unknown type - skip
-			break
+		case stArray:
+			if f.FieldCode == 13 { // AdditionalBooks
+				if err := parseAdditionalBooks(f.Value, offer); err != nil {
+					return err
+				}
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return offer, nil
 }
 
-// ParseLedgerOfferFromBytes parses a LedgerOffer from binary data (exported)
-func ParseLedgerOfferFromBytes(data []byte) (*LedgerOffer, error) {
-	return parseLedgerOffer(data)
+// parseAdditionalBooks records the first Book entry of an AdditionalBooks
+// STArray onto offer; hybrid offers carry exactly one entry. content is the
+// array's inner bytes as delimited by WalkFields.
+func parseAdditionalBooks(content []byte, offer *LedgerOffer) error {
+	first := true
+	return WalkFields(content, func(elem Field) error {
+		if elem.TypeCode != stObject || elem.FieldCode != 36 || !first { // Book
+			return nil
+		}
+		first = false
+		return WalkFields(elem.Value, func(inner Field) error {
+			switch inner.TypeCode {
+			case stUInt64:
+				if inner.FieldCode == 3 { // BookNode
+					offer.AdditionalBookNode = inner.UInt64()
+				}
+			case stHash256:
+				if inner.FieldCode == 16 { // BookDirectory
+					offer.AdditionalBookDirectory = inner.Hash256()
+				}
+			}
+			return nil
+		})
+	})
 }
 
-// ParseLedgerOffer is an alias for ParseLedgerOfferFromBytes
-var ParseLedgerOffer = ParseLedgerOfferFromBytes
+// ParseLedgerOffer parses a LedgerOffer from binary data.
+func ParseLedgerOffer(data []byte) (*LedgerOffer, error) {
+	return parseLedgerOffer(data)
+}

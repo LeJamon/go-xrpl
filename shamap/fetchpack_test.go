@@ -6,10 +6,7 @@ import "testing"
 // non-zero keys so the tree has inner nodes above the leaves.
 func buildFetchPackTestMap(t *testing.T) *SHAMap {
 	t.Helper()
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeState)
 	for branch := byte(0); branch < 4; branch++ {
 		for sub := byte(0); sub < 4; sub++ {
 			for i := byte(0); i < 4; i++ {
@@ -105,10 +102,7 @@ func TestWalkFetchPackNodes_Bounds(t *testing.T) {
 		t.Fatalf("maxNodes=0: got (%v, %v), want (nil, nil)", nodes, err)
 	}
 
-	empty, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("new empty: %v", err)
-	}
+	empty := New(TypeState)
 	nodes, err := empty.WalkFetchPackNodes(10)
 	if err != nil {
 		t.Fatalf("walk empty: %v", err)

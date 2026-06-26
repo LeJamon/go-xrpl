@@ -6,6 +6,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -141,14 +143,14 @@ func (a *TxqAdapter) GetBaseFee(_ tx.Transaction) uint64 {
 // applied = isTesSuccess || isTecClaim (matches rippled
 // Transactor.cpp:1108-1218). On applied=true the tx+meta is written to
 // the view's tx map so subsequent GetTxInLedger / TxExists reflect it.
-func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	if a.view == nil || txn == nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	blob := txn.GetRawBytes()
 	if len(blob) == 0 {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	// TxQ.Apply / TxQ.Accept target the open ledger but run with
@@ -164,18 +166,19 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 		LedgerSequence:            a.view.Sequence(),
 		NetworkID:                 a.cfg.NetworkID,
 		ParentCloseTime:           a.cfg.ParentCloseTime,
+		ParentHash:                a.view.ParentHash(),
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
-	engine := tx.NewEngine(a.view, engineCfg)
-	bp := tx.NewBlockProcessor(engine)
+	engine := txengine.NewEngine(a.view, engineCfg)
+	bp := txengine.NewBlockProcessor(engine)
 
 	result, err := bp.ApplyTransaction(txn, blob)
 	if err != nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 	applyRes := result.ApplyResult
 	a.lastApply = &applyRes
@@ -196,49 +199,81 @@ func (a *TxqAdapter) LastApplyResult() *tx.ApplyResult {
 	return a.lastApply
 }
 
+// PreflightTransaction runs the engine preflight pipeline (syntax,
+// signature, tx-type validation) over the adapter's view, returning the
+// resulting TER. TxQ.Apply calls this before holding a transaction so a
+// malformed or badly-signed submission is rejected with its preflight code
+// instead of terQUEUED (rippled TxQ.cpp:743-745).
+func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
+	if a.view == nil || txn == nil {
+		return ter.TefINTERNAL
+	}
+	engineCfg := tx.EngineConfig{
+		BaseFee:                   a.cfg.BaseFee,
+		ReserveBase:               a.cfg.ReserveBase,
+		ReserveIncrement:          a.cfg.ReserveIncrement,
+		LedgerSequence:            a.view.Sequence(),
+		NetworkID:                 a.cfg.NetworkID,
+		ParentCloseTime:           a.cfg.ParentCloseTime,
+		ParentHash:                a.view.ParentHash(),
+		Logger:                    a.cfg.Logger,
+		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
+		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
+	}
+	return txengine.NewEngine(a.view, engineCfg).Preflight(txn)
+}
+
 // PreclaimTransaction runs a preclaim-style check for the multiTxn path
 // in TxQ.Apply (TxQ.cpp:1127-1170). Rippled clones the open view,
 // overrides the account's Sequence and Balance to reflect the in-flight
 // queued txs, then runs preclaim. terINSUF_FEE_B / terPRE_SEQ / similar
 // codes here indicate the tx would fail once the queued chain lands —
 // surfaced to the caller so the tx is rejected rather than queued.
-func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
+func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result {
 	if a.view == nil || txn == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	blob := txn.GetRawBytes()
 	if len(blob) == 0 {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	txHash, hashErr := tx.ComputeTxHashTransaction(txn)
+	txHash, hashErr := tx.ComputeTransactionHash(txn)
 	if hashErr != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	clone, err := a.view.MutableSnapshot()
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	key := keylet.Account(accountID)
 	data, err := clone.Read(key)
 	if err != nil || data == nil {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 	ar, err := state.ParseAccountRoot(data)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	ar.Sequence = adjustedSeq
 	ar.Balance = adjustedBalance
 	updated, err := state.SerializeAccountRoot(ar)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := clone.Update(key, updated); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
+	// Run preclaim with OpenLedger=false + EnforceLoadFee=true, mirroring
+	// ApplyTransaction. The open-ledger fee ESCALATION (txnsExpected-based) is
+	// the TxQ's own feeLevel-vs-requiredFeeLevel decision, not a preclaim
+	// rejection; checkFee here must only enforce the load-scaled base fee
+	// (a no-op at normal load), matching rippled Transactor::checkFee against
+	// the TxQ open view. Using OpenLedger=true would reject every below-escalation
+	// submission with telINSUF_FEE_P instead of letting it queue.
 	engineCfg := tx.EngineConfig{
 		BaseFee:                   a.cfg.BaseFee,
 		ReserveBase:               a.cfg.ReserveBase,
@@ -246,13 +281,14 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		LedgerSequence:            clone.Sequence(),
 		NetworkID:                 a.cfg.NetworkID,
 		ParentCloseTime:           a.cfg.ParentCloseTime,
+		ParentHash:                a.view.ParentHash(),
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
-		OpenLedger:                true,
 		Rules:                     a.cfg.Rules,
 		FeeTrack:                  a.cfg.FeeTrack,
+		EnforceLoadFee:            true,
 	}
-	engine := tx.NewEngine(clone, engineCfg)
+	engine := txengine.NewEngine(clone, engineCfg)
 	return engine.Preclaim(txn, txHash)
 }
 
@@ -279,7 +315,7 @@ type txqSandbox struct {
 	child  *TxqAdapter
 }
 
-func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	return s.child.ApplyTransaction(txn)
 }
 
@@ -298,18 +334,5 @@ func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, bo
 	if a.view == nil {
 		return nil, false
 	}
-	key := keylet.Account(accountID)
-	exists, err := a.view.Exists(key)
-	if err != nil || !exists {
-		return nil, false
-	}
-	data, err := a.view.Read(key)
-	if err != nil {
-		return nil, false
-	}
-	ar, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return nil, false
-	}
-	return ar, true
+	return state.ReadAccountRoot(a.view, accountID)
 }

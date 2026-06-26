@@ -2,10 +2,10 @@ package genesis
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -17,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -25,8 +24,8 @@ const (
 	// InitialXRP is the total XRP in existence (100 billion XRP in drops)
 	InitialXRP = 100_000_000_000 * 1_000_000
 
-	// GenesisTimeResolution is the close time resolution for the genesis ledger.
-	// Reference: rippled LedgerTiming.h ledgerGenesisTimeResolution = ledgerPossibleTimeResolutions[0] = 10s
+	// GenesisTimeResolution is the close time resolution for the genesis ledger
+	// (10s, the smallest valid resolution).
 	GenesisTimeResolution = 10
 
 	// GenesisLedgerSequence is the sequence number of the genesis ledger
@@ -85,25 +84,23 @@ type InitialAccount struct {
 }
 
 // DefaultGenesisAmendments returns the amendment IDs to include in the genesis
-// ledger. This matches rippled's behavior of enabling all non-vetoed amendments
-// at genesis via getDesired() (AmendmentTable.h:134-139).
+// ledger: all non-vetoed amendments, matching rippled's genesis behaviour.
 func DefaultGenesisAmendments() [][32]byte {
 	features := amendment.DefaultYesFeatures()
 	ids := make([][32]byte, len(features))
 	for i, f := range features {
 		ids[i] = f.ID
 	}
-	// Sort by hash to match rippled's std::map<uint256> ordering
+	// Sort by hash to match rippled's amendment ordering.
 	sort.Slice(ids, func(i, j int) bool {
 		return bytes.Compare(ids[i][:], ids[j][:]) < 0
 	})
 	return ids
 }
 
-// DefaultConfig returns the default genesis configuration.
-// Fee format (modern vs legacy) is automatically derived from whether
-// the XRPFees amendment is in the Amendments list, matching rippled's
-// genesis behavior (Ledger.cpp:168-229).
+// DefaultConfig returns the default genesis configuration. The fee format
+// (modern vs legacy) is derived from whether the XRPFees amendment is in the
+// Amendments list.
 func DefaultConfig() Config {
 	return Config{
 		TotalXRP:            InitialXRP,
@@ -115,16 +112,10 @@ func DefaultConfig() Config {
 	}
 }
 
-// hasXRPFeesAmendment checks if the XRPFees amendment is in the amendments list.
-// This determines whether to use modern (Amount) or legacy (UInt32/UInt64) fee fields.
-// Reference: rippled Ledger.cpp checks for featureXRPFees in the amendments vector.
+// hasXRPFeesAmendment reports whether the XRPFees amendment is in the list,
+// which selects modern (Amount) vs legacy (UInt32/UInt64) fee fields.
 func hasXRPFeesAmendment(amendments [][32]byte) bool {
-	for _, a := range amendments {
-		if a == amendment.FeatureXRPFees {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(amendments, amendment.FeatureXRPFees)
 }
 
 // GenesisLedger represents a freshly created genesis ledger
@@ -144,24 +135,20 @@ func GenerateGenesisAccountID() ([20]byte, string, error) {
 
 // GenerateAccountIDFromPassphrase derives an account ID from a passphrase.
 func GenerateAccountIDFromPassphrase(passphrase string) ([20]byte, string, error) {
-	// Generate seed from passphrase using SHA512-Half
 	seedHash := common.Sha512Half([]byte(passphrase))
-	seed := seedHash[:16] // Use first 16 bytes as seed
+	seed := seedHash[:16]
 
-	// Derive keypair using secp256k1
 	algo := secp256k1.SECP256K1()
 	_, pubKeyHex, err := algo.DeriveKeypair(seed, false)
 	if err != nil {
 		return [20]byte{}, "", err
 	}
 
-	// Generate classic address from public key
 	address, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(pubKeyHex)
 	if err != nil {
 		return [20]byte{}, "", err
 	}
 
-	// Decode back to get the 20-byte account ID
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(address)
 	if err != nil {
 		return [20]byte{}, "", err
@@ -187,7 +174,6 @@ func DecodeAddress(address string) ([20]byte, error) {
 
 // Create creates a new genesis ledger with the given configuration.
 func Create(cfg Config) (*GenesisLedger, error) {
-	// Apply defaults for zero values
 	totalXRP := cfg.TotalXRP
 	if totalXRP == 0 {
 		totalXRP = InitialXRP
@@ -203,25 +189,16 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		closeTimeRes = GenesisTimeResolution
 	}
 
-	// Generate genesis account from passphrase
 	accountID, address, err := GenerateAccountIDFromPassphrase(passphrase)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate genesis account: %w", err)
 	}
 
-	// Create state map (account state tree)
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create state map: %w", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 
-	// Create transaction map (empty for genesis)
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transaction map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
-	// Calculate genesis account balance (total XRP minus initial accounts)
+	// The genesis account holds the total supply minus any initial accounts.
 	genesisBalance := totalXRP
 	for _, acc := range cfg.InitialAccounts {
 		if acc.Balance > genesisBalance {
@@ -230,12 +207,10 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		genesisBalance -= acc.Balance
 	}
 
-	// 1. Create genesis account with remaining XRP
 	if err := createGenesisAccountWithBalance(stateMap, accountID, genesisBalance); err != nil {
 		return nil, fmt.Errorf("failed to create genesis account: %w", err)
 	}
 
-	// 2. Create initial accounts if specified
 	for _, acc := range cfg.InitialAccounts {
 		accID, err := DecodeAddress(acc.Address)
 		if err != nil {
@@ -246,29 +221,24 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		}
 	}
 
-	// 3. Create fee settings
 	if err := createFeeSettings(stateMap, cfg); err != nil {
 		return nil, fmt.Errorf("failed to create fee settings: %w", err)
 	}
 
-	// 4. Create amendments if specified
 	if len(cfg.Amendments) > 0 {
 		if err := createAmendments(stateMap, cfg.Amendments); err != nil {
 			return nil, fmt.Errorf("failed to create amendments: %w", err)
 		}
 	}
 
-	// Make state map immutable
 	if err := stateMap.SetImmutable(); err != nil {
 		return nil, fmt.Errorf("failed to make state map immutable: %w", err)
 	}
 
-	// Make tx map immutable
 	if err := txMap.SetImmutable(); err != nil {
 		return nil, fmt.Errorf("failed to make tx map immutable: %w", err)
 	}
 
-	// Get hashes
 	accountHash, err := stateMap.Hash()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get state map hash: %w", err)
@@ -279,7 +249,6 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		return nil, fmt.Errorf("failed to get tx map hash: %w", err)
 	}
 
-	// Create ledger header
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         GenesisLedgerSequence,
 		ParentCloseTime:     time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC),
@@ -294,7 +263,6 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		Accepted:            true,
 	}
 
-	// Calculate ledger hash
 	ledgerHeader.Hash = CalculateLedgerHash(ledgerHeader)
 
 	return &GenesisLedger{
@@ -308,7 +276,6 @@ func Create(cfg Config) (*GenesisLedger, error) {
 
 // createGenesisAccountWithBalance creates the genesis account entry with a specific balance.
 func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte, balance uint64) error {
-	// Create account root entry
 	account := &accountRoot{
 		Account:    accountID,
 		Sequence:   1,
@@ -316,27 +283,21 @@ func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte
 		OwnerCount: 0,
 	}
 
-	// Serialize the account entry
 	data, err := SerializeAccountRoot(account)
 	if err != nil {
 		return err
 	}
 
-	// Get the keylet for this account
 	k := keylet.Account(accountID)
-
-	// Add to state map
 	return stateMap.Put(k.Key, data)
 }
 
 // createInitialAccount creates an additional account at genesis.
 func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance uint64, sequence uint32, flags uint32) error {
-	// Use sequence 1 if not specified
 	if sequence == 0 {
 		sequence = 1
 	}
 
-	// Create account root entry
 	account := &accountRoot{
 		Flags:      flags,
 		Account:    accountID,
@@ -345,23 +306,18 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 		OwnerCount: 0,
 	}
 
-	// Serialize the account entry
 	data, err := SerializeAccountRoot(account)
 	if err != nil {
 		return err
 	}
 
-	// Get the keylet for this account
 	k := keylet.Account(accountID)
-
-	// Add to state map
 	return stateMap.Put(k.Key, data)
 }
 
-// createFeeSettings creates the fee settings entry.
-// The fee format is derived from the amendments list: modern (Amount fields)
-// if XRPFees is present, legacy (UInt32/UInt64) otherwise.
-// Reference: rippled Ledger.cpp checks featureXRPFees in the amendments vector.
+// createFeeSettings creates the fee settings entry. The format is derived from
+// the amendments list: modern (Amount) fields if XRPFees is present, legacy
+// (UInt32/UInt64) otherwise.
 func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
 	var feeSettings *feeSettings
 
@@ -380,135 +336,78 @@ func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
 		)
 	}
 
-	// Serialize the fee settings entry
 	data, err := serializeFeeSettings(feeSettings)
 	if err != nil {
 		return err
 	}
 
-	// Get the keylet for fee settings
 	k := keylet.Fees()
-
-	// Add to state map
 	return stateMap.Put(k.Key, data)
 }
 
 // createAmendments creates the amendments entry with the specified amendments.
 func createAmendments(stateMap *shamap.SHAMap, amendments [][32]byte) error {
-	// Serialize amendments
 	data, err := serializeAmendments(amendments)
 	if err != nil {
 		return err
 	}
 
-	// Get the keylet for amendments
 	k := keylet.Amendments()
-
-	// Add to state map
 	return stateMap.Put(k.Key, data)
 }
 
-// CalculateLedgerHash computes the hash of a ledger header.
-// This matches rippled's calculateLedgerHash function.
+// CalculateLedgerHash computes the hash of a ledger header. It delegates to the
+// canonical header.CalculateHash so the genesis, ledger, and inbound-replay
+// paths all hash byte-identically.
 func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
-	// Build the data to hash
-	// Format: prefix + seq + drops + parentHash + txHash + accountHash +
-	//         parentCloseTime + closeTime + closeTimeRes + closeFlags
-
-	data := make([]byte, 0, 122)
-
-	// Hash prefix for ledger master
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
-
-	// Sequence (uint32, big-endian)
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, h.LedgerIndex)
-	data = append(data, seqBytes...)
-
-	// Total drops (uint64, big-endian)
-	dropsBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(dropsBytes, h.Drops)
-	data = append(data, dropsBytes...)
-
-	// Parent hash (32 bytes)
-	data = append(data, h.ParentHash[:]...)
-
-	// Transaction hash (32 bytes)
-	data = append(data, h.TxHash[:]...)
-
-	// Account hash (32 bytes)
-	data = append(data, h.AccountHash[:]...)
-
-	// Parent close time (uint32, seconds since ripple epoch - Jan 1, 2000)
-	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, parentCloseBytes...)
-
-	// Close time (uint32, seconds since ripple epoch - Jan 1, 2000)
-	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, closeTimeBytes...)
-
-	// Close time resolution (uint8)
-	data = append(data, byte(h.CloseTimeResolution))
-
-	// Close flags (uint8)
-	data = append(data, h.CloseFlags)
-
-	return common.Sha512Half(data)
+	return header.CalculateHash(h)
 }
 
-// serializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
+// SerializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
 func SerializeAccountRoot(a *accountRoot) ([]byte, error) {
-	// Convert account ID to classic address
 	address, err := addresscodec.EncodeAccountIDToClassicAddress(a.Account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
 	}
 
-	// Build the JSON representation for the binary codec.
-	// All soeREQUIRED fields for AccountRoot must be present (rippled auto-initializes them):
-	// LedgerEntryType, Flags, Account, Sequence, Balance, OwnerCount,
-	// PreviousTxnID, PreviousTxnLgrSeq
-	// Reference: rippled ledger_entries.macro lines 147-153
+	// All soeREQUIRED AccountRoot fields must be present (rippled auto-initialises
+	// them): LedgerEntryType, Flags, Account, Sequence, Balance, OwnerCount,
+	// PreviousTxnID, PreviousTxnLgrSeq.
 	jsonObj := map[string]any{
 		"LedgerEntryType":   "AccountRoot",
-		"Flags":             uint32(0),
+		"Flags":             a.Flags,
 		"Account":           address,
 		"Balance":           fmt.Sprintf("%d", a.Balance), // XRP balance as drops string
 		"Sequence":          a.Sequence,
-		"OwnerCount":        uint32(0),
+		"OwnerCount":        a.OwnerCount,
 		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
 		"PreviousTxnLgrSeq": uint32(0),
 	}
 
-	// Encode using the binary codec
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode AccountRoot: %w", err)
 	}
 
-	// Convert hex string to bytes
 	return hex.DecodeString(hexStr)
 }
 
 // serializeFeeSettings serializes a FeeSettings entry to bytes using the XRPL binary codec.
 func serializeFeeSettings(f *feeSettings) ([]byte, error) {
-	// Build the JSON representation for the binary codec.
-	// Rippled auto-initializes Flags=0 as a required field.
+	// Rippled auto-initialises Flags=0 as a required field.
 	jsonObj := map[string]any{
 		"LedgerEntryType": "FeeSettings",
 		"Flags":           uint32(0),
 	}
 
 	if f.IsUsingModernFees() {
-		// Modern format (XRPFees amendment) - uses Amount fields
+		// Modern format (XRPFees amendment): Amount fields.
 		jsonObj["BaseFeeDrops"] = fmt.Sprintf("%d", f.BaseFeeDrops)
 		jsonObj["ReserveBaseDrops"] = fmt.Sprintf("%d", f.ReserveBaseDrops)
 		jsonObj["ReserveIncrementDrops"] = fmt.Sprintf("%d", f.ReserveIncrementDrops)
 	} else {
-		// Legacy format - uses UInt64/UInt32 fields
-		// UInt64 fields (BaseFee) must be hex strings without leading zeros
+		// Legacy format: UInt64/UInt32 fields. The UInt64 BaseFee must be a hex
+		// string without leading zeros.
 		if f.BaseFee != nil {
 			jsonObj["BaseFee"] = fmt.Sprintf("%x", *f.BaseFee)
 		}
@@ -523,38 +422,33 @@ func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 		}
 	}
 
-	// Encode using the binary codec
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode FeeSettings: %w", err)
 	}
 
-	// Convert hex string to bytes
 	return hex.DecodeString(hexStr)
 }
 
 // serializeAmendments serializes an amendments list to bytes using the XRPL binary codec.
 func serializeAmendments(amendments [][32]byte) ([]byte, error) {
-	// Convert amendment hashes to hex strings for Vector256
+	// Amendment hashes become hex strings for the Vector256 field.
 	amendmentHexes := make([]string, len(amendments))
 	for i, amendment := range amendments {
 		amendmentHexes[i] = fmt.Sprintf("%064X", amendment)
 	}
 
-	// Build the JSON representation for the binary codec.
-	// Rippled auto-initializes Flags=0 as a required field.
+	// Rippled auto-initialises Flags=0 as a required field.
 	jsonObj := map[string]any{
 		"LedgerEntryType": "Amendments",
 		"Flags":           uint32(0),
 		"Amendments":      amendmentHexes,
 	}
 
-	// Encode using the binary codec
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Amendments: %w", err)
 	}
 
-	// Convert hex string to bytes
 	return hex.DecodeString(hexStr)
 }

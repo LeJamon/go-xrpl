@@ -2,7 +2,10 @@ package statecompare
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 func TestGetEnvOrDefault(t *testing.T) {
@@ -88,5 +91,83 @@ func TestValidateRangeFromGreaterThanTo(t *testing.T) {
 	}
 	if missing != 0 {
 		t.Errorf("ValidateRange(10, 5) missing = %d, want 0", missing)
+	}
+}
+
+// testMetaBlob serializes a minimal metadata STObject carrying the given
+// sfTransactionIndex, the way the engine writes it at ledger close.
+func testMetaBlob(t *testing.T, txIndex uint32) []byte {
+	t.Helper()
+	hexStr, err := binarycodec.Encode(map[string]any{
+		"TransactionResult": "tesSUCCESS",
+		"TransactionIndex":  txIndex,
+	})
+	if err != nil {
+		t.Fatalf("encode metadata: %v", err)
+	}
+	b, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("decode hex: %v", err)
+	}
+	return b
+}
+
+func TestMetaTransactionIndex(t *testing.T) {
+	for _, want := range []uint32{0, 1, 5, 60, 1000} {
+		got, err := metaTransactionIndex(testMetaBlob(t, want))
+		if err != nil {
+			t.Fatalf("metaTransactionIndex(%d): %v", want, err)
+		}
+		if got != want {
+			t.Errorf("metaTransactionIndex = %d, want %d", got, want)
+		}
+	}
+}
+
+func TestMetaTransactionIndexErrors(t *testing.T) {
+	if _, err := metaTransactionIndex(nil); err == nil {
+		t.Error("empty metadata: want error, got nil")
+	}
+	hexStr, err := binarycodec.Encode(map[string]any{"TransactionResult": "tesSUCCESS"})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	noIdx, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("decode hex: %v", err)
+	}
+	if _, err := metaTransactionIndex(noIdx); err == nil {
+		t.Error("metadata missing TransactionIndex: want error, got nil")
+	}
+}
+
+// TestOrderByTransactionIndex feeds transactions in transaction-tree (hash)
+// order — unrelated to apply order — and asserts they come back in
+// sfTransactionIndex order so a single replay pass matches mainnet.
+func TestOrderByTransactionIndex(t *testing.T) {
+	txs := []Transaction{
+		{TxHash: [32]byte{0xAA}, MetaBlob: testMetaBlob(t, 2)},
+		{TxHash: [32]byte{0xBB}, MetaBlob: testMetaBlob(t, 0)},
+		{TxHash: [32]byte{0xCC}, MetaBlob: testMetaBlob(t, 1)},
+	}
+	if err := orderByTransactionIndex(txs); err != nil {
+		t.Fatalf("orderByTransactionIndex: %v", err)
+	}
+
+	wantFirstByte := []byte{0xBB, 0xCC, 0xAA} // indices 0, 1, 2
+	for i := range txs {
+		if txs[i].TxIndex != i {
+			t.Errorf("txs[%d].TxIndex = %d, want %d", i, txs[i].TxIndex, i)
+		}
+		if txs[i].TxHash[0] != wantFirstByte[i] {
+			t.Errorf("txs[%d].TxHash[0] = %#x, want %#x", i, txs[i].TxHash[0], wantFirstByte[i])
+		}
+	}
+}
+
+func TestOrderByTransactionIndexBadMeta(t *testing.T) {
+	txs := []Transaction{{TxHash: [32]byte{0x01}, MetaBlob: nil}}
+	if err := orderByTransactionIndex(txs); err == nil {
+		t.Error("nil metadata: want error, got nil")
 	}
 }

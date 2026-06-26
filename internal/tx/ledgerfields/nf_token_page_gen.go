@@ -124,7 +124,7 @@ func (n *NFTokenPage) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenpageBitNextPageMin != 0 && !(skipDefault && isZeroHexString(n.NextPageMin)) {
 		out["NextPageMin"] = n.NextPageMin
 	}
-	if n.present&nftokenpageBitNFTokens != 0 {
+	if n.present&nftokenpageBitNFTokens != 0 && !(skipDefault && len(n.NFTokens) == 0) {
 		out["NFTokens"] = n.NFTokens
 	}
 	if n.present&nftokenpageBitFlags != 0 && !(skipDefault && n.Flags == 0) {
@@ -147,14 +147,14 @@ func (n *NFTokenPage) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (n *NFTokenPage) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*NFTokenPage)
-	if !ok || p == nil {
+	prv, ok := prev.(*NFTokenPage)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "PreviousPageMin", p.PreviousPageMin, n.PreviousPageMin, p.present&nftokenpageBitPreviousPageMin, n.present&nftokenpageBitPreviousPageMin)
-	emitIfChangedString(out, "NextPageMin", p.NextPageMin, n.NextPageMin, p.present&nftokenpageBitNextPageMin, n.present&nftokenpageBitNextPageMin)
-	emitIfChangedDeep(out, "NFTokens", p.NFTokens, n.NFTokens, p.present&nftokenpageBitNFTokens, n.present&nftokenpageBitNFTokens)
-	emitIfChangedUint32(out, "Flags", p.Flags, n.Flags, p.present&nftokenpageBitFlags, n.present&nftokenpageBitFlags)
+	emitIfChangedString(out, "PreviousPageMin", prv.PreviousPageMin, n.PreviousPageMin, prv.present&nftokenpageBitPreviousPageMin, n.present&nftokenpageBitPreviousPageMin)
+	emitIfChangedString(out, "NextPageMin", prv.NextPageMin, n.NextPageMin, prv.present&nftokenpageBitNextPageMin, n.present&nftokenpageBitNextPageMin)
+	emitIfChangedDeep(out, "NFTokens", prv.NFTokens, n.NFTokens, prv.present&nftokenpageBitNFTokens, n.present&nftokenpageBitNFTokens)
+	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenpageBitFlags, n.present&nftokenpageBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

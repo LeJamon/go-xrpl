@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/cmdexit"
+	"github.com/LeJamon/go-xrpl/internal/replaytool"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
@@ -15,7 +18,6 @@ var (
 	configFile string
 	debug      bool
 	verbose    bool
-	quiet      bool
 
 	// globalConfig holds the loaded configuration, available to all subcommands.
 	// It is nil until initConfig() runs (which happens before any command's Run function).
@@ -36,6 +38,11 @@ with concurrent processing capabilities. This is NOT a direct translation of the
 C++ rippled implementation but rather a native Go implementation that follows
 Go conventions and patterns while maintaining protocol compatibility.`,
 	Version: version.Version,
+
+	// Execute() is the single error printer: cobra must not also print the
+	// error (it would duplicate) nor dump usage on a runtime failure.
+	SilenceErrors: true,
+	SilenceUsage:  true,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -45,21 +52,33 @@ func Execute() {
 	// subcommand can run. Safe to call multiple times.
 	all.RegisterAll()
 
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	err := rootCmd.Execute()
+	if err == nil {
+		return
 	}
+	// cmdexit.ErrReported means the command already printed its own failure
+	// report (a replay divergence, a compare diff); only the exit code is
+	// left. Any other error is printed here — the single error printer, since
+	// rootCmd sets SilenceErrors.
+	if !errors.Is(err, cmdexit.ErrReported) {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	}
+	os.Exit(1)
 }
 
 func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Global flags — operational concerns only
-	rootCmd.PersistentFlags().StringVar(&configFile, "conf", "", "configuration file path (required)")
+	rootCmd.PersistentFlags().StringVar(&configFile, "conf", "", "configuration file path (required by server, rpc)")
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable normally suppressed debug logging")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging")
-	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress output to console after startup")
-	rootCmd.PersistentFlags().Bool("silent", false, "no output to console after startup")
+
+	// The replay developer commands live in their own package; register
+	// them here rather than via self-registration into this package's root.
+	for _, c := range replaytool.NewCommands() {
+		rootCmd.AddCommand(c)
+	}
 }
 
 // initConfig loads the configuration file when --conf is set; load

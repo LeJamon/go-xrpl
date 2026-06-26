@@ -27,11 +27,11 @@ var _ LedgerHeader = (*ledger.Ledger)(nil)
 
 type hashLookupFunc func(hash [32]byte) (LedgerHeader, error)
 
-// LedgerProvider satisfies LedgerAncestryProvider. It materialises a
+// AncestryProvider satisfies LedgerAncestryProvider. It materialises a
 // ledger's ancestor slice once per LedgerID and caches it in an LRU,
 // avoiding O(depth²) ParentHash walks across the trie's many
 // Ancestor(s) calls. Cached chains are immutable so never invalidated.
-type LedgerProvider struct {
+type AncestryProvider struct {
 	lookup hashLookupFunc
 
 	mu       sync.Mutex
@@ -45,13 +45,13 @@ type cacheEntry struct {
 	pl *providerLedger
 }
 
-// NewLedgerProvider wraps the ledger service. A nil svc returns a
+// NewAncestryProvider wraps the ledger service. A nil svc returns a
 // disabled provider that always reports (nil, false).
-func NewLedgerProvider(svc *service.Service) *LedgerProvider {
+func NewAncestryProvider(svc *service.Service) *AncestryProvider {
 	if svc == nil {
-		return newLedgerProviderFromLookup(nil)
+		return newAncestryProviderFromLookup(nil)
 	}
-	return newLedgerProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
+	return newAncestryProviderFromLookup(func(hash [32]byte) (LedgerHeader, error) {
 		l, err := svc.GetLedgerByHash(hash)
 		if err != nil {
 			return nil, err
@@ -60,8 +60,8 @@ func NewLedgerProvider(svc *service.Service) *LedgerProvider {
 	})
 }
 
-func newLedgerProviderFromLookup(fn hashLookupFunc) *LedgerProvider {
-	return &LedgerProvider{
+func newAncestryProviderFromLookup(fn hashLookupFunc) *AncestryProvider {
+	return &AncestryProvider{
 		lookup:   fn,
 		maxItems: providerCacheCapacity,
 		cache:    make(map[consensus.LedgerID]*list.Element),
@@ -70,7 +70,7 @@ func newLedgerProviderFromLookup(fn hashLookupFunc) *LedgerProvider {
 }
 
 // LedgerByID implements LedgerAncestryProvider.
-func (p *LedgerProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, bool) {
+func (p *AncestryProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, bool) {
 	if p == nil || p.lookup == nil {
 		return nil, false
 	}
@@ -87,7 +87,7 @@ func (p *LedgerProvider) LedgerByID(id consensus.LedgerID) (ledgertrie.Ledger, b
 	return built, true
 }
 
-func (p *LedgerProvider) cacheGet(id consensus.LedgerID) (*providerLedger, bool) {
+func (p *AncestryProvider) cacheGet(id consensus.LedgerID) (*providerLedger, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	elem, ok := p.cache[id]
@@ -98,7 +98,7 @@ func (p *LedgerProvider) cacheGet(id consensus.LedgerID) (*providerLedger, bool)
 	return elem.Value.(*cacheEntry).pl, true
 }
 
-func (p *LedgerProvider) cachePut(id consensus.LedgerID, pl *providerLedger) {
+func (p *AncestryProvider) cachePut(id consensus.LedgerID, pl *providerLedger) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if elem, ok := p.cache[id]; ok {
@@ -122,7 +122,7 @@ func (p *LedgerProvider) cachePut(id consensus.LedgerID, pl *providerLedger) {
 // buildChain walks parent hashes backwards from id, up to
 // maxProviderAncestors links. Returns nil if the tip is unresolvable;
 // partial chains are returned with a higher minSeq.
-func (p *LedgerProvider) buildChain(id consensus.LedgerID) *providerLedger {
+func (p *AncestryProvider) buildChain(id consensus.LedgerID) *providerLedger {
 	tip, err := p.lookup([32]byte(id))
 	if err != nil || tip == nil {
 		return nil
@@ -132,10 +132,7 @@ func (p *LedgerProvider) buildChain(id consensus.LedgerID) *providerLedger {
 		return nil
 	}
 
-	targetDepth := tipSeq - 1
-	if targetDepth > maxProviderAncestors {
-		targetDepth = maxProviderAncestors
-	}
+	targetDepth := min(tipSeq-1, maxProviderAncestors)
 	if targetDepth == 0 {
 		return &providerLedger{id: id, seq: tipSeq, minSeq: tipSeq}
 	}
@@ -159,7 +156,7 @@ func (p *LedgerProvider) buildChain(id consensus.LedgerID) *providerLedger {
 
 		// If parent's chain is already cached, borrow its entries.
 		if cached, hit := p.cacheGet(parentHash); hit {
-			for j := uint32(0); j < idx; j++ {
+			for j := range idx {
 				wantSeq := myMinSeq + j
 				if wantSeq >= cached.minSeq && wantSeq < cached.seq {
 					ancestors[j] = cached.ancestors[wantSeq-cached.minSeq]

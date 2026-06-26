@@ -151,8 +151,10 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 	}
 }
 
-// TestValidationTracker_TrieNegUNLExcluded confirms a validator on
-// the negUNL never enters the trie, matching the flat-count filter.
+// TestValidationTracker_TrieNegUNLExcluded confirms a validator on the
+// negUNL is excluded from GetTrustedSupport's quorum count, even though
+// (post-#939) it now enters the trie for preferred-ledger steering. The
+// exclusion lives on the support read path, not on trie membership.
 func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 	now := time.Now()
@@ -172,9 +174,73 @@ func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
 	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 
-	// Only n1 counts; n2 on negUNL is excluded.
+	// Only n1 counts toward support; n2 on negUNL is excluded.
 	if got := vt.GetTrustedSupport(abc.ID()); got != 1 {
-		t.Errorf("negUNL validator should not contribute: got %d, want 1", got)
+		t.Errorf("negUNL validator should not contribute to support: got %d, want 1", got)
+	}
+}
+
+// TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum is the
+// issue #939 regression: a negUNL validator must STEER GetPreferred
+// (rippled's updateTrie gates on trusted() only) while being EXCLUDED
+// from GetTrustedSupport's quorum/peer-LCL count.
+//
+// Topology — n1 (good) backs ab; n2 + n3 (both negUNL) back ac:
+//
+//	root -> a -> ab   (n1, trusted)
+//	          \-> ac  (n2, n3 — both on negUNL)
+//
+// Steering (negUNL-inclusive trie): ac has branchSupport 2 vs ab's 1, so
+// GetPreferred descends to ac — driven entirely by the negUNL validators,
+// exactly as rippled would. Quorum/support (negUNL-excluded): ac has 0
+// backing, the shared ancestor a has only n1's 1. The pre-fix trie
+// (which dropped negUNL at insert) would instead have steered to ab.
+func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	a := b.Build("a")
+	ab := b.Build("ab")
+	ac := b.Build("ac")
+	provider := newMapAncestryProvider()
+	provider.add(a)
+	provider.add(ab)
+	provider.add(ac)
+
+	n1 := consensus.NodeID{1} // trusted, backs ab
+	n2 := consensus.NodeID{2} // negUNL, backs ac
+	n3 := consensus.NodeID{3} // negUNL, backs ac
+	vt.SetTrusted([]consensus.NodeID{n1, n2, n3})
+	vt.SetNegativeUNL([]consensus.NodeID{n2, n3})
+	vt.SetLedgerAncestryProvider(provider)
+
+	vt.Add(makeTrustedValidation(n1, ab.ID(), ab.Seq(), now))
+	vt.Add(makeTrustedValidation(n2, ac.ID(), ac.Seq(), now))
+	vt.Add(makeTrustedValidation(n3, ac.ID(), ac.Seq(), now))
+
+	// Steering: the two negUNL validators outweigh n1, so GetPreferred
+	// descends into their branch. Without negUNL steering it would be ab.
+	id, _, ok := vt.GetPreferred(0)
+	if !ok {
+		t.Fatal("GetPreferred should return a result with trie wired")
+	}
+	if id != ac.ID() {
+		t.Errorf("negUNL validators must steer GetPreferred to ac; got a different ID (pre-fix would yield ab)")
+	}
+
+	// Quorum/support: negUNL validators contribute nothing.
+	if got := vt.GetTrustedSupport(ac.ID()); got != 0 {
+		t.Errorf("GetTrustedSupport(ac) must exclude negUNL backers: got %d, want 0", got)
+	}
+	if got := vt.GetTrustedSupport(ab.ID()); got != 1 {
+		t.Errorf("GetTrustedSupport(ab): got %d, want 1", got)
+	}
+	// Even at the shared ancestor, only the single non-negUNL validator
+	// counts — the descendant negUNL tips are filtered out.
+	if got := vt.GetTrustedSupport(a.ID()); got != 1 {
+		t.Errorf("GetTrustedSupport(a) must exclude negUNL descendants: got %d, want 1", got)
 	}
 }
 
@@ -355,5 +421,31 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 	}
 	if got := vt.GetTrustedSupport(abc.ID()); got != 0 {
 		t.Errorf("post-expire branchSupport(abc): got %d, want 0", got)
+	}
+}
+
+// TestValidationTracker_ProposersFinishedIncludesNegUNL pins #939's
+// getNodesAfter-equivalent: ProposersFinished counts negUNL validators
+// (rippled's getNodesAfter reads the trusted()-only trie), unlike the
+// quorum count. Exercises the seq-only fallback (no ancestry provider)
+// where the prior code wrongly skipped negUNL.
+func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	n1 := consensus.NodeID{1}
+	n2 := consensus.NodeID{2}
+	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.SetNegativeUNL([]consensus.NodeID{n2})
+
+	// Both validators advance past prev (seq 100). With no ancestry
+	// provider, ProposersFinished takes the seq-only fallback.
+	vt.Add(makeTrustedValidation(n1, consensus.LedgerID{0xA1}, 101, now))
+	vt.Add(makeTrustedValidation(n2, consensus.LedgerID{0xA2}, 101, now))
+
+	prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
+	if got := vt.ProposersFinished(prev); got != 2 {
+		t.Errorf("ProposersFinished must include negUNL validators: got %d, want 2", got)
 	}
 }

@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ApplyResult contains the result of applying a transaction
 type ApplyResult struct {
 	// Result is the transaction result code
-	Result Result
+	Result ter.Result
 
 	// Applied indicates if the transaction was applied to the ledger
 	Applied bool
@@ -36,7 +37,7 @@ type Metadata struct {
 	TransactionIndex uint32
 
 	// TransactionResult is the result code
-	TransactionResult Result
+	TransactionResult ter.Result
 
 	// DeliveredAmount is the actual amount delivered (for partial payments)
 	DeliveredAmount *Amount
@@ -94,54 +95,66 @@ func (m Metadata) MarshalJSON() ([]byte, error) {
 	return json.Marshal(output)
 }
 
-// affectedNodeToRippledFormat converts an AffectedNode to rippled's nested format
+// affectedNodeToRippledFormat converts an AffectedNode to rippled's nested
+// format for JSON output. It wraps the shared inner-node assembly so the
+// RPC/JSON metadata and the binary/consensus metadata (MetadataToMap) stay in
+// lockstep — including the empty `PreviousFields: {}` (E6 E1) marker and the
+// DeletedNode PreviousTxnID placement.
 func affectedNodeToRippledFormat(n AffectedNode) (map[string]any, error) {
-	// Build the inner node content
+	return map[string]any{
+		n.NodeType: buildAffectedNodeInner(n),
+	}, nil
+}
+
+// buildAffectedNodeInner assembles the inner content of a single AffectedNode
+// (the object under "CreatedNode"/"ModifiedNode"/"DeletedNode"). It is the
+// single source of truth shared by the JSON serializer
+// (affectedNodeToRippledFormat) and the binary serializer (MetadataToMap), so
+// the two encodings can never drift.
+//
+// The emission rules mirror rippled's ApplyStateTable:
+//   - LedgerEntryType / LedgerIndex are always present.
+//   - PreviousTxnID + PreviousTxnLgrSeq are emitted as a pair, both or neither
+//     (one `if (!prevTxID.isZero())` guard, ApplyStateTable.cpp:560-572), and
+//     only for ModifiedNode. On a DeletedNode rippled carries the prior-txn
+//     info inside FinalFields via sMD_DeleteFinal, not at the node level; on a
+//     CreatedNode there is no prior txn.
+//   - FinalFields / PreviousFields / NewFields are omitted when empty, except
+//     that an EmitEmptyPreviousFields signal forces an empty `PreviousFields:
+//     {}` marker (the E6 E1 wire case) even when no orig value was recorded.
+func buildAffectedNodeInner(n AffectedNode) map[string]any {
 	inner := make(map[string]any)
 
-	// FinalFields (for ModifiedNode and DeletedNode)
-	if n.FinalFields != nil {
-		inner["FinalFields"] = n.FinalFields
-	}
-
-	// LedgerEntryType
 	inner["LedgerEntryType"] = n.LedgerEntryType
-
-	// LedgerIndex
 	inner["LedgerIndex"] = n.LedgerIndex
 
-	// PreviousFields (for ModifiedNode only, omit if nil/empty)
-	if n.PreviousFields != nil && len(n.PreviousFields) > 0 {
-		inner["PreviousFields"] = n.PreviousFields
-	}
-
-	// PreviousTxnID + PreviousTxnLgrSeq: emit as a PAIR, both or
-	// neither. Rippled writes them together inside one
-	// `if (!prevTxID.isZero())` guard (ApplyStateTable.cpp:560-572);
-	// independent gates would leak one of the two on genesis-touching
-	// txs where the master has no prior tx.
-	prevTxnIDPresent := n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID)
-	if prevTxnIDPresent {
+	if n.NodeType == "ModifiedNode" && n.PreviousTxnID != "" && !isZeroHashHex(n.PreviousTxnID) {
 		inner["PreviousTxnID"] = n.PreviousTxnID
 		inner["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
 	}
 
-	// NewFields (for CreatedNode only, omit if nil)
-	if n.NewFields != nil {
+	if len(n.FinalFields) > 0 {
+		inner["FinalFields"] = n.FinalFields
+	}
+
+	if len(n.PreviousFields) > 0 {
+		inner["PreviousFields"] = n.PreviousFields
+	} else if n.EmitEmptyPreviousFields {
+		inner["PreviousFields"] = map[string]any{}
+	}
+
+	if len(n.NewFields) > 0 {
 		inner["NewFields"] = n.NewFields
 	}
 
-	// Wrap in NodeType (e.g., "ModifiedNode": {...})
-	return map[string]any{
-		n.NodeType: inner,
-	}, nil
+	return inner
 }
 
 func isZeroHashHex(s string) bool {
 	if len(s) != 64 {
 		return false
 	}
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		if s[i] != '0' {
 			return false
 		}

@@ -87,10 +87,10 @@ func TestMemoryCollector_NotifyEvent_ConcurrentSafe(t *testing.T) {
 	const perG = 250
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < perG; j++ {
+			for j := range perG {
 				// Use ms == j+1 so SumMs has a known closed-form value.
 				c.NotifyEvent("e", time.Duration(j+1)*time.Millisecond)
 			}

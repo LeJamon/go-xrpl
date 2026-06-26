@@ -4,24 +4,14 @@ import (
 	"encoding/hex"
 	"strconv"
 
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// DecodeAddress decodes an XRPL address to a 20-byte account ID.
-func DecodeAddress(address string) ([20]byte, error) {
-	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(address)
-	if err != nil {
-		return [20]byte{}, err
-	}
-
-	var accountID [20]byte
-	copy(accountID[:], accountIDBytes)
-	return accountID, nil
-}
 
 // WithSeq sets the sequence number on a transaction manually.
 // This bypasses autofill and allows testing transactions from non-existent accounts.
@@ -65,7 +55,7 @@ func (e *TestEnv) SignWith(txn tx.Transaction, signer *Account) tx.Transaction {
 		// This ensures identical binary serialization and tx hashes.
 		common.TxnSignature = "00"
 	} else {
-		sig, err := tx.SignTransaction(txn, privateKeyHex(signer))
+		sig, err := sign.SignTransaction(txn, privateKeyHex(signer))
 		if err != nil {
 			e.t.Fatalf("Failed to sign transaction: %v", err)
 		}
@@ -82,7 +72,7 @@ func (e *TestEnv) signReal(txn tx.Transaction, signer *Account) {
 	e.t.Helper()
 	common := txn.GetCommon()
 	common.SigningPubKey = hex.EncodeToString(signer.PublicKey)
-	sig, err := tx.SignTransaction(txn, privateKeyHex(signer))
+	sig, err := sign.SignTransaction(txn, privateKeyHex(signer))
 	if err != nil {
 		e.t.Fatalf("Failed to sign transaction: %v", err)
 	}
@@ -92,20 +82,18 @@ func (e *TestEnv) signReal(txn tx.Transaction, signer *Account) {
 // SubmitSigned signs the transaction with the account's own key and submits
 // with signature verification enabled.
 // The signing account is inferred from the transaction's Account field.
-func (e *TestEnv) SubmitSigned(transaction interface{}) TxResult {
+func (e *TestEnv) SubmitSigned(transaction any) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Look up the account by address
 	acc := e.findAccountByAddress(txn.GetCommon().Account)
 	if acc == nil {
 		e.t.Fatalf("SubmitSigned: account %s not registered in test env", txn.GetCommon().Account)
-		return TxResult{Code: "terNO_ACCOUNT", Success: false, Message: "Account not found"}
 	}
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
@@ -117,13 +105,12 @@ func (e *TestEnv) SubmitSigned(transaction interface{}) TxResult {
 // SubmitSignedWith signs the transaction with a different key (e.g. a regular key)
 // and submits with signature verification enabled.
 // Reference: rippled's sig(account) -- sign with regular key.
-func (e *TestEnv) SubmitSignedWith(transaction interface{}, signer *Account) TxResult {
+func (e *TestEnv) SubmitSignedWith(transaction any, signer *Account) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
@@ -136,13 +123,12 @@ func (e *TestEnv) SubmitSignedWith(transaction interface{}, signer *Account) TxR
 // with signature verification enabled.
 // Each signer signs the transaction with their key, sorted by account ID.
 // Reference: rippled's msig(signers...) funclet.
-func (e *TestEnv) SubmitMultiSigned(transaction interface{}, signers []*Account) TxResult {
+func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
@@ -165,12 +151,12 @@ func (e *TestEnv) SubmitMultiSigned(transaction interface{}, signers []*Account)
 
 	// Each signer signs and is added (AddMultiSigner maintains sorted order)
 	for _, signer := range signers {
-		sig, err := tx.SignTransactionForMultiSign(txn, signer.Address, privateKeyHex(signer))
+		sig, err := sign.SignTransactionForMultiSign(txn, signer.Address, privateKeyHex(signer))
 		if err != nil {
 			e.t.Fatalf("Failed to multi-sign for %s: %v", signer.Name, err)
 		}
 
-		err = tx.AddMultiSigner(txn, signer.Address, hex.EncodeToString(signer.PublicKey), sig)
+		err = sign.AddMultiSigner(txn, signer.Address, hex.EncodeToString(signer.PublicKey), sig)
 		if err != nil {
 			e.t.Fatalf("Failed to add multi-signer %s: %v", signer.Name, err)
 		}
@@ -191,7 +177,6 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to decode account address: %v", err)
-			return
 		}
 
 		var id [20]byte
@@ -201,13 +186,11 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 		data, err := e.ledger.Read(accountKey)
 		if err != nil || data == nil {
 			e.t.Fatalf("autoFillForSigning: failed to read account: %v", err)
-			return
 		}
 
-		accountRoot, err := state.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to parse account root: %v", err)
-			return
 		}
 
 		seq := accountRoot.Sequence
@@ -220,32 +203,41 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 	}
 }
 
-// submitWithSigVerification is the internal submit path with signature verification enabled.
-// Callers must auto-fill and sign BEFORE calling this.
+// submitWithSigVerification is the internal submit path with signature
+// verification enabled. Callers must auto-fill and sign BEFORE calling this.
+//
+// It mirrors applyDirect: it seeds and bumps the per-ledger transaction counters
+// (txInLedger / closingTxTotal / fee levels) and derives ParentCloseTime from
+// the ledger header, so a test mixing Submit and SubmitSigned in one close
+// window gets consistent metadata.TransactionIndex and TxQ fee metrics.
 func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	e.t.Helper()
 
-	parentCloseTime := uint32(e.clock.Now().Unix() - protocol.RippleEpochUnix)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   e.baseFee,
-		ReserveBase:               e.reserveBase,
-		ReserveIncrement:          e.reserveIncrement,
-		LedgerSequence:            e.ledger.Sequence(),
-		SkipSignatureVerification: false, // Verify signatures
-		Rules:                     e.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 e.networkID,
-		ParentHash:                e.ledger.ParentHash(),
-		OpenLedger:                e.openLedger,
-	}
+	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{
+		openLedger:       e.openLedger,
+		feeTrack:         true,
+		verifySignatures: true,
+	})
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
+	// Seed txCount so metadata.TransactionIndex matches rippled — see applyDirect.
+	engine.SetBaseTxCount(e.txInLedger)
 	applyResult := engine.Apply(txn)
 
+	if applyResult.Result.IsApplied() {
+		e.txInLedger++
+		e.closingTxTotal++
+		e.recordTxFeeLevel(txn)
+		if counter, ok := txn.(innerTxCounter); ok {
+			e.closingTxTotal += uint32(counter.InnerTxCount())
+		}
+	}
+
 	return TxResult{
-		Code:    applyResult.Result.String(),
-		Success: applyResult.Result.IsSuccess(),
-		Message: applyResult.Message,
+		Code:     applyResult.Result.String(),
+		Success:  applyResult.Result.IsSuccess(),
+		Message:  applyResult.Message,
+		Metadata: applyResult.Metadata,
 	}
 }
 

@@ -28,10 +28,10 @@ import (
 // adaptor.
 type ValidatorsMethod struct{ AdminHandler }
 
-func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
-	publisherLists := []map[string]interface{}{}
+func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+	publisherLists := []map[string]any{}
 	trustedKeys := []string{}
-	signingKeys := map[string]interface{}{}
+	signingKeys := map[string]any{}
 	localStatic := []string{}
 	negativeUNL := []string{}
 
@@ -45,7 +45,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 			publisherCount = vl.PublisherCount()
 			threshold = vl.Threshold()
 			for _, p := range vl.Publishers() {
-				entry := map[string]interface{}{
+				entry := map[string]any{
 					"pubkey_publisher": p.PublicKeyHex,
 					"available":        p.Available,
 					"uri":              p.SiteURI,
@@ -75,7 +75,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 				// `remaining` array of future-dated rotations, omitted
 				// when empty.
 				if len(p.Remaining) > 0 {
-					rem := make([]map[string]interface{}, 0, len(p.Remaining))
+					rem := make([]map[string]any, 0, len(p.Remaining))
 					for _, r := range p.Remaining {
 						// Mirrors rippled appendList at
 						// ValidatorList.cpp:1673-1689 which emits
@@ -83,7 +83,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 						// entry. `version` lives on the top-level publisher
 						// object (line 1695) and is NOT repeated per
 						// remaining entry — keep parity by omitting it here.
-						re := map[string]interface{}{
+						re := map[string]any{
 							"uri":  r.SiteURI,
 							"list": nonNilStrings(r.ValidatorsBase58),
 							"seq":  r.Sequence,
@@ -161,7 +161,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 		listCount++
 	}
 
-	validatorListSummary := map[string]interface{}{
+	validatorListSummary := map[string]any{
 		"count":                    listCount,
 		"validator_list_threshold": threshold,
 	}
@@ -200,7 +200,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 		}
 	}
 
-	resp := map[string]interface{}{
+	resp := map[string]any{
 		"trusted_validator_keys": trustedKeys,
 		"publisher_lists":        publisherLists,
 		"validation_quorum":      quorum,
@@ -219,12 +219,12 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (int
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:672-705.
 type ValidatorListSitesMethod struct{ AdminHandler }
 
-func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
-	sites := []map[string]interface{}{}
+func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+	sites := []map[string]any{}
 
 	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList != nil {
 		for _, s := range ctx.Services.ValidatorList.Sites() {
-			entry := map[string]interface{}{
+			entry := map[string]any{
 				"uri":                  s.URI,
 				"refresh_interval_min": s.RefreshIntervalMin,
 			}
@@ -250,7 +250,7 @@ func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessa
 		}
 	}
 
-	return map[string]interface{}{"validator_sites": sites}, nil
+	return map[string]any{"validator_sites": sites}, nil
 }
 
 // nonNilStrings returns an empty []string instead of nil so JSON

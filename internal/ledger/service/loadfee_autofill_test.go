@@ -26,7 +26,7 @@ func TestGetAutofillFee_NoLoad(t *testing.T) {
 		t.Fatalf("ParseJSON: %v", err)
 	}
 
-	fee, err := svc.GetAutofillFee(parsed, false)
+	fee, err := svc.GetAutofillFee(parsed, false, 10, 1)
 	if err != nil {
 		t.Fatalf("GetAutofillFee: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestGetAutofillFee_LoadedLocal(t *testing.T) {
 		t.Fatalf("ParseJSON: %v", err)
 	}
 
-	fee, err := svc.GetAutofillFee(parsed, false)
+	fee, err := svc.GetAutofillFee(parsed, false, 10, 1)
 	if err != nil {
 		t.Fatalf("GetAutofillFee: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestGetAutofillFee_Unlimited(t *testing.T) {
 		t.Fatalf("ParseJSON: %v", err)
 	}
 
-	fee, err := svc.GetAutofillFee(parsed, true)
+	fee, err := svc.GetAutofillFee(parsed, true, 10, 1)
 	if err != nil {
 		t.Fatalf("GetAutofillFee: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGetAutofillFee_Unlimited_HitsCeiling(t *testing.T) {
 	ft := svc.FeeTrack()
 	// Drive the local factor far above 4x remote so the unlimited
 	// carve-out drops away and scaleFeeLoad applies in full.
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		ft.RaiseLocalFee()
 	}
 	if got := ft.GetLocalFee(); got < 4*ft.GetRemoteFee() {
@@ -135,7 +135,7 @@ func TestGetAutofillFee_Unlimited_HitsCeiling(t *testing.T) {
 		t.Fatalf("ParseJSON: %v", err)
 	}
 
-	if _, err := svc.GetAutofillFee(parsed, true); err == nil {
+	if _, err := svc.GetAutofillFee(parsed, true, 10, 1); err == nil {
 		t.Fatal("expected HighFeeError once scaled fee exceeds ceiling; got nil")
 	}
 }

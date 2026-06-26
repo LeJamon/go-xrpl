@@ -18,7 +18,7 @@ func TestPeerLifecycleCallbacksConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			o.SetPeerConnectCallback(func(PeerID) {})
 			o.SetPeerDisconnectCallback(func(PeerID) {})
 		}
@@ -26,7 +26,7 @@ func TestPeerLifecycleCallbacksConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			if cb := o.onPeerConnectSnapshot(); cb != nil {
 				cb(PeerID(0))
 			}
@@ -95,7 +95,7 @@ func TestProviderSettersConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			o.SetTxProvider(func([32]byte) ([]byte, bool) { return nil, false })
 			o.SetOpenLedgerHashesProvider(func() [][32]byte { return nil })
 		}
@@ -103,11 +103,47 @@ func TestProviderSettersConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			if p := o.txProviderSnapshot(); p != nil {
 				p([32]byte{})
 			}
 			if p := o.openLedgerHashesProviderSnapshot(); p != nil {
+				p()
+			}
+		}
+	}()
+
+	wg.Wait()
+}
+
+// TestClusterFeeProviderSettersConcurrentAccess pins the providersMu
+// guard on the cluster-fee hooks (finding 3). The server wires
+// SetClusterFeeSink/SetLocalLoadFeeProvider after Overlay.Run has already
+// launched, so a TMCluster frame on the event loop (clusterFeeSinkSnapshot)
+// or the maintenance loop's sendClusterUpdate (localLoadFeeProviderSnapshot)
+// reads them concurrently. Run with -race to catch a regression.
+func TestClusterFeeProviderSettersConcurrentAccess(t *testing.T) {
+	o := &Overlay{}
+
+	const iterations = 2000
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			o.SetClusterFeeSink(func(uint32) {})
+			o.SetLocalLoadFeeProvider(func() uint32 { return 0 })
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			if s := o.clusterFeeSinkSnapshot(); s != nil {
+				s(0)
+			}
+			if p := o.localLoadFeeProviderSnapshot(); p != nil {
 				p()
 			}
 		}

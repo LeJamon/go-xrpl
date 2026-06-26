@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -27,6 +28,7 @@ type LedgerServiceAdapter struct {
 
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
 var _ types.OwnerDirectoryReader = (*LedgerServiceAdapter)(nil)
+var _ types.TxTablesProvider = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
@@ -198,16 +200,31 @@ func (a *LedgerServiceAdapter) SubmitTransactionFailHard(txJSON []byte, txBlobHe
 	return a.submitTransaction(txJSON, txBlobHex, true)
 }
 
+// errorSubmitResult builds a non-applied SubmitResult whose engine fields are
+// sourced from the canonical TER table, so the result token, code, and message
+// stay in lockstep with rippled.
+func errorSubmitResult(r ter.Result) *types.SubmitResult {
+	return &types.SubmitResult{
+		EngineResult:        r.String(),
+		EngineResultCode:    int(r),
+		EngineResultMessage: r.Message(),
+		Applied:             false,
+	}
+}
+
+func malformedSubmitResult() *types.SubmitResult {
+	return errorSubmitResult(ter.TemMALFORMED)
+}
+
+func internalSubmitResult() *types.SubmitResult {
+	return errorSubmitResult(ter.TefINTERNAL)
+}
+
 func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
 	// Parse the transaction from JSON
 	transaction, err := tx.ParseJSON(txJSON)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "temMALFORMED",
-			EngineResultCode:    -299,
-			EngineResultMessage: fmt.Sprintf("Transaction is malformed: %v", err),
-			Applied:             false,
-		}, nil
+		return malformedSubmitResult(), nil
 	}
 
 	// Use the original signed blob if provided, otherwise re-encode
@@ -223,7 +240,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		}
 	}
 	if rawBlob == nil {
-		var jsonMap map[string]interface{}
+		var jsonMap map[string]any
 		if jErr := json.Unmarshal(txJSON, &jsonMap); jErr == nil {
 			if hexStr, eErr := binarycodec.Encode(jsonMap); eErr == nil {
 				rawBlob, _ = hex.DecodeString(hexStr)
@@ -234,12 +251,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// Submit to the service with the raw blob for canonical ordering
 	result, err := a.svc.SubmitTransaction(transaction, rawBlob, failHard)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "tefINTERNAL",
-			EngineResultCode:    -199,
-			EngineResultMessage: fmt.Sprintf("Internal error: %v", err),
-			Applied:             false,
-		}, nil
+		return internalSubmitResult(), nil
 	}
 
 	// Relay only what rippled relays. Mirrors NetworkOPs.cpp:1685-1689:
@@ -254,7 +266,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// retry code. fail_hard suppresses relay on non-apply (matches
 	// NetworkOPs.cpp:1688 `&& !enforceFailHard`).
 	broadcast := false
-	relayable := result.Applied || result.Result == tx.TerQUEUED
+	relayable := result.Applied || result.Result == ter.TerQUEUED
 	if failHard && !result.Applied {
 		relayable = false
 	}
@@ -270,9 +282,9 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// are kept too (they age out of LocalTxs after at most 5 ledgers). This
 	// is the exact condition Service.SubmitTransaction uses for the localTxs
 	// push, so the wire value reflects the actual held-pool decision.
-	queued := result.Result == tx.TerQUEUED
-	kept := (!failHard || result.Result == tx.TesSUCCESS) &&
-		result.Result != tx.TefALREADY
+	queued := result.Result == ter.TerQUEUED
+	kept := (!failHard || result.Result == ter.TesSUCCESS) &&
+		result.Result != ter.TefALREADY
 
 	return &types.SubmitResult{
 		EngineResult:        result.Result.String(),
@@ -349,8 +361,8 @@ func (a *LedgerServiceAdapter) StoreTransaction(txHash [32]byte, txData []byte) 
 }
 
 // GetAccountLines retrieves trust lines for an account
-func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
-	result, err := a.svc.GetAccountLines(ctx, account, ledgerIndex, peer, limit)
+func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*types.AccountLinesResult, error) {
+	result, err := a.svc.GetAccountLines(ctx, account, ledgerIndex, peer, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -386,8 +398,8 @@ func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account stri
 }
 
 // GetAccountOffers retrieves offers for an account
-func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-	result, err := a.svc.GetAccountOffers(ctx, account, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountOffersResult, error) {
+	result, err := a.svc.GetAccountOffers(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -468,6 +480,11 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		Validated:   result.Validated,
 		Marker:      result.Marker,
 	}, nil
+}
+
+// UseTxTables implements types.TxTablesProvider.
+func (a *LedgerServiceAdapter) UseTxTables() bool {
+	return a.svc.UseTxTables()
 }
 
 // GetAccountTransactions retrieves transaction history for an account
@@ -619,8 +636,8 @@ func (a *LedgerServiceAdapter) GetLedgerData(ctx context.Context, ledgerIndex st
 }
 
 // GetAccountObjects retrieves all objects owned by an account
-func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
-	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit)
+func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
+	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -675,8 +692,8 @@ func toRPCAccountObjectItems(items []service.AccountObjectItem) []types.AccountO
 }
 
 // GetAccountChannels retrieves payment channels for an account
-func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
-	result, err := a.svc.GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*types.AccountChannelsResult, error) {
+	result, err := a.svc.GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -910,22 +927,12 @@ func (a *LedgerServiceAdapter) GetNFTBuyOffers(ctx context.Context, nftID [32]by
 func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	transaction, err := tx.ParseJSON(txJSON)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "temMALFORMED",
-			EngineResultCode:    -299,
-			EngineResultMessage: fmt.Sprintf("Transaction is malformed: %v", err),
-			Applied:             false,
-		}, nil
+		return malformedSubmitResult(), nil
 	}
 
 	result, err := a.svc.SimulateTransaction(transaction)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "tefINTERNAL",
-			EngineResultCode:    -199,
-			EngineResultMessage: fmt.Sprintf("Internal error: %v", err),
-			Applied:             false,
-		}, nil
+		return internalSubmitResult(), nil
 	}
 
 	out := &types.SubmitResult{
@@ -950,13 +957,13 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	return out, nil
 }
 
-func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	// rippled getTxFee falls back to reference_fee on any parse failure
 	// (TransactionSign.cpp:790-821). A nil parsedTx triggers the
 	// equivalent baseFee fallback in computeBaseFeeForTx so the later
 	// structural-check passes can surface the real error.
 	parsedTx, _ := tx.ParseJSON(txJSON)
-	return a.svc.GetAutofillFee(parsedTx, unlimited)
+	return a.svc.GetAutofillFee(parsedTx, unlimited, mult, div)
 }
 
 func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
@@ -1018,4 +1025,24 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 		return nil, fmt.Errorf("no closed ledger available")
 	}
 	return l, nil
+}
+
+// GetLedgerViewBySeq returns a state view of the ledger with the given
+// sequence, plus its metadata reader.
+func (a *LedgerServiceAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerBySequence(seq)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l, &ledgerReaderAdapter{l: l}, nil
+}
+
+// GetLedgerViewByHash returns a state view of the ledger with the given
+// hash, plus its metadata reader.
+func (a *LedgerServiceAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateView, types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerByHash(hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l, &ledgerReaderAdapter{l: l}, nil
 }

@@ -2,13 +2,14 @@ package escrow
 
 import (
 	"encoding/hex"
-	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -54,12 +55,11 @@ func (e *EscrowFinish) Validate() error {
 		return err
 	}
 
-	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
+	// where the amendment rules are available.
 
 	if e.Owner == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Owner is required")
+		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
 
 	// Both Condition and Fulfillment must be present or absent together
@@ -68,24 +68,16 @@ func (e *EscrowFinish) Validate() error {
 	hasCondition := e.Condition != nil
 	hasFulfillment := e.Fulfillment != nil
 	if hasCondition != hasFulfillment {
-		return tx.Errorf(tx.TemMALFORMED, "Condition and Fulfillment must be provided together")
+		return ter.Errorf(ter.TemMALFORMED, "Condition and Fulfillment must be provided together")
 	}
 
 	// Validate CredentialIDs field
 	// Reference: rippled Escrow.cpp preflight() calls credentials::checkFields()
 	// Use HasField to detect empty arrays from binary parsing where omitempty
 	// causes the Go struct field to be nil even though the field was present.
-	if e.CredentialIDs != nil || e.HasField("CredentialIDs") {
-		if len(e.CredentialIDs) == 0 || len(e.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(e.CredentialIDs))
-		for _, id := range e.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	if err := credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 
 	return nil
@@ -111,7 +103,7 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 		}
 	}
 
-	fee := tx.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
+	fee := sign.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
 
 	if e.Fulfillment != nil {
 		fulfillmentLen := len(*e.Fulfillment) / 2
@@ -124,19 +116,32 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 	return fee
 }
 
+// Preclaim performs the rules-aware fix1543 flag check.
+// Reference: rippled Escrow.cpp:630 — stray (non-universal) flags are rejected
+// only once fix1543 is active. rippled runs this check first in preflight; the
+// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
+// after the common preflight/preclaim steps. For a tx malformed in two ways this
+// can surface a different tem code than rippled; the result is tem-only (never
+// enters a ledger) so there is no consensus divergence.
+func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
+		return ter.TemINVALID_FLAG
+	}
+	return ter.TesSUCCESS
+}
+
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
 // credential expiration deletion against the engine's view so the side-effects
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	removeExpiredCredentials(ctx, e.CredentialIDs)
-	return tx.TecEXPIRED
+func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
+	credential.RemoveExpiredCredentials(ctx, e.CredentialIDs)
 }
 
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
-func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow finish apply",
 		"account", e.Account,
 		"owner", e.Owner,
@@ -148,7 +153,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Amendment-gated check: CredentialIDs requires Credentials amendment
 	// Reference: rippled Escrow.cpp preflight() credential check
 	if len(e.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return tx.TemDISABLED
+		return ter.TemDISABLED
 	}
 
 	// --- Preclaim: credential validation (before time checks) ---
@@ -156,14 +161,14 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// This must run before doApply's time checks because rippled's preclaim
 	// runs before doApply.
 	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, e.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, e.CredentialIDs); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
 	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Find the escrow
@@ -174,14 +179,14 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			"owner", e.Owner,
 			"offerSequence", e.OfferSequence,
 		)
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Parse escrow
 	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
 		ctx.Log.Error("escrow finish: failed to parse escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	isXRP := escrowEntry.IsXRP
@@ -191,11 +196,11 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
 		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
 		if escrowEntry.MPTIssuanceID != "" {
-			if result := escrowFinishPreclaimMPT(ctx.View, escrowEntry.DestinationID, escrowAmount); result != tx.TesSUCCESS {
+			if result := escrowFinishPreclaimMPT(ctx.View, escrowEntry.DestinationID, escrowAmount); result != ter.TesSUCCESS {
 				return result
 			}
 		} else if escrowAmount.Issuer != "" {
-			if result := escrowFinishPreclaimIOU(ctx.View, escrowEntry.DestinationID, escrowAmount); result != tx.TesSUCCESS {
+			if result := escrowFinishPreclaimIOU(ctx.View, escrowEntry.DestinationID, escrowAmount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -208,19 +213,19 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	if rules.Enabled(amendment.FeatureFix1571) {
 		// fix1571: FinishAfter check — close time must be strictly after finish time
 		if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		// fix1571: CancelAfter check — if past cancel time, finish not allowed
 		if escrowEntry.CancelAfter > 0 && closeTime > escrowEntry.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	} else {
 		// Pre-fix1571: both use <= comparison (known bug in cancel check)
 		if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		if escrowEntry.CancelAfter > 0 && closeTime <= escrowEntry.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -239,25 +244,25 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Escrow has no condition — tx must NOT provide condition/fulfillment
 		if txCondition != "" || txFulfillment != "" {
 			ctx.Log.Warn("escrow finish: condition/fulfillment provided but escrow has no condition")
-			return tx.TecCRYPTOCONDITION_ERROR
+			return ter.TecCRYPTOCONDITION_ERROR
 		}
 	} else {
 		// Escrow has a condition — fulfillment is required (non-empty)
 		if txFulfillment == "" {
 			ctx.Log.Warn("escrow finish: fulfillment required but not provided")
-			return tx.TecCRYPTOCONDITION_ERROR
+			return ter.TecCRYPTOCONDITION_ERROR
 		}
 
 		// Condition in tx must match condition on escrow (case-insensitive hex comparison)
 		if !strings.EqualFold(txCondition, escrowEntry.Condition) {
 			ctx.Log.Warn("escrow finish: condition mismatch")
-			return tx.TecCRYPTOCONDITION_ERROR
+			return ter.TecCRYPTOCONDITION_ERROR
 		}
 
 		// Verify fulfillment matches condition
 		if err := validateCryptoCondition(txFulfillment, escrowEntry.Condition); err != nil {
 			ctx.Log.Debug("escrow finish: fulfillment verification failed", "error", err)
-			return tx.TecCRYPTOCONDITION_ERROR
+			return ter.TecCRYPTOCONDITION_ERROR
 		}
 		ctx.Log.Debug("escrow finish: fulfillment verified successfully")
 	}
@@ -272,55 +277,42 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		destAccount = ctx.Account
 	} else {
 		destData, err := ctx.View.Read(destKey)
-		if err != nil {
-			return tx.TecNO_DST
+		// A missing destination (nil data, nil error) means the account was
+		// deleted after the escrow was created. Escrow cannot fund a new
+		// account, so this is tecNO_DST — not a parse-time tefINTERNAL.
+		// Reference: rippled Escrow.cpp:1105-1108
+		if err != nil || destData == nil {
+			return ter.TecNO_DST
 		}
 		destAccount, err = state.ParseAccountRoot(destData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
-	// Check for expired credentials BEFORE deposit auth check.
-	// Reference: rippled verifyDepositPreauth() — first calls removeExpired(),
-	// returns tecEXPIRED if any credentials were expired.
-	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if removeExpiredCredentials(ctx, e.CredentialIDs) {
-			return tx.TecEXPIRED
-		}
-	}
-
-	// Deposit authorization check
-	// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
+	// Deposit authorization check. Runs only under the DepositAuth amendment,
+	// matching rippled; expired-credential removal happens inside.
+	// Reference: rippled Escrow.cpp doApply() — verifyDepositPreauth()
 	if rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
-			if ctx.AccountID != escrowEntry.DestinationID {
-				// Check account-based DepositPreauth
-				preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
-				if exists, _ := ctx.View.Exists(preauthKey); !exists {
-					// No account-based preauth — check credential-based
-					if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-						if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
-							return result
-						}
-					} else {
-						return tx.TecNO_PERMISSION
-					}
-				}
-			}
+		if result := credential.VerifyDepositPreauth(ctx, e.CredentialIDs, ctx.AccountID, escrowEntry.DestinationID, destAccount); result != ter.TesSUCCESS {
+			return result
 		}
 	}
 
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1120-1129
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	state.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != ter.TesSUCCESS {
+		return result
+	}
 
 	// Remove escrow from destination directory (if cross-account)
 	// Reference: rippled Escrow.cpp doApply() lines 1132-1140
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Transfer the escrowed amount to destination
@@ -330,7 +322,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		destAccount.Balance += escrowEntry.Amount
 	} else {
 		if !rules.Enabled(amendment.FeatureTokenEscrow) {
-			return tx.TemDISABLED
+			return ter.TemDISABLED
 		}
 
 		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
@@ -345,6 +337,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		// createAsset = destination is the tx submitter (they can create trust line for themselves)
 		// Reference: rippled Escrow.cpp line 1155: bool const createAsset = destID == account_;
 		createAsset := escrowEntry.DestinationID == ctx.AccountID
+
+		// rippled checks the trust-line / MPToken reserve against mPriorBalance —
+		// the submitter's balance before the fee was deducted. The reserve check
+		// only runs when the destination is the submitter (createAsset), so add
+		// the fee back only in that case; destAccount is then ctx.Account, whose
+		// balance has already had the fee removed.
+		// Reference: rippled Escrow.cpp:1162 (mPriorBalance argument).
+		destReserveBalance := destAccount.Balance
+		if destIsSelf {
+			destReserveBalance = ctx.PriorBalance()
+		}
 
 		if escrowEntry.MPTIssuanceID != "" {
 			// MPT unlock
@@ -377,12 +380,13 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 				finalAmount,
 				mptHexID,
 				createAsset,
-				destAccount.Balance,
+				destReserveBalance,
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
+				true, // finish bumps the destination account's OwnerCount
 				ctx.Config.ReserveBase,
 				ctx.Config.ReserveIncrement,
-			); result != tx.TesSUCCESS {
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		} else {
@@ -391,16 +395,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			if result := escrowUnlockIOU(
 				ctx.View,
 				lockedRate,
-				destAccount.Balance,
+				destReserveBalance,
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
 				escrowAmount,
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				createAsset,
+				true, // finish bumps the destination account's OwnerCount
 				ctx.Config.ReserveBase,
 				ctx.Config.ReserveIncrement,
-			); result != tx.TesSUCCESS {
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -411,7 +416,9 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, issuerErr := state.DecodeAccountID(escrowAmount.Issuer)
 			if issuerErr == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				state.DirRemove(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key, false)
+				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 		}
 	}
@@ -433,7 +440,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Write destination account back
 	// Reference: rippled Escrow.cpp doApply() line 1186: ctx_.view().update(sled);
 	if !destIsSelf {
-		if result := ctx.UpdateAccountRoot(escrowEntry.DestinationID, destAccount); result != tx.TesSUCCESS {
+		if result := ctx.UpdateAccountRoot(escrowEntry.DestinationID, destAccount); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -442,182 +449,14 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp doApply() line 1194: ctx_.view().erase(slep);
 	if err := ctx.View.Erase(escrowKey); err != nil {
 		ctx.Log.Error("escrow finish: failed to erase escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Decrement OwnerCount for escrow owner only.
 	// Reference: rippled Escrow.cpp doApply() lines 1188-1191
 	adjustOwnerCount(ctx, ownerID, -1)
 
-	return tx.TesSUCCESS
-}
-
-// validateCredentials implements rippled's credentials::valid() preclaim check.
-// For each credential ID, it reads the Credential SLE and validates:
-// 1. The credential exists
-// 2. The credential's Subject matches the transaction sender (src)
-// 3. The credential has been accepted (lsfAccepted flag)
-// Reference: rippled CredentialHelpers.cpp credentials::valid()
-func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		var credID [32]byte
-		copy(credID[:], credHash)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			// Credential doesn't exist
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Subject must match the transaction sender
-		if credEntry.Subject != ctx.AccountID {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Credential must be accepted
-		if (credEntry.Flags & credential.LsfCredentialAccepted) == 0 {
-			return tx.TecBAD_CREDENTIALS
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// removeExpiredCredentials checks for expired credentials and deletes them.
-// Returns true if any credentials were expired.
-// Reference: rippled credentials::removeExpired() in CredentialHelpers.cpp
-func removeExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool {
-	if len(credentialIDs) == 0 {
-		return false
-	}
-
-	closeTime := ctx.Config.ParentCloseTime
-	anyExpired := false
-
-	for _, idHex := range credentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
-			continue
-		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-
-		cred, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-
-		if cred.Expiration != nil && closeTime > *cred.Expiration {
-			_ = credential.DeleteSLE(ctx.View, credKey, cred)
-			anyExpired = true
-		}
-	}
-
-	return anyExpired
-}
-
-// authorizedDepositPreauth implements rippled's credentials::authorizedDepositPreauth().
-// It reads each credential, extracts the (Issuer, CredentialType) pairs,
-// sorts them, and checks if a credential-based DepositPreauth exists for the destination.
-// Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
-	type credPair struct {
-		issuer   [20]byte
-		credType []byte
-	}
-
-	pairs := make([]credPair, 0, len(credentialIDs))
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TefINTERNAL
-		}
-
-		var credID [32]byte
-		copy(credID[:], credHash)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TefINTERNAL
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		pairs = append(pairs, credPair{
-			issuer:   credEntry.Issuer,
-			credType: credEntry.CredentialType,
-		})
-	}
-
-	// Sort by (issuer, credType) to match rippled's sorted set
-	sort.Slice(pairs, func(i, j int) bool {
-		cmp := compareBytesSlice(pairs[i].issuer[:], pairs[j].issuer[:])
-		if cmp != 0 {
-			return cmp < 0
-		}
-		return compareBytesSlice(pairs[i].credType, pairs[j].credType) < 0
-	})
-
-	// Convert to keylet.CredentialPair for keylet computation
-	sortedCreds := make([]keylet.CredentialPair, len(pairs))
-	for i, p := range pairs {
-		sortedCreds[i] = keylet.CredentialPair{
-			Issuer:         p.issuer,
-			CredentialType: p.credType,
-		}
-	}
-
-	// Check if credential-based DepositPreauth exists
-	dpKey := keylet.DepositPreauthCredentials(dst, sortedCreds)
-	if exists, _ := ctx.View.Exists(dpKey); !exists {
-		return tx.TecNO_PERMISSION
-	}
-
-	return tx.TesSUCCESS
-}
-
-// compareBytesSlice compares two byte slices lexicographically.
-func compareBytesSlice(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
+	return ter.TesSUCCESS
 }
 
 // adjustOwnerCount adjusts the OwnerCount of the given account by delta.

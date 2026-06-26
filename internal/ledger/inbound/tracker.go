@@ -132,24 +132,6 @@ func (t *Tracker) Remove(hash [32]byte, complete bool) {
 	delete(t.active, hash)
 }
 
-// ActiveTimedOut returns the in-flight acquisitions that have exceeded the
-// acquisition timeout, for the router's maintenance reaper. The caller decides
-// recovery and finalizes each via Remove.
-func (t *Tracker) ActiveTimedOut() []*Ledger {
-	if t == nil {
-		return nil
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	var out []*Ledger
-	for _, l := range t.active {
-		if l.IsTimedOut() {
-			out = append(out, l)
-		}
-	}
-	return out
-}
-
 // Active returns every in-flight acquisition currently tracked. The router
 // iterates these to attempt local completion from the fetch-pack cache
 // (Ledger.CheckLocal), mirroring rippled's InboundLedgers::gotFetchPack which
@@ -210,10 +192,12 @@ func (t *Tracker) Info() map[string]any {
 		case snap.Complete:
 			t.completed[hash] = completedRecord{snap: snap, at: now}
 			delete(t.active, hash)
-		case snap.Failed || snap.TimedOut:
-			// A timed-out acquisition reports as failed for fetch_info (go-xrpl
-			// reaps on first timeout); mark it before retaining the snapshot so
-			// the failure entry mirrors rippled's still-in-mLedgers getJson.
+		case snap.Failed:
+			// Demote on the authoritative terminal state set by the router's
+			// OnTimer reaper, not a racing wall-clock: a read-only fetch_info
+			// must never reap an acquisition the router is still driving toward
+			// completion. Mark it before retaining the snapshot so the failure
+			// entry mirrors rippled's still-in-mLedgers getJson.
 			snap.Failed = true
 			t.failures[hash] = failureRecord{snap: snap, at: now}
 			delete(t.active, hash)
@@ -264,9 +248,9 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
 		"hash":        fmt.Sprintf("%X", snap.Hash),
 		"have_header": snap.HaveHeader,
-		// go-xrpl reaps on the first timeout, so rippled's retry count is always
-		// zero; emit it for wire-shape parity with InboundLedger::getJson.
-		"timeouts": 0,
+		// Live no-progress retry count, mirroring InboundLedger::getJson's
+		// timeouts_ now that the acquisition runs a timer-driven retry loop.
+		"timeouts": snap.Timeouts,
 	}
 	switch {
 	case snap.Complete:
@@ -275,7 +259,7 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 		entry["failed"] = true
 	default:
 		// peers appears only while in flight, matching rippled's
-		// !complete_ && !failed_ gate. Classic acquisition uses one source peer.
+		// !complete_ && !failed_ gate: the broadened source-peer set size.
 		entry["peers"] = snap.Peers
 	}
 	if snap.HaveHeader {

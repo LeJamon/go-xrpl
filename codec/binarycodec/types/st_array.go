@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 const (
@@ -27,20 +26,21 @@ var ErrNotSTObjectInSTArray = errors.New("STArray fields must be STObjects")
 // of an STObject, appending the resulting byte slice to a "sink" slice.
 // The method returns an error if the JSON value is not a slice.
 func (t *STArray) FromJSON(json any) ([]byte, error) {
+	var elems []any
 	switch v := json.(type) {
 	case []any:
-		json = v
+		elems = v
 	case []map[string]any:
-		json = make([]any, len(v))
+		elems = make([]any, len(v))
 		for i, m := range v {
-			json.([]any)[i] = m
+			elems[i] = m
 		}
 	default:
 		return nil, ErrNotSTObjectInSTArray
 	}
 
 	var sink []byte
-	for _, v := range json.([]any) {
+	for _, v := range elems {
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 		b, err := st.FromJSON(v)
 		if err != nil {
@@ -59,7 +59,7 @@ func (t *STArray) FromJSON(json any) ([]byte, error) {
 // it calls the ToJSON method of an STObject, appending the resulting JSON value to a "value" slice.
 // When decoded as a nested field, opts[0] carries the array's depth so the nesting cap is
 // enforced on its STObject elements, mirroring rippled (STArray.cpp:95, STVar.cpp:122).
-func (t *STArray) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	depth := 0
 	if len(opts) > 0 {
 		depth = opts[0]
@@ -74,7 +74,10 @@ func (t *STArray) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 			return nil, err
 		}
 
-		// Check for ArrayEndMarker FIRST (handles empty arrays)
+		// Check for ArrayEndMarker FIRST (handles empty arrays). Running out of
+		// data before it is rippled-faithful: the STArray SerialIter constructor
+		// loops while the iterator has data and stops without requiring the 0xF1
+		// terminator (STArray.cpp:65).
 		if fi.FieldName == "ArrayEndMarker" {
 			break
 		}

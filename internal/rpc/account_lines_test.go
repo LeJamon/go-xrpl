@@ -96,7 +96,7 @@ func (m *mockAccountLinesLedgerService) GetTransaction(txHash [32]byte) (*types.
 func (m *mockAccountLinesLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	if m.accountLinesErr != nil {
 		return nil, m.accountLinesErr
 	}
@@ -112,7 +112,7 @@ func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, accou
 		Validated:   true,
 	}, nil
 }
-func (m *mockAccountLinesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
@@ -133,10 +133,10 @@ func (m *mockAccountLinesLedgerService) GetLedgerEntry(_ context.Context, entryK
 func (m *mockAccountLinesLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
@@ -163,7 +163,7 @@ func (m *mockAccountLinesLedgerService) GetNFTSellOffers(_ context.Context, nftI
 func (m *mockAccountLinesLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (m *mockAccountLinesLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	return 0, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
@@ -195,14 +195,14 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -214,7 +214,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -222,7 +222,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1.5,
 			},
 			expectedError: "Invalid parameters:",
@@ -230,7 +230,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -238,7 +238,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - null",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": nil,
 			},
 			// Note: JSON null gets unmarshaled as empty string in Go, triggering missing parameter error
@@ -247,15 +247,15 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - object",
-			params: map[string]interface{}{
-				"account": map[string]interface{}{"nested": "value"},
+			params: map[string]any{
+				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid parameters:",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid parameters:",
@@ -265,17 +265,17 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			// Test case from rippled: malformed account using node public key format
 			// Based on line 52-57 of AccountLines_test.cpp
 			name: "Malformed account address - node public key format (actMalformed)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
 			// Based on line 78-87 of AccountLines_test.cpp
 			name: "Account not found - valid format but not in ledger (actNotFound)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
@@ -334,17 +334,17 @@ func TestAccountLinesInvalidAccountTypes(t *testing.T) {
 	// These test cases mirror rippled's testInvalidAccountParam lambda
 	invalidParams := []struct {
 		name  string
-		value interface{}
+		value any
 	}{
 		{"integer", 1},
 		{"float", 1.1},
 		{"boolean true", true},
 		{"boolean false", false},
 		{"null", nil},
-		{"empty object", map[string]interface{}{}},
-		{"non-empty object", map[string]interface{}{"key": "value"}},
-		{"empty array", []interface{}{}},
-		{"non-empty array", []interface{}{"value1", "value2"}},
+		{"empty object", map[string]any{}},
+		{"non-empty object", map[string]any{"key": "value"}},
+		{"empty array", []any{}},
+		{"non-empty array", []any{"value1", "value2"}},
 		{"negative integer", -1},
 		{"zero", 0},
 		{"large integer", 9999999999999},
@@ -352,7 +352,7 @@ func TestAccountLinesInvalidAccountTypes(t *testing.T) {
 
 	for _, tc := range invalidParams {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.value,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -387,15 +387,15 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
 		expectedCode int
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "ledger_index: validated",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "validated",
 			},
@@ -410,13 +410,13 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, true, resp["validated"])
 			},
 		},
 		{
 			name: "ledger_index: current",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "current",
 			},
@@ -431,13 +431,13 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, validAccount, resp["account"])
 			},
 		},
 		{
 			name: "ledger_index: closed",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "closed",
 			},
@@ -452,13 +452,13 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "ledger_index")
 			},
 		},
 		{
 			name: "ledger_index: integer sequence number",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": 2,
 			},
@@ -473,7 +473,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				ledgerIndex := resp["ledger_index"]
 				switch v := ledgerIndex.(type) {
 				case float64:
@@ -489,7 +489,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 			// Test case from rippled: invalid ledger index string -> ledgerIndexMalformed
 			// Based on lines 102-113 of AccountLines_test.cpp
 			name: "ledger_index: invalid string -> ledgerIndexMalformed",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "nonsense",
 			},
@@ -504,7 +504,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 			// Test case from rippled: ledger not found for non-existent sequence
 			// Based on lines 114-124 of AccountLines_test.cpp
 			name: "ledger_index: non-existent sequence -> ledgerNotFound",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": 50000,
 			},
@@ -517,7 +517,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 		},
 		{
 			name: "ledger_hash: valid hash",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":     validAccount,
 				"ledger_hash": "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
 			},
@@ -532,13 +532,13 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "ledger_hash")
 			},
 		},
 		{
 			name: "ledger_hash: invalid hash - not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":     validAccount,
 				"ledger_hash": "0000000000000000000000000000000000000000000000000000000000000000",
 			},
@@ -579,7 +579,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				// Convert result to map for validation
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				err = json.Unmarshal(resultJSON, &respMap)
 				require.NoError(t, err)
 
@@ -610,17 +610,17 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
 		expectedCode int
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			// Test case from rippled: filter by peer account
 			// Based on lines 242-257 of AccountLines_test.cpp
 			name: "Valid peer filter returns filtered trust lines",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"peer":    peerAccount,
 			},
@@ -642,10 +642,10 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				lines := resp["lines"].([]interface{})
+			validateResp: func(t *testing.T, resp map[string]any) {
+				lines := resp["lines"].([]any)
 				assert.Len(t, lines, 1)
-				line := lines[0].(map[string]interface{})
+				line := lines[0].(map[string]any)
 				assert.Equal(t, peerAccount, line["account"])
 			},
 		},
@@ -653,7 +653,7 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 			// Test case from rippled: malformed peer address
 			// Based on lines 258-270 of AccountLines_test.cpp
 			name: "Malformed peer address - node public key format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"peer":    "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
@@ -662,7 +662,7 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 		},
 		{
 			name: "Peer not found - valid format but no trust lines with this peer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"peer":    "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
@@ -677,8 +677,8 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				lines := resp["lines"].([]interface{})
+			validateResp: func(t *testing.T, resp map[string]any) {
+				lines := resp["lines"].([]any)
 				assert.Len(t, lines, 0)
 			},
 		},
@@ -712,7 +712,7 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 				// Convert result to map for validation
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				err = json.Unmarshal(resultJSON, &respMap)
 				require.NoError(t, err)
 
@@ -742,17 +742,17 @@ func TestAccountLinesPagination(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
 		expectedCode int
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			// Test case from rippled: limit parameter
 			// Based on lines 284-305 of AccountLines_test.cpp
 			name: "Limit parameter restricts result count",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"limit":   1,
 			},
@@ -775,8 +775,8 @@ func TestAccountLinesPagination(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				lines := resp["lines"].([]interface{})
+			validateResp: func(t *testing.T, resp map[string]any) {
+				lines := resp["lines"].([]any)
 				assert.Len(t, lines, 1)
 				assert.Contains(t, resp, "marker", "Should have marker for pagination")
 			},
@@ -785,7 +785,7 @@ func TestAccountLinesPagination(t *testing.T) {
 			// Test case from rippled: marker for pagination
 			// Based on lines 294-305 of AccountLines_test.cpp
 			name: "Marker continues pagination from previous result",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"marker":  "some-valid-marker",
 			},
@@ -807,8 +807,8 @@ func TestAccountLinesPagination(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				lines := resp["lines"].([]interface{})
+			validateResp: func(t *testing.T, resp map[string]any) {
+				lines := resp["lines"].([]any)
 				assert.Len(t, lines, 1)
 			},
 		},
@@ -816,7 +816,7 @@ func TestAccountLinesPagination(t *testing.T) {
 			// Test case from rippled: negative limit fails
 			// Based on lines 271-283 of AccountLines_test.cpp
 			name: "Negative limit fails with error",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"limit":   -1,
 			},
@@ -831,7 +831,7 @@ func TestAccountLinesPagination(t *testing.T) {
 			// Test case from rippled: invalid marker
 			// Based on lines 316-330 of AccountLines_test.cpp
 			name: "Invalid marker returns error",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"marker":  "corrupted-marker-value",
 			},
@@ -845,33 +845,24 @@ func TestAccountLinesPagination(t *testing.T) {
 			// Test case from rippled: non-string marker fails
 			// Based on lines 331-342 of AccountLines_test.cpp
 			name: "Non-string marker fails with error",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"marker":  true, // boolean marker should fail
 			},
-			setupMock: func() {
-				// Note: this would fail during parsing if marker expects string
-				mock.accountLinesResult = &types.AccountLinesResult{
-					Account:     validAccount,
-					Lines:       []types.TrustLine{},
-					LedgerIndex: 2,
-					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
-					Validated:   true,
-				}
-			},
-			// The implementation accepts interface{} for marker, so this may not error
-			// depending on how the service handles it
-			expectError: false,
+			// A non-string marker is malformed: the handler rejects it during
+			// parsing (markerString) before reaching the service.
+			expectError:  true,
+			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Default limit returns reasonable amount",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 			},
 			setupMock: func() {
 				// Create multiple trust lines
-				lines := []types.TrustLine{}
-				for i := 0; i < 10; i++ {
+				lines := make([]types.TrustLine, 0, 10)
+				for range 10 {
 					lines = append(lines, types.TrustLine{
 						Account:  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 						Balance:  "50",
@@ -889,14 +880,14 @@ func TestAccountLinesPagination(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				lines := resp["lines"].([]interface{})
+			validateResp: func(t *testing.T, resp map[string]any) {
+				lines := resp["lines"].([]any)
 				assert.Len(t, lines, 10)
 			},
 		},
 		{
 			name: "Limit with marker paginates correctly",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": validAccount,
 				"limit":   3,
 				"marker":  "page-2-marker",
@@ -917,8 +908,8 @@ func TestAccountLinesPagination(t *testing.T) {
 				mock.accountLinesErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
-				lines := resp["lines"].([]interface{})
+			validateResp: func(t *testing.T, resp map[string]any) {
+				lines := resp["lines"].([]any)
 				assert.Len(t, lines, 3)
 				assert.Equal(t, "page-3-marker", resp["marker"])
 			},
@@ -953,7 +944,7 @@ func TestAccountLinesPagination(t *testing.T) {
 				// Convert result to map for validation
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				err = json.Unmarshal(resultJSON, &respMap)
 				require.NoError(t, err)
 
@@ -993,7 +984,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		}
 		mock.accountLinesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1006,12 +997,12 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check lines is an empty array
-		lines := resp["lines"].([]interface{})
+		lines := resp["lines"].([]any)
 		assert.Len(t, lines, 0, "Lines should be empty array for account with no trust lines")
 	})
 
@@ -1042,7 +1033,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		}
 		mock.accountLinesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1055,22 +1046,24 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check top-level fields
+		// Check top-level fields. A bare query targets the open ledger, so
+		// rippled's lookupLedger emits only ledger_current_index.
 		assert.Contains(t, resp, "account")
 		assert.Contains(t, resp, "lines")
-		assert.Contains(t, resp, "ledger_hash")
-		assert.Contains(t, resp, "ledger_index")
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_index")
 		assert.Contains(t, resp, "validated")
 
 		// Check lines array
-		lines := resp["lines"].([]interface{})
+		lines := resp["lines"].([]any)
 		require.Len(t, lines, 1)
 
-		line := lines[0].(map[string]interface{})
+		line := lines[0].(map[string]any)
 		// Required fields for each line
 		assert.Equal(t, peerAccount, line["account"])
 		assert.Equal(t, "50.5", line["balance"])
@@ -1106,7 +1099,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		}
 		mock.accountLinesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1119,14 +1112,14 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		lines := resp["lines"].([]interface{})
+		lines := resp["lines"].([]any)
 		require.Len(t, lines, 1)
 
-		line := lines[0].(map[string]interface{})
+		line := lines[0].(map[string]any)
 
 		// Check flag fields
 		assert.Equal(t, true, line["no_ripple"])
@@ -1167,7 +1160,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		}
 		mock.accountLinesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1180,17 +1173,17 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		lines := resp["lines"].([]interface{})
+		lines := resp["lines"].([]any)
 		assert.Len(t, lines, 3, "Should have 3 trust lines")
 
 		// Verify different currencies
 		currencies := make(map[string]bool)
 		for _, l := range lines {
-			line := l.(map[string]interface{})
+			line := l.(map[string]any)
 			currencies[line["currency"].(string)] = true
 		}
 		assert.Contains(t, currencies, "USD")
@@ -1209,7 +1202,7 @@ func TestAccountLinesServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1233,7 +1226,7 @@ func TestAccountLinesServiceNilLedger(t *testing.T) {
 		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1298,7 +1291,7 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 
 	for _, tc := range malformedAddresses {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.address,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -1332,7 +1325,7 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		ledgerIndex    interface{}
+		ledgerIndex    any
 		expectedLines  int
 		ledgerSequence uint32
 	}{
@@ -1378,7 +1371,7 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 			}
 			mock.accountLinesErr = nil
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account":      validAccount,
 				"ledger_index": tc.ledgerIndex,
 			}
@@ -1393,11 +1386,11 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 			// Convert to map
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var resp map[string]interface{}
+			var resp map[string]any
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
 
-			linesResp := resp["lines"].([]interface{})
+			linesResp := resp["lines"].([]any)
 			assert.Len(t, linesResp, tc.expectedLines,
 				"Expected %d trust lines in ledger %d", tc.expectedLines, tc.ledgerSequence)
 		})
@@ -1426,7 +1419,7 @@ func TestAccountLinesMarkerOwnership(t *testing.T) {
 		// Setup mock to return error when using alice's marker with becky's account
 		mock.accountLinesErr = errors.New("invalid marker - not owned by account")
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": beckyAccount,
 			"marker":  "alice-marker-pointing-to-her-signer-list",
 		}
@@ -1461,7 +1454,7 @@ func TestAccountLinesDeletedEntry(t *testing.T) {
 		// Setup mock to simulate deleted trust line scenario
 		mock.accountLinesErr = errors.New("invalid marker - entry deleted")
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 			"marker":  "marker-pointing-to-deleted-trustline",
 		}
@@ -1506,7 +1499,7 @@ func TestAccountLinesWalkMarkers(t *testing.T) {
 		}
 		mock.accountLinesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
 		}
@@ -1519,11 +1512,11 @@ func TestAccountLinesWalkMarkers(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		lines := resp["lines"].([]interface{})
+		lines := resp["lines"].([]any)
 		assert.Len(t, lines, 1, "Should return exactly 1 line with limit=1")
 		assert.Contains(t, resp, "marker", "Should have marker for continuation")
 	})

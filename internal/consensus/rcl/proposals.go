@@ -3,208 +3,9 @@ package rcl
 import (
 	"bytes"
 	"sync"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
-
-// ProposalTracker tracks proposals during a consensus round.
-type ProposalTracker struct {
-	mu sync.RWMutex
-
-	// round is the current round being tracked
-	round consensus.RoundID
-
-	// proposals maps node ID to their current proposal
-	proposals map[consensus.NodeID]*consensus.Proposal
-
-	// byTxSet maps tx set ID to nodes proposing it
-	byTxSet map[consensus.TxSetID]map[consensus.NodeID]bool
-
-	// trusted is the set of trusted validators
-	trusted map[consensus.NodeID]bool
-
-	// freshness is how long proposals are considered fresh
-	freshness time.Duration
-}
-
-// NewProposalTracker creates a new proposal tracker.
-func NewProposalTracker(freshness time.Duration) *ProposalTracker {
-	return &ProposalTracker{
-		proposals: make(map[consensus.NodeID]*consensus.Proposal),
-		byTxSet:   make(map[consensus.TxSetID]map[consensus.NodeID]bool),
-		trusted:   make(map[consensus.NodeID]bool),
-		freshness: freshness,
-	}
-}
-
-// SetRound sets the current round being tracked.
-func (pt *ProposalTracker) SetRound(round consensus.RoundID) {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
-	pt.round = round
-	pt.proposals = make(map[consensus.NodeID]*consensus.Proposal)
-	pt.byTxSet = make(map[consensus.TxSetID]map[consensus.NodeID]bool)
-}
-
-// SetTrusted updates the set of trusted validators.
-func (pt *ProposalTracker) SetTrusted(nodes []consensus.NodeID) {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
-	pt.trusted = make(map[consensus.NodeID]bool)
-	for _, node := range nodes {
-		pt.trusted[node] = true
-	}
-}
-
-// Add adds or updates a proposal.
-// Returns true if this is a new or updated proposal.
-func (pt *ProposalTracker) Add(proposal *consensus.Proposal) bool {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
-	// Check if for current round
-	if proposal.Round != pt.round {
-		return false
-	}
-
-	// Check if newer than existing
-	existing, hasExisting := pt.proposals[proposal.NodeID]
-	if hasExisting {
-		if proposal.Position <= existing.Position {
-			return false // Not newer
-		}
-
-		// Remove from old tx set tracking
-		if nodes, exists := pt.byTxSet[existing.TxSet]; exists {
-			delete(nodes, proposal.NodeID)
-			if len(nodes) == 0 {
-				delete(pt.byTxSet, existing.TxSet)
-			}
-		}
-	}
-
-	// Store proposal
-	pt.proposals[proposal.NodeID] = proposal
-
-	// Add to tx set tracking
-	nodes, exists := pt.byTxSet[proposal.TxSet]
-	if !exists {
-		nodes = make(map[consensus.NodeID]bool)
-		pt.byTxSet[proposal.TxSet] = nodes
-	}
-	nodes[proposal.NodeID] = true
-
-	return true
-}
-
-// Get returns the proposal from a specific node.
-func (pt *ProposalTracker) Get(nodeID consensus.NodeID) *consensus.Proposal {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-	return pt.proposals[nodeID]
-}
-
-// GetAll returns all current proposals.
-func (pt *ProposalTracker) GetAll() []*consensus.Proposal {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	result := make([]*consensus.Proposal, 0, len(pt.proposals))
-	for _, p := range pt.proposals {
-		result = append(result, p)
-	}
-	return result
-}
-
-// GetTrusted returns proposals from trusted validators.
-func (pt *ProposalTracker) GetTrusted() []*consensus.Proposal {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	var result []*consensus.Proposal
-	for nodeID, p := range pt.proposals {
-		if pt.trusted[nodeID] {
-			result = append(result, p)
-		}
-	}
-	return result
-}
-
-// GetForTxSet returns nodes proposing a specific tx set.
-func (pt *ProposalTracker) GetForTxSet(txSetID consensus.TxSetID) []consensus.NodeID {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	nodes, exists := pt.byTxSet[txSetID]
-	if !exists {
-		return nil
-	}
-
-	result := make([]consensus.NodeID, 0, len(nodes))
-	for nodeID := range nodes {
-		result = append(result, nodeID)
-	}
-	return result
-}
-
-// GetTrustedForTxSet returns trusted nodes proposing a specific tx set.
-func (pt *ProposalTracker) GetTrustedForTxSet(txSetID consensus.TxSetID) []consensus.NodeID {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	nodes, exists := pt.byTxSet[txSetID]
-	if !exists {
-		return nil
-	}
-
-	var result []consensus.NodeID
-	for nodeID := range nodes {
-		if pt.trusted[nodeID] {
-			result = append(result, nodeID)
-		}
-	}
-	return result
-}
-
-// TxSetCounts returns the count of proposals for each tx set.
-func (pt *ProposalTracker) TxSetCounts() map[consensus.TxSetID]int {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	result := make(map[consensus.TxSetID]int)
-	for txSetID, nodes := range pt.byTxSet {
-		result[txSetID] = len(nodes)
-	}
-	return result
-}
-
-// TrustedTxSetCounts returns the count of trusted proposals for each tx set.
-func (pt *ProposalTracker) TrustedTxSetCounts() map[consensus.TxSetID]int {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	result := make(map[consensus.TxSetID]int)
-	for txSetID, nodes := range pt.byTxSet {
-		count := 0
-		for nodeID := range nodes {
-			if pt.trusted[nodeID] {
-				count++
-			}
-		}
-		if count > 0 {
-			result[txSetID] = count
-		}
-	}
-	return result
-}
-
-// GetWinningTxSet returns the tx set with the most trusted support.
-func (pt *ProposalTracker) GetWinningTxSet() (consensus.TxSetID, int) {
-	return mostPopularTxSet(pt.TrustedTxSetCounts())
-}
 
 // mostPopularTxSet returns the tx set with the highest count. Ties are
 // broken deterministically by keeping the lexicographically smallest
@@ -225,56 +26,6 @@ func mostPopularTxSet(counts map[consensus.TxSetID]int) (consensus.TxSetID, int)
 		bestCount = 0
 	}
 	return bestID, bestCount
-}
-
-// Count returns the total number of proposals.
-func (pt *ProposalTracker) Count() int {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-	return len(pt.proposals)
-}
-
-// TrustedCount returns the number of proposals from trusted validators.
-func (pt *ProposalTracker) TrustedCount() int {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	count := 0
-	for nodeID := range pt.proposals {
-		if pt.trusted[nodeID] {
-			count++
-		}
-	}
-	return count
-}
-
-// HasConverged returns true if proposals have converged to a single tx set.
-func (pt *ProposalTracker) HasConverged(threshold float64) bool {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	trustedCount := 0
-	for nodeID := range pt.proposals {
-		if pt.trusted[nodeID] {
-			trustedCount++
-		}
-	}
-
-	if trustedCount == 0 {
-		return false
-	}
-
-	_, bestCount := pt.GetWinningTxSet()
-	return float64(bestCount)/float64(trustedCount) >= threshold
-}
-
-// Clear removes all proposals.
-func (pt *ProposalTracker) Clear() {
-	pt.mu.Lock()
-	defer pt.mu.Unlock()
-
-	pt.proposals = make(map[consensus.NodeID]*consensus.Proposal)
-	pt.byTxSet = make(map[consensus.TxSetID]map[consensus.NodeID]bool)
 }
 
 // DisputeTracker tracks disputed transactions and their per-peer
@@ -336,7 +87,13 @@ func (dt *DisputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, 
 	if !exists {
 		return false
 	}
+	return updateVoteCount(dispute, peerID, yes)
+}
 
+// updateVoteCount records peerID's yes/no vote on dispute, adjusting
+// the Yays/Nays tallies. Returns true iff the vote was newly inserted
+// or changed from a previous value. Caller must hold dt.mu.
+func updateVoteCount(dispute *consensus.DisputedTx, peerID consensus.NodeID, yes bool) bool {
 	prev, had := dispute.Votes[peerID]
 	switch {
 	case !had:
@@ -401,28 +158,7 @@ func (dt *DisputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet cons
 
 	changed := false
 	for txID, dispute := range dt.disputes {
-		yes := peerTxSet.Contains(txID)
-		prev, had := dispute.Votes[peerID]
-		switch {
-		case !had:
-			dispute.Votes[peerID] = yes
-			if yes {
-				dispute.Yays++
-			} else {
-				dispute.Nays++
-			}
-			changed = true
-		case prev == yes:
-			// no-op
-		case yes:
-			dispute.Votes[peerID] = true
-			dispute.Nays--
-			dispute.Yays++
-			changed = true
-		default:
-			dispute.Votes[peerID] = false
-			dispute.Yays--
-			dispute.Nays++
+		if updateVoteCount(dispute, peerID, peerTxSet.Contains(txID)) {
 			changed = true
 		}
 	}

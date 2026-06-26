@@ -7,18 +7,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
 )
 
 const (
 	// zeroQualityHex is the hex representation of the zero quality.
 	zeroQualityHex = 0x5500000000000000
-	// maxIOUPrecision is the maximum precision for an IOU.
-	maxIOUPrecision = 16
-	// minIOUExponent is the minimum exponent for an IOU.
-	minIOUExponent = -96
-	// maxIOUExponent is the maximum exponent for an IOU.
-	maxIOUExponent = 80
 )
 
 var (
@@ -109,5 +104,5 @@ func DecodeQuality(quality string) (string, error) {
 }
 
 func isValidQuality(quality bigdecimal.BigDecimal) bool {
-	return quality.Precision <= maxIOUPrecision && quality.Scale >= minIOUExponent && quality.Scale <= maxIOUExponent
+	return quality.Precision <= types.MaxIOUPrecision && quality.Scale >= types.MinIOUExponent && quality.Scale <= types.MaxIOUExponent
 }

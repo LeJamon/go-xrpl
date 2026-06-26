@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txall "github.com/LeJamon/go-xrpl/internal/tx/all"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // The simulate handler now performs an STTx-ctor-parity Validate()
@@ -61,7 +63,7 @@ func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.S
 	return m.simulateResult, nil
 }
 
-func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	m.feeAutofillCallCount++
 	if m.autofillFeeErr != nil {
 		return 0, m.autofillFeeErr
@@ -110,28 +112,28 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       interface{}
+		params       any
 		expectedMsg  string
 		expectedCode int
 	}{
 		{
 			name:         "No params — neither tx_blob nor tx_json",
-			params:       map[string]interface{}{},
+			params:       map[string]any{},
 			expectedMsg:  "Neither `tx_blob` nor `tx_json` included.",
 			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Both tx_blob and tx_json",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": "1200",
-				"tx_json": map[string]interface{}{},
+				"tx_json": map[string]any{},
 			},
 			expectedMsg:  "Can only include one of `tx_blob` and `tx_json`.",
 			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "binary is not a boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": "1200",
 				"binary":  "100",
 			},
@@ -140,7 +142,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "binary is an integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": "1200",
 				"binary":  1,
 			},
@@ -149,9 +151,9 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "secret field included",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"secret": "doesnt_matter",
-				"tx_json": map[string]interface{}{
+				"tx_json": map[string]any{
 					"TransactionType": "AccountSet",
 					"Account":         validAccountAddress,
 				},
@@ -161,9 +163,9 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "seed field included",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"seed": "doesnt_matter",
-				"tx_json": map[string]interface{}{
+				"tx_json": map[string]any{
 					"TransactionType": "AccountSet",
 					"Account":         validAccountAddress,
 				},
@@ -173,9 +175,9 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "seed_hex field included",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"seed_hex": "doesnt_matter",
-				"tx_json": map[string]interface{}{
+				"tx_json": map[string]any{
 					"TransactionType": "AccountSet",
 					"Account":         validAccountAddress,
 				},
@@ -185,9 +187,9 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "passphrase field included",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"passphrase": "doesnt_matter",
-				"tx_json": map[string]interface{}{
+				"tx_json": map[string]any{
 					"TransactionType": "AccountSet",
 					"Account":         validAccountAddress,
 				},
@@ -197,16 +199,16 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "Empty tx_json — missing TransactionType",
-			params: map[string]interface{}{
-				"tx_json": map[string]interface{}{},
+			params: map[string]any{
+				"tx_json": map[string]any{},
 			},
 			expectedMsg:  "Missing field 'tx.TransactionType'.",
 			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Missing Account field",
-			params: map[string]interface{}{
-				"tx_json": map[string]interface{}{
+			params: map[string]any{
+				"tx_json": map[string]any{
 					"TransactionType": "Payment",
 				},
 			},
@@ -215,8 +217,8 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "Bad Account address",
-			params: map[string]interface{}{
-				"tx_json": map[string]interface{}{
+			params: map[string]any{
+				"tx_json": map[string]any{
 					"TransactionType": "AccountSet",
 					"Account":         "badAccount",
 				},
@@ -226,7 +228,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 		},
 		{
 			name: "tx_json is not an object (string)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_json": "not_an_object",
 			},
 			expectedMsg:  "Invalid field 'tx_json', not object.",
@@ -260,8 +262,8 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 	}
 
 	t.Run("Signed transaction — non-empty TxnSignature", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"TxnSignature":    "1200ABCD",
@@ -278,8 +280,8 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 	})
 
 	t.Run("Empty TxnSignature — allowed", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"TxnSignature":    "",
@@ -294,8 +296,8 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 	})
 
 	t.Run("Missing TxnSignature — autofilled to empty", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -307,9 +309,9 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 		assert.Nil(t, rpcErr, "Missing TxnSignature should be autofilled")
 		require.NotNil(t, result)
 
-		resp, ok := result.(map[string]interface{})
+		resp, ok := result.(map[string]any)
 		require.True(t, ok)
-		txJSON, ok := resp["tx_json"].(map[string]interface{})
+		txJSON, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "", txJSON["TxnSignature"], "TxnSignature should be autofilled to empty string")
 		assert.Equal(t, "", txJSON["SigningPubKey"], "SigningPubKey should be autofilled to empty string")
@@ -329,13 +331,13 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 	}
 
 	t.Run("Signed multisig transaction — non-empty signer TxnSignature", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
-				"Signers": []interface{}{
-					map[string]interface{}{
-						"Signer": map[string]interface{}{
+				"Signers": []any{
+					map[string]any{
+						"Signer": map[string]any{
 							"Account":       validAccountAddress,
 							"SigningPubKey": validAccountAddress,
 							"TxnSignature":  "1200ABCD",
@@ -354,8 +356,8 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 	})
 
 	t.Run("Invalid Signers field — not an array", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"Signers":         "1",
@@ -371,11 +373,11 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 	})
 
 	t.Run("Invalid Signers entry — not an object", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
-				"Signers":         []interface{}{"1"},
+				"Signers":         []any{"1"},
 			},
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -388,13 +390,13 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 	})
 
 	t.Run("Signers autofill — missing SigningPubKey and TxnSignature", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
-				"Signers": []interface{}{
-					map[string]interface{}{
-						"Signer": map[string]interface{}{
+				"Signers": []any{
+					map[string]any{
+						"Signer": map[string]any{
 							"Account": validAccountAddress,
 						},
 					},
@@ -408,18 +410,18 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 		assert.Nil(t, rpcErr, "Valid signers without TxnSignature should pass")
 		require.NotNil(t, result)
 
-		resp, ok := result.(map[string]interface{})
+		resp, ok := result.(map[string]any)
 		require.True(t, ok)
-		txJSON, ok := resp["tx_json"].(map[string]interface{})
+		txJSON, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 
-		signers, ok := txJSON["Signers"].([]interface{})
+		signers, ok := txJSON["Signers"].([]any)
 		require.True(t, ok)
 		require.Len(t, signers, 1)
 
-		entry, ok := signers[0].(map[string]interface{})
+		entry, ok := signers[0].(map[string]any)
 		require.True(t, ok)
-		signer, ok := entry["Signer"].(map[string]interface{})
+		signer, ok := entry["Signer"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "", signer["SigningPubKey"], "Signer SigningPubKey should be autofilled")
 		assert.Equal(t, "", signer["TxnSignature"], "Signer TxnSignature should be autofilled")
@@ -438,8 +440,8 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "Batch",
 			"Account":         validAccountAddress,
 		},
@@ -466,8 +468,8 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "AccountSet",
 			"Account":         validAccountAddress,
 		},
@@ -479,7 +481,7 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	assert.Nil(t, rpcErr, "Expected no error for valid simulation")
 	require.NotNil(t, result)
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 
 	assert.Equal(t, "tesSUCCESS", resp["engine_result"])
@@ -489,7 +491,7 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	assert.Equal(t, uint32(3), resp["ledger_index"])
 
 	// Verify tx_json is returned with autofilled fields
-	txJSON, ok := resp["tx_json"].(map[string]interface{})
+	txJSON, ok := resp["tx_json"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "AccountSet", txJSON["TransactionType"])
 	assert.Equal(t, validAccountAddress, txJSON["Account"])
@@ -509,8 +511,8 @@ func TestSimulateMethod_SrcActMalformed(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "AccountSet",
 			"Account":         "badAccount",
 		},
@@ -542,8 +544,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock.autofillSeq = 42
 		mock.currentNetworkFee = 15
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -553,8 +555,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
-		txJSON := resp["tx_json"].(map[string]interface{})
+		resp := result.(map[string]any)
+		txJSON := resp["tx_json"].(map[string]any)
 
 		assert.Equal(t, uint32(42), txJSON["Sequence"])
 		assert.Equal(t, "15", txJSON["Fee"])
@@ -567,8 +569,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock.autofillSeq = 99
 		mock.currentNetworkFee = 99
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"Sequence":        7,
@@ -580,8 +582,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
-		txJSON := resp["tx_json"].(map[string]interface{})
+		resp := result.(map[string]any)
+		txJSON := resp["tx_json"].(map[string]any)
 
 		assert.EqualValues(t, 7, txJSON["Sequence"])
 		assert.Equal(t, "12", txJSON["Fee"])
@@ -599,8 +601,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.currentNetworkFee = 17
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"Sequence":        9,
@@ -611,8 +613,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
-		txJSON := resp["tx_json"].(map[string]interface{})
+		resp := result.(map[string]any)
+		txJSON := resp["tx_json"].(map[string]any)
 
 		assert.EqualValues(t, 9, txJSON["Sequence"], "caller-supplied Sequence preserved")
 		assert.Equal(t, "17", txJSON["Fee"], "Fee still autofilled")
@@ -624,8 +626,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 	t.Run("Sequence absent invokes GetAutofillSequence", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -644,8 +646,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillSeq = 99
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"TicketSequence":  5,
@@ -656,8 +658,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
-		txJSON := resp["tx_json"].(map[string]interface{})
+		resp := result.(map[string]any)
+		txJSON := resp["tx_json"].(map[string]any)
 
 		assert.Equal(t, uint32(0), txJSON["Sequence"],
 			"rippled Simulate.cpp:68,140-146 writes Sequence=0 when TicketSequence is set")
@@ -670,8 +672,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillSeqErr = svcerr.ErrAccountNotFound
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -691,8 +693,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillFeeErr = &svcerr.HighFeeError{Fee: 5000, Limit: 100}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -713,8 +715,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillFeeErr = fmt.Errorf("autofill: %w", &svcerr.HighFeeError{Fee: 5000, Limit: 100})
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -732,8 +734,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillFeeErr = &svcerr.HighFeeError{Fee: 5000, Limit: 100}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"TxnSignature":    "DEADBEEF",
@@ -756,8 +758,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.autofillSeqErr = svcerr.ErrAccountNotFound
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 				"TxnSignature":    "DEADBEEF",
@@ -781,13 +783,13 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		// structural error is reached.
 		mock := newMockLedgerServiceSimulate()
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
-				"Signers": []interface{}{
-					map[string]interface{}{
-						"Signer": map[string]interface{}{
+				"Signers": []any{
+					map[string]any{
+						"Signer": map[string]any{
 							"Account":      validAccountAddress,
 							"TxnSignature": "DEADBEEF",
 						},
@@ -812,8 +814,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		// must therefore surface rpcTX_SIGNED, not rpcSRC_ACT_MALFORMED.
 		mock := newMockLedgerServiceSimulate()
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         "badAccount",
 				"TxnSignature":    "DEADBEEF",
@@ -839,8 +841,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		// Sequence-supplied case.
 		mock := newMockLedgerServiceSimulate()
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         "badAccount",
 				"Sequence":        7,
@@ -889,8 +891,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1025}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -900,7 +902,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		txJSON := result.(map[string]interface{})["tx_json"].(map[string]interface{})
+		txJSON := result.(map[string]any)["tx_json"].(map[string]any)
 		assert.EqualValues(t, 1025, txJSON["NetworkID"])
 	})
 
@@ -908,8 +910,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.serverInfo = types.LedgerServerInfo{NetworkID: 1024}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -919,7 +921,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		txJSON := result.(map[string]interface{})["tx_json"].(map[string]interface{})
+		txJSON := result.(map[string]any)["tx_json"].(map[string]any)
 		_, has := txJSON["NetworkID"]
 		assert.False(t, has, "NetworkID must be absent when server NetworkID <= 1024")
 	})
@@ -937,8 +939,8 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 			CurrentLedger:       3,
 		}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -948,7 +950,7 @@ func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 
 		result, rpcErr := method.Handle(makeCtx(mock), paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
+		resp := result.(map[string]any)
 		assert.Equal(t, "Malformed: Bad amount.", resp["engine_result_message"],
 			"non-tesSUCCESS messages must not be clobbered by the success override")
 	})
@@ -959,8 +961,8 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 
 	t.Run("meta field present when binary=false", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
-		metaJSON := map[string]interface{}{
-			"AffectedNodes":     []interface{}{},
+		metaJSON := map[string]any{
+			"AffectedNodes":     []any{},
 			"TransactionIndex":  uint32(0),
 			"TransactionResult": "tesSUCCESS",
 		}
@@ -979,8 +981,8 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 			ApiVersion: types.ApiVersion2,
 			Services:   newSimulateTestServices(mock),
 		}
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -989,7 +991,7 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
+		resp := result.(map[string]any)
 
 		assert.Equal(t, metaJSON, resp["meta"])
 		_, hasBlob := resp["meta_blob"]
@@ -1015,9 +1017,9 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 			Services:   newSimulateTestServices(mock),
 		}
 		for _, binary := range []bool{false, true} {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"binary": binary,
-				"tx_json": map[string]interface{}{
+				"tx_json": map[string]any{
 					"TransactionType": "AccountSet",
 					"Account":         validAccountAddress,
 				},
@@ -1026,7 +1028,7 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			require.Nil(t, rpcErr)
-			resp := result.(map[string]interface{})
+			resp := result.(map[string]any)
 
 			_, hasMeta := resp["meta"]
 			_, hasBlob := resp["meta_blob"]
@@ -1053,9 +1055,9 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 			ApiVersion: types.ApiVersion2,
 			Services:   newSimulateTestServices(mock),
 		}
-		params := map[string]interface{}{
+		params := map[string]any{
 			"binary": true,
-			"tx_json": map[string]interface{}{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         validAccountAddress,
 			},
@@ -1064,7 +1066,7 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
-		resp := result.(map[string]interface{})
+		resp := result.(map[string]any)
 
 		assert.Equal(t, "DEADBEEF", resp["meta_blob"])
 		_, hasMeta := resp["meta"]
@@ -1093,7 +1095,7 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 			},
 		},
 		TransactionIndex:  0,
-		TransactionResult: tx.TesSUCCESS,
+		TransactionResult: ter.TesSUCCESS,
 	}
 	mock.simulateResult = &types.SubmitResult{
 		EngineResult:        "tesSUCCESS",
@@ -1110,8 +1112,8 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 		ApiVersion: types.ApiVersion2,
 		Services:   newSimulateTestServices(mock),
 	}
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "AccountSet",
 			"Account":         validAccountAddress,
 		},
@@ -1123,21 +1125,21 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 
 	wire, err := json.Marshal(result)
 	require.NoError(t, err)
-	var roundTrip map[string]interface{}
+	var roundTrip map[string]any
 	require.NoError(t, json.Unmarshal(wire, &roundTrip))
 
-	meta, ok := roundTrip["meta"].(map[string]interface{})
+	meta, ok := roundTrip["meta"].(map[string]any)
 	require.True(t, ok, "meta must be a JSON object on the wire")
 	assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
 	assert.EqualValues(t, 0, meta["TransactionIndex"])
 
-	nodes, ok := meta["AffectedNodes"].([]interface{})
+	nodes, ok := meta["AffectedNodes"].([]any)
 	require.True(t, ok)
 	require.Len(t, nodes, 1)
-	mod, ok := nodes[0].(map[string]interface{})["ModifiedNode"].(map[string]interface{})
+	mod, ok := nodes[0].(map[string]any)["ModifiedNode"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "AccountRoot", mod["LedgerEntryType"])
-	final, ok := mod["FinalFields"].(map[string]interface{})
+	final, ok := mod["FinalFields"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "123ABC", final["Domain"])
 }
@@ -1158,8 +1160,8 @@ func TestSimulateMethod_UnknownField(t *testing.T) {
 		Services:   newSimulateTestServices(mock),
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "AccountSet",
 			"Account":         validAccountAddress,
 			"foo":             "bar",
@@ -1193,8 +1195,8 @@ func TestSimulateMethod_MissingRequiredField(t *testing.T) {
 		Services:   newSimulateTestServices(mock),
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "Payment",
 			"Account":         validAccountAddress,
 			// Destination omitted intentionally

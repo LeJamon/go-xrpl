@@ -37,7 +37,7 @@ func FuzzAccountStateLeafRoundTrip(f *testing.F) {
 		}
 
 		item := NewItem(key, data)
-		node, err := NewAccountStateLeafNode(item)
+		node, err := newAccountStateLeafNode(item)
 		if err != nil {
 			return
 		}
@@ -48,9 +48,9 @@ func FuzzAccountStateLeafRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeForWire failed: %v", err)
 		}
-		node2, err := NewAccountStateLeafFromWire(wireData)
+		node2, err := newAccountStateLeafFromWire(wireData)
 		if err != nil {
-			t.Fatalf("NewAccountStateLeafFromWire failed: %v", err)
+			t.Fatalf("newAccountStateLeafFromWire failed: %v", err)
 		}
 		if origHash != node2.Hash() {
 			t.Fatal("wire round-trip: hash mismatch")
@@ -104,7 +104,7 @@ func FuzzTransactionLeafRoundTrip(f *testing.F) {
 		}
 
 		item := NewItem(key, data)
-		node, err := NewTransactionLeafNode(item)
+		node, err := newTransactionLeafNode(item)
 		if err != nil {
 			return
 		}
@@ -166,7 +166,7 @@ func FuzzTransactionWithMetaLeafRoundTrip(f *testing.F) {
 		}
 
 		item := NewItem(key, data)
-		node, err := NewTransactionWithMetaLeafNode(item)
+		node, err := newTransactionWithMetaLeafNode(item)
 		if err != nil {
 			return
 		}
@@ -177,9 +177,9 @@ func FuzzTransactionWithMetaLeafRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeForWire failed: %v", err)
 		}
-		node2, err := NewTransactionWithMetaLeafFromWire(wireData)
+		node2, err := newTransactionWithMetaLeafFromWire(wireData)
 		if err != nil {
-			t.Fatalf("NewTransactionWithMetaLeafFromWire failed: %v", err)
+			t.Fatalf("newTransactionWithMetaLeafFromWire failed: %v", err)
 		}
 		if origHash != node2.Hash() {
 			t.Fatal("wire round-trip: hash mismatch")
@@ -206,8 +206,8 @@ func FuzzTransactionWithMetaLeafRoundTrip(f *testing.F) {
 	})
 }
 
-// FuzzInnerNodeRoundTrip verifies InnerNode wire and prefix round-trips.
-// Constructs an InnerNode from a branch mask and hash data, then round-trips it.
+// FuzzInnerNodeRoundTrip verifies innerNode wire and prefix round-trips.
+// Constructs an innerNode from a branch mask and hash data, then round-trips it.
 func FuzzInnerNodeRoundTrip(f *testing.F) {
 	// One branch set (branch 0), 32 bytes of hash
 	hash32 := make([]byte, 32)
@@ -235,17 +235,17 @@ func FuzzInnerNodeRoundTrip(f *testing.F) {
 			return // empty inner node — nothing to round-trip
 		}
 
-		node := NewInnerNode()
+		node := newInnerNode()
 
 		// Set hashes for each set bit in branchMask
 		hashIdx := 0
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if branchMask&(1<<i) == 0 {
 				continue
 			}
 			var h [32]byte
 			// Fill hash from hashData, cycling if necessary
-			for j := 0; j < 32; j++ {
+			for j := range 32 {
 				if len(hashData) > 0 {
 					h[j] = hashData[hashIdx%len(hashData)]
 					hashIdx++
@@ -275,9 +275,9 @@ func FuzzInnerNodeRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeForWire failed: %v", err)
 		}
-		node2, err := NewInnerNodeFromWire(wireData)
+		node2, err := newInnerNodeFromWire(wireData)
 		if err != nil {
-			t.Fatalf("NewInnerNodeFromWire failed: %v", err)
+			t.Fatalf("newInnerNodeFromWire failed: %v", err)
 		}
 		if origHash != node2.Hash() {
 			t.Fatal("wire round-trip: hash mismatch")

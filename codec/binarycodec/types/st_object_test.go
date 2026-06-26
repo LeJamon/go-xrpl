@@ -6,9 +6,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,7 +25,7 @@ func TestStObject_FromJson(t *testing.T) {
 		// {}
 		{
 			name: "fail - not found error",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"IncorrectField": 89,
 				"Flags":          525288,
 				"OfferSequence":  1752791,
@@ -38,7 +35,7 @@ func TestStObject_FromJson(t *testing.T) {
 		},
 		{
 			name: "pass - convert valid Json",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"Fee":           "10",
 				"Flags":         uint32(524288),
 				"OfferSequence": uint32(1752791),
@@ -49,7 +46,7 @@ func TestStObject_FromJson(t *testing.T) {
 		},
 		{
 			name: "pass - convert valid STObject with variable length",
-			input: map[string]interface{}{
+			input: map[string]any{
 				"TransactionType":   "Payment",
 				"TransactionResult": 0,
 				"Fee":               "10",
@@ -83,27 +80,25 @@ func TestStObject_ToJson(t *testing.T) {
 
 	testcases := []struct {
 		name        string
-		malleate    func(t *testing.T) interfaces.BinaryParser
+		malleate    func(t *testing.T) *serdes.BinaryParser
 		output      any
 		expectedErr error
 	}{
 		{
 			"fail - binary parser read field error",
-			func(t *testing.T) interfaces.BinaryParser {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().HasMore().Return(true)
-				parser.EXPECT().ReadField().Return(nil, errors.New("read field error"))
-				return parser
+			func(t *testing.T) *serdes.BinaryParser {
+				// A structurally valid 3-byte header with no matching field.
+				return serdes.NewBinaryParser([]byte{0, 200, 200}, defs)
 			},
 			nil,
-			errors.New("ReadField error: read field error"),
+			errors.New("ReadField error: FieldHeader {200 200} not found"),
 		},
 		{
 			"pass - convert valid STObject",
-			func(t *testing.T) interfaces.BinaryParser {
+			func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x22, 0x0, 0x8, 0x0, 0x0, 0x20, 0x19, 0x0, 0x1a, 0xbe, 0xd7, 0x65, 0x40, 0x0, 0x0, 0x22, 0xec, 0xb2, 0x5c, 0x0, 0x68, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa}, defs)
 			},
-			map[string]interface{}{
+			map[string]any{
 				"Fee":           "10",
 				"Flags":         uint32(524288),
 				"OfferSequence": uint32(1752791),
@@ -113,10 +108,10 @@ func TestStObject_ToJson(t *testing.T) {
 		},
 		{
 			"pass - convert valid STObject with variable length",
-			func(t *testing.T) interfaces.BinaryParser {
+			func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x12, 0x0, 0x0, 0x22, 0x0, 0x8, 0x0, 0x0, 0x20, 0x19, 0x0, 0x1a, 0xbe, 0xd7, 0x65, 0x40, 0x0, 0x0, 0x22, 0xec, 0xb2, 0x5c, 0x0, 0x68, 0x40, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa, 0x3, 0x10, 0x0}, defs)
 			},
-			map[string]interface{}{
+			map[string]any{
 				"TransactionType":   "Payment",
 				"TransactionResult": "tesSUCCESS",
 				"Fee":               "10",
@@ -146,37 +141,37 @@ func TestStObject_ToJson(t *testing.T) {
 func TestGetSortedKeys(t *testing.T) {
 	tt := []struct {
 		name   string
-		input  map[definitions.FieldInstance]interface{}
+		input  map[definitions.FieldInstance]any
 		output []definitions.FieldInstance
 	}{
 		{
 			name: "pass - get sorted keys",
-			input: map[definitions.FieldInstance]interface{}{
-				testutil.GetFieldInstance(t, "TransactionType"):   1,
-				testutil.GetFieldInstance(t, "TransactionResult"): 0,
-				testutil.GetFieldInstance(t, "IndexNext"):         5100000,
-				testutil.GetFieldInstance(t, "SourceTag"):         1232,
-				testutil.GetFieldInstance(t, "LedgerEntryType"):   1,
+			input: map[definitions.FieldInstance]any{
+				getFieldInstance(t, "TransactionType"):   1,
+				getFieldInstance(t, "TransactionResult"): 0,
+				getFieldInstance(t, "IndexNext"):         5100000,
+				getFieldInstance(t, "SourceTag"):         1232,
+				getFieldInstance(t, "LedgerEntryType"):   1,
 			},
 			output: []definitions.FieldInstance{
-				testutil.GetFieldInstance(t, "LedgerEntryType"),
-				testutil.GetFieldInstance(t, "TransactionType"),
-				testutil.GetFieldInstance(t, "SourceTag"),
-				testutil.GetFieldInstance(t, "IndexNext"),
-				testutil.GetFieldInstance(t, "TransactionResult"),
+				getFieldInstance(t, "LedgerEntryType"),
+				getFieldInstance(t, "TransactionType"),
+				getFieldInstance(t, "SourceTag"),
+				getFieldInstance(t, "IndexNext"),
+				getFieldInstance(t, "TransactionResult"),
 			},
 		},
 		{
 			name: "pass - get sorted keys",
-			input: map[definitions.FieldInstance]interface{}{
-				testutil.GetFieldInstance(t, "Account"):      "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
-				testutil.GetFieldInstance(t, "TransferRate"): 4234,
-				testutil.GetFieldInstance(t, "Expiration"):   23,
+			input: map[definitions.FieldInstance]any{
+				getFieldInstance(t, "Account"):      "rMBzp8CgpE441cp5PVyA9rpVV7oT8hP3ys",
+				getFieldInstance(t, "TransferRate"): 4234,
+				getFieldInstance(t, "Expiration"):   23,
 			},
 			output: []definitions.FieldInstance{
-				testutil.GetFieldInstance(t, "Expiration"),
-				testutil.GetFieldInstance(t, "TransferRate"),
-				testutil.GetFieldInstance(t, "Account"),
+				getFieldInstance(t, "Expiration"),
+				getFieldInstance(t, "TransferRate"),
+				getFieldInstance(t, "Account"),
 			},
 		},
 	}

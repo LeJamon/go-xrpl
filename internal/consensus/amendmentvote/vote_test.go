@@ -199,6 +199,59 @@ func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 	assert.Equal(t, TfLostMajority, got[0].Flags)
 }
 
+// TestDecide_UnknownAmendmentInMajorityIgnored pins C3: when Known is
+// supplied, an amendment recorded in the parent ledger's sfMajorities
+// (in.Majority) but absent from Known — one this server doesn't
+// recognize, e.g. a newer protocol amendment — must NEVER emit a
+// pseudo-tx, even with lost validator support. Rippled's doVoting walks
+// only amendmentMap_ (AmendmentTable.cpp:875), so it emits nothing for
+// such an amendment; emitting a spurious LostMajority would fork the
+// flag-ledger tx set from the rest of the network.
+func TestDecide_UnknownAmendmentInMajorityIgnored(t *testing.T) {
+	known := makeAmendment(0x01)
+	unknown := makeAmendment(0x02) // recorded on the ledger, but not compiled in
+	in := Inputs{
+		UpcomingSeq:        1024,
+		CloseTime:          baseTime,
+		MajorityTimeout:    14 * 24 * time.Hour,
+		TrustedValidations: 10,
+		Votes:              map[Amendment]int{unknown: 0}, // validator support gone
+		Majority:           map[Amendment]time.Time{unknown: baseTime.Add(-time.Hour)},
+		Stances:            map[Amendment]Stance{},
+		Known:              map[Amendment]bool{known: true},
+		StrictMajority:     true,
+	}
+	got := Decide(in)
+	assert.Empty(t, got,
+		"an amendment absent from Known must never emit a pseudo-tx, even with ledger majority + lost support")
+}
+
+// TestDecide_KnownAbstainAmendmentLostMajorityFires is the companion to
+// the unknown-amendment test: a KNOWN amendment the operator abstains on
+// (absent from Stances but present in Known) that holds ledger majority
+// and loses validator support MUST still emit LostMajority — matching
+// rippled walking amendmentMap_, which includes DefaultNo amendments.
+// This is the case a naive "restrict to Stances keys" fix would wrongly
+// drop.
+func TestDecide_KnownAbstainAmendmentLostMajorityFires(t *testing.T) {
+	a := makeAmendment(0x03) // known, but the operator takes no stance
+	in := Inputs{
+		UpcomingSeq:        1024,
+		CloseTime:          baseTime,
+		MajorityTimeout:    14 * 24 * time.Hour,
+		TrustedValidations: 10,
+		Votes:              map[Amendment]int{a: 0},
+		Majority:           map[Amendment]time.Time{a: baseTime.Add(-time.Hour)},
+		Stances:            map[Amendment]Stance{}, // abstain
+		Known:              map[Amendment]bool{a: true},
+		StrictMajority:     true,
+	}
+	got := Decide(in)
+	require.Len(t, got, 1)
+	assert.Equal(t, TfLostMajority, got[0].Flags,
+		"a known abstain amendment that lost majority must still emit LostMajority")
+}
+
 func TestDecide_DeterministicOrder(t *testing.T) {
 	// Multiple amendments → output sorted by hash so the resulting
 	// tx-set hash is deterministic across map-iteration runs.

@@ -108,10 +108,7 @@ func TestLoadValidatorToken_RoundTrip(t *testing.T) {
 	// formatting validator-keys-tool emits for human-readable configs.
 	var multi strings.Builder
 	for i := 0; i < len(encoded); i += 60 {
-		end := i + 60
-		if end > len(encoded) {
-			end = len(encoded)
-		}
+		end := min(i+60, len(encoded))
 		multi.WriteString("   ")
 		multi.WriteString(encoded[i:end])
 		multi.WriteString("\n")

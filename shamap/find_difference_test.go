@@ -6,18 +6,12 @@ import (
 
 func TestFindDifference(t *testing.T) {
 	t.Run("IdenticalMaps", func(t *testing.T) {
-		map1, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create map1: %v", err)
-		}
+		map1 := New(TypeState)
 
-		map2, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create map2: %v", err)
-		}
+		map2 := New(TypeState)
 
 		// Add same items to both
-		for i := byte(0); i < 5; i++ {
+		for i := range byte(5) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -39,8 +33,8 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("EmptyMaps", func(t *testing.T) {
-		map1, _ := New(TypeState)
-		map2, _ := New(TypeState)
+		map1 := New(TypeState)
+		map2 := New(TypeState)
 
 		keys, err := map1.FindDifference(map2)
 		if err != nil {
@@ -53,11 +47,11 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("OneEmpty", func(t *testing.T) {
-		map1, _ := New(TypeState)
-		map2, _ := New(TypeState)
+		map1 := New(TypeState)
+		map2 := New(TypeState)
 
 		// Add items to map1 only
-		for i := byte(0); i < 3; i++ {
+		for i := range byte(3) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -76,11 +70,11 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("DisjointSets", func(t *testing.T) {
-		map1, _ := New(TypeState)
-		map2, _ := New(TypeState)
+		map1 := New(TypeState)
+		map2 := New(TypeState)
 
 		// Add different items to each
-		for i := byte(0); i < 3; i++ {
+		for i := range byte(3) {
 			var key1, key2 [32]byte
 			key1[0] = i
 			key2[0] = i + 10
@@ -105,8 +99,8 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("ModifiedValue", func(t *testing.T) {
-		map1, _ := New(TypeState)
-		map2, _ := New(TypeState)
+		map1 := New(TypeState)
+		map2 := New(TypeState)
 
 		var key [32]byte
 		key[0] = 1
@@ -137,11 +131,11 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("MixedDifferences", func(t *testing.T) {
-		map1, _ := New(TypeState)
-		map2, _ := New(TypeState)
+		map1 := New(TypeState)
+		map2 := New(TypeState)
 
 		// Common keys
-		for i := byte(0); i < 3; i++ {
+		for i := range byte(3) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -192,7 +186,7 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("NilOther", func(t *testing.T) {
-		map1, _ := New(TypeState)
+		map1 := New(TypeState)
 
 		_, err := map1.FindDifference(nil)
 		if err == nil {
@@ -201,11 +195,11 @@ func TestFindDifference(t *testing.T) {
 	})
 
 	t.Run("LargerMaps", func(t *testing.T) {
-		map1, _ := New(TypeState)
-		map2, _ := New(TypeState)
+		map1 := New(TypeState)
+		map2 := New(TypeState)
 
 		// Add 50 items to each with some overlap
-		for i := byte(0); i < 50; i++ {
+		for i := range byte(50) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -238,8 +232,8 @@ func TestFindDifference(t *testing.T) {
 
 func TestFindDifferenceSymmetry(t *testing.T) {
 	// FindDifference should return same keys regardless of order
-	map1, _ := New(TypeState)
-	map2, _ := New(TypeState)
+	map1 := New(TypeState)
+	map2 := New(TypeState)
 
 	var key1, key2 [32]byte
 	key1[0] = 1
@@ -271,62 +265,6 @@ func TestFindDifferenceSymmetry(t *testing.T) {
 	for _, k := range diff2 {
 		if !keys1[k] {
 			t.Errorf("Key %x in diff2 but not in diff1", k[:8])
-		}
-	}
-}
-
-func TestCollectAllKeys(t *testing.T) {
-	sMap, _ := New(TypeState)
-
-	// Add items
-	for i := byte(0); i < 10; i++ {
-		var key [32]byte
-		key[0] = i
-		sMap.Put(key, make([]byte, 12))
-	}
-
-	sMap.mu.RLock()
-	defer sMap.mu.RUnlock()
-
-	keys, err := sMap.collectAllKeysUnsafe(sMap.root)
-	if err != nil {
-		t.Fatalf("collectAllKeysUnsafe failed: %v", err)
-	}
-
-	if len(keys) != 10 {
-		t.Errorf("Expected 10 keys, got %d", len(keys))
-	}
-}
-
-func TestCollectAllKeysExcept(t *testing.T) {
-	sMap, _ := New(TypeState)
-
-	// Add items
-	for i := byte(0); i < 5; i++ {
-		var key [32]byte
-		key[0] = i
-		sMap.Put(key, make([]byte, 12))
-	}
-
-	var exceptKey [32]byte
-	exceptKey[0] = 2
-
-	sMap.mu.RLock()
-	defer sMap.mu.RUnlock()
-
-	keys, err := sMap.collectAllKeysExceptUnsafe(sMap.root, exceptKey)
-	if err != nil {
-		t.Fatalf("collectAllKeysExceptUnsafe failed: %v", err)
-	}
-
-	if len(keys) != 4 {
-		t.Errorf("Expected 4 keys, got %d", len(keys))
-	}
-
-	// Verify except key is not in result
-	for _, k := range keys {
-		if k == exceptKey {
-			t.Error("Except key should not be in result")
 		}
 	}
 }

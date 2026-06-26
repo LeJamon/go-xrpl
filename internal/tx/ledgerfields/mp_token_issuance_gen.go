@@ -243,21 +243,21 @@ func (m *MPTokenIssuance) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*MPTokenIssuance)
-	if !ok || p == nil {
+	prv, ok := prev.(*MPTokenIssuance)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Issuer", p.Issuer, m.Issuer, p.present&mptokenissuanceBitIssuer, m.present&mptokenissuanceBitIssuer)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, m.Sequence, p.present&mptokenissuanceBitSequence, m.present&mptokenissuanceBitSequence)
-	emitIfChangedInt(out, "TransferFee", p.TransferFee, m.TransferFee, p.present&mptokenissuanceBitTransferFee, m.present&mptokenissuanceBitTransferFee)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, m.OwnerNode, p.present&mptokenissuanceBitOwnerNode, m.present&mptokenissuanceBitOwnerNode)
-	emitIfChangedInt(out, "AssetScale", p.AssetScale, m.AssetScale, p.present&mptokenissuanceBitAssetScale, m.present&mptokenissuanceBitAssetScale)
-	emitIfChangedString(out, "MaximumAmount", p.MaximumAmount, m.MaximumAmount, p.present&mptokenissuanceBitMaximumAmount, m.present&mptokenissuanceBitMaximumAmount)
-	emitIfChangedString(out, "OutstandingAmount", p.OutstandingAmount, m.OutstandingAmount, p.present&mptokenissuanceBitOutstandingAmount, m.present&mptokenissuanceBitOutstandingAmount)
-	emitIfChangedString(out, "LockedAmount", p.LockedAmount, m.LockedAmount, p.present&mptokenissuanceBitLockedAmount, m.present&mptokenissuanceBitLockedAmount)
-	emitIfChangedString(out, "MPTokenMetadata", p.MPTokenMetadata, m.MPTokenMetadata, p.present&mptokenissuanceBitMPTokenMetadata, m.present&mptokenissuanceBitMPTokenMetadata)
-	emitIfChangedString(out, "DomainID", p.DomainID, m.DomainID, p.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
-	emitIfChangedUint32(out, "Flags", p.Flags, m.Flags, p.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
+	emitIfChangedString(out, "Issuer", prv.Issuer, m.Issuer, prv.present&mptokenissuanceBitIssuer, m.present&mptokenissuanceBitIssuer)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, m.Sequence, prv.present&mptokenissuanceBitSequence, m.present&mptokenissuanceBitSequence)
+	emitIfChangedInt(out, "TransferFee", prv.TransferFee, m.TransferFee, prv.present&mptokenissuanceBitTransferFee, m.present&mptokenissuanceBitTransferFee)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, m.OwnerNode, prv.present&mptokenissuanceBitOwnerNode, m.present&mptokenissuanceBitOwnerNode)
+	emitIfChangedInt(out, "AssetScale", prv.AssetScale, m.AssetScale, prv.present&mptokenissuanceBitAssetScale, m.present&mptokenissuanceBitAssetScale)
+	emitIfChangedString(out, "MaximumAmount", prv.MaximumAmount, m.MaximumAmount, prv.present&mptokenissuanceBitMaximumAmount, m.present&mptokenissuanceBitMaximumAmount)
+	emitIfChangedString(out, "OutstandingAmount", prv.OutstandingAmount, m.OutstandingAmount, prv.present&mptokenissuanceBitOutstandingAmount, m.present&mptokenissuanceBitOutstandingAmount)
+	emitIfChangedString(out, "LockedAmount", prv.LockedAmount, m.LockedAmount, prv.present&mptokenissuanceBitLockedAmount, m.present&mptokenissuanceBitLockedAmount)
+	emitIfChangedString(out, "MPTokenMetadata", prv.MPTokenMetadata, m.MPTokenMetadata, prv.present&mptokenissuanceBitMPTokenMetadata, m.present&mptokenissuanceBitMPTokenMetadata)
+	emitIfChangedString(out, "DomainID", prv.DomainID, m.DomainID, prv.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
+	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

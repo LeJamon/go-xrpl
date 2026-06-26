@@ -260,7 +260,7 @@ func TestConsecutiveNFTs(t *testing.T) {
 	nftIDs := make([]string, 0, nftCount)
 	offerIndexes := make([]string, 0, nftCount)
 
-	for i := 0; i < nftCount; i++ {
+	for range nftCount {
 		// Tweak the taxon so zero is always stored internally:
 		// taxon = cipheredTaxon(sequence, 0)
 		// This produces tokens with sequential internal representations.
@@ -552,7 +552,7 @@ func TestConsecutivePacking(t *testing.T) {
 	nftIDsByPage := make([][]string, nftsPerAccount)
 	offersByPage := make([][]string, nftsPerAccount)
 
-	for i := 0; i < nftsPerAccount; i++ {
+	for i := range nftsPerAccount {
 		nftIDsByPage[i] = make([]string, 0, len(accounts))
 		offersByPage[i] = make([]string, 0, len(accounts))
 
@@ -578,7 +578,7 @@ func TestConsecutivePacking(t *testing.T) {
 
 	// Remove one NFT/offer from each page - these would cause overflow
 	overflowOffers := make([]string, nftsPerAccount)
-	for i := 0; i < nftsPerAccount; i++ {
+	for i := range nftsPerAccount {
 		lastIdx := len(nftIDsByPage[i]) - 1
 		overflowOffers[i] = offersByPage[i][lastIdx]
 		nftIDsByPage[i] = nftIDsByPage[i][:lastIdx]

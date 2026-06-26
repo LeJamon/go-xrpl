@@ -28,7 +28,7 @@ func TestPeersResponseStructure(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -52,13 +52,13 @@ func TestPeersEmptyList(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// In standalone mode (stub), peers list should be empty
 	peersRaw := resp["peers"]
-	peers, ok := peersRaw.([]interface{})
+	peers, ok := peersRaw.([]any)
 	require.True(t, ok, "peers should be an array")
 	assert.Equal(t, 0, len(peers), "Stub should return empty peers list")
 }
@@ -72,7 +72,7 @@ func TestPeersWithEmptyParams(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	paramsJSON, err := json.Marshal(map[string]interface{}{})
+	paramsJSON, err := json.Marshal(map[string]any{})
 	require.NoError(t, err)
 
 	result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -82,7 +82,7 @@ func TestPeersWithEmptyParams(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 

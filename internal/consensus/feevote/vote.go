@@ -31,7 +31,7 @@ package feevote
 import (
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -137,7 +137,7 @@ func (v *votableValue) getVotes() (uint64, bool) {
 	for k := range v.votes {
 		keys = append(keys, k)
 	}
-	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	slices.Sort(keys)
 
 	chosen := v.current
 	weight := 0

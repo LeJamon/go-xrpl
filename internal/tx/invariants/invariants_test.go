@@ -69,9 +69,10 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 	}
 }
 
-// TestValidNewAccountRoot_PermittedTypes ensures the allow-list now covers
-// VaultCreate and the XChain attestation tx types in addition to Payment /
-// AMMCreate / Batch.
+// TestValidNewAccountRoot_PermittedTypes ensures the allow-list covers
+// Payment / AMMCreate / VaultCreate and the XChain attestation tx types.
+// Batch is NOT in the list: rippled has no ttBATCH arm (InvariantCheck.cpp:
+// 964-967) because each inner tx is invariant-checked under its own type.
 // Reference: rippled InvariantCheck.cpp:964-967.
 func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 	rules := amendment.AllSupportedRules()
@@ -83,13 +84,41 @@ func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 	})
 	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
 
-	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation", "Batch"} {
+	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation"} {
 		if v := checkValidNewAccountRoot(txType, TesSUCCESS, entries, view, rules); v != nil {
 			t.Errorf("%s: unexpected violation %v", txType, v)
 		}
 	}
-	if v := checkValidNewAccountRoot("OfferCreate", TesSUCCESS, entries, view, rules); v == nil {
-		t.Fatalf("OfferCreate: expected violation creating AccountRoot")
+	for _, txType := range []string{"OfferCreate", "Batch"} {
+		if v := checkValidNewAccountRoot(txType, TesSUCCESS, entries, view, rules); v == nil {
+			t.Fatalf("%s: expected violation creating AccountRoot", txType)
+		}
+	}
+}
+
+// TestValidNewAccountRoot_XChainTypeCodesReachable proves the basic.go permitted
+// branch for the XChain attestation types is reachable from the type CODE. The
+// old duplicated invariants table lacked codes 45/46, so TxType(45).String()
+// returned "Unknown(45)" and the branch could never match. Driving the check
+// off the code-derived name guards against that regression.
+func TestValidNewAccountRoot_XChainTypeCodesReachable(t *testing.T) {
+	rules := amendment.AllSupportedRules()
+	view := stubView{seq: 100}
+	newAcct := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  1_000_000,
+		Sequence: 100,
+	})
+	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
+
+	for _, code := range []TxType{45, 46} {
+		name := code.String()
+		if name == "Unknown(45)" || name == "Unknown(46)" {
+			t.Fatalf("TxType(%d).String() = %q; XChain attestation name missing", code, name)
+		}
+		if v := checkValidNewAccountRoot(name, TesSUCCESS, entries, view, rules); v != nil {
+			t.Errorf("code %d (%s): unexpected violation %v", code, name, v)
+		}
 	}
 }
 
@@ -136,7 +165,7 @@ func rulesWithSingleAssetVault() *amendment.Rules {
 
 // TestValidNewAccountRoot_PseudoAccountWrongTxType: when featureSingleAssetVault
 // is enabled, a pseudo-account (sfAMMID set) created by a tx type other than
-// AMMCreate / VaultCreate / Batch must violate.
+// AMMCreate / VaultCreate must violate.
 // Reference: rippled Invariants_test.cpp:965-980, InvariantCheck.cpp:973-979.
 func TestValidNewAccountRoot_PseudoAccountWrongTxType(t *testing.T) {
 	rules := rulesWithSingleAssetVault()

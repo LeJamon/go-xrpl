@@ -58,7 +58,7 @@ func NewTestCluster(t *testing.T, n int) *TestCluster {
 	nodeKeys := make([]string, n)
 	validatorNodeIDs := make([]consensus.NodeID, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		id, err := adaptor.NewValidatorIdentity(validatorSeeds[i])
 		if err != nil {
 			t.Fatalf("create validator identity %d: %v", i, err)
@@ -75,7 +75,7 @@ func NewTestCluster(t *testing.T, n int) *TestCluster {
 
 	// Create nodes, each with the same genesis and all validators in UNL
 	nodes := make([]*TestNode, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		svc := createTestService(t)
 
 		a := adaptor.New(adaptor.Config{

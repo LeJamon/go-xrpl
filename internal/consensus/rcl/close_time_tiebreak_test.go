@@ -49,7 +49,7 @@ func TestCloseTimeTieBreak_DeterministicAcrossValidators(t *testing.T) {
 	const iterations = 50
 	threshVoteInitial := 3 // 50% of 6 participants → 3
 	picks := make(map[time.Time]int)
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		threshVote := threshVoteInitial
 		var picked time.Time
 
@@ -113,7 +113,7 @@ func TestDetermineCloseTime_ObserverTieBreakDeterministic(t *testing.T) {
 	// Go randomizes map iteration on every range, so the buggy strict-'>'
 	// loop would return `smaller` on roughly half of these calls.
 	const iterations = 100
-	for i := 0; i < iterations; i++ {
+	for i := range iterations {
 		got := eng.determineCloseTime()
 		assert.True(t, got.Equal(larger),
 			"observer must deterministically pick the LARGER tied close-time "+

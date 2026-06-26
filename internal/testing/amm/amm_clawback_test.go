@@ -263,6 +263,7 @@ func TestAMMClawback_FeatureDisabled(t *testing.T) {
 
 	// Disable the AMMClawback amendment
 	env.DisableFeature("AMMClawback")
+	env.Close()
 
 	// When featureAMMClawback is not enabled, AMMClawback is disabled.
 	clawbackTx := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).Build()

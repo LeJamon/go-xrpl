@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"maps"
 )
 
 var (
@@ -115,9 +116,7 @@ func initializePermissions() {
 
 	definitions.DelegatablePermissions = make(map[string]int32, len(definitions.GranularPermissions)+len(definitions.TransactionTypes))
 
-	for name, value := range definitions.GranularPermissions {
-		definitions.DelegatablePermissions[name] = value
-	}
+	maps.Copy(definitions.DelegatablePermissions, definitions.GranularPermissions)
 
 	for txType, value := range definitions.TransactionTypes {
 		definitions.DelegatablePermissions[txType] = value + 1

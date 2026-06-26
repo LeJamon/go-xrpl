@@ -11,14 +11,12 @@ require (
 	github.com/decred/dcrd/crypto/ripemd160 v1.0.2
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
-	github.com/golang/mock v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.10.9
 	github.com/pierrec/lz4 v2.6.1+incompatible
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.10.0
-	github.com/syndtr/goleveldb v1.0.0
 	golang.org/x/sync v0.18.0
 	google.golang.org/grpc v1.78.0
 	modernc.org/sqlite v1.46.1

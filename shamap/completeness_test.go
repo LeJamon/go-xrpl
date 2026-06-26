@@ -9,10 +9,7 @@ import (
 // family, and returns the root hash plus a backed map reconstructed from it.
 func buildBackedStateMap(t *testing.T, family *memoryFamily, keys []string) ([32]byte, *SHAMap) {
 	t.Helper()
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 	for i, keyHex := range keys {
 		if err := sMap.Put(hexToHash(keyHex), intToBytes(i+1)); err != nil {
 			t.Fatalf("Put %d: %v", i, err)
@@ -149,10 +146,7 @@ func TestCheckComplete_DetectsCorruptNode(t *testing.T) {
 }
 
 func TestCheckComplete_UnbackedMapIsComplete(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 	if err := sMap.Put(hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7"), intToBytes(1)); err != nil {
 		t.Fatal(err)
 	}
@@ -169,10 +163,7 @@ func TestCheckComplete_UnbackedMapIsComplete(t *testing.T) {
 }
 
 func TestCheckComplete_EmptyMap(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sMap := New(TypeState)
 	res, err := sMap.CheckComplete(context.Background())
 	if err != nil {
 		t.Fatalf("CheckComplete: %v", err)

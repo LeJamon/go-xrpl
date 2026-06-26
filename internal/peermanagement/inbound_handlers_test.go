@@ -316,11 +316,12 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 	require.NoError(t, err)
 
 	o := &Overlay{
-		cfg:      Config{EnableTxReduceRelay: false},
-		peers:    make(map[PeerID]*Peer),
-		events:   make(chan Event, 8),
-		messages: make(chan *InboundMessage, 8),
-		cluster:  cluster.New(),
+		cfg:        Config{EnableTxReduceRelay: false},
+		peers:      make(map[PeerID]*Peer),
+		events:     make(chan Event, 8),
+		messages:   make(chan *InboundMessage, 8),
+		txMessages: make(chan *InboundMessage, 8),
+		cluster:    cluster.New(),
 	}
 
 	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
@@ -345,13 +346,127 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 	assert.NotZero(t, peer.BadDataCount(),
 		"TMTransactions batch without tx-reduce-relay must charge bad-data")
 
-	// And no inner frame should have been fanned out to the messages
-	// channel — the whole batch is dropped before the fanout loop.
+	// And no inner frame should have been fanned out to the tx lane —
+	// the whole batch is dropped before the fanout loop.
 	select {
-	case got := <-o.messages:
+	case got := <-o.txMessages:
 		t.Fatalf("expected no fanout, got %v", got)
 	case <-time.After(10 * time.Millisecond):
 	}
+}
+
+// TestHandleTransactionsBatchMessage_FansOutDecodedTx pins the negotiated
+// batch path: each inner TMTransaction is fanned out carrying its
+// already-decoded form (InboundMessage.Tx) with no re-serialization,
+// mirroring rippled handing the decoded inner straight to
+// handleTransaction (PeerImp.cpp:2682-2687). Payload stays nil so the
+// router skips a redundant decode.
+func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		cfg:        Config{EnableTxReduceRelay: true},
+		peers:      make(map[PeerID]*Peer),
+		events:     make(chan Event, 8),
+		messages:   make(chan *InboundMessage, 8),
+		txMessages: make(chan *InboundMessage, 8),
+		cluster:    cluster.New(),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(34), endpoint, false, id, make(chan Event, 1))
+	caps := NewPeerCapabilities()
+	caps.Features.Enable(FeatureTxReduceRelay)
+	peer.capabilities = caps
+	o.peers[peer.ID()] = peer
+
+	inners := []message.Transaction{
+		{RawTransaction: []byte{0x12, 0x00, 0x01}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x02}, Status: message.TxStatusCurrent},
+	}
+	payload, err := message.Encode(&message.Transactions{Transactions: inners})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeTransactions),
+		Payload:     payload,
+	})
+
+	for i := range inners {
+		select {
+		case got := <-o.txMessages:
+			require.NotNil(t, got)
+			assert.Equal(t, uint16(message.TypeTransaction), got.Type)
+			assert.Nil(t, got.Payload,
+				"fanned-out frame must carry the decoded tx, not re-encoded bytes")
+			require.NotNil(t, got.Tx,
+				"fanned-out frame must carry the decoded transaction")
+			assert.Equal(t, inners[i].RawTransaction, got.Tx.RawTransaction)
+		case <-time.After(time.Second):
+			t.Fatalf("expected fanout for inner %d", i)
+		}
+	}
+
+	assert.Zero(t, peer.BadDataCount(),
+		"negotiated batch must not charge bad-data")
+}
+
+// TestHandleTransactionsBatchMessage_OverflowShedsToTxCounter pins the
+// #1103 batch-overflow accounting: when the tx lane is saturated, inner
+// frames fanned out from a TMTransactions batch are shed to
+// droppedTransactions (jq_trans_overflow) rather than the consensus-lane
+// droppedMessages, and never consume the consensus lane. Mirrors rippled
+// routing batched txs through the same MAX_TRANSACTIONS / jqTransOverflow
+// gate as single ones (PeerImp.cpp:2682-2687 → 1349-1355).
+func TestHandleTransactionsBatchMessage_OverflowShedsToTxCounter(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	const txCap = 2
+	o := &Overlay{
+		cfg:        Config{EnableTxReduceRelay: true},
+		peers:      make(map[PeerID]*Peer),
+		events:     make(chan Event, 8),
+		messages:   make(chan *InboundMessage, 8),
+		txMessages: make(chan *InboundMessage, txCap),
+		cluster:    cluster.New(),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(35), endpoint, false, id, make(chan Event, 1))
+	caps := NewPeerCapabilities()
+	caps.Features.Enable(FeatureTxReduceRelay)
+	peer.capabilities = caps
+	o.peers[peer.ID()] = peer
+
+	// More inners than the tx lane holds; the lane is never drained, so the
+	// overflow has nowhere to go but the shed branch.
+	inners := []message.Transaction{
+		{RawTransaction: []byte{0x12, 0x00, 0x01}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x02}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x03}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x04}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x05}, Status: message.TxStatusCurrent},
+	}
+	payload, err := message.Encode(&message.Transactions{Transactions: inners})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeTransactions),
+		Payload:     payload,
+	})
+
+	assert.Equal(t, txCap, len(o.txMessages),
+		"tx lane must fill to capacity with fanned-out inner frames")
+	assert.Equal(t, uint64(len(inners)-txCap), o.DroppedTransactions(),
+		"batch overflow must shed to droppedTransactions (jq_trans_overflow)")
+	assert.Equal(t, uint64(0), o.DroppedMessages(),
+		"batch overflow must not bump the consensus-lane counter")
+	assert.Equal(t, 0, len(o.messages),
+		"a transaction batch must never consume the consensus lane")
 }
 
 // TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest pins

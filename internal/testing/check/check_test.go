@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/check"
@@ -13,9 +14,35 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+// requireTrustLineInBothDirs asserts that the trust line between holder and
+// issuer is present in both accounts' owner directories and that its deletion
+// hints (LowNode/HighNode) are recorded. A trust line auto-created by CheckCash
+// must be inserted into both directories, mirroring rippled's trustCreate;
+// without this it is orphaned from the directories and cannot later be deleted.
+func requireTrustLineInBothDirs(t *testing.T, env *jtx.TestEnv, holder, issuer *jtx.Account, currency string) {
+	t.Helper()
+
+	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
+	require.True(t, env.LedgerEntryExists(lineKey), "trust line should exist")
+
+	inDir := func(owner *jtx.Account) bool {
+		found := false
+		_ = state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func(itemKey [32]byte) error {
+			if itemKey == lineKey.Key {
+				found = true
+			}
+			return nil
+		})
+		return found
+	}
+	require.True(t, inDir(holder), "trust line missing from holder's owner directory")
+	require.True(t, inDir(issuer), "trust line missing from issuer's owner directory")
+}
 
 // TestCheck_Enabled tests that checks are gated by the Checks amendment.
 // Reference: rippled Check_test.cpp testEnabled (lines 140-189)
@@ -682,6 +709,92 @@ func TestCheck_CashXRP(t *testing.T) {
 		// 150 DeliverMin but under SendMax(200).
 		result = env.Submit(check.CheckCashDeliverMin(dst, chkID, tx.NewXRPAmount(jtx.XRP(150))).Build())
 		require.Equal(t, "tecPATH_PARTIAL", result.Code)
+		env.Close()
+	})
+
+	t.Run("BelowReserveWindowUnfunded", func(t *testing.T) {
+		// In the below-reserve window the two rippled funds checks disagree on
+		// the result code, and the doApply branch wins. The writer's preclaim
+		// available funds = max(balance - reserve(ownerCount), 0) + increment
+		// (CashCheck.cpp:177), but the doApply liquid = xrpLiquid(src, -1) =
+		// max(balance - reserve(ownerCount-1), 0) (CashCheck.cpp:304). Once the
+		// writer's balance drops below reserve(ownerCount), the preclaim term
+		// zero-clamps to just the released increment while the doApply liquid is
+		// strictly smaller, so a request that clears preclaim still fails doApply
+		// with tecUNFUNDED_PAYMENT (CashCheck.cpp:319).
+		reserveBase := env.ReserveBase()             // reserve(0)
+		reserveIncrement := env.ReserveIncrement()   // one increment
+		reserveOne := reserveBase + reserveIncrement // reserve(1), the writer holds one check
+
+		writer := jtx.NewAccount("writer847")
+		dst := jtx.NewAccount("dest847")
+		// Fund just enough to create the check (needs prior balance >= reserve(1)).
+		env.FundAmount(writer, reserveOne+uint64(jtx.XRP(10)))
+		env.Fund(dst)
+		env.Close()
+
+		// SendMax(40 XRP) leaves headroom under the preclaim available funds but
+		// above the doApply liquid we engineer below.
+		sendMax := uint64(jtx.XRP(40))
+		chkID := check.GetCheckID(writer, env.Seq(writer))
+		result := env.Submit(check.CheckCreate(writer, dst, tx.NewXRPAmount(int64(sendMax))).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		jtx.RequireOwnerCount(t, env, writer, 1)
+
+		// Burn the writer's balance below reserve(1) via a large AccountSet fee.
+		// Target balance = reserveBase + 10 XRP, which sits below reserve(1).
+		// Then:
+		//   preclaim available = max(target - reserve(1), 0) + increment = increment (50 XRP)
+		//   doApply liquid     = max(target - reserve(0), 0)             = 10 XRP
+		targetBalance := reserveBase + uint64(jtx.XRP(10))
+		burnFee := env.Balance(writer) - targetBalance
+		result = env.Submit(accountset.AccountSet(writer).Fee(burnFee).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		require.Equal(t, targetBalance, env.Balance(writer))
+
+		// Cash exactly SendMax(40 XRP). preclaim passes (40 <= 50 available) but
+		// doApply fails (doApply liquid 10 < 40), so rippled returns
+		// tecUNFUNDED_PAYMENT — not tecPATH_PARTIAL.
+		result = env.Submit(check.CheckCashAmount(dst, chkID, tx.NewXRPAmount(int64(sendMax))).Build())
+		require.Equal(t, "tecUNFUNDED_PAYMENT", result.Code,
+			"below-reserve doApply funds failure must return tecUNFUNDED_PAYMENT")
+		env.Close()
+
+		// Same window with DeliverMin(40 XRP): doApply liquid (10) < DeliverMin,
+		// so the doApply branch returns tecUNFUNDED_PAYMENT here too.
+		result = env.Submit(check.CheckCashDeliverMin(dst, chkID, tx.NewXRPAmount(int64(sendMax))).Build())
+		require.Equal(t, "tecUNFUNDED_PAYMENT", result.Code,
+			"below-reserve DeliverMin doApply funds failure must return tecUNFUNDED_PAYMENT")
+		env.Close()
+	})
+
+	t.Run("AboveReserveInsufficientStaysPathPartial", func(t *testing.T) {
+		// Above the writer's reserve the preclaim funds guard pre-empts the
+		// doApply branch, so an underfunded request returns tecPATH_PARTIAL —
+		// the division of labour rippled keeps between preclaim (CashCheck.cpp:183)
+		// and doApply (CashCheck.cpp:319). Here the writer stays above reserve(1)
+		// and both the preclaim available funds and the doApply liquid equal the
+		// same ~60 XRP, so the request fails preclaim first.
+		writer := jtx.NewAccount("writer847b")
+		dst := jtx.NewAccount("dest847b")
+		// Balance 260 XRP, owner count 1 ⇒ above reserve(1)=250 XRP.
+		env.FundAmount(writer, env.ReserveBase()+env.ReserveIncrement()+uint64(jtx.XRP(10)))
+		env.Fund(dst)
+		env.Close()
+
+		chkID := check.GetCheckID(writer, env.Seq(writer))
+		result := env.Submit(check.CheckCreate(writer, dst, tx.NewXRPAmount(jtx.XRP(200))).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// Writer liquid ≈ 60 XRP (260 - reserve(0) 200, after the released check
+		// reserve). Cashing SendMax(200) exceeds it, and since the writer is above
+		// reserve(1) the preclaim guard returns tecPATH_PARTIAL.
+		result = env.Submit(check.CheckCashAmount(dst, chkID, tx.NewXRPAmount(jtx.XRP(200))).Build())
+		require.Equal(t, "tecPATH_PARTIAL", result.Code,
+			"above-reserve underfunded cash must stay tecPATH_PARTIAL")
 		env.Close()
 	})
 }
@@ -1382,6 +1495,30 @@ func TestCheck_CashInvalid(t *testing.T) {
 				env.Close()
 			}
 		})
+
+		// Cashing a check with an amount whose asset type does not match the
+		// check's SendMax is temMALFORMED. This covers the cross-type case: an
+		// IOU check cashed with native XRP (and an XRP check cashed with IOU),
+		// which must be rejected by the currency comparison before dispatch
+		// rather than slipping into the XRP path and returning tecPATH_PARTIAL.
+		// Reference: rippled CashCheck.cpp preclaim L144-155.
+		t.Run("CrossTypeAsset_"+label, func(t *testing.T) {
+			var wrongType tx.Amount
+			if amount.IsNative() {
+				// XRP check cashed with an IOU amount.
+				wrongType = USD(10)
+			} else {
+				// IOU check cashed with a native XRP amount.
+				wrongType = tx.NewXRPAmount(jtx.XRP(10))
+			}
+			result := env.Submit(check.CheckCashAmount(bob, chkID, wrongType).Build())
+			require.Equal(t, "temMALFORMED", result.Code)
+			env.Close()
+
+			result = env.Submit(check.CheckCashDeliverMin(bob, chkID, wrongType).Build())
+			require.Equal(t, "temMALFORMED", result.Code)
+			env.Close()
+		})
 	}
 
 	t.Run("XRP", func(t *testing.T) {
@@ -2055,6 +2192,8 @@ func TestCheck_TrustLineCreation(t *testing.T) {
 		env.Close()
 
 		jtx.RequireOwnerCount(t, env, alice, 1) // auto-created trustline
+		// The auto-created line must live in both owner directories.
+		requireTrustLineInBothDirs(t, env, alice, gw1, "CK1")
 	})
 
 	t.Run("GlobalFreezeIssuerCheck", func(t *testing.T) {

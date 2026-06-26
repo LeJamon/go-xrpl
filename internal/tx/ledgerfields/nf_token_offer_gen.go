@@ -22,7 +22,6 @@ func init() {
 // (sMD_Never) — so Decode → Encode is byte-identical.
 type NFTokenOffer struct {
 	present           uint64
-	Account           string // AccountID (base58)
 	Owner             string // AccountID (base58)
 	NFTokenID         string // Hash256 (uppercase hex)
 	Amount            any    // Amount (XRP string | IOU map)
@@ -36,8 +35,7 @@ type NFTokenOffer struct {
 }
 
 const (
-	nftokenofferBitAccount uint64 = 1 << iota
-	nftokenofferBitOwner
+	nftokenofferBitOwner uint64 = 1 << iota
 	nftokenofferBitNFTokenID
 	nftokenofferBitAmount
 	nftokenofferBitOwnerNode
@@ -142,9 +140,6 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
-			case 1:
-				n.Account = val
-				n.present |= nftokenofferBitAccount
 			case 2:
 				n.Owner = val
 				n.present |= nftokenofferBitOwner
@@ -165,16 +160,13 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (n *NFTokenOffer) emitAll(out map[string]any, skipDefault bool) {
-	if n.present&nftokenofferBitAccount != 0 && !(skipDefault && n.Account == "") {
-		out["Account"] = n.Account
-	}
 	if n.present&nftokenofferBitOwner != 0 && !(skipDefault && n.Owner == "") {
 		out["Owner"] = n.Owner
 	}
 	if n.present&nftokenofferBitNFTokenID != 0 && !(skipDefault && isZeroHexString(n.NFTokenID)) {
 		out["NFTokenID"] = n.NFTokenID
 	}
-	if n.present&nftokenofferBitAmount != 0 {
+	if n.present&nftokenofferBitAmount != 0 && !(skipDefault && amountIsDefault(n.Amount)) {
 		out["Amount"] = n.Amount
 	}
 	if n.present&nftokenofferBitOwnerNode != 0 && !(skipDefault && isZeroHexString(n.OwnerNode)) {
@@ -209,19 +201,18 @@ func (n *NFTokenOffer) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (n *NFTokenOffer) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*NFTokenOffer)
-	if !ok || p == nil {
+	prv, ok := prev.(*NFTokenOffer)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, n.Account, p.present&nftokenofferBitAccount, n.present&nftokenofferBitAccount)
-	emitIfChangedString(out, "Owner", p.Owner, n.Owner, p.present&nftokenofferBitOwner, n.present&nftokenofferBitOwner)
-	emitIfChangedString(out, "NFTokenID", p.NFTokenID, n.NFTokenID, p.present&nftokenofferBitNFTokenID, n.present&nftokenofferBitNFTokenID)
-	emitIfChangedAmount(out, "Amount", p.Amount, n.Amount, p.present&nftokenofferBitAmount, n.present&nftokenofferBitAmount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, n.OwnerNode, p.present&nftokenofferBitOwnerNode, n.present&nftokenofferBitOwnerNode)
-	emitIfChangedString(out, "NFTokenOfferNode", p.NFTokenOfferNode, n.NFTokenOfferNode, p.present&nftokenofferBitNFTokenOfferNode, n.present&nftokenofferBitNFTokenOfferNode)
-	emitIfChangedString(out, "Destination", p.Destination, n.Destination, p.present&nftokenofferBitDestination, n.present&nftokenofferBitDestination)
-	emitIfChangedUint32(out, "Expiration", p.Expiration, n.Expiration, p.present&nftokenofferBitExpiration, n.present&nftokenofferBitExpiration)
-	emitIfChangedUint32(out, "Flags", p.Flags, n.Flags, p.present&nftokenofferBitFlags, n.present&nftokenofferBitFlags)
+	emitIfChangedString(out, "Owner", prv.Owner, n.Owner, prv.present&nftokenofferBitOwner, n.present&nftokenofferBitOwner)
+	emitIfChangedString(out, "NFTokenID", prv.NFTokenID, n.NFTokenID, prv.present&nftokenofferBitNFTokenID, n.present&nftokenofferBitNFTokenID)
+	emitIfChangedAmount(out, "Amount", prv.Amount, n.Amount, prv.present&nftokenofferBitAmount, n.present&nftokenofferBitAmount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, n.OwnerNode, prv.present&nftokenofferBitOwnerNode, n.present&nftokenofferBitOwnerNode)
+	emitIfChangedString(out, "NFTokenOfferNode", prv.NFTokenOfferNode, n.NFTokenOfferNode, prv.present&nftokenofferBitNFTokenOfferNode, n.present&nftokenofferBitNFTokenOfferNode)
+	emitIfChangedString(out, "Destination", prv.Destination, n.Destination, prv.present&nftokenofferBitDestination, n.present&nftokenofferBitDestination)
+	emitIfChangedUint32(out, "Expiration", prv.Expiration, n.Expiration, prv.present&nftokenofferBitExpiration, n.present&nftokenofferBitExpiration)
+	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&nftokenofferBitFlags, n.present&nftokenofferBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -230,9 +221,6 @@ func (n *NFTokenOffer) EmitPreviousFields(prev Entry, out map[string]any) {
 // (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
 // level) cannot trip a spurious STI_NOTPRESENT emission.
 func (n *NFTokenOffer) EmitChangeOrigFields(out map[string]any) {
-	if n.present&nftokenofferBitAccount != 0 {
-		out["Account"] = n.Account
-	}
 	if n.present&nftokenofferBitOwner != 0 {
 		out["Owner"] = n.Owner
 	}
@@ -297,9 +285,6 @@ func (n *NFTokenOffer) PreviousTxn() (string, uint32) {
 func (n *NFTokenOffer) ToMap() map[string]any {
 	out := map[string]any{
 		"LedgerEntryType": "NFTokenOffer",
-	}
-	if n.present&nftokenofferBitAccount != 0 {
-		out["Account"] = n.Account
 	}
 	if n.present&nftokenofferBitOwner != 0 {
 		out["Owner"] = n.Owner

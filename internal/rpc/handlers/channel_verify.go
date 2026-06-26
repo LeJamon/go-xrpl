@@ -14,8 +14,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// ChannelVerifyMethod handles the channel_verify RPC method
-// This verifies a signature that can be used to redeem a specific amount from a payment channel.
+// ChannelVerifyMethod handles channel_verify: it checks a payment-channel
+// claim signature against the channel ID, amount, and public key, without
+// touching ledger state.
 type ChannelVerifyMethod struct{ BaseHandler }
 
 // channelVerifyRequest represents the request parameters
@@ -26,7 +27,7 @@ type channelVerifyRequest struct {
 	Signature string `json:"signature"`
 }
 
-func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request channelVerifyRequest
 
 	if params != nil {
@@ -151,7 +152,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// rippled: result[jss::signature_verified] = verify(*pk, msg.slice(), makeSlice(*sig), /*canonical*/ true);
 	verified := verifySignature(messageBytes, pubKeyHex, sigHex)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"signature_verified": verified,
 	}
 

@@ -1,6 +1,8 @@
 package invariants
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -120,7 +122,10 @@ func checkClawbackHolderBalance(tx Transaction, view ReadView) *InvariantViolati
 
 	rs, err := state.ParseRippleState(lineData)
 	if err != nil {
-		return nil
+		return &InvariantViolation{
+			Name:    "ValidClawback",
+			Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
+		}
 	}
 
 	// accountHolds logic: get balance in holder's terms.

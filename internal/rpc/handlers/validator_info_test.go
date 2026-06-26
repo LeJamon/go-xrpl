@@ -76,11 +76,11 @@ func adminCtx(services *types.ServiceContainer) *types.RpcContext {
 	}
 }
 
-func decodeResponse(t *testing.T, result interface{}) map[string]interface{} {
+func decodeResponse(t *testing.T, result any) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))
 	return resp
 }

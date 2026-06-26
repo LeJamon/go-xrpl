@@ -3,7 +3,9 @@ package rfc1751
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,12 +20,7 @@ func mustHex(t *testing.T, s string) []byte {
 }
 
 func containsWord(phrase, word string) bool {
-	for _, w := range strings.Fields(phrase) {
-		if w == word {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(phrase), word)
 }
 
 // Canonical RFC 1751 Appendix B test vectors. The key bytes encode directly
@@ -94,7 +91,7 @@ func TestSeedToEnglishRippledVectors(t *testing.T) {
 
 func TestKeyToEnglishRoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		key := make([]byte, 16)
 		rng.Read(key)
 
@@ -115,7 +112,7 @@ func TestKeyToEnglishRoundTrip(t *testing.T) {
 
 func TestSeedToEnglishRoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		seed := make([]byte, 16)
 		rng.Read(seed)
 
@@ -138,12 +135,12 @@ func TestSeedToEnglishRoundTrip(t *testing.T) {
 // seedAs1751 std::reverse_copy in Seed.cpp). Verify that relationship.
 func TestSeedToEnglishReversesKey(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		seed := make([]byte, 16)
 		rng.Read(seed)
 
 		reversed := make([]byte, 16)
-		for j := 0; j < 16; j++ {
+		for j := range 16 {
 			reversed[j] = seed[15-j]
 		}
 
@@ -209,7 +206,7 @@ func TestEnglishToKeyParityError(t *testing.T) {
 
 	// Substitute the first word with another dictionary word so all six
 	// words still resolve but the stored parity no longer matches, exercising
-	// the etob parity check (error code -2, matching rippled RFC1751.cpp:446).
+	// the etob parity check (ErrParity, matching rippled RFC1751.cpp:446).
 	words := strings.Fields(valid)
 	found := false
 	for _, repl := range dictionary {
@@ -217,7 +214,7 @@ func TestEnglishToKeyParityError(t *testing.T) {
 			continue
 		}
 		candidate := repl + " " + strings.Join(words[1:], " ")
-		if _, err := EnglishToKey(candidate); err != nil && strings.Contains(err.Error(), "error code -2") {
+		if _, err := EnglishToKey(candidate); errors.Is(err, ErrParity) {
 			found = true
 			break
 		}

@@ -1,63 +1,12 @@
 package csf
 
 import (
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
-
-// ProcessingDelays simulates internal peer processing delays.
-// These model real-world delays between receiving a message and fully processing it.
-type ProcessingDelays struct {
-	// LedgerAccept is delay from consensus doAccept to accepting and issuing validation
-	LedgerAccept SimDuration
-
-	// RecvValidation is delay in processing validations from remote peers
-	RecvValidation SimDuration
-
-	// RecvProposal is delay in processing proposals
-	RecvProposal SimDuration
-
-	// RecvTxSet is delay in processing transaction sets
-	RecvTxSet SimDuration
-
-	// RecvTx is delay in processing individual transactions
-	RecvTx SimDuration
-}
-
-// OnReceive returns the receive delay for a message type.
-// Default is no delay.
-func (d ProcessingDelays) OnReceive(msg interface{}) SimDuration {
-	switch msg.(type) {
-	case *Validation:
-		return d.RecvValidation
-	case *Proposal:
-		return d.RecvProposal
-	case *TxSet:
-		return d.RecvTxSet
-	case Tx:
-		return d.RecvTx
-	default:
-		return 0
-	}
-}
-
-// Position wraps a Proposal with additional metadata.
-// For real consensus, this would add serialization and signing data.
-type Position struct {
-	proposal *Proposal
-}
-
-// NewPosition creates a position from a proposal.
-func NewPosition(p *Proposal) *Position {
-	return &Position{proposal: p}
-}
-
-// Proposal returns the underlying proposal.
-func (p *Position) Proposal() *Proposal {
-	return p.proposal
-}
 
 // Router handles message deduplication using sequence numbers.
 // Messages are tagged with a sequence number by the origin node.
@@ -102,12 +51,6 @@ func (r *Router) HasSeen(origin PeerID, seq uint64) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.lastObservedSeq[origin] >= seq
-}
-
-// BroadcastMsg wraps a message for flooding across the network.
-type BroadcastMsg struct {
-	Seq    uint64
-	Origin PeerID
 }
 
 // ValidationParms holds validation parameters.
@@ -294,11 +237,6 @@ func (v *Validations) Laggards(seq uint32, trusted map[PeerID]bool) int {
 	return count
 }
 
-// Expire removes old validations.
-func (v *Validations) Expire() {
-	// For simulation, we don't expire
-}
-
 // ValStatus represents the result of adding a validation.
 type ValStatus int
 
@@ -355,7 +293,6 @@ type Peer struct {
 
 	// Configuration
 	clockSkew      time.Duration
-	delays         ProcessingDelays
 	runAsValidator bool
 	consensusParms ConsensusParms
 
@@ -479,13 +416,6 @@ func (p *Peer) SetClockSkew(skew time.Duration) {
 	p.clockSkew = skew
 }
 
-// SetDelays sets the processing delays.
-func (p *Peer) SetDelays(delays ProcessingDelays) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.delays = delays
-}
-
 // SetRunAsValidator sets whether this peer runs as a validator.
 func (p *Peer) SetRunAsValidator(val bool) {
 	p.mu.Lock()
@@ -527,12 +457,7 @@ func (p *Peer) Trusts(other *Peer) bool {
 
 // TrustsPeerID checks whether we trust a peer by ID.
 func (p *Peer) TrustsPeerID(id PeerID) bool {
-	for _, trusted := range p.trustGraph.TrustedPeers(p.ID) {
-		if trusted == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.trustGraph.TrustedPeers(p.ID), id)
 }
 
 // Connect creates a network connection to another peer.
@@ -670,9 +595,6 @@ func (p *Peer) OnClose(prevLedger *Ledger, closeTime time.Time, mode consensus.M
 	return txSet, proposal
 }
 
-// Note: OnAccept, doAccept, and OnForceAccept are no longer used as the Peer
-// now uses built-in consensus logic in acceptLedgerLocked.
-
 // EarliestAllowedSeq returns the earliest sequence for ledger selection.
 func (p *Peer) EarliestAllowedSeq() uint32 {
 	p.mu.RLock()
@@ -708,7 +630,7 @@ func (p *Peer) Propose(pos *Proposal) {
 }
 
 // share broadcasts a message to all connected peers.
-func (p *Peer) share(msg interface{}) {
+func (p *Peer) share(msg any) {
 	seq := p.router.NextSeq()
 	origin := p.ID
 
@@ -1004,10 +926,7 @@ func (p *Peer) checkConsensusLocked() {
 	// Use the UNL size for threshold, not just the count of proposals received
 	// This ensures we wait for enough trusted validators to respond
 	unlSize := p.trustGraph.UNLSize(p.ID)
-	threshold := int(float64(unlSize) * 0.8)
-	if threshold < 1 {
-		threshold = 1
-	}
+	threshold := max(int(float64(unlSize)*0.8), 1)
 
 	var winningTxSetID consensus.TxSetID
 	var winningCount int
@@ -1068,10 +987,9 @@ func (p *Peer) acceptLedgerLocked(winningTxSetID consensus.TxSetID, proposers in
 	p.ledgers[newLedger.ID()] = newLedger
 
 	p.Issue(AcceptLedgerEvent{Ledger: newLedger})
-	p.prevProposers = proposers - 1 // Subtract self
-	if p.prevProposers < 0 {
-		p.prevProposers = 0
-	}
+	p.prevProposers = max(
+		// Subtract self
+		proposers-1, 0)
 	p.prevRoundTime = p.Now().Sub(p.roundStartTime)
 	p.lastClosedLedger = newLedger
 
@@ -1237,10 +1155,7 @@ func (p *Peer) checkFullyValidatedLocked(ledger *Ledger) {
 
 	count := p.validations.NumTrustedForLedger(ledger.ID())
 	numTrustedPeers := p.trustGraph.UNLSize(p.ID)
-	p.quorum = int(float64(numTrustedPeers) * 0.8)
-	if p.quorum < 1 {
-		p.quorum = 1
-	}
+	p.quorum = max(int(float64(numTrustedPeers)*0.8), 1)
 
 	if count >= p.quorum && ledger.IsAncestor(p.fullyValidatedLedger, p.oracle) {
 		p.Issue(FullyValidateLedgerEvent{Ledger: ledger})
@@ -1282,7 +1197,6 @@ func (p *Peer) StartRound() {
 // Start begins the consensus process.
 // This runs until targetLedgers is reached.
 func (p *Peer) Start() {
-	p.validations.Expire()
 	p.scheduler.In(p.consensusParms.LedgerGranularity, func() {
 		p.TimerEntry()
 	})
@@ -1364,21 +1278,3 @@ func (p *Peer) injectTxs(prevLedger *Ledger, src *TxSet) *TxSet {
 	result.Insert(tx)
 	return result
 }
-
-// ConsensusResult represents the result of a consensus round.
-type ConsensusResult struct {
-	TxSet     *TxSet
-	Position  *Proposal
-	State     ConsensusState
-	Proposers int
-	RoundTime time.Duration
-}
-
-// ConsensusState represents the state of consensus.
-type ConsensusState int
-
-const (
-	ConsensusStateNo ConsensusState = iota
-	ConsensusStateMovedOn
-	ConsensusStateYes
-)

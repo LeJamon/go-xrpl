@@ -1,12 +1,12 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // FeeSettings represents the singleton fee settings ledger entry.
@@ -36,7 +36,7 @@ type FeeSettings struct {
 }
 
 // Ledger entry type for FeeSettings
-const ledgerEntryTypeFeeSettings uint16 = 0x0073
+const ledgerEntryTypeFeeSettings = uint16(entry.TypeFeeSettings)
 
 // Field codes for FeeSettings
 // Reference: XRPL binary codec field definitions
@@ -63,121 +63,60 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	}
 
 	fee := &FeeSettings{}
-	offset := 0
 
-	for offset < len(data) {
-		if offset+1 > len(data) {
-			break
-		}
-
-		// Read field header
-		header := data[offset]
-		offset++
-
-		// Decode type and field from header
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type codes
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field codes
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		// Parse field based on type
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return fee, nil
-			}
-			value := binary.BigEndian.Uint16(data[offset : offset+2])
-			offset += 2
-			if fieldCode == fieldCodeLedgerEntryType {
-				if value != ledgerEntryTypeFeeSettings {
-					return nil, errors.New("not a FeeSettings entry")
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt16:
+			if f.FieldCode == fieldCodeLedgerEntryType {
+				if f.UInt16() != ledgerEntryTypeFeeSettings {
+					return errors.New("not a FeeSettings entry")
 				}
 			}
 
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return fee, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 5: // PreviousTxnLgrSeq
-				fee.PreviousTxnLgrSeq = value
-			case fieldCodeReferenceFeeUnits:
-				fee.ReferenceFeeUnits = value
-			case fieldCodeReserveBase:
-				fee.ReserveBase = value
-			case fieldCodeReserveIncrement:
-				fee.ReserveIncrement = value
+				fee.PreviousTxnLgrSeq = f.UInt32()
+			case int(fieldCodeReferenceFeeUnits):
+				fee.ReferenceFeeUnits = f.UInt32()
+			case int(fieldCodeReserveBase):
+				fee.ReserveBase = f.UInt32()
+			case int(fieldCodeReserveIncrement):
+				fee.ReserveIncrement = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return fee, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			if fieldCode == fieldCodeBaseFee {
-				fee.BaseFee = value
+		case stUInt64:
+			if f.FieldCode == int(fieldCodeBaseFee) {
+				fee.BaseFee = f.UInt64()
 			}
 
-		case FieldTypeAmount:
-			// XRP amounts are 8 bytes
-			if offset+8 > len(data) {
-				return fee, nil
-			}
-			// Check if it's XRP (first bit is 0)
-			if data[offset]&0x80 == 0 {
-				// XRP amount - 8 bytes
-				rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-				// Clear the top bit and extract drops
-				drops := rawAmount & 0x3FFFFFFFFFFFFFFF
-				switch fieldCode {
-				case fieldCodeBaseFeeDrops:
+		case stAmount:
+			// FeeSettings' fee amounts are native XRP (8 bytes); an IOU value
+			// (48 bytes) is foreign here and is skipped.
+			if len(f.Value) == 8 {
+				drops := xrpDrops(f.Value)
+				switch f.FieldCode {
+				case int(fieldCodeBaseFeeDrops):
 					fee.BaseFeeDrops = drops
 					fee.XRPFeesMode = true
-				case fieldCodeReserveBaseDrops:
+				case int(fieldCodeReserveBaseDrops):
 					fee.ReserveBaseDrops = drops
 					fee.XRPFeesMode = true
-				case fieldCodeReserveIncrementDrops:
+				case int(fieldCodeReserveIncrementDrops):
 					fee.ReserveIncrementDrops = drops
 					fee.XRPFeesMode = true
 				}
-				offset += 8
-			} else {
-				// IOU amount - skip 48 bytes (shouldn't appear in FeeSettings)
-				offset += 48
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return fee, nil
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				fee.PreviousTxnID = f.Hash256()
 			}
-			if fieldCode == 5 { // PreviousTxnID
-				copy(fee.PreviousTxnID[:], data[offset:offset+32])
-			}
-			offset += 32
-
-		default:
-			// Unknown type - stop parsing
-			return fee, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return fee, nil
@@ -188,8 +127,14 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 // emitted, including zero-valued fields — matching rippled's `set()` /
 // `makeFieldAbsent()` semantics at Change.cpp:362-379.
 func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
+	// sfFlags is a soeREQUIRED common field (LedgerFormats.cpp commonFields), so
+	// rippled serializes it on every entry — present at its default 0 from the
+	// SLE template. The genesis FeeSettings (genesis.go) already emits Flags=0;
+	// the runtime serializer (SetFee re-serialization) must match or the
+	// post-fee-vote FeeSettings state diverges (account_hash fork).
 	jsonObj := map[string]any{
 		"LedgerEntryType": "FeeSettings",
+		"Flags":           uint32(0),
 	}
 
 	if fee.XRPFeesMode {

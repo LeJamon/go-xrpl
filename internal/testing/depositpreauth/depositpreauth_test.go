@@ -16,23 +16,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
 	paymentPkg "github.com/LeJamon/go-xrpl/internal/tx/payment"
-	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
 // xrpAccount is the XRPL zero account address (20 bytes of zero).
 const xrpAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
-
-// rippleTime returns the current Ripple epoch time from the test environment.
-func rippleTime(env *jtx.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
-}
-
-// credentialKeylet computes the keylet for a credential.
-func credentialKeylet(subject, issuer *jtx.Account, credType string) keylet.Keylet {
-	return keylet.Credential(subject.ID, issuer.ID, []byte(credType))
-}
 
 // --------------------------------------------------------------------------
 // testEnable
@@ -1058,7 +1046,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Issuer creates credential for alice with expiration (current time + 60s).
-		now := rippleTime(env)
+		now := env.NowRipple()
 		expiration := now + 60
 		result := env.Submit(
 			credential.CredentialCreate(issuer, alice, credType).
@@ -1074,7 +1062,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Issuer creates non-expiring credential for alice (expiration far in the future).
-		now = rippleTime(env)
+		now = env.NowRipple()
 		result = env.Submit(
 			credential.CredentialCreate(issuer, alice, credType2).
 				Expiration(now + 1000).
@@ -1124,12 +1112,12 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Expired credential should be deleted.
-		credKey := credentialKeylet(alice, issuer, credType)
+		credKey := jtx.CredentialKeylet(alice, issuer, credType)
 		require.False(t, env.LedgerEntryExists(credKey),
 			"expired credential should be deleted from ledger")
 
 		// Non-expired credential should still be present.
-		credKey2 := credentialKeylet(alice, issuer, credType2)
+		credKey2 := jtx.CredentialKeylet(alice, issuer, credType2)
 		require.True(t, env.LedgerEntryExists(credKey2),
 			"non-expired credential should still exist")
 
@@ -1137,7 +1125,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, alice, 1) // only credType2 remains
 
 		// Additional test: issuer creates credential for gw with short expiration.
-		now = rippleTime(env)
+		now = env.NowRipple()
 		result = env.Submit(
 			credential.CredentialCreate(issuer, gw, credType).
 				Expiration(now + 40).
@@ -1170,7 +1158,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Expired credential should be deleted.
-		gwCredKey := credentialKeylet(gw, issuer, credType)
+		gwCredKey := jtx.CredentialKeylet(gw, issuer, credType)
 		require.False(t, env.LedgerEntryExists(gwCredKey))
 		jtx.RequireOwnerCount(t, env, issuer, 0)
 		jtx.RequireOwnerCount(t, env, gw, 0)
@@ -1189,7 +1177,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		env.Close()
 
 		// Issuer creates credential for zelda with short expiration.
-		now := rippleTime(env)
+		now := env.NowRipple()
 		result := env.Submit(
 			credential.CredentialCreate(issuer, zelda, credType).
 				Expiration(now + 50).
@@ -1244,7 +1232,7 @@ func TestDepositPreauth_ExpiredCreds(t *testing.T) {
 		_ = credIdx
 
 		// Verify expired credentials were deleted.
-		zeldaCredKey := credentialKeylet(zelda, issuer, credType)
+		zeldaCredKey := jtx.CredentialKeylet(zelda, issuer, credType)
 		// After the escrow finish attempt with expired creds, the credential should be deleted.
 		// Since we can't fully test escrow here, at least verify the credential still exists
 		// (it will be deleted when a transaction attempts to use it after expiration).
@@ -1292,7 +1280,7 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 		// Since we can't easily read the ledger entry's AuthorizeCredentials field
 		// in Go (unlike rippled's ledger_entry RPC), we verify that creation and
 		// deletion work correctly regardless of input order.
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			// Rotate the credentials array to get different orderings.
 			rotated := make([]dp.AuthorizeCredentials, len(credentials))
 			copy(rotated, credentials)
@@ -1320,7 +1308,7 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 		env.Close()
 
 		// Re-create with any shuffled order — should get tecDUPLICATE.
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			rotated := make([]dp.AuthorizeCredentials, len(credentials))
 			copy(rotated, credentials)
 			for j := range rotated {

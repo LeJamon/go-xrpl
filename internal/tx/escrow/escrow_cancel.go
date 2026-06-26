@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -36,12 +37,11 @@ func (e *EscrowCancel) Validate() error {
 		return err
 	}
 
-	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
+	// where the amendment rules are available.
 
 	if e.Owner == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Owner is required")
+		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
 
 	return nil
@@ -51,9 +51,23 @@ func (e *EscrowCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
+// Preclaim performs the rules-aware fix1543 flag check.
+// Reference: rippled Escrow.cpp:1203 — stray (non-universal) flags are rejected
+// only once fix1543 is active. rippled runs this check first in preflight; the
+// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
+// after the common preflight/preclaim steps. For a tx malformed in two ways this
+// can surface a different tem code than rippled; the result is tem-only (never
+// enters a ledger) so there is no consensus divergence.
+func (e *EscrowCancel) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
+		return ter.TemINVALID_FLAG
+	}
+	return ter.TesSUCCESS
+}
+
 // Apply applies an EscrowCancel transaction
 // Reference: rippled Escrow.cpp EscrowCancel::preclaim() + doApply()
-func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow cancel apply",
 		"account", e.Account,
 		"owner", e.Owner,
@@ -64,7 +78,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Find the escrow
@@ -75,14 +89,14 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			"owner", e.Owner,
 			"offerSequence", e.OfferSequence,
 		)
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Parse escrow
 	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
 		ctx.Log.Error("escrow cancel: failed to parse escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	isXRP := escrowEntry.IsXRP
@@ -92,11 +106,11 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
 		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
 		if escrowAmount.IsMPT() {
-			if result := escrowCancelPreclaimMPT(ctx.View, escrowEntry.Account, escrowAmount); result != tx.TesSUCCESS {
+			if result := escrowCancelPreclaimMPT(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
 				return result
 			}
 		} else if escrowAmount.Issuer != "" {
-			if result := escrowCancelPreclaimIOU(ctx.View, escrowEntry.Account, escrowAmount); result != tx.TesSUCCESS {
+			if result := escrowCancelPreclaimIOU(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -109,28 +123,32 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	if rules.Enabled(amendment.FeatureFix1571) {
 		// fix1571: must have CancelAfter set, and close time must be past it
 		if escrowEntry.CancelAfter == 0 {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		if closeTime <= escrowEntry.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	} else {
 		// Pre-fix1571: same logic
 		if escrowEntry.CancelAfter == 0 || closeTime <= escrowEntry.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1333-1342
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	state.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != ter.TesSUCCESS {
+		return result
+	}
 
 	// Remove escrow from destination directory (if cross-account)
 	// Reference: rippled Escrow.cpp doApply() lines 1345-1356
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Return the escrowed amount to the owner.
@@ -149,17 +167,17 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			ownerData, err := ctx.View.Read(ownerKey)
 			if err != nil {
 				ctx.Log.Error("escrow cancel: failed to read owner account", "error", err)
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			ownerAccount, err := state.ParseAccountRoot(ownerData)
 			if err != nil {
 				ctx.Log.Error("escrow cancel: failed to parse owner account", "error", err)
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			ownerAccount.Balance += escrowEntry.Amount
-			if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != tx.TesSUCCESS {
+			if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -167,7 +185,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		// IOU or MPT token escrow cancel
 		// Reference: rippled Escrow.cpp doApply() lines 1364-1398
 		if !rules.Enabled(amendment.FeatureTokenEscrow) {
-			return tx.TemDISABLED
+			return ter.TemDISABLED
 		}
 
 		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
@@ -184,20 +202,8 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			mptRaw, _ := escrowAmount.MPTRaw()
 			finalAmount := uint64(mptRaw)
 
-			// Get dest (= owner) balance and ownerCount for reserve check
-			var ownerBalance uint64
-			var ownerOwnerCount uint32
-			if ownerIsSelf {
-				ownerBalance = ctx.Account.Balance
-				ownerOwnerCount = ctx.Account.OwnerCount
-			} else {
-				ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
-				ownerAccount, _ := state.ParseAccountRoot(ownerData)
-				if ownerAccount != nil {
-					ownerBalance = ownerAccount.Balance
-					ownerOwnerCount = ownerAccount.OwnerCount
-				}
-			}
+			// Get dest (= owner) balance and ownerCount for the reserve check.
+			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
 
 			if result := escrowUnlockMPT(
 				ctx.View,
@@ -208,27 +214,16 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				ownerBalance,
 				ownerOwnerCount,
 				escrowEntry.Account,
+				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
-			); result != tx.TesSUCCESS {
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		} else {
 			// IOU cancel: return tokens to sender (sender == receiver == escrow creator).
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<Issue>)
-			var ownerBalance uint64
-			var ownerOwnerCount uint32
-			if ownerIsSelf {
-				ownerBalance = ctx.Account.Balance
-				ownerOwnerCount = ctx.Account.OwnerCount
-			} else {
-				ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
-				ownerAccount, _ := state.ParseAccountRoot(ownerData)
-				if ownerAccount != nil {
-					ownerBalance = ownerAccount.Balance
-					ownerOwnerCount = ownerAccount.OwnerCount
-				}
-			}
+			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
 
 			if result := escrowUnlockIOU(
 				ctx.View,
@@ -239,21 +234,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				escrowAmount,
 				escrowEntry.Account, escrowEntry.Account, // senderID == receiverID (cancel returns to creator)
 				createAsset,
+				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
-			); result != tx.TesSUCCESS {
+			); result != ter.TesSUCCESS {
 				return result
-			}
-		}
-
-		// When ownerIsSelf, the unlock functions may create new objects
-		// (MPToken or trust line) and adjust OwnerCount through the view.
-		// Re-synchronize ctx.Account so the engine write-back doesn't lose it.
-		if ownerIsSelf {
-			ownerKey := keylet.Account(ownerID)
-			if updatedData, readErr := ctx.View.Read(ownerKey); readErr == nil && updatedData != nil {
-				if updatedAcct, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
-					ctx.Account.OwnerCount = updatedAcct.OwnerCount
-				}
 			}
 		}
 
@@ -263,7 +247,9 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, err := state.DecodeAccountID(escrowAmount.Issuer)
 			if err == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				state.DirRemove(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key, false)
+				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
+					return result
+				}
 			}
 		}
 	}
@@ -276,8 +262,26 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp doApply() line 1405
 	if err := ctx.View.Erase(escrowKey); err != nil {
 		ctx.Log.Error("escrow cancel: failed to erase escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
+}
+
+// ownerReserveSnapshot returns the escrow owner's balance and owner count for the
+// token-unlock reserve check. rippled passes mPriorBalance — the submitter's
+// balance before the fee — and the reserve check only runs when the owner is the
+// submitter (createAsset), so the fee is added back in the self case. For a
+// third-party owner the current ledger balance is used.
+// Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
+func ownerReserveSnapshot(ctx *tx.ApplyContext, ownerID [20]byte, ownerIsSelf bool) (uint64, uint32) {
+	if ownerIsSelf {
+		return ctx.PriorBalance(), ctx.Account.OwnerCount
+	}
+	ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
+	ownerAccount, _ := state.ParseAccountRoot(ownerData)
+	if ownerAccount != nil {
+		return ownerAccount.Balance, ownerAccount.OwnerCount
+	}
+	return 0, 0
 }

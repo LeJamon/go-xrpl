@@ -29,7 +29,8 @@ func ReleaseSHA512(h hash.Hash) {
 	sha512Pool.Put(h)
 }
 
-// Sha512Half Returns the first 32 bytes of a sha512 hash of a byte[]
+// Sha512Half returns the first 32 bytes of the SHA-512 hash of the
+// concatenated argument slices.
 func Sha512Half(args ...[]byte) [32]byte {
 	hasher := AcquireSHA512()
 	defer ReleaseSHA512(hasher)

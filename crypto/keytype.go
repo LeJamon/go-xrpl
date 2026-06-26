@@ -1,4 +1,3 @@
-// Package crypto provides cryptographic operations for the XRPL protocol.
 package crypto
 
 // KeyType represents the type of cryptographic key used in XRPL.
@@ -49,9 +48,4 @@ func PublicKeyType(pubKey []byte) KeyType {
 	default:
 		return KeyTypeUnknown
 	}
-}
-
-// IsValidPublicKey returns true if the public key has a valid format.
-func IsValidPublicKey(pubKey []byte) bool {
-	return PublicKeyType(pubKey) != KeyTypeUnknown
 }

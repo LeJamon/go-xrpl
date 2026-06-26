@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/bits"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -14,22 +16,16 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// Autofill fee ceiling: feeDefault * mult / div. Mirrors rippled
-// Tuning.h:60-61.
-const (
-	defaultAutoFillFeeMultiplier uint64 = 10
-	defaultAutoFillFeeDivisor    uint64 = 1
-)
-
 // SubmitResult contains the result of submitting a transaction
 type SubmitResult struct {
 	// Result is the engine result code
-	Result tx.Result
+	Result ter.Result
 
 	// Applied indicates if the transaction was applied to the ledger
 	Applied bool
@@ -103,10 +99,16 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	ptx, parseErr := openledger.ParsePendingTx(blob)
 	if parseErr != nil {
 		return &SubmitResult{
-			Result:        tx.TemMALFORMED,
-			Message:       tx.TemMALFORMED.Message(),
+			Result:        ter.TemMALFORMED,
+			Message:       ter.TemMALFORMED.Message(),
 			CurrentLedger: s.openLedgerView.Current().Sequence(),
 		}, nil
+	}
+	// Verify the signature before SubmitDetailed acquires the apply mutex so the
+	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
+	// mode, matching cfg.SkipSignatureVerification above.
+	if !cfg.SkipSignatureVerification {
+		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
 	}
 
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
@@ -146,8 +148,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// and relay (1685-1689) so the caller learns about the failure
 	// immediately without a delayed re-application.
 	if rawBlob != nil && s.localTxs != nil {
-		ter := outcome.Result
-		if (!failHard || ter == tx.TesSUCCESS) && ter != tx.TefALREADY {
+		tr := outcome.Result
+		if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
 			s.localTxs.PushBack(currentSeq, ptx)
 		}
 	}
@@ -180,7 +182,10 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 				Applied: outcome.Applied,
 			},
 		}
-		cb(ev)
+		// Dispatch off-goroutine like every other Service callback (the event
+		// owns a copy of the blob): a WebSocket subscriber must not be able to
+		// run a Service getter and re-enter s.mu, nor stall submits/closes.
+		go cb(ev)
 	}
 
 	return result, nil
@@ -240,16 +245,21 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 //   - escalatedFee = toDrops(openLedgerFeeLevel-1, baseFee) + 1 (TxQ load)
 //   - returned fee = max(loadFee, escalatedFee)
 //
-// The returned fee is capped at feeDefault * defaultAutoFillFeeMultiplier
-// / defaultAutoFillFeeDivisor; exceeding it yields *svcerr.HighFeeError
-// (which errors.Is(svcerr.ErrHighFee) also matches). The ceiling check
-// runs regardless of unlimited — rippled applies it after the role-aware
+// The returned fee is capped at feeDefault * mult / div (the caller's
+// fee_mult_max / fee_div_max, default 10 / 1 per rippled Tuning.h);
+// exceeding it yields *svcerr.HighFeeError (which
+// errors.Is(svcerr.ErrHighFee) also matches). The ceiling check runs
+// regardless of unlimited — rippled applies it after the role-aware
 // scale, so privileged callers still cannot exceed mult/div.
 //
 // The source account is never read — matches rippled's getTxFee
 // (TransactionSign.cpp:765-836), so callers that have already supplied
 // Sequence must not receive an account-related error from this path.
-func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint64, error) {
+func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, div int) (uint64, error) {
+	if mult < 0 || div <= 0 {
+		return 0, fmt.Errorf("autofill fee: invalid fee limit factors mult=%d div=%d", mult, div)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -283,7 +293,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint6
 		}
 	}
 
-	ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
+	ceiling, ok := mulDivU64(feeDefault, uint64(mult), uint64(div))
 	if !ok {
 		return 0, fmt.Errorf("autofill fee: ceiling overflow (feeDefault=%d)", feeDefault)
 	}
@@ -388,7 +398,7 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if signerCount > maxMultiSigners(cfg.Rules) {
 		return cfg.BaseFee
 	}
-	return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
+	return sign.CalculateMultiSigFee(cfg.BaseFee, signerCount)
 }
 
 // maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63).
@@ -459,7 +469,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	// Look up which ledger contains this transaction
 	ledgerSeq, found := s.txIndex[txHash]
 	if !found {
-		return nil, errors.New("transaction not found")
+		return nil, svcerr.ErrTxnNotFound
 	}
 
 	// Get the ledger
@@ -474,7 +484,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 		return nil, fmt.Errorf("failed to get transaction: %w", err)
 	}
 	if !found {
-		return nil, errors.New("transaction not found in ledger")
+		return nil, fmt.Errorf("%w: not found in ledger", svcerr.ErrTxnNotFound)
 	}
 
 	return &TransactionResult{
@@ -534,6 +544,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		ReserveBase:               simReserveBase,
 		ReserveIncrement:          simReserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
+		ParentHash:                s.openLedger.ParentHash(),
 		SkipSignatureVerification: true, // Skip signatures for simulation
 		OpenLedger:                true, // Check fee adequacy for simulation
 		NetworkID:                 s.config.NetworkID,
@@ -543,7 +554,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	}
 
 	// Create engine with the snapshot view
-	engine := tx.NewEngine(simView, engineConfig)
+	engine := txengine.NewEngine(simView, engineConfig)
 
 	// Apply the transaction (changes go to the snapshot, not the real ledger)
 	applyResult := engine.Apply(transaction)
@@ -585,15 +596,31 @@ type AccountTransaction struct {
 	Meta        []byte   `json:"meta,omitempty"`
 }
 
+// UseTxTables reports whether the transaction tables backing the
+// tx-history queries below are available, i.e. a relational DB is
+// configured. Mirrors rippled config().useTxTables().
+func (s *Service) UseTxTables() bool {
+	return s.relationalDB != nil
+}
+
 // GetAccountTransactions retrieves transaction history for an account.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
+	// Snapshot the validated-seq bound under the lock, then release it before
+	// the DB pages: relationalDB is immutable and the query needs no other
+	// service state, so holding s.mu across the I/O would block consensus close
+	// on a slow page. A slightly-stale validated bound is acceptable here.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	hasValidated := s.validatedLedger != nil
+	var validatedSeq uint32
+	if hasValidated {
+		validatedSeq = s.validatedLedger.Sequence()
+	}
+	s.mu.RUnlock()
 
 	// If no RelationalDB, return error
 	if s.relationalDB == nil {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	// Decode account address
@@ -620,15 +647,15 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 	var maxLedger relationaldb.LedgerIndex
 	if ledgerMax > 0 {
 		maxLedger = relationaldb.LedgerIndex(ledgerMax)
-	} else if s.validatedLedger != nil {
-		maxLedger = relationaldb.LedgerIndex(s.validatedLedger.Sequence())
+	} else if hasValidated {
+		maxLedger = relationaldb.LedgerIndex(validatedSeq)
 	} else {
 		maxLedger = relationaldb.LedgerIndex(0xFFFFFFFF)
 	}
 
 	// Clamp max to validated ledger
-	if s.validatedLedger != nil && maxLedger > relationaldb.LedgerIndex(s.validatedLedger.Sequence()) {
-		maxLedger = relationaldb.LedgerIndex(s.validatedLedger.Sequence())
+	if hasValidated && maxLedger > relationaldb.LedgerIndex(validatedSeq) {
+		maxLedger = relationaldb.LedgerIndex(validatedSeq)
 	}
 
 	options := relationaldb.AccountTxPageOptions{
@@ -682,11 +709,11 @@ type TxHistoryResult struct {
 // GetTransactionHistory retrieves recent transactions.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// relationalDB is set once at construction; this read-only query touches no
+	// mutable service state, so it must not hold s.mu while the DB pages — a
+	// slow page would otherwise block consensus close.
 	if s.relationalDB == nil {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	txInfos, err := s.relationalDB.Transaction().GetTxHistory(ctx, relationaldb.LedgerIndex(startIndex), 20)

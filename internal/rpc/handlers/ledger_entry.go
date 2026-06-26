@@ -10,7 +10,6 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -18,7 +17,7 @@ import (
 // LedgerEntryMethod handles the ledger_entry RPC method
 type LedgerEntryMethod struct{ BaseHandler }
 
-func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// We need to parse into a generic map first because the fields are polymorphic
 	// (some are strings, some are objects)
 	var rawParams map[string]json.RawMessage
@@ -30,9 +29,19 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Parse ledger specifier
+	// ledger_hash takes precedence over ledger_index, matching rippled's
+	// RPC::lookupLedger.
 	ledgerIndex := "validated"
-	if li, ok := rawParams["ledger_index"]; ok {
+	if lh, ok := rawParams["ledger_hash"]; ok {
+		var lhStr string
+		if err := json.Unmarshal(lh, &lhStr); err != nil {
+			return nil, types.RpcErrorExpectedField("ledger_hash", "string")
+		}
+		if raw, err := hex.DecodeString(lhStr); err != nil || len(raw) != 32 {
+			return nil, types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		ledgerIndex = lhStr
+	} else if li, ok := rawParams["ledger_index"]; ok {
 		var liStr string
 		if err := json.Unmarshal(li, &liStr); err == nil {
 			ledgerIndex = liStr
@@ -375,10 +384,13 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
 			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
 		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"index":        result.Index,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
@@ -538,7 +550,7 @@ func parseDelegateKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	if err != nil {
 		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid delegate authorize: %v", err))
 	}
-	return keylet.DelegateKeylet(accountID, authorizeID).Key, nil
+	return keylet.Delegate(accountID, authorizeID).Key, nil
 }
 
 // parseDepositPreauthKeylet parses a deposit_preauth specifier:
@@ -818,7 +830,7 @@ func parseCurrencyIssuer(raw json.RawMessage) (currency [20]byte, issuer [20]byt
 	}
 
 	// Canonical write-path encoder; matches AMMCreate's keying.
-	currency = state.GetCurrencyBytes(req.Currency)
+	currency = keylet.CurrencyBytes(req.Currency)
 
 	if req.Issuer != "" {
 		issuer, err = decodeAccountID(req.Issuer)

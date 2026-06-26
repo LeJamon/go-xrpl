@@ -111,12 +111,8 @@ func (o *Overlay) sendEndpoints() {
 // connected to are still eligible — the recipient peer will dedup
 // against its own slot.
 func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
-	o.discovery.mu.RLock()
-	defer o.discovery.mu.RUnlock()
-
-	out := make([]message.Endpointv2, 0, len(o.discovery.peers))
-	for _, p := range o.discovery.peers {
-		hops := p.Hops
+	var out []message.Endpointv2
+	o.discovery.ForEachDiscovered(func(address string, hops uint32) {
 		if hops == 0 {
 			// Our discovered entry has no explicit hop count — assume
 			// a single hop. The wire format treats hops==0 as a
@@ -127,10 +123,10 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 			hops = 1
 		}
 		out = append(out, message.Endpointv2{
-			Endpoint: p.Address,
+			Endpoint: address,
 			Hops:     hops,
 		})
-	}
+	})
 	return out
 }
 
@@ -142,6 +138,11 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 // one. The recipient correctly interprets an absent hops=0 entry as
 // "fall back to the socket remote" (PeerImp.cpp:1234-1235).
 func (o *Overlay) localEndpointForGossip() (message.Endpointv2, bool) {
+	// peer_private: suppress sharing our own address with peers. rippled's
+	// PEER_PRIVATE node does not advertise itself in PeerFinder gossip.
+	if o.cfg.PrivateMode {
+		return message.Endpointv2{}, false
+	}
 	if o.cfg.PublicIP == nil {
 		return message.Endpointv2{}, false
 	}

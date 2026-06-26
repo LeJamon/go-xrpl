@@ -49,8 +49,4 @@ const (
 	// WaitOnBootup is the grace period after start-up before reduce-relay
 	// engages, to let the node establish its peer connections.
 	WaitOnBootup = 10 * time.Minute
-
-	// MaxTxQueueSize caps the aggregated transaction-hash queue per peer
-	// so a TMTransactions message stays within the 64MB protocol limit.
-	MaxTxQueueSize = 10000
 )

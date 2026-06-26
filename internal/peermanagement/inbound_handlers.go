@@ -42,9 +42,7 @@ const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 // accounting is shared across the cluster, mirroring rippled
 // PeerImp.cpp:1157-1172.
 func (o *Overlay) handleClusterMessage(evt Event) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
@@ -98,9 +96,9 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	// through with clusterFee=0 in that case but we leave the prior
 	// value intact, mirroring the more general "no signal → no
 	// change" pattern.
-	if o.clusterFeeSink != nil {
+	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
 		if fee, ok := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow)); ok {
-			o.clusterFeeSink(fee)
+			sink(fee)
 		}
 	}
 
@@ -192,9 +190,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		// gate at 75% (peerSendQueueDropThreshold) to refuse new
 		// heavy work before the channel saturates and the next
 		// Send returns ErrSendBufferFull.
-		o.peersMu.RLock()
-		peer, peerOK := o.peers[evt.PeerID]
-		o.peersMu.RUnlock()
+		peer, peerOK := o.getPeer(evt.PeerID)
 		if peerOK && peer.SendQueueLen() >= peerSendQueueDropThreshold {
 			slog.Debug("TMGetObjects dropped: peer send queue saturated",
 				"t", "Overlay", "peer", evt.PeerID,
@@ -205,8 +201,11 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		case message.ObjectTypeFetchPack:
 			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
 			// Build a pack of the predecessor ledger's SHAMap nodes and
-			// reply (serveFetchPack), mirroring makeFetchPack.
-			o.serveFetchPack(evt.PeerID, gob)
+			// reply (serveFetchPack), mirroring makeFetchPack. Offloaded
+			// to the serve-worker pool — building a pack snapshots the
+			// state+tx tree (capped at fetchPackMaxObjects nodes) and
+			// must not run on the event loop.
+			o.submitServe(func() { o.serveFetchPack(evt.PeerID, gob) })
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -222,23 +221,27 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			o.serveDoTransactions(evt.PeerID, gob)
+			o.submitServe(func() { o.serveDoTransactions(evt.PeerID, gob) })
 			return
 		}
 
 		// Generic node-store object fetch by hash. Mirrors rippled's
-		// fetchNodeObject loop at PeerImp.cpp:2483-2538.
-		o.serveGetObjects(evt.PeerID, gob)
+		// fetchNodeObject loop at PeerImp.cpp:2483-2538. Offloaded to the
+		// serve-worker pool — up to N node-store fetches per request.
+		o.submitServe(func() { o.serveGetObjects(evt.PeerID, gob) })
 		return
 	}
 
 	// Reply branch (query=false). Rippled adds the inbound objects to the
 	// fetch-pack cache at PeerImp.cpp:2547-2593. The acquisition state and
 	// the fetch-pack cache live in the consensus router, so forward the reply
-	// onto the overlay→router channel exactly as every other peer-originated
-	// reply (TMLedgerData, TMTransaction) is delivered. Other reply types have
-	// no consumer and are dropped.
-	if gob.ObjType == message.ObjectTypeFetchPack {
+	// onto the same overlay→router channel other peer-originated replies use.
+	// Both the bulk fetch-pack reply and the otSTATE_NODE/otTRANSACTION_NODE
+	// nodes served for a by-hash acquisition escalation (issue #985) carry
+	// SHAMap nodes the router caches; other reply types have no consumer and
+	// are dropped.
+	switch gob.ObjType {
+	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
 		select {
 		case o.messages <- &InboundMessage{
 			PeerID:  evt.PeerID,
@@ -247,7 +250,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}:
 		default:
 			o.droppedMessages.Add(1)
-			slog.Warn("TMGetObjects fetch-pack reply dropped: channel full",
+			slog.Warn("TMGetObjects node reply dropped: channel full",
 				"t", "Overlay", "peer", evt.PeerID)
 		}
 		return
@@ -266,7 +269,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 // taken by serveDoTransactions and only charge a malformed hash there). A valid
 // request is charged feeHeavyBurdenPeer up front, mirroring rippled's
 // doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
-// full state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
+// state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
 // rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
 // so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
 // rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
@@ -276,9 +279,7 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		return
 	}
 
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
@@ -305,22 +306,7 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		LedgerHash: append([]byte(nil), req.LedgerHash...),
 		Objects:    objects,
 	}
-	encoded, err := message.Encode(reply)
-	if err != nil {
-		slog.Debug("fetch-pack reply encode failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
-	if err != nil {
-		slog.Debug("fetch-pack reply frame build failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("fetch-pack reply send failed",
-			"t", "Overlay", "peer", peerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeGetObjects, reply, "fetch-pack reply")
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -383,28 +369,11 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 		Query:   true,
 		Objects: missing,
 	}
-	encoded, encErr := message.Encode(req)
-	if encErr != nil {
-		slog.Debug("TMGetObjectByHash request encode failed",
-			"t", "Overlay", "peer", evt.PeerID, "err", encErr)
-		return
-	}
-	frame, frameErr := message.BuildWireMessage(message.TypeGetObjects, encoded)
-	if frameErr != nil {
-		slog.Debug("TMGetObjectByHash request frame build failed",
-			"t", "Overlay", "peer", evt.PeerID, "err", frameErr)
-		return
-	}
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("TMGetObjectByHash request send failed",
-			"t", "Overlay", "peer", evt.PeerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeGetObjects, req, "TMGetObjectByHash request")
 }
 
 // endpointsIngestMaxEntries bounds an inbound TMEndpoints frame.
@@ -429,9 +398,7 @@ const endpointsIngestMaxEntries = 1024
 // socket's observed remote IP (keeping the advertised port), matching
 // rippled's remote_address_.at_port(result->port()).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
@@ -535,28 +502,11 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		return
 	}
 
-	encoded, err := message.Encode(reply)
-	if err != nil {
-		slog.Debug("TMTransactions reply encode failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeTransactions, encoded)
-	if err != nil {
-		slog.Debug("TMTransactions reply frame build failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("TMTransactions reply send failed",
-			"t", "Overlay", "peer", peerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeTransactions, reply, "TMTransactions reply")
 }
 
 // serveGetObjects answers an inbound mtGET_OBJECTS query for generic
@@ -571,9 +521,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 // PeerImp.cpp:2538 so a requester polling several peers can tell "I
 // don't have these" from a peer that never answered.
 func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
@@ -637,36 +585,22 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		reply.Objects = append(reply.Objects, out)
 	}
 
-	encoded, err := message.Encode(reply)
-	if err != nil {
-		slog.Debug("TMGetObjectByHash reply encode failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
-	if err != nil {
-		slog.Debug("TMGetObjectByHash reply frame build failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("TMGetObjectByHash reply send failed",
-			"t", "Overlay", "peer", peerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeGetObjects, reply, "TMGetObjectByHash reply")
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched
 // list of TMTransaction frames). Mirrors rippled
 // PeerImp::onMessage(TMTransactions) at PeerImp.cpp:2667-2688.
 //
-// Each inner TMTransaction is re-emitted onto o.messages so
+// Each inner TMTransaction is fanned out onto the tx lane
+// (o.txMessages) carrying its already-decoded form so
 // router.handleTransaction processes it identically to an unbundled
-// TMTransaction frame. This matches rippled's pattern of calling
-// handleTransaction(inner, eraseTxQueue=false, batch=true) for each
-// child — the only behavioural difference rippled draws between
-// batched and unbatched is the eraseTxQueue path on a duplicate hit,
-// which go-xrpl doesn't implement (no tx-reduce-relay outbound queue
-// to erase from).
+// TMTransaction frame. Like rippled, which
+// hands the decoded inner straight to handleTransaction, we never
+// re-serialize: the decode happened once when the batch was parsed.
+// The only behavioural difference rippled draws between batched and
+// unbatched is the eraseTxQueue path on a duplicate hit, which go-xrpl
+// doesn't implement (no tx-reduce-relay outbound queue to erase from).
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
 		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",
@@ -688,31 +622,17 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	// rippled addTxMetrics(m->transactions_size()) at PeerImp.cpp:2680.
 	o.txm.addMissingTx(uint64(len(batch.Transactions)))
 
-	// Re-emit each inner TMTransaction as a standalone wire-encoded
-	// inbound message so the router's handleTransaction path picks
-	// it up. Encoding the inner protobuf is the cheapest path —
-	// alternatively we could expose a router entrypoint that takes
-	// a pre-decoded *message.Transaction, but the channel-based
-	// dispatch is the established pattern for every other peer
-	// message and keeps the relay-timing fix in one place.
+	// Fan out each inner TMTransaction onto the tx lane so the router's
+	// handleTransaction path picks it up. The decoded transaction rides
+	// along in Tx, so the router need not re-serialize and re-parse it —
+	// the batch decode above already produced the decoded form. The lane
+	// is shared with the wire path, so batch frames are subject to the
+	// same MaxTransactions ceiling and jq_trans_overflow accounting.
 	for i := range batch.Transactions {
-		inner := &batch.Transactions[i]
-		encoded, encErr := message.Encode(inner)
-		if encErr != nil {
-			slog.Debug("TMTransactions inner encode failed",
-				"t", "Overlay", "peer", evt.PeerID, "idx", i, "err", encErr)
-			continue
-		}
-		select {
-		case o.messages <- &InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    uint16(message.TypeTransaction),
-			Payload: encoded,
-		}:
-		default:
-			o.droppedMessages.Add(1)
-			slog.Warn("TMTransactions batch fanout dropped: channel full",
-				"t", "Overlay", "peer", evt.PeerID, "idx", i)
-		}
+		o.forwardTransaction(&InboundMessage{
+			PeerID: evt.PeerID,
+			Type:   uint16(message.TypeTransaction),
+			Tx:     &batch.Transactions[i],
+		})
 	}
 }

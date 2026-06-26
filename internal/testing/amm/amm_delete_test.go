@@ -168,7 +168,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 		usdAsset := env.USD
 
 		// Create numAccounts accounts, each with an LP token trust line
-		for i := 0; i < numAccounts; i++ {
+		for i := range numAccounts {
 			a := jtx.NewAccount(fmt.Sprintf("lp%d", i))
 			env.FundAmount(a, uint64(jtx.XRP(1000)))
 			env.Close()
@@ -283,7 +283,7 @@ func TestAutoDeleteAMM(t *testing.T) {
 		usdAsset := env.USD
 
 		// Create numAccounts LP token trust lines
-		for i := 0; i < numAccounts; i++ {
+		for i := range numAccounts {
 			a := jtx.NewAccount(fmt.Sprintf("lp%d", i))
 			env.FundAmount(a, uint64(jtx.XRP(1000)))
 			env.Close()

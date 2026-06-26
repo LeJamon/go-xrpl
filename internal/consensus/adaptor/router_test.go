@@ -21,11 +21,12 @@ import (
 
 // mockEngine records calls from the router for testing.
 type mockEngine struct {
-	mu          sync.Mutex
-	proposals   []*consensus.Proposal
-	validations []*consensus.Validation
-	txSets      []consensus.TxSetID
-	ledgers     []consensus.LedgerID
+	mu            sync.Mutex
+	proposals     []*consensus.Proposal
+	validations   []*consensus.Validation
+	txSets        []consensus.TxSetID
+	ledgers       []consensus.LedgerID
+	acquireFailed []consensus.LedgerID
 }
 
 func (m *mockEngine) Start(context.Context) error              { return nil }
@@ -47,10 +48,22 @@ func (m *mockEngine) OnLedger(id consensus.LedgerID, _ []byte) error {
 	return nil
 }
 
+func (m *mockEngine) OnLedgerAcquireFailed(id consensus.LedgerID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.acquireFailed = append(m.acquireFailed, id)
+}
+
 func (m *mockEngine) getLedgers() []consensus.LedgerID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]consensus.LedgerID(nil), m.ledgers...)
+}
+
+func (m *mockEngine) getAcquireFailed() []consensus.LedgerID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]consensus.LedgerID(nil), m.acquireFailed...)
 }
 
 func (m *mockEngine) OnProposal(p *consensus.Proposal, _ uint64) error {
@@ -98,10 +111,9 @@ func TestRouterDispatchesProposal(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Create a ProposeSet message with sizes inside the bounds
@@ -136,10 +148,9 @@ func TestRouterDispatchesValidation(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Build a valid STValidation binary payload.
@@ -174,10 +185,9 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Build a real signed payment blob; the open-ledger Submit path
@@ -195,7 +205,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	require.NoError(t, err)
 	blob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
-	txHash, err := tx.ComputeTxHashTransaction(txn)
+	txHash, err := tx.ComputeTransactionHash(txn)
 	require.NoError(t, err)
 
 	txMsg := &message.Transaction{
@@ -218,15 +228,60 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	assert.True(t, a.HasTx(consensus.TxID(txHash)))
 }
 
+// TestRouterDispatchesPreDecodedTransaction covers the path taken by
+// frames fanned out from a TMTransactions batch: the transaction arrives
+// already decoded in InboundMessage.Tx with a nil Payload, so the router
+// must accept it without re-decoding. Companion to
+// TestRouterDispatchesTransaction (the wire/Payload path).
+func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
+	engine := &mockEngine{}
+	a := newTestAdaptor(t)
+	inbox := make(chan *peermanagement.InboundMessage, 10)
+
+	router := NewRouter(engine, a, inbox)
+
+	ctx := t.Context()
+	go router.Run(ctx)
+
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := testenv.MasterAccount()
+	alice := testenv.NewAccount("alice")
+	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	txHash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+
+	inbox <- &peermanagement.InboundMessage{
+		PeerID: 3,
+		Type:   uint16(message.TypeTransaction),
+		Tx: &message.Transaction{
+			RawTransaction:   blob,
+			Status:           message.TxStatusNew,
+			ReceiveTimestamp: uint64(time.Now().UnixNano()),
+		},
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	assert.True(t, a.HasTx(consensus.TxID(txHash)),
+		"router must accept a pre-decoded (batch-fanned) transaction")
+}
+
 func TestRouterIgnoresUnknownMessages(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Send a Ping message — should be silently ignored
@@ -247,10 +302,9 @@ func TestRouterHandlesMalformedMessage(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Send garbage as a proposal — should not panic
@@ -270,7 +324,7 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -374,10 +428,9 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Single canonical proposal payload — same bytes delivered twice
@@ -441,10 +494,9 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	untrustedPubKey := make([]byte, 33)
@@ -506,10 +558,9 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	proposeSet := &message.ProposeSet{
@@ -599,10 +650,9 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Construct a proposal and PRE-SEED the overlay's reverse index
@@ -645,7 +695,7 @@ func TestRouterStopsOnChannelClose(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	done := make(chan struct{})
 	go func() {

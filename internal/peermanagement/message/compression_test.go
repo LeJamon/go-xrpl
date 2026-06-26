@@ -7,54 +7,14 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pierrec/lz4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Reference: rippled src/test/overlay/compression_test.cpp
-
-// Compression constants (matching rippled)
-const (
-	minCompressibleSize = 70
-)
-
-// compressLZ4 compresses data using LZ4.
-// Returns the compressed data or nil if compression wouldn't save space.
-func compressLZ4(data []byte) ([]byte, error) {
-	if len(data) < minCompressibleSize {
-		return nil, nil
-	}
-
-	maxSize := lz4.CompressBlockBound(len(data))
-	compressed := make([]byte, maxSize)
-
-	n, err := lz4.CompressBlock(data, compressed, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if n == 0 || n >= len(data) {
-		return nil, nil
-	}
-
-	return compressed[:n], nil
-}
-
-// decompressLZ4 decompresses LZ4 compressed data.
-func decompressLZ4(compressed []byte, uncompressedSize int) ([]byte, error) {
-	decompressed := make([]byte, uncompressedSize)
-	n, err := lz4.UncompressBlock(compressed, decompressed)
-	if err != nil {
-		return nil, err
-	}
-
-	if n != uncompressedSize {
-		return nil, fmt.Errorf("decompression size mismatch: expected %d, got %d", uncompressedSize, n)
-	}
-
-	return decompressed, nil
-}
+//
+// These tests exercise the production CompressLZ4/DecompressLZ4 in this
+// package rather than test-local copies.
 
 // buildManifests creates test manifests similar to rippled compression_test.cpp
 // Reference: rippled compression_test.cpp buildManifests()
@@ -64,7 +24,7 @@ func buildManifests(n int) *Manifests {
 		History: false,
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Generate realistic manifest data
 		// In rippled this includes: sfSequence, sfPublicKey, sfSigningPubKey, sfDomain, sfMasterSignature, sfSignature
 		// We simulate this with random bytes of appropriate size
@@ -72,11 +32,11 @@ func buildManifests(n int) *Manifests {
 		rand.Read(stObject)
 
 		// Add some structure to make it more realistic
-		stObject[0] = byte(i % 256)                                     // Sequence-like byte
-		stObject[1] = 0xED                                              // ed25519 key prefix
-		copy(stObject[2:35], randomBytes(33))                           // Public key
-		copy(stObject[35:68], randomBytes(33))                          // Signing key
-		copy(stObject[68:100], []byte(fmt.Sprintf("example%d.com", i))) // Domain
+		stObject[0] = byte(i % 256)                                  // Sequence-like byte
+		stObject[1] = 0xED                                           // ed25519 key prefix
+		copy(stObject[2:35], randomBytes(33))                        // Public key
+		copy(stObject[35:68], randomBytes(33))                       // Signing key
+		copy(stObject[68:100], fmt.Appendf(nil, "example%d.com", i)) // Domain
 
 		manifests.List[i] = Manifest{STObject: stObject}
 	}
@@ -92,7 +52,7 @@ func buildEndpoints(n int) *Endpoints {
 		EndpointsV2: make([]Endpointv2, n),
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		endpoints.EndpointsV2[i] = Endpointv2{
 			Endpoint: fmt.Sprintf("10.0.1.%d", i%256),
 			Hops:     uint32(i % 4),
@@ -135,7 +95,7 @@ func buildLedgerData(n int) *LedgerData {
 		Error:         ReplyErrorNoLedger,
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Simulate ledger node data (like serialized LedgerInfo)
 		nodeData := make([]byte, 100+i%50)
 		rand.Read(nodeData)
@@ -169,7 +129,7 @@ func buildGetObjectByHash(n int) *GetObjectByHash {
 		Objects:    make([]IndexedObject, n),
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		objectHash := sha512Half([]byte{byte(i)})
 		getObject.Objects[i] = IndexedObject{
 			Hash:      objectHash,
@@ -322,7 +282,7 @@ func testCompressionRoundtrip(t *testing.T, msg Message) {
 	require.NotEmpty(t, original, "Encoded message should not be empty")
 
 	// 2. Compress the message
-	compressed, err := compressLZ4(original)
+	compressed, err := CompressLZ4(original)
 	require.NoError(t, err, "Failed to compress message")
 
 	// Skip compression tests if data is too small or incompressible
@@ -340,7 +300,7 @@ func testCompressionRoundtrip(t *testing.T, msg Message) {
 		"Compressed size should be less than original")
 
 	// 4. Decompress
-	decompressed, err := decompressLZ4(compressed, len(original))
+	decompressed, err := DecompressLZ4(compressed, len(original))
 	require.NoError(t, err, "Failed to decompress message")
 
 	// 5. Verify decompressed matches original
@@ -367,7 +327,7 @@ func TestCompressionMultiBuffer(t *testing.T) {
 	original, err := Encode(msg)
 	require.NoError(t, err)
 
-	compressed, err := compressLZ4(original)
+	compressed, err := CompressLZ4(original)
 	require.NoError(t, err)
 	require.NotNil(t, compressed, "Message should be compressible")
 
@@ -379,10 +339,7 @@ func TestCompressionMultiBuffer(t *testing.T) {
 			// Simulate reading the compressed data in chunks
 			var chunks [][]byte
 			for i := 0; i < len(compressed); i += chunkSize {
-				end := i + chunkSize
-				if end > len(compressed) {
-					end = len(compressed)
-				}
+				end := min(i+chunkSize, len(compressed))
 				chunks = append(chunks, compressed[i:end])
 			}
 
@@ -393,7 +350,7 @@ func TestCompressionMultiBuffer(t *testing.T) {
 			}
 
 			// Decompress the reassembled data
-			decompressed, err := decompressLZ4(reassembled.Bytes(), len(original))
+			decompressed, err := DecompressLZ4(reassembled.Bytes(), len(original))
 			require.NoError(t, err)
 
 			// Verify
@@ -480,21 +437,28 @@ func TestCompressionHeaderRoundtrip(t *testing.T) {
 
 // TestCompressionMinSize tests that small messages are not compressed
 func TestCompressionMinSize(t *testing.T) {
-	// Create a message smaller than minCompressibleSize
+	// Create a message smaller than MinCompressibleSize
 	smallData := make([]byte, 50)
 	rand.Read(smallData)
 
-	compressed, err := compressLZ4(smallData)
+	compressed, err := CompressLZ4(smallData)
 	require.NoError(t, err)
 	assert.Nil(t, compressed, "Small data should not be compressed")
 
-	// Create a message at the threshold
-	thresholdData := make([]byte, minCompressibleSize)
+	// A payload at exactly the threshold is left uncompressed, matching
+	// rippled's `messageBytes <= 70` check.
+	thresholdData := make([]byte, MinCompressibleSize)
 	rand.Read(thresholdData)
 
-	// This may or may not compress depending on content
-	_, err = compressLZ4(thresholdData)
+	compressed, err = CompressLZ4(thresholdData)
 	require.NoError(t, err)
+	assert.Nil(t, compressed, "Data at the threshold should not be compressed")
+
+	// One byte over the threshold is eligible to compress.
+	overData := bytes.Repeat([]byte("A"), MinCompressibleSize+1)
+	compressed, err = CompressLZ4(overData)
+	require.NoError(t, err)
+	assert.NotNil(t, compressed, "Compressible data above the threshold should compress")
 }
 
 // TestCompressionIncompressible tests handling of incompressible data
@@ -503,7 +467,7 @@ func TestCompressionIncompressible(t *testing.T) {
 	randomData := make([]byte, 1000)
 	rand.Read(randomData)
 
-	compressed, err := compressLZ4(randomData)
+	compressed, err := CompressLZ4(randomData)
 	require.NoError(t, err)
 
 	// Random data typically doesn't compress well
@@ -520,7 +484,7 @@ func TestCompressionHighlyCompressible(t *testing.T) {
 	// Create highly compressible data (repeated patterns)
 	repeatableData := bytes.Repeat([]byte("XRPL_COMPRESS_TEST_"), 100)
 
-	compressed, err := compressLZ4(repeatableData)
+	compressed, err := CompressLZ4(repeatableData)
 	require.NoError(t, err)
 	require.NotNil(t, compressed, "Repetitive data should be compressible")
 
@@ -532,7 +496,7 @@ func TestCompressionHighlyCompressible(t *testing.T) {
 	assert.Less(t, ratio, 0.5, "Highly compressible data should compress to < 50%%")
 
 	// Verify roundtrip
-	decompressed, err := decompressLZ4(compressed, len(repeatableData))
+	decompressed, err := DecompressLZ4(compressed, len(repeatableData))
 	require.NoError(t, err)
 	assert.Equal(t, repeatableData, decompressed)
 }
@@ -547,7 +511,7 @@ func TestCompressionFullMessageFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// 3. Compress
-	compressed, err := compressLZ4(encoded)
+	compressed, err := CompressLZ4(encoded)
 	require.NoError(t, err)
 	require.NotNil(t, compressed)
 
@@ -575,7 +539,7 @@ func TestCompressionFullMessageFlow(t *testing.T) {
 	payload := wireData[HeaderSizeCompressed : HeaderSizeCompressed+int(parsedHeader.PayloadSize)]
 
 	// 8. Decompress
-	decompressed, err := decompressLZ4(payload, int(parsedHeader.UncompressedSize))
+	decompressed, err := DecompressLZ4(payload, int(parsedHeader.UncompressedSize))
 	require.NoError(t, err)
 
 	// 9. Decode message

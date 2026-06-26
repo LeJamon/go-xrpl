@@ -31,7 +31,7 @@ type channelAuthorizeRequest struct {
 	Amount    string `json:"amount"`
 }
 
-func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request channelAuthorizeRequest
 
 	if params != nil {
@@ -130,7 +130,7 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Exception occurred during signing: %v", err))
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"signature": signature,
 	}
 

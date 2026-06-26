@@ -88,10 +88,7 @@ func materializeState(t *testing.T, env *jtx.TestEnv) (*ctrlFamily, [32]byte) {
 		t.Fatalf("StateMapHash: %v", err)
 	}
 
-	rebuilt, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rebuilt := shamap.New(shamap.TypeState)
 	leaves := 0
 	if err := closed.ForEach(func(key [32]byte, data []byte) bool {
 		if perr := rebuilt.Put(key, data); perr != nil {

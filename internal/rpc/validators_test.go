@@ -42,7 +42,7 @@ func TestValidatorsResponseStructure(t *testing.T) {
 	// Marshal and unmarshal to get map
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -78,15 +78,15 @@ func TestValidatorsEmptyList(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// Stub should return empty arrays
-	trustedKeys := resp["trusted_validator_keys"].([]interface{})
+	trustedKeys := resp["trusted_validator_keys"].([]any)
 	assert.Empty(t, trustedKeys, "Stub should return empty trusted_validator_keys")
 
-	publisherLists := resp["publisher_lists"].([]interface{})
+	publisherLists := resp["publisher_lists"].([]any)
 	assert.Empty(t, publisherLists, "Stub should return empty publisher_lists")
 
 	// Quorum should be 0 for stub
@@ -135,7 +135,7 @@ func TestValidatorsWithParams(t *testing.T) {
 		Services:   services,
 	}
 
-	params, err := json.Marshal(map[string]interface{}{
+	params, err := json.Marshal(map[string]any{
 		"extra": "value",
 	})
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestValidationCreateReturnsKeyPair(t *testing.T) {
 	require.Nil(t, rpcErr, "validation_create should succeed")
 	require.NotNil(t, result, "validation_create should return a result")
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok, "result should be a map")
 
 	for _, field := range []string{"validation_key", "validation_private_key", "validation_public_key", "validation_seed"} {
@@ -186,7 +186,7 @@ func TestValidationCreateReturnsKeyPair(t *testing.T) {
 	// Two random invocations must produce distinct keys.
 	result2, rpcErr2 := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr2)
-	resp2 := result2.(map[string]interface{})
+	resp2 := result2.(map[string]any)
 	assert.NotEqual(t, resp["validation_seed"], resp2["validation_seed"],
 		"random invocations should produce distinct seeds")
 }
@@ -207,7 +207,7 @@ func TestValidationCreateWithSecret(t *testing.T) {
 	}
 
 	const secret = "BAWL MAN JADE MOON DOVE GEM SON NOW HAD ADEN GLOW TIRE"
-	params, err := json.Marshal(map[string]interface{}{
+	params, err := json.Marshal(map[string]any{
 		"secret": secret,
 	})
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func TestValidationCreateWithSecret(t *testing.T) {
 	require.Nil(t, rpcErr, "validation_create with secret should succeed")
 	require.NotNil(t, result, "validation_create should return a result")
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok, "result should be a map")
 
 	// RFC-1751 round-trips: the returned validation_key echoes the secret.
@@ -230,19 +230,19 @@ func TestValidationCreateWithSecret(t *testing.T) {
 	// Derivation is deterministic for a given secret.
 	result2, rpcErr2 := method.Handle(ctx, params)
 	require.Nil(t, rpcErr2)
-	assert.Equal(t, resp, result2.(map[string]interface{}),
+	assert.Equal(t, resp, result2.(map[string]any),
 		"the same secret should yield identical keys")
 }
 
 // callValidationCreate invokes validation_create with the given secret and
 // returns the successful result map, failing the test otherwise.
-func callValidationCreate(t *testing.T, method *handlers.ValidationCreateMethod, ctx *types.RpcContext, secret string) map[string]interface{} {
+func callValidationCreate(t *testing.T, method *handlers.ValidationCreateMethod, ctx *types.RpcContext, secret string) map[string]any {
 	t.Helper()
-	params, err := json.Marshal(map[string]interface{}{"secret": secret})
+	params, err := json.Marshal(map[string]any{"secret": secret})
 	require.NoError(t, err)
 	result, rpcErr := method.Handle(ctx, params)
 	require.Nil(t, rpcErr, "validation_create(%q) should succeed", secret)
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok, "result should be a map")
 	return resp
 }
@@ -288,9 +288,9 @@ func TestValidationCreateRejectsKeyTokens(t *testing.T) {
 	// A genuine node public key (n...), produced by the method itself.
 	generated, rpcErr := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr)
-	nodePublicKey := generated.(map[string]interface{})["validation_public_key"].(string)
+	nodePublicKey := generated.(map[string]any)["validation_public_key"].(string)
 
-	params, err := json.Marshal(map[string]interface{}{"secret": nodePublicKey})
+	params, err := json.Marshal(map[string]any{"secret": nodePublicKey})
 	require.NoError(t, err)
 	_, rpcErr = method.Handle(ctx, params)
 	require.NotNil(t, rpcErr, "a node public key must not be accepted as a seed")
@@ -308,7 +308,7 @@ func TestValidationCreateEmptySecret(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	params, err := json.Marshal(map[string]interface{}{"secret": ""})
+	params, err := json.Marshal(map[string]any{"secret": ""})
 	require.NoError(t, err)
 	_, rpcErr := method.Handle(ctx, params)
 	require.NotNil(t, rpcErr, "an explicit empty secret should be rejected")
@@ -367,7 +367,7 @@ func TestConsensusInfoResponseStructure(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -375,7 +375,7 @@ func TestConsensusInfoResponseStructure(t *testing.T) {
 	assert.Contains(t, resp, "info", "Response must contain 'info' field")
 
 	// Info should be a map (empty in standalone stub)
-	infoMap, ok := resp["info"].(map[string]interface{})
+	infoMap, ok := resp["info"].(map[string]any)
 	assert.True(t, ok, "info field should be a map")
 	assert.Empty(t, infoMap, "Stub should return empty info map in standalone mode")
 }
@@ -419,7 +419,7 @@ func TestConsensusInfoWithParams(t *testing.T) {
 		Services:   services,
 	}
 
-	params, err := json.Marshal(map[string]interface{}{
+	params, err := json.Marshal(map[string]any{
 		"extra": "value",
 	})
 	require.NoError(t, err)
@@ -459,7 +459,7 @@ func TestStopReturnsStoppingMessage(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -561,7 +561,7 @@ func TestStopWithParams(t *testing.T) {
 		Services:   services,
 	}
 
-	params, err := json.Marshal(map[string]interface{}{
+	params, err := json.Marshal(map[string]any{
 		"extra": "value",
 	})
 	require.NoError(t, err)

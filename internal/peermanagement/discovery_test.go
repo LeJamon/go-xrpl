@@ -1,8 +1,6 @@
 package peermanagement
 
 import (
-	"context"
-	"net"
 	"testing"
 	"time"
 )
@@ -196,8 +194,7 @@ func TestDiscoveryBootstrapPeers(t *testing.T) {
 	events := make(chan Event, 10)
 	d := NewDiscovery(cfg, events)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := d.Start(ctx)
 	if err != nil {
@@ -214,144 +211,6 @@ func TestDiscoveryBootstrapPeers(t *testing.T) {
 	}
 
 	d.Stop()
-}
-
-func TestNewInboundSlot(t *testing.T) {
-	localAddr := &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 51235}
-	remoteAddr := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 51235}
-
-	slot := NewInboundSlot(localAddr, remoteAddr, false)
-
-	if !slot.Inbound() {
-		t.Error("Slot should be inbound")
-	}
-
-	if slot.Fixed() {
-		t.Error("Slot should not be fixed")
-	}
-
-	if slot.State() != SlotStateAccept {
-		t.Errorf("Expected SlotStateAccept, got %v", slot.State())
-	}
-}
-
-func TestNewOutboundSlot(t *testing.T) {
-	remoteAddr := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 51235}
-
-	slot := NewOutboundSlot(remoteAddr, true)
-
-	if slot.Inbound() {
-		t.Error("Slot should not be inbound")
-	}
-
-	if !slot.Fixed() {
-		t.Error("Slot should be fixed")
-	}
-
-	if slot.State() != SlotStateConnect {
-		t.Errorf("Expected SlotStateConnect, got %v", slot.State())
-	}
-}
-
-func TestSlotStateTransitions(t *testing.T) {
-	remoteAddr := &net.TCPAddr{IP: net.ParseIP("192.168.1.1"), Port: 51235}
-	slot := NewOutboundSlot(remoteAddr, false)
-
-	// Initial state
-	if slot.State() != SlotStateConnect {
-		t.Errorf("Expected SlotStateConnect, got %v", slot.State())
-	}
-
-	// Transition to connected
-	slot.SetState(SlotStateConnected)
-	if slot.State() != SlotStateConnected {
-		t.Errorf("Expected SlotStateConnected, got %v", slot.State())
-	}
-
-	// Activate
-	slot.Activate()
-	if slot.State() != SlotStateActive {
-		t.Errorf("Expected SlotStateActive, got %v", slot.State())
-	}
-
-	if !slot.IsActive() {
-		t.Error("Slot should be active")
-	}
-
-	// Transition to closing
-	slot.SetState(SlotStateClosing)
-	if slot.State() != SlotStateClosing {
-		t.Errorf("Expected SlotStateClosing, got %v", slot.State())
-	}
-}
-
-func TestSlotStateString(t *testing.T) {
-	tests := []struct {
-		state    SlotState
-		expected string
-	}{
-		{SlotStateAccept, "accept"},
-		{SlotStateConnect, "connect"},
-		{SlotStateConnected, "connected"},
-		{SlotStateActive, "active"},
-		{SlotStateClosing, "closing"},
-		{SlotState(99), "unknown"},
-	}
-
-	for _, tc := range tests {
-		if tc.state.String() != tc.expected {
-			t.Errorf("Expected %s for state %d, got %s", tc.expected, tc.state, tc.state.String())
-		}
-	}
-}
-
-func TestRecentEndpoints(t *testing.T) {
-	recent := NewRecentEndpoints()
-
-	// Insert an endpoint
-	recent.Insert("192.168.1.1:51235", 1)
-
-	// Should filter the same endpoint with same or higher hops
-	if !recent.Filter("192.168.1.1:51235", 1) {
-		t.Error("Should filter endpoint with same hops")
-	}
-
-	if !recent.Filter("192.168.1.1:51235", 2) {
-		t.Error("Should filter endpoint with higher hops")
-	}
-
-	// Should not filter with lower hops
-	if recent.Filter("192.168.1.1:51235", 0) {
-		t.Error("Should not filter endpoint with lower hops")
-	}
-
-	// Should not filter unknown endpoint
-	if recent.Filter("192.168.1.2:51235", 1) {
-		t.Error("Should not filter unknown endpoint")
-	}
-}
-
-func TestRecentEndpointsExpire(t *testing.T) {
-	recent := NewRecentEndpoints()
-
-	// Insert endpoint
-	recent.Insert("192.168.1.1:51235", 1)
-
-	// Set last seen to past (beyond TTL)
-	recent.mu.Lock()
-	recent.cache["192.168.1.1:51235"].LastSeen = time.Now().Add(-RecentEndpointTTL - time.Minute)
-	recent.mu.Unlock()
-
-	// Expire should remove it
-	recent.Expire()
-
-	recent.mu.RLock()
-	_, exists := recent.cache["192.168.1.1:51235"]
-	recent.mu.RUnlock()
-
-	if exists {
-		t.Error("Expired endpoint should be removed")
-	}
 }
 
 func TestBootCache(t *testing.T) {
@@ -402,12 +261,12 @@ func TestBootCacheGetEndpointsSorted(t *testing.T) {
 	bc.Insert("192.168.1.3", 51235)
 
 	// Increase valence for peer 2
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		bc.MarkSuccess("192.168.1.2")
 	}
 
 	// Increase valence for peer 3 even more
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		bc.MarkSuccess("192.168.1.3")
 	}
 
@@ -443,7 +302,7 @@ func TestBackoffValenceDecrease(t *testing.T) {
 	}
 
 	// Simulate repeated connection failures
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		bc.MarkFailed("65.0.0.1")
 	}
 
@@ -474,7 +333,7 @@ func TestBackoffPeerPrioritization(t *testing.T) {
 	bc.Insert("192.168.1.3", 51235)
 
 	// Mark peer 1 as failed multiple times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		bc.MarkFailed("192.168.1.1")
 	}
 
@@ -514,7 +373,7 @@ func TestBackoffRecovery(t *testing.T) {
 
 	// Insert and fail multiple times
 	bc.Insert("65.0.0.1", 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		bc.MarkFailed("65.0.0.1")
 	}
 
@@ -694,14 +553,14 @@ func TestSimulatedBackoffBehavior(t *testing.T) {
 	bc.Insert("backup2.peer", 51235)
 
 	// Boost backup peers' valence
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		bc.MarkSuccess("backup1.peer")
 		bc.MarkSuccess("backup2.peer")
 	}
 
 	// Simulate connection attempts over 100 iterations
 	primaryAttempts := 0
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		endpoints := bc.GetEndpoints(1)
 		if len(endpoints) > 0 && endpoints[0].Address == "primary.peer" {
 			primaryAttempts++

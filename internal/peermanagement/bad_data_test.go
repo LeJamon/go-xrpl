@@ -64,10 +64,10 @@ func TestPeer_BadDataCount_Concurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < perG; j++ {
+			for range perG {
 				peer.IncBadData("concurrent")
 			}
 		}()
@@ -117,6 +117,38 @@ func TestOverlay_IncPeerBadData_Attributes(t *testing.T) {
 	assert.Equal(t, uint32(0), o.IncPeerBadData(PeerID(999), "unknown"))
 }
 
+// TestOverlay_admitInboundEndpoint_RefusesOverBudget verifies the
+// accept-time admission gate: a fresh endpoint is admitted, while one
+// whose resource balance has crossed the drop threshold — from prior
+// bad-data charges on the same host, which persist keyed by address — is
+// refused before a handshake is attempted. A failed handshake itself is
+// never charged, mirroring rippled's inbound admission check.
+func TestOverlay_admitInboundEndpoint_RefusesOverBudget(t *testing.T) {
+	rm := resource.NewManager(nil, nil)
+	o := &Overlay{resourceManager: rm}
+	const addr = "198.51.100.9:51235"
+
+	assert.True(t, o.admitInboundEndpoint(addr),
+		"a zero-balance endpoint must be admitted")
+
+	// Drive the host's persisted balance over the drop threshold, as a
+	// prior abusive session would have via bad-data charges.
+	c := rm.NewInboundEndpoint(addr)
+	fee := resource.NewCharge(resource.DropThreshold+1, "abuse")
+	dropped := false
+	for range 10000 {
+		if c.Charge(fee, "abuse") == resource.Drop {
+			dropped = true
+			break
+		}
+	}
+	c.Release()
+	require.True(t, dropped, "sustained over-budget charges must reach Drop")
+
+	assert.False(t, o.admitInboundEndpoint(addr),
+		"an endpoint over the drop threshold must be refused admission")
+}
+
 // TestPeer_Charge_DropDisconnects exercises the new charge-based
 // disconnect path: a sequence of charges that crosses the drop
 // threshold must invoke the onDropDisconnect callback and close the
@@ -139,7 +171,7 @@ func TestPeer_Charge_DropDisconnects(t *testing.T) {
 
 	fee := resource.NewCharge(resource.DropThreshold+1, "synthetic")
 	dropped := false
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		if peer.Charge(fee, "abuse") == resource.Drop {
 			dropped = true
 			break
@@ -150,7 +182,7 @@ func TestPeer_Charge_DropDisconnects(t *testing.T) {
 		"onDropDisconnect callback must fire exactly once per peer lifetime")
 
 	// Repeat charges after the first Drop must not re-fire the hook.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		peer.Charge(fee, "abuse-after-close")
 	}
 	assert.Equal(t, 1, dropBumped,

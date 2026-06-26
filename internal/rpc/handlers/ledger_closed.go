@@ -9,7 +9,7 @@ import (
 // LedgerClosedMethod handles the ledger_closed RPC method
 type LedgerClosedMethod struct{}
 
-func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -25,7 +25,7 @@ func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	}
 
 	hash := ledger.Hash()
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_hash":  FormatLedgerHash(hash),
 		"ledger_index": seq,
 	}
