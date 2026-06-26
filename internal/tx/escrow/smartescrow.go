@@ -190,8 +190,13 @@ func runSmartEscrow(ctx *tx.ApplyContext, e *EscrowFinish, escrowData []byte) tx
 		if err := ctx.View.Update(keylet.Escrow(ownerID, e.OfferSequence), newEscrow); err != nil {
 			return tx.TefINTERNAL
 		}
-		e.wasmData = data
-		e.wasmDataSet = true
+		// Capture for tec re-apply only on the reject path; a successful finish
+		// carries the sandbox write into the escrow's deletion, so
+		// ApplyWasmDataOnTec is never invoked.
+		if res.Result <= 0 {
+			e.wasmData = data
+			e.wasmDataSet = true
+		}
 	}
 
 	if res.Result <= 0 {

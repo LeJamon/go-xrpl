@@ -151,10 +151,29 @@ func TestSmartEscrow_AcceptWithDataMutation(t *testing.T) {
 		Fee(2_000_000).
 		BuildEscrowFinish()
 	ef.ComputationAllowance = &allowance
-	require.Equal(t, "tesSUCCESS", env.Submit(ef).Code)
+	res := env.Submit(ef)
+	require.Equal(t, "tesSUCCESS", res.Code)
 	env.Close()
 
 	require.False(t, env.LedgerEntryExists(keylet.Escrow(alice.ID, seq)), "escrow must be deleted on a successful finish")
+
+	// The deleted escrow's metadata must still carry the finish function's
+	// update_data write: runSmartEscrow writes Data into the escrow SLE before the
+	// success-path erase, so the escrow's DeletedNode FinalFields records it.
+	require.NotNil(t, res.Metadata, "successful finish must produce metadata")
+	var finalData string
+	var found bool
+	for _, n := range res.Metadata.AffectedNodes {
+		if n.NodeType == "DeletedNode" && n.LedgerEntryType == "Escrow" {
+			v, ok := n.FinalFields["Data"].(string)
+			require.True(t, ok, "deleted escrow FinalFields must include Data")
+			finalData, found = v, true
+			break
+		}
+	}
+	require.True(t, found, "successful finish must emit a DeletedNode for the escrow")
+	require.True(t, strings.EqualFold(updateDataValueHex, finalData),
+		"deleted escrow FinalFields.Data must hold the finish function's write, got %q", finalData)
 }
 
 // TestSmartEscrow_FinishRejects: a finish function returning 0 rejects the
