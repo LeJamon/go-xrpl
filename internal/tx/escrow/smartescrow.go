@@ -147,9 +147,10 @@ func runSmartEscrow(ctx *tx.ApplyContext, e *EscrowFinish, escrowData []byte) tx
 	}
 
 	view := &escrowView{ctx: ctx, txBytes: e.GetRawBytes(), escrowBytes: escrowData}
+	h := host.New(view)
 	engine := wasm.New()
 	defer engine.Close()
-	res, runErr := engine.Run(wasmBytes, "finish", nil, host.New(view), int64(*e.ComputationAllowance))
+	res, runErr := engine.Run(wasmBytes, "finish", nil, h, int64(*e.ComputationAllowance))
 	if runErr != nil {
 		ctx.Log.Debug("escrow finish: wasm execution failed", "error", runErr)
 		return tx.TecFAILED_PROCESSING
@@ -168,10 +169,47 @@ func runSmartEscrow(ctx *tx.ApplyContext, e *EscrowFinish, escrowData []byte) tx
 		ctx.Metadata.GasUsed = &gasUsed
 	}
 
+	// If the finish function mutated the escrow's Data via update_data, write it
+	// to the escrow SLE before testing the result — matching rippled, which writes
+	// sfData regardless of the verdict. On a successful finish the new Data rides
+	// into the escrow's DeletedNode; on tecWASM_REJECTED the escrow survives, so
+	// the write is re-applied after the sandbox is discarded (ApplyWasmDataOnTec).
+	// Reference: rippled EscrowFinish.cpp:424-433.
+	if data := h.Data(); len(data) > 0 {
+		if len(data) > maxWasmDataLength {
+			return tx.TecINTERNAL
+		}
+		newEscrow, err := setEscrowData(escrowData, data)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		ownerID, err := state.DecodeAccountID(e.Owner)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if err := ctx.View.Update(keylet.Escrow(ownerID, e.OfferSequence), newEscrow); err != nil {
+			return tx.TefINTERNAL
+		}
+		e.wasmData = data
+		e.wasmDataSet = true
+	}
+
 	if res.Result <= 0 {
 		return tx.TecWASM_REJECTED
 	}
 	return tx.TesSUCCESS
+}
+
+// setEscrowData returns the escrow ledger object reserialized with its Data
+// field set to data. The escrow SLE is round-tripped through the binary codec
+// because state.EscrowData does not model the Data field.
+func setEscrowData(escrowData, data []byte) ([]byte, error) {
+	m, err := binarycodec.DecodeBytes(escrowData)
+	if err != nil {
+		return nil, err
+	}
+	m["Data"] = hex.EncodeToString(data)
+	return binarycodec.EncodeBytes(m)
 }
 
 // escrowFinishFunctionHex extracts the FinishFunction (hex string) from a

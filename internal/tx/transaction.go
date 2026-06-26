@@ -73,6 +73,15 @@ type TecApplier interface {
 	ApplyOnTec(ctx *ApplyContext) Result
 }
 
+// WasmDataApplier is implemented by transaction types whose SmartEscrow finish
+// function may mutate a ledger object's Data field and have that mutation persist
+// even when the finish is rejected. On tecWASM_REJECTED the tx sandbox is
+// discarded, so the Data write-back is re-applied through the recovery view.
+// Reference: rippled Transactor.cpp modifyWasmDataFields (tecWASM_REJECTED path)
+type WasmDataApplier interface {
+	ApplyWasmDataOnTec(ctx *ApplyContext)
+}
+
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
 // Used by Batch transactions which require a higher fee based on inner tx count and signers.
 type BatchFeeCalculator interface {

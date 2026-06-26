@@ -438,6 +438,28 @@ func (e *Engine) applyTecRecovery(st *applyState, result Result) Result {
 		}
 	}
 
+	// tecWASM_REJECTED: a SmartEscrow finish function that mutated the escrow's
+	// Data via update_data persists that mutation even though the finish was
+	// rejected. The sandbox carrying the in-doApply sfData write is discarded, so
+	// re-apply it through tecTable on the surviving escrow.
+	// Reference: rippled Transactor.cpp lines 1377-1381 modifyWasmDataFields.
+	if result == TecWASM_REJECTED {
+		if applier, ok := st.tx.(WasmDataApplier); ok {
+			tecCtx := &ApplyContext{
+				View:      tecTable,
+				Account:   recoveredAccount,
+				AccountID: st.accountID,
+				Config:    e.config,
+				TxHash:    st.txHash,
+				Metadata:  st.metadata,
+				Engine:    e,
+				Log:       e.logger,
+				Ctx:       st.ctx,
+			}
+			applier.ApplyWasmDataOnTec(tecCtx)
+		}
+	}
+
 	// Apply all tracked changes and generate proper metadata
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {

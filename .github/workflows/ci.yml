@@ -145,8 +145,10 @@ jobs:
       - name: Build libwasmi
         run: ./internal/wasm/wasmi/build.sh
       # The WASM engine is gated behind the `wasmi` tag; assert its gas costs
-      # match rippled's smart-escrow branch (fib=1137) byte-for-byte.
-      - run: go test -tags wasmi -count=1 -timeout 15m ./internal/wasm/...
+      # match rippled's smart-escrow branch (fib=1137) byte-for-byte, and run the
+      # SmartEscrow EscrowFinish end-to-end tests (also `cgo && wasmi`-gated) so
+      # the engine accept/reject + gas + Data write-back paths are exercised in CI.
+      - run: go test -tags wasmi -count=1 -timeout 15m ./internal/wasm/... ./internal/tx/escrow/... ./internal/testing/escrow/...
 
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)
