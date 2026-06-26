@@ -131,6 +131,13 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_ENTRY
 	}
 
+	// The CheckID must reference a Check. rippled reads through the typed
+	// keylet::check, which returns tecNO_ENTRY when the index holds any other
+	// object type; an untyped read here must reject non-Check entries the same way.
+	if state.EntryType(checkData) != "Check" {
+		return ter.TecNO_ENTRY
+	}
+
 	// Parse check
 	check, err := state.ParseCheck(checkData)
 	if err != nil {
