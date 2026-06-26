@@ -143,8 +143,9 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 		return nil, fmt.Errorf("root node %x not found in store", rootHash[:8])
 	}
 
-	// Deserialize — creates innerNode with hashes set, children nil
-	node, err := DeserializeFromPrefix(data)
+	// Deserialize — creates innerNode with hashes set, children nil. The root
+	// hash is known (the fetch key), so install it without recomputing.
+	node, err := DeserializeFromPrefixWithHash(data, rootHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize root node: %w", err)
 	}
@@ -200,8 +201,10 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 		return nil, fmt.Errorf("child node %x not found in store", hash[:8])
 	}
 
-	// Fresh deserialised copy — not shared across SHAMap instances.
-	node, err := DeserializeFromPrefix(data)
+	// Fresh deserialised copy — not shared across SHAMap instances. The hash is
+	// already known (it is the fetch key), so install it directly instead of
+	// re-hashing every descended node.
+	node, err := DeserializeFromPrefixWithHash(data, hash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
 	}

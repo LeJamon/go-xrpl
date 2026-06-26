@@ -90,6 +90,26 @@ func newLeafNode(kind leafKind, item *Item) (*leafNode, error) {
 	return n, nil
 }
 
+// newLeafNodeWithHash builds a leaf whose hash is already known — the
+// content-addressed key it was fetched by — and installs it directly instead
+// of re-hashing the item (a SHA-512Half over the full, possibly large, leaf
+// data on every lazy descent). The node is marked clean: it came from the store.
+func newLeafNodeWithHash(kind leafKind, item *Item, h [32]byte) (*leafNode, error) {
+	if item == nil {
+		return nil, ErrNilItem
+	}
+	if len(item.Data()) < 12 {
+		return nil, ErrItemTooSmall
+	}
+	n := &leafNode{
+		item: item,
+		kind: kind,
+	}
+	n.hash = h
+	n.SetDirty(false)
+	return n, nil
+}
+
 // newAccountStateLeafNode creates a new account state leaf node.
 func newAccountStateLeafNode(item *Item) (*leafNode, error) {
 	return newLeafNode(leafAccountState, item)
