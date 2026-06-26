@@ -316,10 +316,55 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	// maps to temINVALID (Transactor.cpp:198-201) — NOT temBAD_SIGNATURE. The
 	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
 	// caught unconditionally in preflight1 (preflightCommon).
+	//
+	// A verdict cached off-strand (PrewarmSignature) means this same signature
+	// was already verified under the same rules, so the verify is skipped here to
+	// keep it off the open-ledger apply mutex (issue #1105). Only positive
+	// verdicts are cached, so a cold cache still runs the full verify below.
+	if tx.GetCommon().SignatureVerified() {
+		return ter.TesSUCCESS
+	}
 	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
 	}
 	return ter.TesSUCCESS
+}
+
+// PrewarmSignature cryptographically verifies a single-signed transaction's
+// signature ahead of the open-ledger apply strand and caches a positive verdict
+// on the transaction, so the in-strand signature check skips the repeat verify.
+// This moves the dominant per-tx cost — ECDSA/EdDSA verification — off the
+// apply mutex onto the ingress workers, where it runs concurrently, mirroring
+// rippled caching SF_SIGGOOD in checkValidity before the apply strand (#1105).
+//
+// It never rejects and never caches a negative verdict: multi-signed, unsigned,
+// and bad-signature transactions leave the cache cold so the in-strand preflight
+// runs unchanged and reports the canonical, ordered result. Multi-signed
+// transactions stay on the in-strand path because go-xrpl interleaves their
+// crypto check with ledger-state signer-list authorization, which must observe
+// the apply view.
+//
+// rules supplies the parent ledger's amendment state so the canonicality
+// requirement matches the in-strand check; a nil rules honours only the per-tx
+// tfFullyCanonicalSig flag.
+func PrewarmSignature(txn txcore.Transaction, rules *amendment.Rules) {
+	if txn == nil {
+		return
+	}
+	common := txn.GetCommon()
+	if common == nil || common.SignatureVerified() {
+		return
+	}
+	// Only single-signed transactions are verified off-strand; an empty
+	// SigningPubKey marks a multi-signed or unsigned (inner-batch) transaction.
+	if common.SigningPubKey == "" {
+		return
+	}
+	mustBeFullyCanonical := (rules != nil && rules.RequireFullyCanonicalSigEnabled()) ||
+		(common.GetFlags()&txcore.TfFullyCanonicalSig) != 0
+	if sign.VerifySignature(txn, mustBeFullyCanonical) == nil {
+		common.MarkSignatureVerified()
+	}
 }
 
 // parseValidationError maps a Validate() error to a TER result code.

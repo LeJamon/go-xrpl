@@ -104,6 +104,12 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			CurrentLedger: s.openLedgerView.Current().Sequence(),
 		}, nil
 	}
+	// Verify the signature before SubmitDetailed acquires the apply mutex so the
+	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
+	// mode, matching cfg.SkipSignatureVerification above.
+	if !cfg.SkipSignatureVerification {
+		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+	}
 
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
 

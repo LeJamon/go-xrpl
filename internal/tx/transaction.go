@@ -212,6 +212,12 @@ type Common struct {
 	// PresentFields tracks which fields were present in the original parsed data.
 	// This is used to distinguish between a field being absent vs explicitly set to empty.
 	PresentFields map[string]bool `json:"-"`
+
+	// sigVerified records that this transaction's cryptographic signature has
+	// already been verified off the open-ledger apply strand, so the in-strand
+	// signature check can skip the repeat verify. It is never serialized and is
+	// meaningful only for one in-memory parsed transaction.
+	sigVerified bool
 }
 
 // Validate validates the common fields. preflightCommonFields catches these
@@ -263,6 +269,18 @@ func (c *Common) GetFlags() uint32 {
 		return 0
 	}
 	return *c.Flags
+}
+
+// MarkSignatureVerified records that the transaction's cryptographic signature
+// has been verified, so a later in-strand check can skip re-verifying it.
+func (c *Common) MarkSignatureVerified() {
+	c.sigVerified = true
+}
+
+// SignatureVerified reports whether the transaction's signature was already
+// verified off-strand (see MarkSignatureVerified).
+func (c *Common) SignatureVerified() bool {
+	return c.sigVerified
 }
 
 // SetSequence sets the sequence number
