@@ -707,3 +707,50 @@ func TestAccountSet_DirIsEmpty_AnchorEmptyWithContinuation(t *testing.T) {
 		jtx.RequireTxFail(t, result, "tecOWNERS")
 	})
 }
+
+// =========================================================================
+// DisableMaster requires the master key — issue 734.
+// =========================================================================
+// asfDisableMaster may be set only by a transaction signed with the account's
+// own master key. A regular-key-signed or multi-signed AccountSet must be
+// rejected with tecNEED_MASTER_KEY, matching rippled SetAccount.cpp sigWithMaster.
+func TestAccountSet_DisableMaster_RequiresMasterKey(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	eric := jtx.NewAccount("eric")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, eric, bob)
+	env.Close()
+
+	// Give alice both alternate signing methods so disabling the master key is
+	// otherwise permitted (no tecNO_ALTERNATIVE_KEY): a regular key and a signer
+	// list. This isolates the master-key requirement as the only gate under test.
+	env.SetRegularKey(alice, eric)
+	env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: bob, Weight: 1}})
+	env.Close()
+
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfDisableMaster)
+
+	// Multi-signed: an empty SigningPubKey is never the master key.
+	result := env.SubmitMultiSigned(
+		AccountSet(alice).SetFlag(accounttx.AccountSetFlagDisableMaster).Build(),
+		[]*jtx.Account{bob},
+	)
+	jtx.RequireTxFail(t, result, "tecNEED_MASTER_KEY")
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfDisableMaster)
+
+	// Regular-key signed: a valid but non-master key.
+	result = env.SubmitSignedWith(
+		AccountSet(alice).SetFlag(accounttx.AccountSetFlagDisableMaster).Build(),
+		eric,
+	)
+	jtx.RequireTxFail(t, result, "tecNEED_MASTER_KEY")
+	jtx.RequireFlagNotSet(t, env, alice, state.LsfDisableMaster)
+
+	// Master-key signed: succeeds and sets lsfDisableMaster.
+	result = env.SubmitSigned(
+		AccountSet(alice).SetFlag(accounttx.AccountSetFlagDisableMaster).Build(),
+	)
+	jtx.RequireTxSuccess(t, result)
+	jtx.RequireFlagSet(t, env, alice, state.LsfDisableMaster)
+}

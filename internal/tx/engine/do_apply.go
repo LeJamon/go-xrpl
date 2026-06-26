@@ -7,7 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
@@ -320,17 +319,7 @@ func (e *Engine) invokeApply(st *applyState) (result ter.Result) {
 // invokeApplyInner is the body of invokeApply, separated so the panic-recovery
 // defer in invokeApply does not have to walk back through the dispatch.
 func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
-	// Determine if the transaction was signed with the master key.
-	// Reference: rippled SetAccount.cpp sigWithMaster — compares
-	// calcAccountID(SigningPubKey) against the account ID.
-	// When signature verification is skipped (test mode), assume master key.
-	sigWithMaster := e.config.SkipSignatureVerification
-	if st.common.SigningPubKey != "" {
-		signerAddr, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(st.common.SigningPubKey)
-		if addrErr == nil {
-			sigWithMaster = signerAddr == st.common.Account
-		}
-	}
+	sigWithMaster := txcore.SignedWithMasterKey(e.config.SkipSignatureVerification, st.common)
 
 	// All transaction types implement Appliable
 	ctx := &txcore.ApplyContext{
