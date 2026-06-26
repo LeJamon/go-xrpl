@@ -72,10 +72,35 @@ func CanonicalizeRoundIOUOverflow(amount uint64, offset int) (uint64, int) {
 	return amount, offset
 }
 
+// maxNativeDrops is cMaxNativeN (10^17 drops) as a signed value. A native (XRP)
+// magnitude above it exceeds the total supply and is out of range.
+const maxNativeDrops = int64(MaxNativeDrops)
+
+// guardNativeOffset enforces STAmount::canonicalize's native pre-loop check:
+// log10(cMaxNativeN) == 17, so a non-zero magnitude with a scale-up offset above
+// 17 is unconditionally out of range.
+func guardNativeOffset(exponent int) {
+	if exponent > 17 {
+		panic("Native currency amount out of range")
+	}
+}
+
+// guardNativeDrops enforces cMaxNativeN on a native drops magnitude (>= 0),
+// mirroring STAmount::canonicalize's per-multiply and post-loop checks. rippled
+// Throws here; go-xrpl panics, recovered as tefEXCEPTION at the tx-apply boundary
+// and as a path-find failure on the RPC path.
+func guardNativeDrops(value int64) {
+	if value > maxNativeDrops {
+		panic("Native currency amount out of range")
+	}
+}
+
 // CanonicalizeDrops converts an IOU-style mantissa/exponent to XRP drops using
 // rippled's non-strict native canonicalizeRound: a positive offset scales up,
 // and a negative offset rounds away from zero by loop count (add 10 when one
-// division loop ran, 9 when two or more).
+// division loop ran, 9 when two or more). The cMaxNativeN range checks match
+// STAmount::canonicalize: out of range before each scale-up multiply, and again
+// on the final magnitude.
 func CanonicalizeDrops(mantissa int64, exponent int) int64 {
 	if mantissa == 0 {
 		return 0
@@ -84,7 +109,9 @@ func CanonicalizeDrops(mantissa int64, exponent int) int64 {
 	if value < 0 {
 		value = -value
 	}
+	guardNativeOffset(exponent)
 	for exponent > 0 {
+		guardNativeDrops(value)
 		value *= 10
 		exponent--
 	}
@@ -101,6 +128,7 @@ func CanonicalizeDrops(mantissa int64, exponent int) int64 {
 		}
 		value = (value + adder) / 10
 	}
+	guardNativeDrops(value)
 	if mantissa < 0 {
 		return -value
 	}
@@ -118,7 +146,9 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 	if value < 0 {
 		value = -value
 	}
+	guardNativeOffset(exponent)
 	for exponent > 0 {
+		guardNativeDrops(value)
 		value *= 10
 		exponent--
 	}
@@ -138,6 +168,7 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 		}
 		value = (value + adder) / 10
 	}
+	guardNativeDrops(value)
 	if mantissa < 0 {
 		return -value
 	}
@@ -156,10 +187,18 @@ func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
 		if amount == 0 || offset <= -20 {
 			return 0
 		}
-		return XRPLNumber{mantissa: int64(amount), exponent: offset}.ToInt64WithMode(RoundToNearest)
+		guardNativeOffset(offset)
+		drops := XRPLNumber{mantissa: int64(amount), exponent: offset}.ToInt64WithMode(RoundToNearest)
+		guardNativeDrops(drops)
+		return drops
 	}
 	drops := int64(amount)
+	if drops == 0 {
+		return 0
+	}
+	guardNativeOffset(offset)
 	for offset > 0 {
+		guardNativeDrops(drops)
 		drops *= 10
 		offset--
 	}
@@ -167,6 +206,7 @@ func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
 		drops /= 10
 		offset++
 	}
+	guardNativeDrops(drops)
 	return drops
 }
 
