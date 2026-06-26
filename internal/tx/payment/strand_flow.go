@@ -147,13 +147,13 @@ func ExecuteStrand(
 	// restorePermRemovals unions every BookStep's unconditional ("perm")
 	// removals back into ofrsToRm. These are rippled's FlowOfferStream
 	// permToRemove offers (self-crossed, authorization-failed, expired,
-	// deep-frozen, domain-removed) which survive "even if the strand is not
-	// applied" and are never rolled back by a limiting-step reset. A reset's
-	// over-walk discard (deferredDiscard) targets only "became unfunded"
-	// removals; calling this afterwards guarantees a perm removal a discarded
-	// over-walk produced is kept, matching rippled's monotonic permToRemove.
-	// Reference: rippled OfferStream.h permToRemove_; StrandFlow.h (ofrsToRm is
-	// passed by reference into every rev/fwd and never reset).
+	// deep-frozen, domain-removed, found-unfunded, found-tiny) which survive "even
+	// if the strand is not applied" and are never rolled back by a limiting-step
+	// reset. It guarantees ofrsToRm carries the full perm set on the failure and
+	// success exits even though the per-step writes already accumulate it, matching
+	// rippled's monotonic permToRemove. Reference: rippled OfferStream.h
+	// permToRemove_; StrandFlow.h (ofrsToRm is passed by reference into every
+	// rev/fwd and never reset).
 	restorePermRemovals := func() {
 		for _, step := range strand {
 			bs, ok := step.(*BookStep)
@@ -205,36 +205,15 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h lines 138-221
 	stepOut := requestedOut
 
-	// deferredDiscard maps each offer a limiting step removed during its
-	// over-extended reverse walk to the strand index of that step. Whether the
-	// removal survives depends on what ultimately limited the strand:
-	//   - if a step closer to the input (lower index) limited further
-	//     (limitingStep < recorded index), the over-walk requested more output
-	//     than the input could buy, so those extra offers were never really
-	//     reached — their removals are spurious and stay discarded.
-	//   - otherwise the recording step is itself the final limiting step: the
-	//     offers were genuinely reached and their owners drained by the actual
-	//     cross, so rippled removes them — the removals must be restored.
-	deferredDiscard := make(map[[32]byte]int)
-
+	// ofrsToRm now holds only perm removals (rippled's permToRemove_): every offer
+	// the grooming rule adds here is paired with recordPermRm, while a BECAME
+	// removal is a working-sandbox delete that the sb.Reset() below rolls back on a
+	// limiting step. So, like rippled's monotonic permToRemove_, this set is never
+	// discarded on a reset — a perm removal an over-walk produced is genuinely
+	// removable (already unfunded/tiny in the pristine view) and survives even when
+	// the strand is reset or fails. Reference: rippled OfferStream.h permToRemove_.
 	for i := s - 1; i >= 0; i-- {
 		step := strand[i]
-
-		// Snapshot the offers-to-remove set before this step's (possibly
-		// over-extended) reverse walk, so a limiting-step reset can drop the
-		// removals the over-walk added; see maxInCapped/deferredDiscard above for
-		// when those are later restored.
-		rmBefore := make(map[[32]byte]bool, len(ofrsToRm))
-		for k := range ofrsToRm {
-			rmBefore[k] = true
-		}
-		restoreRmAfterReset := func() {
-			for k := range ofrsToRm {
-				if !rmBefore[k] {
-					delete(ofrsToRm, k)
-				}
-			}
-		}
 
 		actualIn, actualOut := step.Rev(sb, afView, ofrsToRm, stepOut)
 
@@ -248,7 +227,6 @@ func ExecuteStrand(
 			// Reset sandbox and re-execute step 0 with Fwd(maxIn)
 			// Reference: rippled StrandFlow.h lines 148-178
 			sb.Reset()
-			restoreRmAfterReset()
 			limitingStep = 0
 
 			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, *maxIn)
@@ -272,12 +250,6 @@ func ExecuteStrand(
 			// Reset BOTH sandboxes and re-execute ONLY this step
 			// Reference: rippled StrandFlow.h lines 180-217
 			sb.Reset()
-			for k := range ofrsToRm {
-				if !rmBefore[k] {
-					deferredDiscard[k] = i
-				}
-			}
-			restoreRmAfterReset()
 			limitingStep = i
 
 			// Re-execute with the limited output
@@ -304,16 +276,6 @@ func ExecuteStrand(
 		} else {
 			// Not limiting — continue to previous step
 			stepOut = actualIn
-		}
-	}
-
-	// Restore a deferred over-walk removal only when its recording step is the
-	// final limiting step (no lower-index step reduced the throughput further).
-	// If a step closer to the input limited more (limitingStep < idx), the cross
-	// never actually reached that offer, so the removal stays discarded.
-	for k, idx := range deferredDiscard {
-		if limitingStep >= idx {
-			ofrsToRm[k] = true
 		}
 	}
 

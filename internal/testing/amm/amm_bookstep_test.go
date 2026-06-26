@@ -2927,6 +2927,10 @@ func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 	if ammBBUX < 320 || ammBBUX > 321 {
 		t.Errorf("AMM B_BUX: got %f, want ~320.02", ammBBUX)
 	}
+	// rippled testDirectToDirectPath (AMMExtended_test.cpp:1305-1325): cam's
+	// self-crossed passive offer is removed; only cam's new offer rests on the
+	// book, with the unfilled remainder (~20.02 B_BUX / ~20.02 A_BUX).
+	offerbuild.RequireOfferCount(t, env.TestEnv, cam, 1)
 }
 
 // TestAMMBookStep_RequireAuth tests require auth with AMM paths.

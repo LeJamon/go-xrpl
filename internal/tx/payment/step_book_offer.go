@@ -206,6 +206,32 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 					continue
 				}
 
+				// The single funded/groom rule, applied to every offer the walk
+				// steps onto and read from the live working sandbox — rippled's
+				// OfferStream::step. A deep-frozen or zero-amount offer is a
+				// permanent removal; an unfunded or tiny/increased-quality offer is
+				// classified FOUND (still unfunded/tiny in the pristine afView →
+				// permanent, survives a limiting-step reset) or BECAME (this flow's
+				// crossing drained the owner → a plain working-sandbox delete that
+				// rides the sandbox reset/apply lifecycle, never the permanent
+				// removableOffers set). Only a funded, non-groomable offer is
+				// yielded for crossing, so the main loop and trailing drain no
+				// longer repeat any funded check.
+				// Reference: rippled OfferStream.cpp step() lines 271-404.
+				offerOwner, ownerErr := state.DecodeAccountID(offer.Account)
+				if ownerErr != nil {
+					continue
+				}
+				if offer.TakerGets.IsZero() ||
+					s.isDeepFrozen(sb, offerOwner, s.book.In.Currency, s.book.In.Issuer) {
+					ofrsToRm[offerKey] = true
+					s.recordPermRm(offerKey)
+					continue
+				}
+				if s.groomUnfundedOffer(sb, afView, offer, offerKey, offerOwner, ofrsToRm) {
+					continue
+				}
+
 				return offer, offerKey, nil
 			}
 
@@ -277,33 +303,54 @@ func (s *BookStep) offerOutOfDomain(sb *PaymentSandbox, offer *state.LedgerOffer
 	return !permissioneddomain.OfferInDomain(sb, offer, offer.DomainID, s.parentCloseTime)
 }
 
-// isBecameGroomableAgainst reports whether the trailing offer is a BECAME
-// removal (unfunded or tiny) when its owner's funds are read from baseView — the
-// flow's iteration base, i.e. the state after all PRIOR iterations but before
-// the current strand pass's consumption — yet was funded before this whole flow
-// ran (pristine afView). This is rippled's OfferStream::step grooming a became-
-// unfunded/became-tiny offer the cross advances over: its owner was drained by
-// an earlier cross, so the offer is genuinely gone, but it is a conditional (not
-// perm) removal. Reading from baseView rather than the working sandbox is what
-// distinguishes a truly-drained owner from one the current over-walk merely
-// over-consumed (whose drain a limiting reset discards), matching the offers
-// rippled actually deletes. The found cases (unfunded/tiny in pristine afView
-// too) are handled separately by isFoundPermGroomable, so this returns false for
-// them to avoid double-classifying a perm removal as conditional.
-func (s *BookStep) isBecameGroomableAgainst(baseView, afView *PaymentSandbox, offer *state.LedgerOffer) bool {
-	fundsBase := s.getOfferFundedAmount(baseView, offer)
-	fundsAf := s.getOfferFundedAmount(afView, offer)
-	if fundsBase.IsZero() {
-		// Unfunded in the iteration base; a BECAME removal only if it was funded
-		// pre-flow (otherwise isFoundPermGroomable already handles the found case).
-		return !fundsAf.IsZero()
+// groomUnfundedOffer applies rippled's single OfferStream::step funds rule to an
+// offer the book walk has advanced onto, reading the owner's funds from the live
+// working sandbox. It removes the offer and reports true when the owner is
+// unfunded or holds only a tiny/increased-quality residue, classifying the
+// removal by one comparison against the pristine afView:
+//   - FOUND (also unfunded/tiny in afView → this flow did not touch the owner):
+//     a permanent removal recorded in ofrsToRm/permRm, which survives a
+//     limiting-step reset and is erased from both views regardless of TER.
+//   - BECAME (funded in afView → this flow's crossing drained the owner): a plain
+//     working-sandbox delete via dropBecameOffer, which rides the sandbox
+//     reset/apply lifecycle — rolled back with an over-extended pass and applied
+//     only when the crossing commits, never the permanent removableOffers set.
+//
+// A funded, non-groomable offer is left untouched and reports false.
+// Reference: rippled OfferStream.cpp step() lines 314-341 (unfunded) and 378-404
+// (tiny); found-vs-became is the cancelView_ comparison at lines 328 / 388.
+func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.LedgerOffer, offerKey [32]byte, owner [20]byte, ofrsToRm map[[32]byte]bool) bool {
+	funds := s.getOfferFundedAmount(sb, offer)
+	if funds.IsZero() {
+		if s.getOfferFundedAmount(afView, offer).IsZero() {
+			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+		} else {
+			s.dropBecameOffer(sb, offer, owner)
+		}
+		return true
 	}
-	if s.shouldRmSmallIncreasedQOffer(baseView, offer, fundsBase) {
-		// Tiny in the iteration base; a BECAME-tiny removal only if its pre-flow
-		// funds differ (a found-tiny offer is the perm case handled elsewhere).
-		return fundsAf.Compare(fundsBase) != 0
+	if s.shouldRmSmallIncreasedQOffer(sb, offer, funds) {
+		if s.getOfferFundedAmount(afView, offer).Compare(funds) == 0 {
+			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+		} else {
+			s.dropBecameOffer(sb, offer, owner)
+		}
+		return true
 	}
 	return false
+}
+
+// dropBecameOffer deletes a BECAME-unfunded/tiny offer straight from the working
+// sandbox — the same erase path consumeOffer uses for a zero-remainder tip and
+// the view offerDelete rippled's BookTip::step performs on advance — so the
+// removal follows the sandbox reset/apply lifecycle rather than the permanent
+// removableOffers set. Reference: rippled OfferStream.cpp 333-340 (became
+// unfunded: deleted from view_ but not added to permToRemove_).
+func (s *BookStep) dropBecameOffer(sb *PaymentSandbox, offer *state.LedgerOffer, owner [20]byte) {
+	txHash, ledgerSeq := sb.GetTransactionContext()
+	_ = s.deleteOffer(sb, offer, owner, txHash, ledgerSeq)
 }
 
 // tipFullyConsumed reports whether the offer just consumed by the callback is now

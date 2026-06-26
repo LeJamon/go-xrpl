@@ -153,18 +153,6 @@ func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
 	}
 }
 
-// IterationBase returns the parent sandbox, which for a per-strand working
-// sandbox is the flow's accumulating view: the ledger state after all prior
-// flow iterations applied but before THIS strand pass's (possibly
-// over-extended) consumption. The trailing-offer groom uses it to tell an
-// offer whose owner was already drained by an earlier iteration (a genuine
-// became-unfunded that survives) from one the current over-walk merely
-// over-consumed (a spurious removal a limiting reset discards). Returns nil for
-// a root sandbox.
-func (s *PaymentSandbox) IterationBase() *PaymentSandbox {
-	return s.parent
-}
-
 // SetOpenLedger records whether this sandbox is applying against the open
 // ledger. It is set once from EngineConfig.IsViewOpen at the flow entry point
 // and propagated to child sandboxes. Mirrors rippled's view.open().
