@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
@@ -95,7 +96,9 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	// Test connection
-	if err := db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}

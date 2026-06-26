@@ -1139,7 +1139,7 @@ func (l *Ledger) SerializeHeader() []byte {
 // calculateLedgerHash computes the hash of a ledger header
 // This is duplicated from genesis package to avoid circular imports
 func calculateLedgerHash(h header.LedgerHeader) [32]byte {
-	var data []byte
+	data := make([]byte, 0, 122)
 
 	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
 

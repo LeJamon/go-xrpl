@@ -699,7 +699,7 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 
 // Run starts the overlay and blocks until the context is cancelled.
 func (o *Overlay) Run(ctx context.Context) error {
-	o.ctx, o.cancel = context.WithCancel(ctx)
+	o.ctx, o.cancel = context.WithCancel(ctx) //nolint:gosec // G118: defer o.cancel() follows; also called in Stop()
 	defer o.cancel()
 
 	// Start listener if configured
@@ -780,7 +780,8 @@ func (o *Overlay) Stop() error {
 
 // startListener creates and starts the TCP/TLS listener.
 func (o *Overlay) startListener() error {
-	tcpListener, err := net.Listen("tcp", o.cfg.ListenAddr)
+	var lc net.ListenConfig
+	tcpListener, err := lc.Listen(o.ctx, "tcp", o.cfg.ListenAddr)
 	if err != nil {
 		return err
 	}
@@ -1003,7 +1004,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		if peerRemote != nil {
 			remoteAddr = peerRemote.String()
 		}
-		errResp := BuildHandshakeErrorResponse(
+		errResp := BuildHandshakeErrorResponse( //nolint:bodyclose // locally-built response serialized via Write; Body is http.NoBody
 			hsCfg.UserAgent,
 			remoteAddr,
 			"Unable to agree on a protocol version",
@@ -1020,7 +1021,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	peer.protocolVersion = protocol
 	peer.mu.Unlock()
 
-	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol)
+	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol) //nolint:bodyclose // locally-built handshake response serialized via Write; Body is nil
 	addAddressHeaders(resp.Header, hsCfg, peerRemote)
 
 	if err := resp.Write(tlsConn); err != nil {

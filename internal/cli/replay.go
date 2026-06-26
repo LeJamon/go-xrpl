@@ -681,7 +681,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 
 	// Write post-state JSON
 	postStateJSON, _ := json.MarshalIndent(postStateData, "", "  ")
-	if err := os.WriteFile(postStateFile, postStateJSON, 0644); err != nil {
+	if err := os.WriteFile(postStateFile, postStateJSON, 0644); err != nil { //nolint:gosec // G306: developer replay output, world-readable by intent
 		fmt.Printf("ERROR: Failed to write post_state.json: %v\n", err)
 	} else {
 		fmt.Printf("\nWrote %s (%d entries)\n", postStateFile, len(postStateData))
@@ -772,7 +772,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 
 	// Write diff JSON
 	diffJSON, _ := json.MarshalIndent(diff, "", "  ")
-	if err := os.WriteFile(diffFile, diffJSON, 0644); err != nil {
+	if err := os.WriteFile(diffFile, diffJSON, 0644); err != nil { //nolint:gosec // G306: developer replay output, world-readable by intent
 		fmt.Printf("ERROR: Failed to write state_diff.json: %v\n", err)
 	} else {
 		fmt.Printf("Wrote %s\n", diffFile)
@@ -781,7 +781,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 	// Dump transaction results
 	txResultsFile := filepath.Join(dir, "tx_results.json")
 	txResultsJSON, _ := json.MarshalIndent(result.TxResults, "", "  ")
-	if err := os.WriteFile(txResultsFile, txResultsJSON, 0644); err != nil {
+	if err := os.WriteFile(txResultsFile, txResultsJSON, 0644); err != nil { //nolint:gosec // G306: developer replay output, world-readable by intent
 		fmt.Printf("ERROR: Failed to write tx_results.json: %v\n", err)
 	} else {
 		fmt.Printf("Wrote %s (%d transactions)\n", txResultsFile, len(result.TxResults))
@@ -865,7 +865,7 @@ func writeResultJSON(path string, result *ReplayResult) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0644)
+	return os.WriteFile(path, data, 0644) //nolint:gosec // G306: developer replay output, world-readable by intent
 }
 
 // updateSkipList updates the LedgerHashes entries (skip lists) with the parent hash.

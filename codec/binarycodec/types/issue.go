@@ -152,11 +152,11 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 
 		// Convert sequence from little-endian to big-endian for mpt_issuance_id
 		sequence := binary.LittleEndian.Uint32(sequenceBytes)
-		seqBE := make([]byte, 4)
-		binary.BigEndian.PutUint32(seqBE, sequence)
 
 		// mpt_issuance_id = sequence (BE) + issuer account
-		mptID := append(seqBE, currencyOrAccount...)
+		mptID := make([]byte, 4+len(currencyOrAccount))
+		binary.BigEndian.PutUint32(mptID, sequence)
+		copy(mptID[4:], currencyOrAccount)
 		return map[string]any{
 			"mpt_issuance_id": strings.ToUpper(hex.EncodeToString(mptID)),
 		}, nil

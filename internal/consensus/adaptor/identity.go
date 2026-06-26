@@ -296,7 +296,7 @@ func VerifyValidation(validation *consensus.Validation) error {
 // buildProposalSigningData constructs the data to be signed for a proposal.
 // Format: HashPrefixProposal + ProposeSeq(4) + CloseTime(4) + PreviousLedger(32) + TxSet(32)
 func buildProposalSigningData(p *consensus.Proposal) []byte {
-	var buf []byte
+	buf := make([]byte, 0, len(protocol.HashPrefixProposal)+4+4+len(p.PreviousLedger)+len(p.TxSet))
 	buf = append(buf, protocol.HashPrefixProposal[:]...)
 
 	// ProposeSeq (4 bytes, big-endian)

@@ -806,7 +806,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 	}
 
 	postStateJSON, _ := json.MarshalIndent(postStateData, "", "  ")
-	os.WriteFile(postStateFile, postStateJSON, 0644)
+	os.WriteFile(postStateFile, postStateJSON, 0644) //nolint:gosec // G306: developer replay output, world-readable by intent
 	fmt.Printf("  Wrote %s (%d entries)\n", postStateFile, len(postStateData))
 
 	// Dump state diff
@@ -862,7 +862,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 	diff["removed"] = removedKeys
 
 	diffJSON, _ := json.MarshalIndent(diff, "", "  ")
-	os.WriteFile(diffFile, diffJSON, 0644)
+	os.WriteFile(diffFile, diffJSON, 0644) //nolint:gosec // G306: developer replay output, world-readable by intent
 	fmt.Printf("  Wrote %s\n", diffFile)
 
 	dumpTxResults(dir, result)
@@ -884,7 +884,7 @@ func materializeState(stateMap *shamap.SHAMap) map[string][]byte {
 func dumpTxResults(dir string, result *BlockResult) {
 	txResultsFile := filepath.Join(dir, "tx_results.json")
 	txResultsJSON, _ := json.MarshalIndent(result.TxResults, "", "  ")
-	os.WriteFile(txResultsFile, txResultsJSON, 0644)
+	os.WriteFile(txResultsFile, txResultsJSON, 0644) //nolint:gosec // G306: developer replay output, world-readable by intent
 	fmt.Printf("  Wrote %s (%d transactions)\n", txResultsFile, len(result.TxResults))
 }
 

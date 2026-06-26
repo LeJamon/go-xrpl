@@ -106,7 +106,7 @@ func TestUNLQuorum(t *testing.T) {
 		"spizqKqVpcPE8hZy4nFUbmMSaMZWx",
 		"sp1o6ZeTweRbXMYAY6VvFtGcwpERb",
 	}
-	var keys []string
+	keys := make([]string, 0, len(seeds))
 	for _, seed := range seeds {
 		id, err := NewValidatorIdentity(seed)
 		require.NoError(t, err)

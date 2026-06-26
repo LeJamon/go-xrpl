@@ -26,9 +26,11 @@ jobs:
         with:
           version: v2.11.3
 
-  # Advisory linters (security, leaked HTTP bodies, missing request contexts).
-  # Surfaced but non-blocking: continue-on-error keeps these visible without
-  # gating merges on rules too noisy to enforce. Fixed opportunistically.
+  # Advisory linters (security smells, leaked HTTP bodies, missing request
+  # contexts, slice preallocation). The codebase is currently clean against this
+  # config, so the job is green. continue-on-error keeps it non-blocking: a new
+  # finding shows up on the PR (and goes red here) without gating the merge, to
+  # be fixed opportunistically.
   lint-advisory:
     name: Lint (advisory, non-blocking)
     runs-on: ubuntu-latest

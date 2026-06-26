@@ -132,7 +132,7 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 	}
 	path := cachePathFor(a.cacheDir, s.MasterKey)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		a.logger.Debug("validator list: cache write failed",
 			"publisher", hex.EncodeToString(s.MasterKey[:]),
 			"error", err)

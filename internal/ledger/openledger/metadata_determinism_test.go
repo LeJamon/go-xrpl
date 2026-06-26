@@ -52,7 +52,7 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 		// taker pays 10 XRP, gets 10 USD → owner gives USD, gets XRP.
 		return offer.OfferCreate(acct, tx.NewXRPAmount(10_000_000), usd(10)).Sequence(seq).Build()
 	}
-	specs := []spec{
+	specs := []spec{ //nolint:prealloc
 		{trustset.TrustSet(a, usd(1000)).Sequence(aSeq).Build(), a},
 		{trustset.TrustSet(b, usd(1000)).Sequence(bSeq).Build(), b},
 		{trustset.TrustSet(d, usd(1000)).Sequence(dSeq).Build(), d},
@@ -85,7 +85,7 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 		spec{esc(c, b, 1_000_000, cSeq+3), c},
 	)
 
-	var pending []openledger.PendingTx
+	pending := make([]openledger.PendingTx, 0, len(specs))
 	for _, s := range specs {
 		blob := buildSignedBlob(t, env, s.txn, s.signer)
 		pt, err := openledger.ParsePendingTx(blob)

@@ -253,7 +253,7 @@ const (
 // (with the extra underscore) but the canonical rippled identifier is
 // "temCANNOT_PREAUTH_SELF" — see rippled include/xrpl/protocol/TER.h:120.
 // The constant name is the Go-side oddity; the string is correct.
-var resultNames = map[Result]string{
+var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code name table, not credentials
 	TesSUCCESS:                            "tesSUCCESS",
 	TecCLAIM:                              "tecCLAIM",
 	TecPATH_PARTIAL:                       "tecPATH_PARTIAL",

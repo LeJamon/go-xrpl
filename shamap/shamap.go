@@ -1131,7 +1131,7 @@ func getBranchAtDepth(key [32]byte, depth int) int {
 		return 0
 	}
 
-	b := key[byteIndex]
+	b := key[byteIndex] //nolint:gosec // G602: byteIndex < 32 guarded above (>=32 returns 0)
 	if depth%2 == 0 {
 		return int(b >> 4) // Use upper 4 bits
 	}

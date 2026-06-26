@@ -543,7 +543,7 @@ func writeDiffJSON(path string, added, removed []stateEntry, modified []modified
 	}
 
 	data, _ := json.MarshalIndent(output, "", "  ")
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0644); err != nil { //nolint:gosec // G306: developer CLI output file, world-readable by intent
 		fmt.Printf("ERROR: Failed to write diff file: %v\n", err)
 	} else {
 		fmt.Printf("Diff written to: %s\n", path)

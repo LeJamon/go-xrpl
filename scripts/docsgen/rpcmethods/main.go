@@ -82,7 +82,7 @@ func main() {
 			name, roleName(h.RequiredRole()), versions(h.SupportedApiVersions()), ws)
 	}
 
-	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(outPath, []byte(b.String()), 0o644); err != nil { //nolint:gosec // G306: generated docs artifact, 0644 intentional
 		fmt.Fprintln(os.Stderr, "write:", err)
 		os.Exit(1)
 	}

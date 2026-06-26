@@ -405,7 +405,7 @@ func (s *ValidatorSlot) getSquelchDuration(numPeers int) time.Duration {
 
 	// rand_int(min, max) in rippled is inclusive on both ends; mirror that
 	// with IntN(span+1).
-	return time.Duration(minSecs+rand.IntN(maxSecs-minSecs+1)) * time.Second
+	return time.Duration(minSecs+rand.IntN(maxSecs-minSecs+1)) * time.Second //nolint:gosec // G404: non-security relay timing/selection jitter; math/rand is intentional
 }
 
 // Relay manages reduce-relay for all validators.

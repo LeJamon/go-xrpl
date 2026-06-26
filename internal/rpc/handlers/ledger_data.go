@@ -141,7 +141,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 // formatLedgerHeaderBinary creates a hex-encoded binary representation of ledger header
 func formatLedgerHeaderBinary(hdr *types.LedgerHeaderInfo) string {
 	// This is a simplified binary format - real implementation would match rippled's serialization
-	var buf []byte
+	buf := make([]byte, 0, 118)
 
 	// Sequence (4 bytes)
 	seqBytes := make([]byte, 4)

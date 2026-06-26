@@ -408,7 +408,7 @@ func (a *mockAdaptor) IsTrusted(nodeID consensus.NodeID) bool {
 func (a *mockAdaptor) GetTrustedValidators() []consensus.NodeID {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	var result []consensus.NodeID
+	result := make([]consensus.NodeID, 0, len(a.trusted))
 	for nodeID := range a.trusted {
 		result = append(result, nodeID)
 	}

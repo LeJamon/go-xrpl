@@ -267,7 +267,7 @@ func (bc *BootCache) Save() error {
 	}
 
 	bc.dirty = false
-	return os.WriteFile(bc.filePath, data, 0644)
+	return os.WriteFile(bc.filePath, data, 0o600)
 }
 
 // Insert adds or updates an endpoint in the cache.
@@ -468,7 +468,7 @@ func (t *ReservationTable) Save() error {
 	if err := os.MkdirAll(filepath.Dir(t.filePath), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(t.filePath, data, 0o644)
+	return os.WriteFile(t.filePath, data, 0o600)
 }
 
 // Reservations exposes the reservation table backing the peer_reservations_*
@@ -547,7 +547,7 @@ func (d *Discovery) Start(ctx context.Context) error {
 		d.AddPeer(addr, 0, 0)
 	}
 
-	ctx, d.cancel = context.WithCancel(ctx)
+	ctx, d.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancel stored in d.cancel, called in Stop()
 
 	d.wg.Add(1)
 	go d.maintenanceLoop(ctx)

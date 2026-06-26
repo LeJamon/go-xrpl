@@ -150,7 +150,7 @@ func (i *Identity) PublicKeyHex() string {
 func (i *Identity) EncodedPublicKey() string {
 	pubKeyBytes := i.publicKey.SerializeCompressed()
 
-	payload := make([]byte, 1+len(pubKeyBytes))
+	payload := make([]byte, 1+len(pubKeyBytes), 1+len(pubKeyBytes)+ChecksumLen)
 	payload[0] = NodePublicKeyPrefix
 	copy(payload[1:], pubKeyBytes)
 
@@ -311,7 +311,7 @@ func (p *PublicKeyToken) Bytes() []byte {
 func (p *PublicKeyToken) Encode() string {
 	keyBytes := p.key.SerializeCompressed()
 
-	payload := make([]byte, 1+len(keyBytes))
+	payload := make([]byte, 1+len(keyBytes), 1+len(keyBytes)+ChecksumLen)
 	payload[0] = NodePublicKeyPrefix
 	copy(payload[1:], keyBytes)
 

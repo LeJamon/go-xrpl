@@ -171,7 +171,7 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Use Background() not r.Context() because the WebSocket connection
 	// lives beyond the HTTP request lifecycle.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // G118: cancel stored in wsConn.cancel, called in closeConnection
 
 	// Capture proxy-attribution headers at upgrade time. They are only
 	// consulted when the upgrade socket peer is in the per-port

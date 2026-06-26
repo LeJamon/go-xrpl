@@ -145,5 +145,5 @@ func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.filePath), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(s.filePath, data, 0o644)
+	return os.WriteFile(s.filePath, data, 0o600)
 }

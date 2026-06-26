@@ -415,7 +415,7 @@ func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
 	// Format: prefix + seq + drops + parentHash + txHash + accountHash +
 	//         parentCloseTime + closeTime + closeTimeRes + closeFlags
 
-	var data []byte
+	data := make([]byte, 0, 122)
 
 	// Hash prefix for ledger master
 	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
