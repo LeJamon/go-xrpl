@@ -216,7 +216,10 @@ type Common struct {
 	// sigVerified records that this transaction's cryptographic signature has
 	// already been verified off the open-ledger apply strand, so the in-strand
 	// signature check can skip the repeat verify. It is never serialized and is
-	// meaningful only for one in-memory parsed transaction.
+	// meaningful only for one in-memory parsed transaction. No synchronization
+	// guards it: ingress writes the verdict (PrewarmSignature) and then submits
+	// on the same goroutine, so the write happens-before the in-strand read and
+	// before the parsed transaction is shared with any other goroutine.
 	sigVerified bool
 }
 
