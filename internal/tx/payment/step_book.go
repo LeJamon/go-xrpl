@@ -467,8 +467,16 @@ func (s *BookStep) forEachOffer(
 	// until the next funded tip fails the quality threshold. The bound never stops
 	// the walk at a found-unfunded offer — only at a funded (crossable) one — so a
 	// reserve-locked own offer at a beyond-limit tip is still removed.
+	// rippled's do-while: `do { if(!execOffer(tip)) break; } while(step())`. The
+	// loop is NOT bounded by remaining-amount at the top; instead each step()
+	// (getNextOfferSkipVisited) grooms the unfunded/became/tiny run it advances
+	// over, and the callback returns false once the demand is met (remainingZero
+	// at entry) or a partial fill leaves a still-funded tip. So after the take
+	// that meets demand, the loop runs one more getNextOfferSkipVisited — which
+	// grooms the trailing run in the SAME (committed) pass — before the next
+	// callback returns false and breaks. Reference: BookStep.cpp:855-865.
 	consumed := false
-	for s.offersUsed < s.maxOffersToConsume && !remainingZero() {
+	for s.offersUsed < s.maxOffersToConsume {
 		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
 		if err != nil {
 			break
@@ -551,78 +559,14 @@ func (s *BookStep) forEachOffer(
 		}
 	}
 
-	// Trailing-offer drain: rippled's forEachOffer do-while keeps stepping the
-	// book tip after the requested amount is satisfied, but ONLY when the last
-	// crossed tip was fully consumed (eachOffer returned true). That extra
-	// offers.step() first deletes the just-consumed tip from the working view
-	// (BookTip::step), then grooms the contiguous run of unfunded/tiny offers
-	// behind it before execOffer's remainingOut==0 guard stops the walk. goXRPL's
-	// main loop stops as soon as the demand is met (remainingZero), so it never
-	// reaches those trailing offers; replay that bounded step() here.
-	//
-	// removeConsumedTipIfUnfunded deletes the just-consumed funded-cap tip, and
-	// drainTrailingOffers advances through the run — getNextOfferSkipVisited's
-	// single funded rule grooms each found/became unfunded or tiny offer it steps
-	// over (perm or working-sandbox drop), and the self-cross clause removes the
-	// taker's own offers at the tier — stopping at the first funded survivor.
-	//
-	// When demand is met by a PARTIAL fill of a still-funded tip, eachOffer
-	// returns offer.fully_consumed()==false, the do-while breaks WITHOUT another
-	// offers.step(), and trailing offers are never reached — so the drain must not
-	// fire (lastTipFullyConsumed gate).
-	// Reference: rippled BookStep.cpp forEachOffer do-while 859-863; OfferStream.cpp
-	// step 234-404; limitSelfCrossQuality.
-	if consumed && s.lastTipFullyConsumed && remainingZero() {
-		if s.lastConsumedTipValid {
-			s.removeConsumedTipIfUnfunded(sb)
-		}
-		s.drainTrailingOffers(sb, afView, ofrsToRm, visited, currentQuality)
-	}
+	// The trailing groom is no longer a separate gated drain: the do-while above
+	// runs one more getNextOfferSkipVisited after the demand-meeting take, which
+	// grooms the trailing unfunded/became/tiny run in this (committed) pass before
+	// the next callback returns false — matching rippled's `while(offers.step())`.
 
 	// If no CLOB offers found, try the AMM alone.
 	if firstCLOB {
 		tryAMM(nil)
-	}
-}
-
-// drainTrailingOffers replays rippled's forEachOffer do-while after the requested
-// amount has been satisfied: it keeps stepping the book tip, letting
-// getNextOfferSkipVisited groom the contiguous run of unfunded/tiny offers the
-// crossing left behind (its single funded rule), and removing the taker's own
-// self-crossed offers at or better than the limit on the locked tier (rippled's
-// limitSelfCrossQuality, which removes them "even if no crossing occurs"), until
-// the first funded, non-own survivor — where rippled's execOffer stops on
-// remainingOut==0.
-// Reference: rippled BookStep.cpp do-while 855-863; limitSelfCrossQuality 443-457.
-func (s *BookStep) drainTrailingOffers(
-	sb, afView *PaymentSandbox,
-	ofrsToRm, visited map[[32]byte]bool,
-	currentQuality *Quality,
-) {
-	selfCrossDrain := s.defaultPath && s.qualityLimit != nil &&
-		s.strandSrc == s.strandDst && currentQuality != nil
-	for s.offersUsed < s.maxOffersToConsume {
-		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, false)
-		if err != nil || offer == nil {
-			break
-		}
-		// getNextOfferSkipVisited already groomed every found/became unfunded or
-		// tiny offer it stepped over, so what it yields is a funded survivor or the
-		// taker's own offer. Remove an own self-cross offer at or better than the
-		// limit on the locked tier and keep stepping; otherwise stop at the funded,
-		// non-own survivor (rippled's execOffer break on remainingOut==0).
-		if selfCrossDrain {
-			if offerOwner, err := state.DecodeAccountID(offer.Account); err == nil &&
-				offerOwner == s.strandSrc {
-				offerQ := s.offerQuality(offer)
-				if offerQ.Value == currentQuality.Value && !offerQ.WorseThan(*s.qualityLimit) {
-					ofrsToRm[offerKey] = true
-					s.recordPermRm(offerKey)
-					continue
-				}
-			}
-		}
-		break
 	}
 }
 
@@ -724,6 +668,11 @@ func (s *BookStep) Rev(
 	// revImp callback: decide full vs partial take, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp revImp callback lines 1056-1083.
 	revCallback := func(e offerExec) bool {
+		// rippled eachOffer: if (remainingOut <= 0) return false — demand already
+		// met, so the do-while breaks (the prior take's step already groomed the run).
+		if remainingOut.IsZero() {
+			return false
+		}
 		if e.stpOut.Compare(remainingOut) <= 0 {
 			// Full take
 			savedIns.insert(e.stpIn)
@@ -785,7 +734,11 @@ func (s *BookStep) Rev(
 			s.lastTipFullyConsumed = s.tipFullyConsumed(e)
 		}
 
-		return true
+		// rippled eachOffer return: a full take always returns true ("even if the
+		// payment is satisfied, we need to consume the offer"), so the do-while
+		// steps once more and grooms the trailing run; a partial fill returns
+		// offer.fully_consumed(). lastTipFullyConsumed carries exactly that value.
+		return s.lastTipFullyConsumed
 	}
 
 	s.forEachOffer(sb, afView, ofrsToRm, trIn, trOut,
@@ -841,6 +794,11 @@ func (s *BookStep) Fwd(
 	// pass cache, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp fwdImp callback lines 1175-1240.
 	fwdCallback := func(e offerExec) bool {
+		// rippled fwd eachOffer: once the input is exhausted, break the do-while
+		// (the prior take's step already groomed the trailing run).
+		if remainingIn.IsZero() {
+			return false
+		}
 		if e.stpIn.Compare(remainingIn) <= 0 {
 			// Full take: rippled sets processMore = true and eachOffer returns
 			// true, so the do-while runs offers.step() again and grooms trailing
@@ -973,7 +931,10 @@ func (s *BookStep) Fwd(
 			s.lastTipFullyConsumed = s.tipFullyConsumed(e)
 		}
 
-		return true
+		// rippled fwd eachOffer return: processMore || offer.fully_consumed(). A
+		// full take continues (lastTipFullyConsumed true → another step grooms the
+		// trailing run); a partial fill returns offer.fully_consumed().
+		return s.lastTipFullyConsumed
 	}
 
 	s.forEachOffer(sb, afView, ofrsToRm, trIn, trOut,
