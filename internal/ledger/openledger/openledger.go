@@ -18,7 +18,7 @@ type Config struct {
 	Logger    xrpllog.Logger
 }
 
-// OpenLedger is goxrpl's port of rippled's app/ledger/OpenLedger.
+// OpenLedger is goxrpl's open-ledger view.
 // Invariants:
 //   - current is never nil after construction.
 //   - Current() reads under currentMu.RLock — never blocked by long Modify apply.
@@ -27,18 +27,16 @@ type Config struct {
 type OpenLedger struct {
 	cfg       Config
 	logger    xrpllog.Logger
-	modifyMu  sync.Mutex   // OpenLedger.cpp:56 modify_mutex_
-	currentMu sync.RWMutex // OpenLedger.cpp:57 current_mutex_
+	modifyMu  sync.Mutex
+	currentMu sync.RWMutex
 	current   *ledger.Ledger
-	// cachedTxs memoises the result of CurrentTxs against the currently
-	// published view. Invalidated (set to nil) at every publish point.
-	// Guarded by currentMu.
+	// cachedTxs memoises CurrentTxs for the published view; nil'd at every
+	// publish point. Guarded by currentMu.
 	cachedTxs [][]byte
 }
 
-// New creates a fresh OpenLedger anchored on closed. The initial Current()
-// view is an open ledger built on top of closed via ledger.NewOpen,
-// mirroring rippled's create() helper (OpenLedger.cpp:159-168).
+// New creates a fresh OpenLedger anchored on closed; the initial Current() view is
+// an open ledger built on top of closed via ledger.NewOpen.
 func New(closed *ledger.Ledger, cfg Config) (*OpenLedger, error) {
 	if closed == nil {
 		return nil, errors.New("openledger.New: closed parent is nil")
@@ -55,32 +53,22 @@ func New(closed *ledger.Ledger, cfg Config) (*OpenLedger, error) {
 }
 
 // Current returns the latest published view. Safe for concurrent callers.
-// Mirrors OpenLedger::current() (OpenLedger.cpp:50-55).
 func (o *OpenLedger) Current() *ledger.Ledger {
 	o.currentMu.RLock()
 	defer o.currentMu.RUnlock()
 	return o.current
 }
 
-// Modify clones current, runs fn against the clone, and atomically
-// publishes the clone iff fn returns true. Mirrors OpenLedger::modify()
-// (OpenLedger.cpp:57-69).
+// Modify clones current, runs fn against the clone, and atomically publishes the
+// clone iff fn returns true.
 //
-// Concurrency: modifyMu serialises writers so two concurrent Modify calls
-// do not race on top of the same parent (matching rippled's
-// modify_mutex_). Readers calling Current() take only the currentMu read
-// lock and so are never blocked by an in-flight fn — they either see the
-// pre-Modify pointer or the post-Modify pointer, never a partially-
-// constructed clone.
+// modifyMu serialises writers so two concurrent Modify calls don't race on the
+// same parent; readers calling Current() take only currentMu and see either the
+// pre- or post-Modify pointer, never a partial clone.
 //
-// Blocking contract: fn runs UNDER modifyMu, so it serialises against
-// every other Modify call — and therefore against every Submit, since
-// Submit funnels its tx-apply path through Modify. A slow fn stalls all
-// concurrent submissions for its whole duration. Callers MUST keep fn
-// short and CPU-bound: do not block on I/O, locks, or long computation
-// inside it. This single-writer serialisation is intentional (it mirrors
-// rippled's OpenLedger modify_mutex_); only writers pay the cost, while
-// Current() and other read paths remain unblocked.
+// fn runs UNDER modifyMu, so it serialises against every Modify (and every Submit,
+// which funnels through Modify): a slow fn stalls all concurrent submissions.
+// Callers MUST keep fn short and CPU-bound — no I/O, locks, or long computation.
 func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 	o.modifyMu.Lock()
 	defer o.modifyMu.Unlock()
@@ -116,42 +104,26 @@ func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 	return true
 }
 
-// Accept rebuilds the working view from newLCL, optionally replaying
-// retries first, then prior current view's txs, then running the
-// modifier (TxQ promotion), then replaying locals via TxQ.apply. Any
-// PendingTxs that ended in Retry on the final pass are appended to
-// *retries for the caller.
+// Accept rebuilds the working view from newLCL, replaying (optionally) retries
+// first, then the prior view's txs, then the modifier, then locals; any PendingTx
+// still in Retry on the final pass is appended to *retries.
 //
-// Mirrors OpenLedger::accept (OpenLedger.cpp:71-155).
+// Locking: the retries-first apply runs OUTSIDE modifyMu so concurrent Submits
+// aren't blocked by disputed-tx replay; modifyMu covers prior-current replay +
+// modifier + locals + relay + publish; currentMu guards the final pointer swap.
 //
-// Locking matches rippled (OpenLedger.cpp:85-94): the retries-first
-// apply runs OUTSIDE modifyMu so concurrent Submits aren't blocked by
-// disputed-tx replay against the freshly-closed ledger; modifyMu is
-// acquired only for prior-current replay + modifier + locals + relay
-// + publish. currentMu is taken for the final pointer swap.
+// cfg is the per-call ApplyConfig (LedgerSequence is overridden to the working
+// view's; Logger / NetworkID filled from the OpenLedger if unset).
 //
-// cfg carries the per-call ApplyConfig — the caller has just computed
-// fees from newLCL via readFeesFromLedger. LedgerSequence is overridden
-// to the working view's sequence, and Logger / NetworkID are filled in
-// from the OpenLedger if not already set.
+// queue (if non-nil) routes locals through TxQ.Apply so an under-fee local lands
+// in the queue rather than being dropped; nil falls back to direct ApplyTxs
+// (tests / standalone).
 //
-// queue (if non-nil) routes locals through TxQ.Apply so each local
-// re-enters the queue path (rippled OpenLedger.cpp:117-118 calls
-// `app.getTxQ().apply(app, *next, item.second, flags, j_)` per local).
-// Without queue, locals fall back to direct ApplyTxs (used only by
-// tests / standalone-mode replay).
+// modifier (if non-nil) runs against the rebuilt view after replay and before
+// locals — the TxQ-promotion hook so locals see the post-promotion fee level.
 //
-// modifier (if non-nil) runs against the freshly built next view after
-// retries-and-prior-current replay and BEFORE locals. This is the hook
-// rippled uses at OpenLedger.cpp:113 to call
-// `app_.getTxQ().accept(app_, view)` — promoting queued txs into the
-// new open view so the post-promotion fee level shapes which locals can
-// land. Pass nil when no TxQ promotion is desired.
-//
-// relay (if non-nil) is invoked once per tx in the final post-replay
-// view (skipping inner-batch txs, mirroring OpenLedger.cpp:120-150).
-// Callers thread their overlay handle through this callback. Pass nil
-// in unit tests / paths that should not re-broadcast.
+// relay (if non-nil) is invoked once per tx in the final view, skipping
+// inner-batch txs; nil in tests / paths that should not re-broadcast.
 func (o *OpenLedger) Accept(
 	newLCL *ledger.Ledger,
 	locals []PendingTx,
@@ -177,12 +149,10 @@ func (o *OpenLedger) Accept(
 	if applyCfg.Logger == nil {
 		applyCfg.Logger = o.logger
 	}
-	// Accept-replay is OpenLedger semantics, not BuildLedger. Force the
-	// mode here so we don't inherit a stray BuildLedgerMode from cfg.
+	// Force OpenLedger mode so we don't inherit a stray BuildLedgerMode from cfg.
 	applyCfg.Mode = OpenLedgerMode
 
-	// 1. retriesFirst — replay disputed/held txs first, OUTSIDE modifyMu
-	// so concurrent Submits aren't blocked (OpenLedger.cpp:85-90).
+	// 1. retriesFirst — replay disputed/held txs first, OUTSIDE modifyMu.
 	if retriesFirst && retries != nil && len(*retries) > 0 {
 		held := append([]PendingTx(nil), (*retries)...)
 		*retries = (*retries)[:0]
@@ -191,12 +161,11 @@ func (o *OpenLedger) Accept(
 		}
 	}
 
-	// Block concurrent Submits while we read prior-current, run the
-	// modifier, replay locals, relay, and publish (OpenLedger.cpp:94).
+	// Block concurrent Submits while we replay, modify, relay, and publish.
 	o.modifyMu.Lock()
 	defer o.modifyMu.Unlock()
 
-	// 2. Replay prior current's txs (OpenLedger.cpp:96-112).
+	// 2. Replay prior current's txs.
 	o.currentMu.RLock()
 	curTxs := collectTxs(o.current, o.logger)
 	o.currentMu.RUnlock()
@@ -206,17 +175,13 @@ func (o *OpenLedger) Accept(
 		}
 	}
 
-	// 3. Modifier hook — rippled OpenLedger.cpp:113-115 calls
-	// app_.getTxQ().accept(app_, view) here to drain queued txs into
-	// the freshly rebuilt open view BEFORE locals replay, so locals
-	// see the post-promotion fee level.
+	// 3. Modifier hook (TxQ promotion) — runs before locals so they see the
+	// post-promotion fee level.
 	if modifier != nil {
 		modifier(next)
 	}
 
-	// 4. Replay locals via TxQ.Apply (OpenLedger.cpp:117-118). Each
-	// local re-enters the queue path so a local that does not meet the
-	// current fee level lands in the queue rather than being dropped.
+	// 4. Replay locals via TxQ.Apply so an under-fee local lands in the queue.
 	if len(locals) > 0 {
 		if queue != nil {
 			viewCfg := applyCfg
@@ -240,10 +205,8 @@ func (o *OpenLedger) Accept(
 		}
 	}
 
-	// 5. Relay recovered txs — rippled OpenLedger.cpp:120-150 iterates
-	// the rebuilt view and re-broadcasts any non-inner-batch tx whose
-	// HashRouter::shouldRelay() permits it. Caller's relay callback
-	// owns the HashRouter + overlay; we just iterate.
+	// 5. Relay recovered txs (skipping inner-batch); the caller's callback owns
+	// the HashRouter + overlay, we just iterate.
 	if relay != nil {
 		_ = next.ForEachTransaction(func(hash [32]byte, data []byte) bool {
 			rawBlob, _, splitErr := tx.SplitTxWithMetaBlob(data)
@@ -270,10 +233,9 @@ func (o *OpenLedger) Accept(
 	return nil
 }
 
-// snapshotCurrentTxs returns the cached tx-blob slice for the currently
-// published view, building (and memoising) it on first access. The returned
-// slice is the internal cache pointer and MUST NOT be exposed to callers
-// directly; CurrentTxs wraps it with a fresh outer slice.
+// snapshotCurrentTxs returns the cached tx-blob slice for the published view,
+// building and memoising it on first access. The returned slice is the internal
+// cache pointer and MUST NOT be exposed directly; CurrentTxs wraps it.
 func (o *OpenLedger) snapshotCurrentTxs() [][]byte {
 	o.currentMu.RLock()
 	if o.cachedTxs != nil {
@@ -305,10 +267,9 @@ func (o *OpenLedger) snapshotCurrentTxs() [][]byte {
 	return built
 }
 
-// CurrentTxs returns a snapshot of the raw tx blobs in the currently
-// published view. The outer slice is fresh per call (safe to re-order);
-// the inner tx-blob byte slices are shared with the view and must not be
-// mutated. Mirrors RCLConsensus.cpp:333-349 reading openLedger().current()->txs.
+// CurrentTxs returns a snapshot of the raw tx blobs in the published view. The
+// outer slice is fresh per call (safe to re-order); the inner byte slices are
+// shared with the view and must not be mutated.
 func (o *OpenLedger) CurrentTxs() [][]byte {
 	cached := o.snapshotCurrentTxs()
 	out := make([][]byte, len(cached))
@@ -316,9 +277,8 @@ func (o *OpenLedger) CurrentTxs() [][]byte {
 	return out
 }
 
-// collectTxs parses each tx blob in view into a PendingTx. Malformed
-// entries are skipped (and logged) so one bad record doesn't poison
-// the replay.
+// collectTxs parses each tx blob in view into a PendingTx, skipping (and logging)
+// malformed entries so one bad record doesn't poison the replay.
 func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 	if v == nil {
 		return nil
@@ -346,33 +306,22 @@ func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 	return out
 }
 
-// Submit is the convenience entry point for tx ingress. It wraps Modify
-// with a single-tx apply attempt mirroring apply_one
-// (OpenLedger.cpp:170-189). Returns (changed, result) where changed
-// reflects whether the open-view pointer was advanced; result is the
-// per-tx classification.
+// Submit is the convenience entry point for tx ingress, wrapping Modify with a
+// single-tx apply attempt. Returns (changed, result) where changed reflects
+// whether the open-view pointer advanced.
 //
-// Mirrors NetworkOPsImp::apply calling openLedger().modify with a
-// single-tx body (NetworkOPs.cpp:1507). When queue is non-nil (the
-// production wiring) all classification is delegated to TxQ.Apply,
-// which itself decides whether to apply directly to the view or hold
-// the tx in the queue. Note: when TxQ holds a tx (terQUEUED) the
-// result is Success but changed is false — the tx is in flight in the
-// queue, not in the open view.
-//
-// The nil-queue branch exists only for unit tests / standalone-mode
-// callers where TxQ is not wired; production wiring always passes a
-// non-nil queue via service.go.
+// When queue is non-nil (production wiring) classification is delegated to
+// TxQ.Apply, which decides whether to apply to the view or hold the tx. When TxQ
+// holds a tx (terQUEUED) result is Success but changed is false. The nil-queue
+// branch is for unit tests / standalone callers without a wired TxQ.
 func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (bool, Result) {
 	out := o.SubmitDetailed(ptx, cfg, queue)
 	return out.Changed, out.Class
 }
 
-// SubmitOutcome is the detailed result of routing one tx through TxQ.Apply
-// via the open-view ingress path. Class is the coarse Success/Failure/Retry
-// bucket the relay decision keys off; the remaining fields carry the engine
-// detail the RPC submit response needs that TxQ's own ApplyResult omits
-// (the terQUEUED code, the charged Fee, Metadata and the human Message).
+// SubmitOutcome is the detailed result of routing one tx through TxQ.Apply. Class
+// is the coarse Success/Failure/Retry bucket the relay decision keys off; the
+// other fields carry the engine detail the RPC submit response needs.
 type SubmitOutcome struct {
 	// Changed reports whether the open-view pointer advanced (the tx was
 	// applied to the view). False for terQUEUED (in flight in the queue)
@@ -394,30 +343,22 @@ type SubmitOutcome struct {
 	Message string
 }
 
-// SubmitDetailed is the rich-result ingress entry point. It mirrors Submit
-// (NetworkOPsImp::apply → openLedger().modify, NetworkOPs.cpp:1507) but
-// returns the full engine detail so RPC submit can report engine_result /
-// queued / fee. Both the RPC path (Service.SubmitTransaction) and the
-// network path (Service.SubmitOpenLedgerTx, via Submit) funnel through
-// here, matching rippled where both ingress routes share
-// NetworkOPsImp::processTransaction → TxQ::apply.
+// SubmitDetailed is the rich-result ingress entry point: like Submit but returns
+// full engine detail so RPC submit can report engine_result / queued / fee. Both
+// the RPC and network ingress paths funnel through here.
 //
-// When queue is non-nil (production wiring) all classification is delegated
-// to TxQ.Apply, which decides whether to apply directly to the view or hold
-// the tx in the queue. terQUEUED is treated as Success/in-flight (matches
-// OpenLedger.cpp:183). The nil-queue branch is for unit tests / standalone
-// callers without a wired TxQ.
+// When queue is non-nil (production wiring) classification is delegated to
+// TxQ.Apply; terQUEUED is treated as Success/in-flight. The nil-queue branch is
+// for unit tests / standalone callers without a wired TxQ.
 func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) SubmitOutcome {
-	// Per-tx ingress is OpenLedger semantics by definition (BuildLedger
-	// only applies inside consensus close). cfg.Mode is ignored.
+	// Per-tx ingress is always OpenLedger semantics; cfg.Mode is ignored.
 	cfg.Mode = OpenLedgerMode
 	var out SubmitOutcome
 	out.Class = ResultFailure
 	out.Result = ter.TefINTERNAL
 	out.Changed = o.Modify(func(view *ledger.Ledger) bool {
-		// Pre-filter: tx already in view → drop (BuildLedger.cpp:125-129).
-		// Surface tefALREADY so callers can report the duplicate distinctly
-		// from a generic failure.
+		// Pre-filter: tx already in view → tefALREADY, so callers can report
+		// the duplicate distinctly from a generic failure.
 		if view.TxExists(ptx.Hash) {
 			out.Class = ResultFailure
 			out.Result = ter.TefALREADY
@@ -451,11 +392,9 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 				out.Class = ResultSuccess
 				return true
 			case applyRes.Result == ter.TerQUEUED:
-				// Held for a later ledger — view is unchanged but the
-				// tx is in flight, so classify as Success (matches
-				// OpenLedger.cpp:183 treating terQUEUED as applied). Nothing
-				// was charged, so drop any Fee/Metadata/Message left from a
-				// failed direct-apply attempt and report the queued status.
+				// Held for a later ledger — view unchanged but in flight, so
+				// classify as Success. Nothing was charged: drop any
+				// Fee/Metadata/Message from a failed direct-apply attempt.
 				out.Queued = true
 				out.Fee = 0
 				out.Metadata = nil
@@ -471,12 +410,9 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 			}
 		}
 
-		// No TxQ wired — fall back to direct apply with tapNONE. Rippled's
-		// per-tx ingress path is NetworkOPs::processTransaction →
-		// TxQ.apply (NetworkOPs.cpp:1483-1530), which uses tapNONE — not
-		// OpenLedger::apply_one(retry=true). Setting tapRETRY here would
-		// suppress tapFAIL_HARD interactions (Transactor.cpp:1114-1124)
-		// and shift open-ledger fee throttling.
+		// No TxQ wired — fall back to direct apply with tapNONE (not tapRETRY:
+		// tapRETRY would suppress tapFAIL_HARD interactions and shift
+		// open-ledger fee throttling).
 		out.Class = applyOneSingle(view, parsed, ptx.Blob, false, cfg)
 		out.Applied = out.Class == ResultSuccess
 		return out.Applied

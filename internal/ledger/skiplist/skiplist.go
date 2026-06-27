@@ -13,35 +13,23 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// UpdateOnMap updates the LedgerHashes SLE(s) on a mutable SHAMap.
-// Matches rippled's updateSkipList() in Ledger.cpp:878-943.
+// UpdateOnMap updates the LedgerHashes SLE(s) on a mutable SHAMap: every 256th
+// ledger appends parentHash to the historical skiplist (keylet::skip(seq)), and
+// every ledger appends it to the rolling-256 skiplist (keylet::skip()).
 //
-// Two operations:
-// 1. Every 256th ledger: append parentHash to the historical skiplist (keylet::skip(seq))
-// 2. Every ledger: append parentHash to the rolling-256 skiplist (keylet::skip())
-//
-// The function asserts the existing SLE — read from stateMap, which on the
-// consensus close path is the snapshot of the just-closed parent — is
-// internally consistent before mutating it. Specifically, an existing
-// LastLedgerSequence must equal prevIndex-1 (i.e. the parent's own parent
-// seq) and the existing Hashes vector must have the right length. If either
-// invariant is violated, the SLE was mutated by a path other than a clean
-// chain advance — typically a leak from a speculative consensus attempt
-// (see issue #470). Failing the close loudly here prevents goxrpl from
-// emitting a divergent ledger and forking the network.
+// It asserts the existing SLE is consistent before mutating; a violation means a
+// non-chain-advance path mutated it (issue #470: speculative-consensus leakage).
+// Failing loudly here prevents emitting a divergent ledger and forking the network.
 func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte) error {
 	prevIndex := ledgerSeq - 1
 
-	// Genesis ledger (seq 1) has no parent to record
+	// Genesis ledger (seq 1) has no parent to record.
 	if prevIndex == 0 {
 		return nil
 	}
 
-	// Operation 1: Historical skiplist (every 256th ledger).
-	// rippled appends without trimming; the historical list grows
-	// monotonically and never rolls. The size cap mirrors rippled's
-	// XRPL_ASSERT(hashes.size() <= 256) at Ledger.cpp:904-906 — a 64K
-	// window holds at most 65536/256 = 256 entries.
+	// Historical skiplist: append without trimming; grows monotonically up to
+	// 256 entries (a 64K window holds 65536/256 = 256).
 	if (prevIndex & 0xff) == 0 {
 		histKey := keylet.LedgerHashesForSeq(prevIndex)
 		fields, hashes, lastSeq, err := ReadLedgerHashesSLE(stateMap, histKey.Key)
@@ -57,7 +45,7 @@ func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte)
 		}
 	}
 
-	// Operation 2: Rolling 256 skiplist (every ledger)
+	// Rolling-256 skiplist: every ledger.
 	rollingKey := keylet.LedgerHashes()
 	fields, hashes, lastSeq, err := ReadLedgerHashesSLE(stateMap, rollingKey.Key)
 	if err != nil {
@@ -66,7 +54,7 @@ func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte)
 	if err := assertSkipListConsistent(hashes, lastSeq, prevIndex); err != nil {
 		return fmt.Errorf("rolling LedgerHashes (key %x): %w", rollingKey.Key, err)
 	}
-	// Trim to 256: remove oldest if at capacity
+	// Trim to 256: drop oldest at capacity.
 	if len(hashes) >= 256 {
 		hashes = hashes[1:]
 	}
@@ -78,19 +66,13 @@ func UpdateOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte)
 	return nil
 }
 
-// assertSkipListConsistent validates the parent's rolling-256 LedgerHashes
-// SLE before we append to it. An existing SLE must describe ledgers
-// 1..prevIndex-1 — equivalently, LastLedgerSequence == prevIndex-1 and
-// len(Hashes) == min(prevIndex-1, 256). Anything else means the SLE was
-// mutated by a path that isn't a clean chain advance (issue #470 traces
-// this to speculative-build leakage during consensus).
-//
-// An absent SLE is allowed: this is the first close after a fresh genesis,
-// or the parent state was never threaded through updateSkipList (initial
-// sync header-only adoption). Either way, we have nothing to validate.
+// assertSkipListConsistent validates the rolling-256 SLE before appending: an
+// existing SLE must describe ledgers 1..prevIndex-1 (LastLedgerSequence ==
+// prevIndex-1, len(Hashes) == min(prevIndex-1, 256)). Anything else is a
+// non-chain-advance mutation (issue #470). An absent SLE is allowed (first close
+// after genesis, or header-only adoption during initial sync).
 func assertSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) error {
 	if len(hashes) == 0 && lastSeq == 0 {
-		// Absent SLE — first append, nothing to assert.
 		return nil
 	}
 	wantLastSeq := prevIndex - 1
@@ -106,14 +88,10 @@ func assertSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) erro
 	return nil
 }
 
-// assertHistoricalSkipListConsistent validates the per-64K-window historical
-// LedgerHashes SLE before appending. Rippled's only invariant here is
-// `hashes.size() <= 256` (Ledger.cpp:904-906); we additionally require
-// LastLedgerSequence to be the most recent 256-aligned seq strictly below
-// prevIndex, which catches the same leak class as the rolling assertion
-// without crossing window boundaries (a window covers 65536 ledgers, so
-// within a single SLE lastSeq always == prevIndex - 256 after the prior
-// append).
+// assertHistoricalSkipListConsistent validates the historical SLE before
+// appending: hashes.size() <= 256, and LastLedgerSequence is the most recent
+// 256-aligned seq below prevIndex (== prevIndex-256). Catches the same leak class
+// as the rolling assertion without crossing the 64K window boundary.
 func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) error {
 	if len(hashes) == 0 && lastSeq == 0 {
 		return nil
@@ -128,10 +106,9 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 	return nil
 }
 
-// ReadLedgerHashesSLE returns the decoded field map, Hashes, and
-// LastLedgerSequence for the LedgerHashes SLE at key, or (nil, nil, 0, nil)
-// when absent. The field map lets callers preserve every present field —
-// notably the optional FirstLedgerSequence — when rewriting the SLE.
+// ReadLedgerHashesSLE returns the decoded field map, Hashes, and LastLedgerSequence
+// for the LedgerHashes SLE at key, or (nil, nil, 0, nil) when absent. The field map
+// lets callers preserve every present field (notably optional FirstLedgerSequence).
 func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
 	item, found, err := stateMap.Get(key)
 	if err != nil {
@@ -191,10 +168,8 @@ func decodeHashesField(jsonObj map[string]any) ([][32]byte, error) {
 	return result, nil
 }
 
-// decodeUint32Field reads a STI_UINT32 field from a binarycodec-decoded
-// SLE. binarycodec/types.UInt32.ToJSON returns uint32, so that is the
-// only type we expect; any other type is a codec-drift signal worth
-// surfacing rather than silently coercing.
+// decodeUint32Field reads a STI_UINT32 field. binarycodec returns uint32, so any
+// other type is a codec-drift signal worth surfacing rather than coercing.
 func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
 	raw, ok := jsonObj[name]
 	if !ok {
@@ -207,27 +182,18 @@ func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
 	return v, nil
 }
 
-// ReadHashes reads and decodes the Hashes array from an existing
-// LedgerHashes SLE in the state map. Returns nil if the entry doesn't exist.
-// Thin wrapper over ReadLedgerHashesSLE that drops the LastLedgerSequence
-// — kept for callers that only need the vector.
+// ReadHashes returns the Hashes array from a LedgerHashes SLE, or nil when absent.
+// Thin wrapper over ReadLedgerHashesSLE for callers needing only the vector.
 func ReadHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
 	_, hashes, _, err := ReadLedgerHashesSLE(stateMap, key)
 	return hashes, err
 }
 
-// Write serializes a LedgerHashes SLE and writes it to the state map.
-//
-// When fields is non-nil — the decoded map of an existing SLE — it updates
-// only Hashes and LastLedgerSequence and preserves every other present field,
-// mirroring rippled's in-place updateSkipList (Ledger.cpp:878-943). This keeps
-// the optional FirstLedgerSequence (and any future field) intact across the
-// per-close rewrite; rebuilding from a fixed field set would silently drop it
-// and shift the state-tree leaf, diverging account_hash.
-//
-// When fields is nil — no existing SLE — it creates a fresh entry. rippled's
-// updateSkipList likewise sets only Hashes and LastLedgerSequence on a newly
-// created SLE, so FirstLedgerSequence is intentionally absent here.
+// Write serializes a LedgerHashes SLE to the state map. When fields is non-nil (an
+// existing SLE's decoded map) it updates only Hashes and LastLedgerSequence and
+// preserves every other present field — notably optional FirstLedgerSequence;
+// rebuilding from a fixed field set would drop it and diverge account_hash. When
+// fields is nil it creates a fresh entry (FirstLedgerSequence intentionally absent).
 func Write(stateMap *shamap.SHAMap, key [32]byte, fields map[string]any, hashes [][32]byte, lastSeq uint32) error {
 	hashHexes := make([]string, len(hashes))
 	for i, h := range hashes {

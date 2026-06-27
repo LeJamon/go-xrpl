@@ -1,31 +1,6 @@
-// Package feevote ports rippled's FeeVoteImpl
-// (src/xrpld/app/misc/FeeVoteImpl.cpp) — the producer side that
-// decides whether to inject a SetFee pseudo-tx into the consensus
-// tx set on a flag-ledger boundary, based on trusted validators'
-// fee votes from the prior voting ledger.
-//
-// The algorithm:
-//
-//  1. Initialize three VotableValues (baseFee, reserveBase,
-//     reserveIncrement) seeded with the parent ledger's current
-//     fees and the local validator's preferred target. Each
-//     constructor pre-increments voteMap[target], which represents
-//     the local validator's stance.
-//
-//  2. For each trusted validation, extract the fee fields and
-//     addVote() the value (or noVote() if the field is missing or
-//     out of legal range — counts as a vote for current).
-//
-//  3. getVotes() picks the most-voted value WITHIN
-//     [min(current, target), max(current, target)] — votes outside
-//     that window are clamped out. The chosen value flips
-//     `changed` if it differs from current.
-//
-//  4. If any of the three changed, build a SetFee pseudo-tx with
-//     all three values (chosen-or-current) and the upcoming
-//     ledger sequence. Pre-XRPFees uses sfBaseFee/sfReserveBase/
-//     sfReserveIncrement/sfReferenceFeeUnits; post-XRPFees uses
-//     sfBaseFeeDrops/sfReserveBaseDrops/sfReserveIncrementDrops.
+// Package feevote decides whether to inject a SetFee pseudo-tx into the
+// consensus tx set at a flag-ledger boundary, tallying trusted validators'
+// fee votes from the prior voting ledger. Mirrors rippled FeeVoteImpl.cpp.
 package feevote
 
 import (
@@ -39,64 +14,38 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 )
 
-// MaxLegalDrops is the upper bound on a legal XRPAmount, equal to
-// INITIAL_XRP (1e17 drops = 100 billion XRP). Mirrors rippled's
-// isLegalAmountSigned check at SystemParameters.h:55-59 — values
-// exceeding this are silently treated as "no vote" rather than
-// errors. rippled also rejects amounts below -INITIAL_XRP, but Vote
-// fields are *uint64 so the negative branch is structurally
-// unreachable here. Any extractor that builds Vote from an
-// STValidation MUST clamp negative XRPAmounts to noVote before
-// reaching this layer.
+// MaxLegalDrops is the upper bound on a legal XRPAmount (INITIAL_XRP, 1e17
+// drops); values above it count as "no vote". The negative bound is
+// unreachable here (Vote fields are *uint64) but extractors MUST clamp
+// negative XRPAmounts to noVote upstream.
 const MaxLegalDrops uint64 = 100_000_000_000 * 1_000_000
 
-// ReferenceFeeUnitsDeprecated is the legacy sfReferenceFeeUnits
-// value rippled stamps on every pre-XRPFees SetFee pseudo-tx
-// (FeeVoteImpl.cpp:317 → Config::FEE_UNITS_DEPRECATED == 10).
+// ReferenceFeeUnitsDeprecated is the legacy sfReferenceFeeUnits stamped on
+// every pre-XRPFees SetFee (== 10).
 const ReferenceFeeUnitsDeprecated uint32 = 10
 
-// Stance is the three vote-able fee parameters (in drops) — both
-// the parent ledger's "current" and the validator's preferred
-// "target" use this shape. ReserveBase / ReserveIncrement are
-// uint32 in the pre-XRPFees wire format; values above UINT32_MAX
-// fall back to current at emission time, mirroring rippled's
-// dropsAs<uint32>(current) at FeeVoteImpl.cpp:312-316.
+// Stance is the three vote-able fee parameters (in drops), shared by
+// "current" and "target". Pre-XRPFees ReserveBase/ReserveIncrement are
+// uint32; values above UINT32_MAX fall back to current at emission.
 type Stance struct {
 	BaseFee          uint64
 	ReserveBase      uint64
 	ReserveIncrement uint64
 }
 
-// Vote is one trusted validator's per-field fee preference,
-// extracted from sfBaseFee / sfReserveBase / sfReserveIncrement
-// (pre-XRPFees) or the *Drops variants (post-XRPFees) on their
-// STValidation. Each field is independent: a validator may emit
-// any subset, and a missing or out-of-range value is treated as
-// "noVote" — counted as a vote for current at tally time.
-//
-// Preconditions on extractor (the future STValidation→Vote
-// adapter, deferred per #369): the extractor MUST set the field
-// to nil ("noVote") when:
-//
-//   - post-XRPFees: the STAmount is non-native (IOU). Mirrors
-//     FeeVoteImpl.cpp:222 (`field->native()` guard).
-//   - pre-XRPFees: the STUInt64 exceeds INT64_MAX. Mirrors
-//     FeeVoteImpl.cpp:254 (`vote <= numeric_limits<int64>::max()`
-//     guard, which precedes isLegalAmountSigned).
-//   - either mode: the XRPAmount is negative. Mirrors
-//     isLegalAmountSigned's lower bound at SystemParameters.h:58.
-//
-// applyVote here only enforces the upper bound (MaxLegalDrops);
-// the other three conditions are structurally unrepresentable in
-// *uint64 and so MUST be filtered upstream.
+// Vote is one trusted validator's per-field fee preference. Each field is
+// independent; a missing or out-of-range value is "noVote" (a vote for
+// current). applyVote enforces only the MaxLegalDrops upper bound — the
+// extractor MUST set a field to nil for the cases unrepresentable in
+// *uint64: post-XRPFees non-native (IOU) amounts, pre-XRPFees values above
+// INT64_MAX, and negative XRPAmounts (either mode).
 type Vote struct {
 	BaseFee          *uint64
 	ReserveBase      *uint64
 	ReserveIncrement *uint64
 }
 
-// votableValue is the per-field tallying state. Mirrors rippled's
-// detail::VotableValue at FeeVoteImpl.cpp:31-86.
+// votableValue is the per-field tallying state.
 type votableValue struct {
 	current uint64
 	target  uint64
@@ -121,12 +70,9 @@ func (v *votableValue) noVote() {
 	v.votes[v.current]++
 }
 
-// getVotes returns (chosen, changed). chosen is the most-voted
-// value within [min(current, target), max(current, target)] —
-// votes outside that range are clamped out. On ties, the lowest
-// in-window key wins, matching rippled's std::map ascending-key
-// iteration with strict `val > weight` at FeeVoteImpl.cpp:69-86.
-// changed indicates whether chosen differs from current.
+// getVotes returns the most-voted value within [min,max](current,target)
+// (out-of-window votes clamped; ties pick the lowest key) and whether it
+// differs from current.
 func (v *votableValue) getVotes() (uint64, bool) {
 	lo, hi := v.current, v.target
 	if lo > hi {
@@ -153,27 +99,12 @@ func (v *votableValue) getVotes() (uint64, bool) {
 	return chosen, chosen != v.current
 }
 
-// DoVoting tallies trusted validators' fee votes from the
-// validations of the prior voting ledger and returns a serialized
-// SetFee pseudo-tx blob if any of the three settings would
-// change, or nil otherwise.
-//
-// It is a stateless free function: every input it needs is supplied
-// per round and nothing carries over between rounds. This contrasts
-// with negativeunlvote.Voter.DoVoting, which is a method on stateful
-// producer state — negativeUNL voting must remember newly-seen
-// validators across rounds, whereas fee voting is pure per-round.
-//
-// upcomingSeq is the sequence the SetFee tx will carry (parent +
-// 1). current is the parent ledger's fee setup; target is the
-// local validator's preferred stance. votes are the trusted
-// validations' fee votes (the local validator's stance is already
-// represented by target — getVotes seeds +1 for target in the
-// constructor, so the local stance is implicit).
-//
-// xrpFeesEnabled selects the pre-XRPFees vs post-XRPFees wire
-// format. Both use the same algorithm; only the SetFee field set
-// differs.
+// DoVoting tallies trusted validators' fee votes and returns a SetFee
+// pseudo-tx blob if any of the three settings would change, else nil.
+// Stateless: a pure function of its per-round inputs. upcomingSeq is the
+// tx sequence (parent + 1); the local validator's stance is implicit in
+// target (getVotes seeds +1 for it). xrpFeesEnabled selects the wire
+// format (same algorithm, different SetFee fields).
 func DoVoting(
 	upcomingSeq uint32,
 	current, target Stance,
@@ -206,11 +137,8 @@ func DoVoting(
 	return buildSetFeeTx(upcomingSeq, current, chosen, xrpFeesEnabled)
 }
 
-// applyVote routes a per-validator field vote into the tally.
-// Missing fields and overflow values both count as a vote for
-// current (noVote), so a single bad field does not poison the
-// rest of a validator's votes — matching rippled's
-// isLegalAmountSigned guard at FeeVoteImpl.cpp:222-262.
+// applyVote routes a field vote into the tally; missing or overflow values
+// count as a vote for current (noVote) so one bad field doesn't poison the rest.
 func applyVote(v *votableValue, field *uint64) {
 	if field == nil || *field > MaxLegalDrops {
 		v.noVote()
@@ -219,11 +147,8 @@ func applyVote(v *votableValue, field *uint64) {
 	v.addVote(*field)
 }
 
-// buildSetFeeTx serializes a SetFee pseudo-tx. Pre-XRPFees uses
-// sfBaseFee (uint64) / sfReserveBase (uint32) / sfReserveIncrement
-// (uint32) / sfReferenceFeeUnits; post-XRPFees uses sfBaseFeeDrops
-// / sfReserveBaseDrops / sfReserveIncrementDrops (XRPAmount-as-
-// string). Mirrors FeeVoteImpl.cpp:297-319.
+// buildSetFeeTx serializes a SetFee pseudo-tx; the field set differs
+// between pre- and post-XRPFees wire formats.
 func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]byte, error) {
 	return common.BuildPseudoTx(tx.TypeFee, func(base tx.BaseTx) tx.Transaction {
 		stx := &pseudo.SetFee{
@@ -249,19 +174,9 @@ func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]b
 	})
 }
 
-// narrowToUint32 returns chosen as uint32, or fallback if chosen
-// exceeds UINT32_MAX. Mirrors rippled's
-// dropsAs<std::uint32_t>(current) at FeeVoteImpl.cpp:312-316: if
-// the chosen XRPAmount cannot fit in uint32, fall back to the
-// current ledger setting rather than silently truncating.
-//
-// If fallback itself exceeds UINT32_MAX the low 32 bits are
-// returned. This is unreachable on any real ledger — pre-XRPFees
-// reserves are sourced from on-chain FeeSettings whose uint32
-// fields cannot exceed UINT32_MAX by construction. Documented
-// here so the divergence from rippled's `T(drops_)` cast (which
-// is implementation-defined for an out-of-range XRPAmount) is
-// explicit.
+// narrowToUint32 returns chosen as uint32, or fallback if it exceeds
+// UINT32_MAX (fall back to current rather than truncate). A fallback above
+// UINT32_MAX is unreachable — on-chain FeeSettings uint32 fields can't exceed it.
 func narrowToUint32(chosen, fallback uint64) uint32 {
 	if chosen > math.MaxUint32 {
 		return uint32(fallback)

@@ -14,47 +14,37 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// LoadAmendmentsFromLedger reads the Amendments ledger entry and returns
-// a Rules instance with all enabled amendments.
+// LoadAmendmentsFromLedger reads the Amendments ledger entry into a Rules set.
 func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
-	// Get the Amendments keylet
 	amendmentsKey := keylet.Amendments()
 
-	// Check if the Amendments entry exists
 	exists, err := reader.Exists(amendmentsKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check amendments existence: %w", err)
 	}
 	if !exists {
-		// No Amendments entry: only the permanently-enabled retired amendments
-		// are active. They are never stored in the Amendments object but their
-		// code runs unconditionally in rippled, so the runtime rules must report
-		// them enabled.
+		// No SLE: only the permanently-enabled retired amendments are active
+		// (never stored, but their code runs unconditionally in rippled).
 		return amendment.NewRules(amendment.PermanentlyEnabledIDs()), nil
 	}
 
-	// Read the Amendments entry
 	data, err := reader.Read(amendmentsKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read amendments entry: %w", err)
 	}
 
-	// Parse the Amendments entry to extract enabled amendment IDs
 	enabledIDs, err := parseAmendmentsEntry(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse amendments entry: %w", err)
 	}
 
-	// Retired amendments are permanently enabled but are never stored in the
-	// ledger's Amendments object, so add them to the runtime rule set (their
-	// pre-amendment code gate is removed in rippled, so the code always runs).
+	// Retired amendments are permanently enabled but never stored in the SLE.
 	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }
 
-// parseAmendmentsEntry parses the binary Amendments ledger entry
-// and returns the list of enabled amendment IDs.
-// The Amendments field is a Vector256 (array of 256-bit hashes).
+// parseAmendmentsEntry returns the enabled amendment IDs from the binary
+// Amendments entry (the Amendments field is a Vector256 of 256-bit hashes).
 func parseAmendmentsEntry(data []byte) ([][32]byte, error) {
 	enabledIDs := make([][32]byte, 0)
 
@@ -66,7 +56,6 @@ func parseAmendmentsEntry(data []byte) ([][32]byte, error) {
 	parser := serdes.NewBinaryParser(data, definitions.Get())
 
 	for parser.HasMore() {
-		// Read the field header
 		field, err := parser.ReadField()
 		if err != nil {
 			return nil, fmt.Errorf("failed to read field: %w", err)
@@ -74,14 +63,11 @@ func parseAmendmentsEntry(data []byte) ([][32]byte, error) {
 
 		switch field.FieldName {
 		case "Amendments":
-			// Amendments field is a Vector256 (variable length encoded array of Hash256)
-			// Read the length prefix
 			length, err := parser.ReadVariableLength()
 			if err != nil {
 				return nil, fmt.Errorf("failed to read amendments length: %w", err)
 			}
 
-			// Each amendment ID is 32 bytes
 			numAmendments := length / 32
 			for range numAmendments {
 				hashBytes, err := parser.ReadBytes(32)
@@ -94,35 +80,29 @@ func parseAmendmentsEntry(data []byte) ([][32]byte, error) {
 			}
 
 		case "LedgerEntryType":
-			// Read 2 bytes for uint16
 			_, err := parser.ReadBytes(2)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read LedgerEntryType: %w", err)
 			}
 
 		case "Flags":
-			// Read 4 bytes for uint32
 			_, err := parser.ReadBytes(4)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read Flags: %w", err)
 			}
 
 		case "Majorities":
-			// Majorities is an STArray - skip it for now
-			// STArrays end with 0xF1 (array end marker)
 			if err := skipSTArray(parser); err != nil {
 				return nil, fmt.Errorf("failed to skip Majorities array: %w", err)
 			}
 
 		case "index":
-			// Read 32 bytes for Hash256
 			_, err := parser.ReadBytes(32)
 			if err != nil {
 				return nil, fmt.Errorf("failed to read index: %w", err)
 			}
 
 		default:
-			// Skip unknown fields based on their type
 			if err := skipField(parser, field); err != nil {
 				return nil, fmt.Errorf("failed to skip field %s: %w", field.FieldName, err)
 			}
@@ -140,19 +120,16 @@ func skipSTArray(parser *serdes.BinaryParser) error {
 			return err
 		}
 
-		// Check for array end marker (0xF1)
 		if b == 0xF1 {
-			_, _ = parser.ReadByte() // consume the marker
+			_, _ = parser.ReadByte()
 			return nil
 		}
 
-		// Read and skip the field
 		field, err := parser.ReadField()
 		if err != nil {
 			return err
 		}
 
-		// Check for object end marker within array (0xE1)
 		if field.FieldName == "EndOfObject" || (field.FieldHeader.TypeCode == 14 && field.FieldHeader.FieldCode == 1) {
 			continue
 		}
@@ -164,7 +141,6 @@ func skipSTArray(parser *serdes.BinaryParser) error {
 	return nil
 }
 
-// skipField skips a field based on its type
 func skipField(parser *serdes.BinaryParser, field *definitions.FieldInstance) error {
 	switch field.Type {
 	case "UInt8":
@@ -192,21 +168,18 @@ func skipField(parser *serdes.BinaryParser, field *definitions.FieldInstance) er
 		_, err := parser.ReadBytes(32)
 		return err
 	case "Amount":
-		// Check first byte to determine if XRP or IOU
+		// High bit of the first byte selects XRP (8 bytes) vs IOU (amount+currency+issuer = 48).
 		b, err := parser.Peek()
 		if err != nil {
 			return err
 		}
 		if b&0x80 == 0 {
-			// XRP amount: 8 bytes
 			_, err = parser.ReadBytes(8)
 		} else {
-			// IOU amount: 8 bytes + 20 bytes currency + 20 bytes issuer = 48 bytes
 			_, err = parser.ReadBytes(48)
 		}
 		return err
 	case "Blob", "Vector256":
-		// Variable length encoded
 		length, err := parser.ReadVariableLength()
 		if err != nil {
 			return err
@@ -214,15 +187,12 @@ func skipField(parser *serdes.BinaryParser, field *definitions.FieldInstance) er
 		_, err = parser.ReadBytes(length)
 		return err
 	case "STObject":
-		// Skip until end of object marker (0xE1)
 		return skipSTObject(parser)
 	case "STArray":
 		return skipSTArray(parser)
 	default:
-		// Refuse to guess: blindly reading an unknown type as VL can
-		// consume a data byte as a length prefix and silently desync
-		// the parser. Fail closed so the caller surfaces a parse error
-		// rather than a wrong amendment set.
+		// Fail closed: guessing VL on an unknown type could consume a data byte
+		// as a length prefix and silently desync the parser.
 		return fmt.Errorf("unsupported field type %q", field.Type)
 	}
 }
@@ -235,13 +205,11 @@ func skipSTObject(parser *serdes.BinaryParser) error {
 			return err
 		}
 
-		// Check for object end marker (0xE1)
 		if b == 0xE1 {
-			_, _ = parser.ReadByte() // consume the marker
+			_, _ = parser.ReadByte()
 			return nil
 		}
 
-		// Read and skip the field
 		field, err := parser.ReadField()
 		if err != nil {
 			return err
@@ -254,15 +222,13 @@ func skipSTObject(parser *serdes.BinaryParser) error {
 	return nil
 }
 
-// LoadAmendmentsFromLedgerEntry is a convenience function that parses
-// the raw Amendments ledger entry data directly.
+// LoadAmendmentsFromLedgerEntry parses raw Amendments ledger entry data directly.
 func LoadAmendmentsFromLedgerEntry(data []byte) (*amendment.Rules, error) {
 	enabledIDs, err := parseAmendmentsEntry(data)
 	if err != nil {
 		return nil, err
 	}
-	// Retired amendments are permanently enabled but never stored in the
-	// Amendments object; add them so runtime rules match (see LoadAmendmentsFromLedger).
+	// Retired amendments are permanently enabled but never stored (see LoadAmendmentsFromLedger).
 	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }

@@ -1,6 +1,5 @@
-// Package negativeunl applies the flag-ledger NegativeUNL transitions
-// (materializing pending ValidatorToDisable / ValidatorToReEnable into the
-// DisabledValidators set) directly on a ledger's state map.
+// Package negativeunl applies flag-ledger NegativeUNL transitions (pending
+// ValidatorToDisable / ValidatorToReEnable → DisabledValidators) on a state map.
 package negativeunl
 
 import (
@@ -12,18 +11,15 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-// Apply materializes the pending ValidatorToDisable / ValidatorToReEnable
-// transitions on the NegativeUNL SLE in stateMap, stamping ledgerIndex as the
-// FirstLedgerSequence of any newly disabled validator.
-//
-// It is a no-op when there is no NegativeUNL SLE, or when neither
-// ValidatorToDisable nor ValidatorToReEnable is present. When the resulting
-// DisabledValidators set is empty the SLE is erased.
+// Apply materializes pending ValidatorToDisable / ValidatorToReEnable on the
+// NegativeUNL SLE, stamping ledgerIndex as FirstLedgerSequence of any newly
+// disabled validator. No-op when the SLE or both transition fields are absent;
+// erases the SLE when DisabledValidators becomes empty.
 func Apply(stateMap *shamap.SHAMap, ledgerIndex uint32) error {
 	key := keylet.NegativeUNL().Key
 	item, exists, err := stateMap.Get(key)
 	if err != nil || !exists || item == nil {
-		return nil // no SLE → nothing to do
+		return nil
 	}
 	data := item.Data()
 	if len(data) == 0 {
@@ -53,8 +49,7 @@ func Apply(stateMap *shamap.SHAMap, ledgerIndex uint32) error {
 		sle.DisabledValidators = filtered
 	}
 
-	// Append ValidatorToDisable (if any) as a new DisabledValidators entry,
-	// stamping the flag-ledger sequence as sfFirstLedgerSequence.
+	// Append ValidatorToDisable as a new entry, stamping the flag-ledger seq.
 	if hasToDisable {
 		sle.DisabledValidators = append(sle.DisabledValidators, pseudo.DisabledValidator{
 			PublicKey:           sle.ValidatorToDisable,
@@ -62,11 +57,9 @@ func Apply(stateMap *shamap.SHAMap, ledgerIndex uint32) error {
 		})
 	}
 
-	// Clear the transition fields.
 	sle.ValidatorToDisable = nil
 	sle.ValidatorToReEnable = nil
 
-	// Serialize + write back (or erase if the SLE is now empty).
 	if len(sle.DisabledValidators) == 0 {
 		return stateMap.Delete(key)
 	}

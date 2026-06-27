@@ -42,10 +42,9 @@ type AccountInfoResult struct {
 }
 
 // parseDirMarker decodes the resume marker shared by account_lines,
-// account_offers and account_channels: "<entryKey>,<ownerNode>" — the ledger key
-// of the last entry returned plus the owner-directory page it sat on (the resume
-// hint). Mirrors rippled's forEachItemAfter marker. An empty marker means "start
-// from the beginning"; a malformed one yields svcerr.ErrInvalidMarker.
+// account_offers and account_channels: "<entryKey>,<ownerNode>" — last entry's
+// ledger key plus the owner-directory page it sat on. Empty means start from the
+// beginning; malformed yields svcerr.ErrInvalidMarker.
 func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool, err error) {
 	if marker == "" {
 		return afterKey, 0, false, nil
@@ -58,8 +57,7 @@ func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool
 	if derr := decodeHex32Into(keyStr, &key); derr != nil {
 		return afterKey, 0, false, svcerr.ErrInvalidMarker
 	}
-	// rippled reads the hint as the second comma-delimited field and ignores any
-	// trailing content (std::getline up to the next ','); mirror that.
+	// hint is the second comma-delimited field; ignore trailing content.
 	pageStr, _, _ := strings.Cut(rest, ",")
 	p, perr := strconv.ParseUint(pageStr, 10, 64)
 	if perr != nil {
@@ -72,12 +70,9 @@ func formatDirMarker(key [32]byte, page uint64) string {
 	return formatHashHex(key) + "," + strconv.FormatUint(page, 10)
 }
 
-// withAccountQuery factors the preamble shared by the account_* RPC queries: the
-// context check, the read lock held for the whole query, resolution of the
-// target ledger via the shared selector grammar, and decoding the account
-// address to its 20-byte ID. It invokes fn with the resolved ledger, account ID
-// and validated flag while the read lock is held, releasing the lock only after
-// fn returns — an identical lock scope to inlining the preamble in each method.
+// withAccountQuery runs the shared account_* preamble — context check, read lock,
+// ledger resolution, address decode — then invokes fn with the resolved ledger,
+// account ID and validated flag while the read lock is held.
 func withAccountQuery[T any](
 	s *Service,
 	ctx context.Context,
@@ -92,10 +87,7 @@ func withAccountQuery[T any](
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// getLedgerForQuery resolves the shared selector grammar — shortcuts,
-	// numeric indices, and 64-char-hex ledger_hash — so a ledger_hash query
-	// targets the specific named ledger rather than collapsing to the latest
-	// validated one.
+	// resolves shortcuts / numeric index / ledger_hash to the target ledger.
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
 	if err != nil {
 		return zero, err
@@ -114,10 +106,8 @@ func withAccountQuery[T any](
 // GetAccountInfo retrieves account information from the ledger
 func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfoResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountInfoResult, error) {
-		// Get the account keylet
 		accountKey := keylet.Account(accountID)
 
-		// Check if account exists
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check account existence: %w", err)
@@ -126,13 +116,11 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		// Read the account data
 		data, err := targetLedger.Read(accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read account: %w", err)
 		}
 
-		// Parse the account root
 		accountRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse account data: %w", err)
@@ -195,7 +183,6 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			return nil, err
 		}
 
-		// Parse peer if provided
 		var peerID [20]byte
 		hasPeer := false
 		if peer != "" {
@@ -207,8 +194,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			hasPeer = true
 		}
 
-		// Default an unset limit; the upper bound is enforced by the caller
-		// (handler ClampLimit), so an unlimited/admin caller is not re-clamped here.
+		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
 		if limit == 0 {
 			limit = 200
 		}
@@ -223,8 +209,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				return
 			}
 
-			// Determine which side of the line the account sits on. Owner-directory
-			// membership guarantees one side matches; the default guard is defensive.
+			// Owner-directory membership guarantees one side matches; default is defensive.
 			lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 			highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
@@ -240,7 +225,6 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				return
 			}
 
-			// Filter by peer if specified
 			if hasPeer {
 				peerAccountID, _ := decodeAccountIDLocal(peerAccount)
 				if peerAccountID != peerID {
@@ -253,8 +237,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				Currency: rs.Balance.Currency,
 			}
 
-			// Calculate balance from perspective of our account.
-			// Positive balance means peer owes us, negative means we owe peer.
+			// Balance from our account's perspective: positive = peer owes us.
 			if isLowAccount {
 				line.Balance = rs.Balance.Negate().Value()
 				line.Limit = rs.LowLimit.Value()
@@ -351,7 +334,6 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 				Seq:   offer.Sequence,
 			}
 
-			// Format TakerGets
 			if offer.TakerGets.IsNative() {
 				accountOffer.TakerGets = offer.TakerGets.Value()
 			} else {
@@ -362,7 +344,6 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 				}
 			}
 
-			// Format TakerPays
 			if offer.TakerPays.IsNative() {
 				accountOffer.TakerPays = offer.TakerPays.Value()
 			} else {
@@ -418,17 +399,14 @@ type AccountObjectItem struct {
 	Data            []byte `json:"data"`
 }
 
-// GetAccountObjects enumerates the ledger objects an account owns, paginated by
-// an opaque marker. It mirrors rippled RPC::getAccountObjects: NFTokenPages
-// first (they are not linked into the owner directory), then the owner-directory
-// entries. The marker is "<dirIndex>,<entryIndex>" — "0,<pageKey>" while still
-// in the NFTokenPage region. limit counts every directory entry visited, not
-// just those matching the type filter, so a filtered page can come back short
-// with a marker to continue from.
+// GetAccountObjects enumerates an account's owned objects, paginated by an opaque
+// marker: NFTokenPages first (not linked into the owner directory), then
+// owner-directory entries. Marker is "<dirIndex>,<entryIndex>" ("0,<pageKey>" in
+// the NFTokenPage region). limit counts every directory entry visited, not just
+// type-filter matches, so a filtered page can come back short with a marker.
 func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountObjectsResult, error) {
-		// Match rippled: account_objects returns actNotFound for missing accounts
-		// rather than an empty result.
+		// account_objects returns actNotFound for a missing account, not empty.
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
@@ -441,8 +419,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		// Normalize type filter from rippled's snake_case to PascalCase
 		objType = normalizeObjectType(objType)
 
-		// Default an unset limit; the upper bound is the caller's responsibility
-		// (handler ClampLimit), so an unlimited/admin caller is not re-clamped here.
+		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
 		if limit == 0 {
 			limit = 200
 		}
@@ -501,12 +478,11 @@ func markerUint256(s string) ([32]byte, bool) {
 	return out, true
 }
 
-// enumerateAccountObjects walks an account's NFTokenPages then its owner
-// directory into result, resuming from (dirIndex, entryIndex) and visiting at
-// most limit entries. When more remain it sets result.Marker. Mirrors rippled
-// RPC::getAccountObjects (RPCHelpers.cpp): limit is charged per directory entry
-// visited, NFTokenPages are walked over their own min→max range, and a missing
-// dirIndex page or absent entryIndex is reported as an invalid marker.
+// enumerateAccountObjects walks an account's NFTokenPages then owner directory
+// into result, resuming from (dirIndex, entryIndex) and visiting at most limit
+// entries (charged per directory entry, not per type-match); sets result.Marker
+// when more remain. A missing dirIndex page or absent entryIndex is an invalid
+// marker.
 func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [20]byte, objType string, dirIndex, entryIndex [32]byte, limit uint32, result *AccountObjectsResult) error {
 	var zero [32]byte
 	wantType := func(t string) bool { return objType == "" || t == objType }
@@ -615,8 +591,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			found = true
 		}
 
-		// NFTokenPages exactly filled the page; resume the marker at the first
-		// directory entry.
+		// NFTokenPages exactly filled the limit; resume at the first dir entry.
 		if i == mlimit && mlimit < limit {
 			result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[start])
 			return nil
@@ -682,16 +657,12 @@ func indexOfHash(entries [][32]byte, key [32]byte) int {
 	return -1
 }
 
-// ownerDirAfter walks accountID's owner directory in directory order and invokes
-// visit for each entry, resuming strictly after afterKey when hasMarker. It
-// mirrors rippled's forEachItemAfter plus the pagination shared by account_lines,
-// account_offers and account_channels: it jumps to hintPage first (falling back
-// to a scan from the root if afterKey is not there), and charges limit per
-// directory entry visited rather than per entry kept — so a filtered page can
-// come back short but still carry a marker. It returns the "<entryKey>,<ownerNode>"
-// resume marker when an entry beyond the limit exists, and found=false when a
-// non-empty resume marker could not be located (reported by callers as an
-// invalid marker).
+// ownerDirAfter walks accountID's owner directory, invoking visit per entry and
+// resuming strictly after afterKey when hasMarker (jumping to hintPage first, else
+// scanning from the root). limit is charged per entry visited, not per entry kept,
+// so a filtered page can come back short but still carry a marker. Returns the
+// "<entryKey>,<ownerNode>" resume marker when an entry beyond the limit exists,
+// and found=false when a non-empty marker could not be located.
 func ownerDirAfter(
 	ctx context.Context,
 	l *ledger.Ledger,
@@ -758,8 +729,7 @@ func ownerDirAfter(
 				return "", found, rerr
 			}
 			if data == nil {
-				// A directory entry with no backing object is skipped without
-				// charging the limit, mirroring rippled's null-SLE traversal.
+				// Null-SLE entry: skip without charging the limit.
 				continue
 			}
 			if count >= limit {
@@ -800,11 +770,8 @@ type OwnerInfoResult struct {
 }
 
 // GetOwnerInfo walks the account's owner directory and groups offers and trust
-// lines, mirroring rippled's NetworkOPsImp::getOwnerInfo (NetworkOPs.cpp:1753).
-// Unlike GetAccountObjects it follows every directory page with no object-count
-// cap and visits only owned objects (not the whole ledger). A missing owner
-// directory yields empty slices, matching rippled's empty result for an
-// account with no owned objects.
+// lines. Unlike GetAccountObjects it follows every page with no object cap; a
+// missing owner directory yields empty slices.
 func (s *Service) GetOwnerInfo(ctx context.Context, account string, ledgerIndex string) (*OwnerInfoResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*OwnerInfoResult, error) {
 		result := &OwnerInfoResult{
@@ -886,7 +853,6 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			return nil, err
 		}
 
-		// Check if account exists
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
@@ -896,7 +862,6 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		// Parse destination account if provided
 		var destID [20]byte
 		hasDestFilter := false
 		if destinationAccount != "" {
@@ -908,8 +873,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			hasDestFilter = true
 		}
 
-		// Default an unset limit (rippled's accountChannels tuning); the caller
-		// (handler ClampLimit) owns the upper bound.
+		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
 		if limit == 0 {
 			limit = 256
 		}
@@ -924,13 +888,11 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 				return
 			}
 
-			// A channel sits in both the source and destination owner directories;
-			// account_channels only reports channels the account is the source of.
+			// account_channels reports only channels the account is source of.
 			if payChan.Account != accountID {
 				return
 			}
 
-			// Filter by destination account if specified
 			if hasDestFilter && payChan.DestinationID != destID {
 				return
 			}
@@ -947,10 +909,8 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 				SettleDelay:        payChan.SettleDelay,
 			}
 
-			// Add public key if present
 			if payChan.PublicKey != "" {
 				channel.PublicKeyHex = payChan.PublicKey
-				// Convert hex to base58 for public_key field
 				pkBytes, derr := hex.DecodeString(payChan.PublicKey)
 				if derr == nil && len(pkBytes) > 0 {
 					if encoded, encErr := addresscodec.EncodeNodePublicKey(pkBytes); encErr == nil {
@@ -959,7 +919,6 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 				}
 			}
 
-			// Add optional fields
 			if payChan.Expiration > 0 {
 				channel.Expiration = payChan.Expiration
 			}
@@ -1009,7 +968,6 @@ type AccountCurrenciesResult struct {
 // GetAccountCurrencies retrieves currencies an account can send and receive
 func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountCurrenciesResult, error) {
-		// Check if account exists
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
@@ -1019,7 +977,6 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		// Use maps to collect unique currencies
 		receiveCurrencies := make(map[string]bool)
 		sendCurrencies := make(map[string]bool)
 
@@ -1041,14 +998,12 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 				return nil
 			}
 
-			// Membership in the owner directory already implies ownership; the
-			// low/high check selects our side and defensively skips foreign lines.
+			// Owner-directory membership implies ownership; low/high selects our side.
 			lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 			highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
-			// balance is from our perspective (rippled negates it for the high
-			// account); a currency is receivable while balance < our limit and
-			// sendable while -balance < the peer's limit.
+			// balance is from our perspective; receivable while balance < our limit,
+			// sendable while -balance < peer limit.
 			var balance, ownLimit, peerLimit tx.Amount
 			if lowID == accountID {
 				balance, ownLimit, peerLimit = rs.Balance, rs.LowLimit, rs.HighLimit
@@ -1072,17 +1027,14 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 			return nil, walkErr
 		}
 
-		// A RippleState cannot legitimately carry the XRP currency code; drop the
-		// reserved sentinel from both sets, as rippled does.
+		// RippleState can't carry XRP; drop the reserved sentinel like rippled.
 		delete(receiveCurrencies, "XRP")
 		delete(sendCurrencies, "XRP")
 
-		// Convert maps to sorted slices
 		receiveList := make([]string, 0, len(receiveCurrencies))
 		for currency := range receiveCurrencies {
 			receiveList = append(receiveList, currency)
 		}
-		// Sort for consistent output
 		sort.Strings(receiveList)
 
 		sendList := make([]string, 0, len(sendCurrencies))
@@ -1125,7 +1077,6 @@ type AccountNFTsResult struct {
 // GetAccountNFTs retrieves NFTs owned by an account
 func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountNFTsResult, error) {
-		// Check if account exists
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
@@ -1140,24 +1091,20 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			limit = 256
 		}
 
-		// Collect NFTs by iterating through ledger entries looking for NFTokenPage objects
 		var nfts []NFTInfo
 
 		targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 			if ctx.Err() != nil {
 				return false
 			}
-			// Check if we've reached the limit
 			if uint32(len(nfts)) >= limit {
 				return false
 			}
 
-			// Check if this is an NFTokenPage entry
 			if len(data) < 3 {
 				return true
 			}
 
-			// Check LedgerEntryType field
 			if data[0] != 0x11 { // UInt16 type code 1, field code 1
 				return true
 			}
@@ -1166,21 +1113,18 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 				return true
 			}
 
-			// Check if this NFTokenPage belongs to our account
-			// NFTokenPage key includes the account ID in bytes 0-19
+			// NFTokenPage key has the owner account ID in bytes 0-19.
 			var pageOwner [20]byte
 			copy(pageOwner[:], key[0:20])
 			if pageOwner != accountID {
 				return true
 			}
 
-			// Parse the NFTokenPage
 			page, err := state.ParseNFTokenPage(data)
 			if err != nil {
 				return true
 			}
 
-			// Extract NFTs from the page
 			for _, token := range page.NFTokens {
 				if uint32(len(nfts)) >= limit {
 					break
@@ -1225,9 +1169,8 @@ type GatewayBalancesResult struct {
 	Validated      bool
 }
 
-// addEscrowLocked sums an Escrow into locked, keyed by currency. XRP escrows key
-// on "XRP" and IOU escrows on their currency code. MPT escrows are deliberately
-// skipped: they have no currency code to sum under, where rippled instead errors.
+// addEscrowLocked sums an Escrow into locked by currency ("XRP" or the IOU code).
+// MPT escrows are skipped — no currency to sum under (rippled instead errors).
 func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 	esc, err := state.ParseEscrow(data)
 	if err != nil {
@@ -1258,9 +1201,8 @@ func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 	locked[currency] = addLockedSaturating(existing, amount)
 }
 
-// addLockedSaturating returns existing+add, clamping to the largest representable
-// IOU amount on overflow rather than panicking — matching rippled, whose escrow
-// locked sum saturates to the maximum valid amount instead of failing.
+// addLockedSaturating returns existing+add, clamping to the largest IOU amount on
+// overflow rather than panicking, matching rippled's saturating escrow sum.
 func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
 	defer func() {
 		if recover() != nil {
@@ -1277,7 +1219,6 @@ func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
 // GetGatewayBalances retrieves obligations and balances for a gateway account
 func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*GatewayBalancesResult, error) {
-		// Check if account exists
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
@@ -1287,7 +1228,6 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		// Parse hot wallet addresses
 		hotWalletIDs := make(map[[20]byte]bool)
 		for _, hw := range hotWallets {
 			_, hwIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(hw)
@@ -1299,7 +1239,6 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			hotWalletIDs[hwID] = true
 		}
 
-		// Maps to collect results
 		obligations := make(map[string]tx.Amount)         // currency -> total obligations
 		hotBalances := make(map[string][]CurrencyBalance) // account -> balances
 		frozenBalances := make(map[string][]CurrencyBalance)
@@ -1331,7 +1270,6 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 				return nil
 			}
 
-			// Check if this trust line involves our account
 			lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 			highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
@@ -1348,48 +1286,34 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 				return nil // Not our account
 			}
 
-			// Check if balance is zero
 			if rs.Balance.IsZero() {
 				return nil
 			}
 
-			// Get the balance from the gateway's perspective.
-			// RippleState raw balance: positive means low account holds IOUs from high account.
-			// To get the balance from the viewAccount's perspective (matching rippled's
-			// TrustLineBase constructor): keep as-is if we are low, negate if we are high.
-			// Result: negative = we owe them (obligations), positive = they owe us (assets).
+			// Balance from the gateway's perspective: keep as-is if low, negate if high.
+			// Negative = we owe (obligations), positive = they owe us (assets).
 			var gatewayBalance tx.Amount
 			if isLowAccount {
-				// We are low, balance from our perspective is as stored
 				gatewayBalance = rs.Balance
 			} else {
-				// We are high, negate to get balance from our perspective
 				gatewayBalance = rs.Balance.Negate()
 			}
 
-			// Get peer address
 			peerAddr, _ := addresscodec.EncodeAccountIDToClassicAddress(peerID[:])
 
 			currency := rs.Balance.Currency
 
-			// Determine if the gateway has frozen this trust line.
-			// Matches rippled's TrustLineBase::getFreeze(): checks whether the
-			// view account (gateway) set the freeze flag on its side of the line.
+			// Gateway froze the line if it set the freeze flag on its own side.
 			var isFrozen bool
 			if isLowAccount {
-				// We are low, check if we (low) have frozen the peer
 				isFrozen = (rs.Flags & state.LsfLowFreeze) != 0
 			} else {
-				// We are high, check if we (high) have frozen the peer
 				isFrozen = (rs.Flags & state.LsfHighFreeze) != 0
 			}
 
-			// Check what category this balance falls into
 			if hotWalletIDs[peerID] {
-				// This is a hot wallet - add to balances
-				// For hot wallets, we report the balance they hold (negated from gateway perspective)
+				// Hot wallet: report the balance they hold (negated from gateway side).
 				if gatewayBalance.Signum() < 0 {
-					// Gateway owes hot wallet (hot wallet holds currency)
 					balanceText := gatewayBalance.Negate().Value()
 					hotBalances[peerAddr] = append(hotBalances[peerAddr], CurrencyBalance{
 						Currency: currency,
@@ -1397,22 +1321,20 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 					})
 				}
 			} else if gatewayBalance.Signum() > 0 {
-				// Gateway has a positive balance (holds currency from peer) - unusual, add to assets
+				// Gateway holds currency from peer (unusual) — asset.
 				balanceText := gatewayBalance.Value()
 				assets[peerAddr] = append(assets[peerAddr], CurrencyBalance{
 					Currency: currency,
 					Value:    balanceText,
 				})
 			} else if isFrozen {
-				// This is a frozen obligation
 				balanceText := gatewayBalance.Negate().Value()
 				frozenBalances[peerAddr] = append(frozenBalances[peerAddr], CurrencyBalance{
 					Currency: currency,
 					Value:    balanceText,
 				})
 			} else {
-				// Normal obligation - gateway owes this amount
-				// Balance is negative (we owe them), so negate for the amount we owe
+				// Normal obligation: negate the negative balance to the amount owed.
 				owedAmount := gatewayBalance.Negate()
 				if existing, ok := obligations[currency]; ok {
 					sum, _ := existing.Add(owedAmount)
@@ -1428,7 +1350,6 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			return nil, walkErr
 		}
 
-		// Convert obligations map to string values
 		obligationsStr := make(map[string]string)
 		for curr, amt := range obligations {
 			obligationsStr[curr] = amt.Value()
@@ -1499,7 +1420,6 @@ var errNoRippleLimitReached = errors.New("noripple_check limit reached")
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
 func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*NoRippleCheckResult, error) {
-		// Check if account exists and get its flags and sequence
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
 		if err != nil {
@@ -1509,7 +1429,6 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		// Read the account data to get flags and sequence
 		data, err := targetLedger.Read(accountKey)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read account: %w", err)
@@ -1520,7 +1439,6 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			return nil, fmt.Errorf("failed to parse account data: %w", err)
 		}
 
-		// Validate role
 		roleGateway := role == "gateway"
 		if !roleGateway && role != "user" {
 			return nil, errors.New("invalid role: must be 'gateway' or 'user'")
@@ -1531,18 +1449,15 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			limit = 300
 		}
 
-		// Check DefaultRipple flag
 		bDefaultRipple := (accountRoot.Flags & state.LsfDefaultRipple) != 0
 
 		var problems []string
 		var suggestedTxs []SuggestedTransaction
 		seq := accountRoot.Sequence
 
-		// Get base fee for suggested transactions
 		baseFee, _, _ := s.GetCurrentFees()
 		feeStr := strconv.FormatUint(baseFee, 10)
 
-		// Check DefaultRipple setting based on role
 		if bDefaultRipple && !roleGateway {
 			problems = append(problems, "You appear to have set your default ripple flag even though you are not a gateway. This is not recommended unless you are experimenting")
 		} else if roleGateway && !bDefaultRipple {
@@ -1559,8 +1474,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			}
 		}
 
-		// Walk the account's owner directory and check NoRipple settings, capping the
-		// number of reported problems at limit.
+		// Walk owner directory checking NoRipple, capping reported problems at limit.
 		problemCount := uint32(0)
 		dirKey := keylet.OwnerDir(accountID)
 		walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
@@ -1584,8 +1498,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 				return nil
 			}
 
-			// Membership in the owner directory already implies ownership; the
-			// low/high check selects our side and defensively skips foreign lines.
+			// Owner-directory membership implies ownership; low/high selects our side.
 			lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 			highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
@@ -1602,7 +1515,6 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 				return nil // Not our account
 			}
 
-			// Check NoRipple flag for this account's side
 			var bNoRipple bool
 			if isLowAccount {
 				bNoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
@@ -1612,7 +1524,6 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 
 			currency := rs.Balance.Currency
 
-			// Determine if there's a problem
 			var problem string
 			needFix := false
 			if bNoRipple && roleGateway {
@@ -1628,7 +1539,6 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 				problemCount++
 
 				if transactions {
-					// Get our limit for this trust line
 					var limitValue string
 					if isLowAccount {
 						limitValue = rs.LowLimit.Value()
@@ -1636,7 +1546,6 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 						limitValue = rs.HighLimit.Value()
 					}
 
-					// Build TrustSet transaction
 					var flags uint32
 					if bNoRipple {
 						flags = tfClearNoRipple
@@ -1719,11 +1628,10 @@ type DepositAuthorizedResult struct {
 	Validated          bool
 }
 
-// GetDepositAuthorized checks if a source account is authorized to deposit to a destination account.
-// When credentials are provided, they are validated against the ledger (existence,
-// acceptance, expiry, ownership, duplicates) before checking credential-based
-// deposit preauthorization.
-// Reference: rippled DepositAuthorized.cpp doDepositAuthorized()
+// GetDepositAuthorized reports whether sourceAccount may deposit to
+// destinationAccount. Supplied credentials are validated on-ledger (existence,
+// acceptance, expiry, ownership, duplicates) before the credential-based
+// preauth check.
 func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string, destinationAccount string, ledgerIndex string, credentials []string) (*DepositAuthorizedResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -1731,13 +1639,11 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Determine which ledger to use
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
 
-	// Decode the source account address
 	_, srcIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(sourceAccount)
 	if err != nil {
 		return nil, fmt.Errorf("invalid source_account address: %w", err)
@@ -1745,7 +1651,6 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	var srcID [20]byte
 	copy(srcID[:], srcIDBytes)
 
-	// Decode the destination account address
 	_, dstIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(destinationAccount)
 	if err != nil {
 		return nil, fmt.Errorf("invalid destination_account address: %w", err)
@@ -1753,7 +1658,6 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	var dstID [20]byte
 	copy(dstID[:], dstIDBytes)
 
-	// Check if source account exists in the ledger
 	srcKey := keylet.Account(srcID)
 	exists, err := targetLedger.Exists(srcKey)
 	if err != nil {
@@ -1763,7 +1667,6 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, svcerr.ErrSrcAccountNotFound
 	}
 
-	// Check if destination account exists and get its flags
 	dstKey := keylet.Account(dstID)
 	exists, err = targetLedger.Exists(dstKey)
 	if err != nil {
@@ -1773,7 +1676,6 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, svcerr.ErrDstAccountNotFound
 	}
 
-	// Read the destination account data to get flags
 	dstData, err := targetLedger.Read(dstKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read destination account: %w", err)
@@ -1784,14 +1686,12 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, fmt.Errorf("failed to parse destination account data: %w", err)
 	}
 
-	// Check if DepositAuth flag is set on destination
 	depositAuthRequired := (dstAccountRoot.Flags & state.LsfDepositAuth) != 0
 
-	// If source == destination, deposit is always authorized (self-deposit)
+	// Self-deposit is always authorized.
 	sameAccount := srcID == dstID
 
 	// Validate credentials on-ledger if provided.
-	// Reference: rippled DepositAuthorized.cpp credential validation loop
 	var sortedCredPairs []keylet.CredentialPair
 	credentialsPresent := len(credentials) > 0
 	if credentialsPresent {
@@ -1801,10 +1701,9 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		}
 	}
 
-	// Determine authorization status
 	depositAuthorized := true
 	if depositAuthRequired && !sameAccount {
-		// First check direct deposit preauth (account-to-account)
+		// Direct account-to-account preauth.
 		depositPreauthKey := keylet.DepositPreauth(dstID, srcID)
 		exists, err := targetLedger.Exists(depositPreauthKey)
 		if err != nil {
@@ -1812,8 +1711,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		}
 		depositAuthorized = exists
 
-		// If not directly authorized but credentials are present,
-		// check credential-based deposit preauthorization.
+		// Fall back to credential-based preauth.
 		if !depositAuthorized && credentialsPresent {
 			credPreauthKey := keylet.DepositPreauthCredentials(dstID, sortedCredPairs)
 			exists, err := targetLedger.Exists(credPreauthKey)
@@ -1834,13 +1732,10 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 	}, nil
 }
 
-// validateCredentialsOnLedger validates each credential ID against the ledger.
-// It checks: existence, acceptance, expiry, ownership (subject == srcAcct), and
-// detects duplicates (same issuer+credentialType pair).
-// Returns the sorted credential pairs for use in credential-based preauth lookup.
-// Errors wrap svcerr.ErrBadCredentials so the handler can map them to
-// rpcBAD_CREDENTIALS via errors.Is, with the wrapper's message carrying the detail.
-// Reference: rippled DepositAuthorized.cpp credential validation loop
+// validateCredentialsOnLedger checks each credential ID against the ledger
+// (existence, acceptance, expiry, ownership subject==srcAcct, duplicate
+// issuer+type) and returns the sorted pairs for the preauth lookup. Errors wrap
+// svcerr.ErrBadCredentials so the handler maps them via errors.Is.
 func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []string, srcAcct [20]byte) ([]keylet.CredentialPair, error) {
 	type credKey struct {
 		issuer         [20]byte
@@ -1850,8 +1745,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 	seen := make(map[credKey]struct{})
 	pairs := make([]keylet.CredentialPair, 0, len(credentials))
 
-	// Parent close time in Ripple-epoch seconds for the expiry check;
-	// credential Expiration is stored in Ripple-epoch seconds.
+	// Parent close time in Ripple-epoch seconds for the expiry check.
 	var parentCloseTimeSecs uint32
 	if t := targetLedger.ParentCloseTime(); !t.IsZero() {
 		switch secs := toRippleTime(t); {
@@ -1863,7 +1757,6 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 	}
 
 	for _, credHex := range credentials {
-		// Decode the credential hash
 		credHashBytes, err := hex.DecodeString(credHex)
 		if err != nil {
 			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
@@ -1871,39 +1764,33 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		var credHash [32]byte
 		copy(credHash[:], credHashBytes)
 
-		// Look up credential on ledger by its hash
 		credKeylet := keylet.CredentialByID(credHash)
 		credData, err := targetLedger.Read(credKeylet)
 		if err != nil || credData == nil {
 			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
 
-		// Parse the credential entry
 		credEntry, err := credential.ParseCredentialEntry(credData)
 		if err != nil {
 			return nil, fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials)
 		}
 
-		// Check accepted flag
-		// Reference: rippled DepositAuthorized.cpp: if (!(sleCred->getFlags() & lsfAccepted))
+		// Check accepted flag.
 		if !credEntry.IsAccepted() {
 			return nil, fmt.Errorf("%w: credentials aren't accepted", svcerr.ErrBadCredentials)
 		}
 
-		// Check expiry
-		// Reference: rippled DepositAuthorized.cpp: if (credentials::checkExpired(sleCred, ...))
+		// Check expiry.
 		if credential.CheckCredentialExpired(credEntry, parentCloseTimeSecs) {
 			return nil, fmt.Errorf("%w: credentials are expired", svcerr.ErrBadCredentials)
 		}
 
-		// Check ownership: subject must match source account
-		// Reference: rippled DepositAuthorized.cpp: if ((*sleCred)[sfSubject] != srcAcct)
+		// Check ownership: subject must match source account.
 		if credEntry.Subject != srcAcct {
 			return nil, fmt.Errorf("%w: credentials doesn't belong to the root account", svcerr.ErrBadCredentials)
 		}
 
-		// Check for duplicates (same issuer + credentialType)
-		// Reference: rippled DepositAuthorized.cpp: sorted.emplace(issuer, credType)
+		// Check for duplicates (same issuer + credentialType).
 		key := credKey{
 			issuer:         credEntry.Issuer,
 			credentialType: string(credEntry.CredentialType),
@@ -1919,8 +1806,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 		})
 	}
 
-	// Sort pairs by (issuer, credentialType) for deterministic keylet computation.
-	// Reference: rippled uses std::set which sorts by (issuer, credType)
+	// Sort by (issuer, credentialType) for a deterministic keylet.
 	sort.Slice(pairs, func(i, j int) bool {
 		cmp := bytes.Compare(pairs[i].Issuer[:], pairs[j].Issuer[:])
 		if cmp != 0 {

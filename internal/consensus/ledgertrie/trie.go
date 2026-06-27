@@ -1,6 +1,5 @@
-// Package ledgertrie ports rippled's LedgerTrie<Ledger>
-// (src/xrpld/consensus/LedgerTrie.h): branchSupport-based preferred-
-// ledger selection over a compressed ancestry trie.
+// Package ledgertrie implements branchSupport-based preferred-ledger selection
+// over a compressed ancestry trie, porting rippled's LedgerTrie (LedgerTrie.h).
 package ledgertrie
 
 import (
@@ -20,10 +19,9 @@ type Ledger interface {
 	Ancestor(s uint32) consensus.LedgerID
 }
 
-// Mismatch returns the first sequence at which a and b diverge.
-// Returns 1 when the overlap doesn't exist or mismatches at its floor
-// (rippled's "assume post-genesis divergence" fallback,
-// RCLValidations.cpp:99-114).
+// Mismatch returns the first sequence at which a and b diverge, or 1 when the
+// overlap is empty or mismatches at its floor (rippled's post-genesis-divergence
+// fallback, RCLValidations.cpp:99).
 func Mismatch(a, b Ledger) uint32 {
 	upper := min(b.Seq(), a.Seq())
 	lower := a.MinSeq()
@@ -66,7 +64,7 @@ type Trie struct {
 	root    *node
 	genesis Ledger
 
-	// seqKeys is the sorted-key view over seqSupport (std::map analogue).
+	// seqKeys is the sorted-key view over seqSupport.
 	seqSupport map[uint32]uint32
 	seqKeys    []uint32
 }
@@ -125,10 +123,8 @@ func findByIDWalk(curr *node, id consensus.LedgerID) *node {
 	return nil
 }
 
-// seqSupportAdd/seqSupportSub keep seqKeys sorted with O(n) insert/delete
-// shifts. seqKeys holds only the few distinct ledger sequences with active
-// branch support, so this is kept intentionally simple; revisit if that set
-// ever grows large.
+// seqSupportAdd/seqSupportSub keep seqKeys sorted with O(n) shifts. The set of
+// distinct sequences with active branch support is small, so this stays simple.
 func (t *Trie) seqSupportAdd(seq uint32, delta uint32) {
 	if _, ok := t.seqSupport[seq]; !ok {
 		idx, _ := slices.BinarySearch(t.seqKeys, seq)

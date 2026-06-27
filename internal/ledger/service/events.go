@@ -10,19 +10,13 @@ import (
 
 // LedgerAcceptedEvent contains information about an accepted ledger and its transactions
 type LedgerAcceptedEvent struct {
-	// LedgerInfo contains the accepted ledger information
-	LedgerInfo *LedgerInfo
-
-	// TransactionResults contains the results of transactions in this ledger
+	LedgerInfo         *LedgerInfo
 	TransactionResults []TransactionResultEvent
 }
 
 // TransactionResultEvent contains transaction details for event broadcasting
 type TransactionResultEvent struct {
-	// TxHash is the transaction hash
 	TxHash [32]byte
-
-	// TxData is the raw transaction data
 	TxData []byte
 
 	// MetaData is the transaction metadata (nil if not available)
@@ -31,17 +25,11 @@ type TransactionResultEvent struct {
 	// Validated indicates if the transaction is in a validated ledger
 	Validated bool
 
-	// LedgerIndex is the ledger sequence containing this transaction
-	LedgerIndex uint32
-
-	// LedgerHash is the hash of the ledger containing this transaction
-	LedgerHash [32]byte
-
-	// AffectedAccounts lists the accounts affected by this transaction
+	LedgerIndex      uint32
+	LedgerHash       [32]byte
 	AffectedAccounts []string
 }
 
-// EventCallback is a function that receives ledger events
 type EventCallback func(event *LedgerAcceptedEvent)
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
@@ -49,11 +37,9 @@ type EventCallback func(event *LedgerAcceptedEvent)
 type SubmittedTxEvent struct {
 	RawBlob []byte
 	TxHash  [32]byte
-	// AffectedAccounts is the full mentioned-accounts set so
-	// accounts_proposed fans out to every party referenced by the tx
-	// (source, destination, regular key, signers, ...). Mirrors
-	// rippled STTx::getMentionedAccounts → pubProposedAccountTransaction
-	// at NetworkOPs.cpp:3550-3611.
+	// AffectedAccounts is the full mentioned-accounts set so accounts_proposed
+	// fans out to every party referenced by the tx (source, destination,
+	// regular key, signers, ...).
 	AffectedAccounts []string
 	CurrentLedger    uint32
 	Result           Result
@@ -70,16 +56,14 @@ type Result struct {
 
 type SubmittedTxCallback func(SubmittedTxEvent)
 
-// SetEventCallback sets the callback function for ledger events
 func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventCallback = callback
 }
 
-// SetSubmittedTxCallback registers a sink fired from SubmitTransaction
-// after every apply attempt. Pass nil to unwire. Mirrors rippled's
-// pubProposedTransaction subscription wiring (NetworkOPs.cpp:2316-2370).
+// SetSubmittedTxCallback registers a sink fired from SubmitTransaction after
+// every apply attempt. Pass nil to unwire.
 func (s *Service) SetSubmittedTxCallback(fn SubmittedTxCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,8 +71,7 @@ func (s *Service) SetSubmittedTxCallback(fn SubmittedTxCallback) {
 }
 
 // SetTxRelay registers the per-tx broadcast handler invoked by
-// OpenLedger.Accept's relay callback (rippled OpenLedger.cpp:120-150).
-// Pass nil to unwire.
+// OpenLedger.Accept's relay callback. Pass nil to unwire.
 func (s *Service) SetTxRelay(fn func(blob []byte)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -104,8 +87,7 @@ func (s *Service) SetOnPendingValidationStashed(handler func(seq uint32, hash [3
 	s.onPendingValidationStashed = handler
 }
 
-// SetEventHooks sets the event hooks for ledger events
-// This provides a more structured callback mechanism than SetEventCallback
+// SetEventHooks registers structured event hooks (richer than SetEventCallback).
 func (s *Service) SetEventHooks(hooks *EventHooks) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -119,17 +101,9 @@ func (s *Service) GetEventHooks() *EventHooks {
 	return s.hooks
 }
 
-// fireLedgerClosedHooksLocked fires hooks.OnLedgerClosed and
-// hooks.OnTransaction for a ledger that has transitioned to closed.
-// Each hook dispatch runs on its own goroutine so subscriber callbacks
-// cannot block the ledger service or deadlock against s.mu. Safe to
-// call with s.hooks == nil or individual hook fields nil.
-//
-// Caller must hold s.mu. Shared by the standalone close path and the
-// peer-adopt path so WebSocket `ledger` and `transactions` streams see
-// every closed ledger regardless of whether it was closed locally or
-// adopted from a peer — a silent divergence from rippled before F3
-// where peer-adopted ledgers never reached stream subscribers.
+// fireLedgerClosedHooksLocked fires hooks.OnLedgerClosed and OnTransaction for a
+// closed ledger. Each hook runs on its own goroutine so subscriber callbacks
+// can't deadlock against s.mu; safe with nil hooks. Caller must hold s.mu.
 func (s *Service) fireLedgerClosedHooksLocked(
 	info *LedgerInfo,
 	txResults []TransactionResultEvent,
@@ -169,13 +143,9 @@ func (s *Service) fireLedgerClosedHooksLocked(
 	}
 }
 
-// collectTransactionResults gathers transaction data from the closed ledger
-// and records each transaction's position within the ledger. It also
-// populates s.txIndex (hash -> ledger seq) so tx-hash RPC lookups
-// resolve to this ledger. For the local-close path s.txIndex is also
-// written at Apply time; repeating the write here is idempotent and is
-// the sole index population site for the peer-adopt path, which has no
-// Apply step.
+// collectTransactionResults gathers per-tx results from the closed ledger and
+// populates s.txIndex/s.txPositionIndex (hash -> seq, position). Idempotent with
+// the Apply-time write; the sole index site for the Apply-less peer-adopt path.
 func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
 	var results []TransactionResultEvent
 
@@ -201,10 +171,8 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 	return results
 }
 
-// extractAffectedAccounts extracts account addresses affected by a transaction.
-// Parses the binary transaction blob and extracts Account (sender),
-// Destination (for payments, escrows, checks, etc.), and any other
-// account-typed fields present in the transaction.
+// extractAffectedAccounts parses the tx blob and returns the account-typed
+// fields it mentions (Account, Destination, ...).
 func extractAffectedAccounts(txData []byte) []string {
 	if len(txData) == 0 {
 		return nil
@@ -222,7 +190,6 @@ func extractAffectedAccounts(txData []byte) []string {
 		}
 	}
 
-	// Primary account fields present across transaction types
 	add("Account")
 	add("Destination")
 	add("Authorize")

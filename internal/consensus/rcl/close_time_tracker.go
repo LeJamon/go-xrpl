@@ -10,8 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// avalancheState tracks the close time voting threshold escalation.
-// Matches rippled's avalanche cutoffs in ConsensusParms.h.
+// avalancheState is the close-time vote threshold escalation level.
 type avalancheState int
 
 const (
@@ -21,52 +20,29 @@ const (
 	avalancheStuck                       // 95% threshold
 )
 
-// closeTimeTracker owns the close-time consensus state of a round: the
-// avalanche threshold level the close-time vote has escalated to, and
-// whether a close-time consensus has been reached. It hosts the close-time
-// vote tallying helpers used by the Engine's updateCloseTimePosition /
-// determineCloseTime.
-//
-// Like ProposalTracker it is NOT independently synchronized: every method
-// is called with the Engine's e.mu held, the same lock that protected the
-// two state fields when they were inline on the Engine.
+// closeTimeTracker owns a round's close-time consensus state (avalanche
+// threshold level, whether consensus is reached). Not independently
+// synchronized: every method runs under the Engine's e.mu.
 type closeTimeTracker struct {
-	// haveConsensus reports whether a close-time consensus has been reached
-	// this round (rippled's haveCloseTimeConsensus_).
+	// close-time consensus reached this round
 	haveConsensus bool
 
-	// avalancheState is the close-time vote threshold level, escalated by
-	// neededWeight as the round's converge percent rises.
+	// threshold level, escalated by neededWeight as converge percent rises
 	avalancheState avalancheState
 }
 
-// newCloseTimeTracker creates a close-time tracker in its round-start
-// state (no consensus, threshold at the initial avalanche level).
 func newCloseTimeTracker() *closeTimeTracker {
 	return &closeTimeTracker{}
 }
 
-// reset returns the tracker to its round-start state.
 func (c *closeTimeTracker) reset() {
 	c.haveConsensus = false
 	c.avalancheState = avalancheInit
 }
 
-// neededWeight returns the minimum vote percentage required for close-time
-// consensus at the current avalanche level, advancing that level when the
-// converge percent crosses the next cutoff. Mirrors rippled's call at
-// Consensus.h:1578-1581:
-//
-//	auto const [neededWeight, newState] = getNeededWeight(
-//	    parms, closeTimeAvalancheState_, convergePercent_, 0, 0);
-//	if (newState)
-//	    closeTimeAvalancheState_ = *newState;
-//
-// Close-time avalanche advancement is purely percent-based — rippled
-// passes currentRounds=0 and minimumRounds=0 so the round-dwell check is
-// trivially satisfied — matching that here keeps a single canonical
-// NeededWeight implementation across per-tx disputes and close-time
-// threshold escalation.
+// neededWeight returns the vote percentage required for close-time consensus,
+// advancing the avalanche level when convergePercent crosses the next cutoff.
+// Round-dwell args are 0: close-time advancement is purely percent-based.
 func (c *closeTimeTracker) neededWeight(convergePercent int, parms consensus.ConsensusParms) int {
 	pct, newState := parms.NeededWeight(
 		consensus.AvalancheState(c.avalancheState),
@@ -80,7 +56,6 @@ func (c *closeTimeTracker) neededWeight(convergePercent int, parms consensus.Con
 	return pct
 }
 
-// stateName renders the current avalanche level for logging.
 func (c *closeTimeTracker) stateName() string {
 	switch c.avalancheState {
 	case avalancheInit:
@@ -95,8 +70,8 @@ func (c *closeTimeTracker) stateName() string {
 	return "unknown"
 }
 
-// summarizeCloseTimeVotes renders the vote distribution as "ct=count"
-// pairs (XRPL-epoch seconds), capped at 8 entries.
+// summarizeCloseTimeVotes renders the vote distribution as "ct=count" pairs
+// (XRPL-epoch seconds), capped at 8 entries.
 func summarizeCloseTimeVotes(votes map[time.Time]int) string {
 	if len(votes) == 0 {
 		return "(empty)"
@@ -123,8 +98,7 @@ func summarizeCloseTimeVotes(votes map[time.Time]int) string {
 	return b.String()
 }
 
-// participantsNeeded computes the minimum number of participants required
-// to meet a given percentage threshold. Matches rippled's participantsNeeded().
+// participantsNeeded rounds to the nearest participant count and never returns 0.
 func participantsNeeded(participants, percent int) int {
 	result := (participants*percent + percent/2) / 100
 	if result == 0 {
@@ -133,14 +107,11 @@ func participantsNeeded(participants, percent int) int {
 	return result
 }
 
-// mostVotedAscending returns the close time with the most votes, considering
-// only times whose count is >= minCount, and breaks ties toward the LARGEST
-// time. It iterates ascending so the result never depends on Go's randomized
-// map iteration: two nodes tallying the same votes must agree or they finalize
-// different ledger hashes (a fork). Mirrors rippled's std::map<NetClock,int>
-// "raise the bar" loop (Consensus.h:1605-1621). The bool reports whether any
-// time met minCount; callers must use it rather than best.IsZero(), since a
-// legitimate winner may be the zero time (unset close times round to zero).
+// mostVotedAscending returns the most-voted close time among those with count
+// >= minCount, breaking ties toward the LARGEST time. Ascending iteration makes
+// the result independent of Go's randomized map order — two nodes tallying the
+// same votes must agree or they fork. The bool reports whether any time met
+// minCount; callers must use it, since the zero time is a legitimate winner.
 func mostVotedAscending(votes map[time.Time]int, minCount int) (time.Time, int, bool) {
 	sorted := make([]time.Time, 0, len(votes))
 	for t := range votes {

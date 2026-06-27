@@ -24,11 +24,9 @@ const (
 	// InitialXRP is the total XRP in existence (100 billion XRP in drops)
 	InitialXRP = 100_000_000_000 * 1_000_000
 
-	// GenesisTimeResolution is the close time resolution for the genesis ledger
-	// (10s, the smallest valid resolution).
+	// GenesisTimeResolution is the genesis close-time resolution (10s, smallest valid).
 	GenesisTimeResolution = 10
 
-	// GenesisLedgerSequence is the sequence number of the genesis ledger
 	GenesisLedgerSequence = 1
 
 	// MasterPassphrase is the passphrase used to derive the genesis account
@@ -45,9 +43,9 @@ type DefaultFees struct {
 // StandardFees returns the standard XRPL fee configuration
 func StandardFees() DefaultFees {
 	return DefaultFees{
-		BaseFee:          drops.NewXRPAmount(10), // 10 drops
-		ReserveBase:      drops.DropsPerXRP * 10, // 10 XRP
-		ReserveIncrement: drops.DropsPerXRP * 2,  // 2 XRP
+		BaseFee:          drops.NewXRPAmount(10),
+		ReserveBase:      drops.DropsPerXRP * 10,
+		ReserveIncrement: drops.DropsPerXRP * 2,
 	}
 }
 
@@ -56,15 +54,13 @@ type Config struct {
 	// TotalXRP is the total XRP supply in drops (default: 100 billion XRP)
 	TotalXRP uint64
 
-	// MasterPassphrase is the passphrase to derive the genesis account from
-	// If empty, uses "masterpassphrase" (produces rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh)
+	// MasterPassphrase derives the genesis account; empty uses "masterpassphrase"
+	// (produces rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh).
 	MasterPassphrase string
 
-	// CloseTimeResolution is the close time resolution in seconds (default: 30)
-	// Valid values: 10, 20, 30, 60, 90, 120
+	// CloseTimeResolution in seconds (default 30; valid: 10, 20, 30, 60, 90, 120).
 	CloseTimeResolution uint32
 
-	// Fees to use in the genesis ledger
 	Fees DefaultFees
 
 	// Amendments to enable at genesis (empty for standard genesis)
@@ -83,8 +79,7 @@ type InitialAccount struct {
 	Flags    uint32
 }
 
-// DefaultGenesisAmendments returns the amendment IDs to include in the genesis
-// ledger: all non-vetoed amendments, matching rippled's genesis behaviour.
+// DefaultGenesisAmendments returns all non-vetoed amendment IDs for the genesis ledger.
 func DefaultGenesisAmendments() [][32]byte {
 	features := amendment.DefaultYesFeatures()
 	ids := make([][32]byte, len(features))
@@ -98,9 +93,8 @@ func DefaultGenesisAmendments() [][32]byte {
 	return ids
 }
 
-// DefaultConfig returns the default genesis configuration. The fee format
-// (modern vs legacy) is derived from whether the XRPFees amendment is in the
-// Amendments list.
+// DefaultConfig returns the default genesis configuration. Fee format (modern vs
+// legacy) is derived from whether XRPFees is in the Amendments list.
 func DefaultConfig() Config {
 	return Config{
 		TotalXRP:            InitialXRP,
@@ -112,8 +106,7 @@ func DefaultConfig() Config {
 	}
 }
 
-// hasXRPFeesAmendment reports whether the XRPFees amendment is in the list,
-// which selects modern (Amount) vs legacy (UInt32/UInt64) fee fields.
+// hasXRPFeesAmendment reports whether XRPFees is present (selects modern vs legacy fee fields).
 func hasXRPFeesAmendment(amendments [][32]byte) bool {
 	return slices.Contains(amendments, amendment.FeatureXRPFees)
 }
@@ -274,7 +267,6 @@ func Create(cfg Config) (*GenesisLedger, error) {
 	}, nil
 }
 
-// createGenesisAccountWithBalance creates the genesis account entry with a specific balance.
 func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte, balance uint64) error {
 	account := &accountRoot{
 		Account:    accountID,
@@ -292,7 +284,6 @@ func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte
 	return stateMap.Put(k.Key, data)
 }
 
-// createInitialAccount creates an additional account at genesis.
 func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance uint64, sequence uint32, flags uint32) error {
 	if sequence == 0 {
 		sequence = 1
@@ -315,9 +306,8 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 	return stateMap.Put(k.Key, data)
 }
 
-// createFeeSettings creates the fee settings entry. The format is derived from
-// the amendments list: modern (Amount) fields if XRPFees is present, legacy
-// (UInt32/UInt64) otherwise.
+// createFeeSettings writes the fee settings entry (modern Amount fields if
+// XRPFees is present, else legacy UInt32/UInt64).
 func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
 	var feeSettings *feeSettings
 
@@ -345,7 +335,6 @@ func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
 	return stateMap.Put(k.Key, data)
 }
 
-// createAmendments creates the amendments entry with the specified amendments.
 func createAmendments(stateMap *shamap.SHAMap, amendments [][32]byte) error {
 	data, err := serializeAmendments(amendments)
 	if err != nil {
@@ -356,28 +345,24 @@ func createAmendments(stateMap *shamap.SHAMap, amendments [][32]byte) error {
 	return stateMap.Put(k.Key, data)
 }
 
-// CalculateLedgerHash computes the hash of a ledger header. It delegates to the
-// canonical header.CalculateHash so the genesis, ledger, and inbound-replay
-// paths all hash byte-identically.
+// CalculateLedgerHash hashes a ledger header via the canonical header.CalculateHash
+// so genesis, ledger, and inbound-replay paths hash byte-identically.
 func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
 	return header.CalculateHash(h)
 }
 
-// serializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
 func serializeAccountRoot(a *accountRoot) ([]byte, error) {
 	address, err := addresscodec.EncodeAccountIDToClassicAddress(a.Account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
 	}
 
-	// All soeREQUIRED AccountRoot fields must be present (rippled auto-initialises
-	// them): LedgerEntryType, Flags, Account, Sequence, Balance, OwnerCount,
-	// PreviousTxnID, PreviousTxnLgrSeq.
+	// All soeREQUIRED AccountRoot fields must be present (rippled auto-initialises them).
 	jsonObj := map[string]any{
 		"LedgerEntryType":   "AccountRoot",
 		"Flags":             a.Flags,
 		"Account":           address,
-		"Balance":           fmt.Sprintf("%d", a.Balance), // XRP balance as drops string
+		"Balance":           fmt.Sprintf("%d", a.Balance),
 		"Sequence":          a.Sequence,
 		"OwnerCount":        a.OwnerCount,
 		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
@@ -392,7 +377,6 @@ func serializeAccountRoot(a *accountRoot) ([]byte, error) {
 	return hex.DecodeString(hexStr)
 }
 
-// serializeFeeSettings serializes a FeeSettings entry to bytes using the XRPL binary codec.
 func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 	// Rippled auto-initialises Flags=0 as a required field.
 	jsonObj := map[string]any{
@@ -401,13 +385,11 @@ func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 	}
 
 	if f.IsUsingModernFees() {
-		// Modern format (XRPFees amendment): Amount fields.
 		jsonObj["BaseFeeDrops"] = fmt.Sprintf("%d", f.BaseFeeDrops)
 		jsonObj["ReserveBaseDrops"] = fmt.Sprintf("%d", f.ReserveBaseDrops)
 		jsonObj["ReserveIncrementDrops"] = fmt.Sprintf("%d", f.ReserveIncrementDrops)
 	} else {
-		// Legacy format: UInt64/UInt32 fields. The UInt64 BaseFee must be a hex
-		// string without leading zeros.
+		// Legacy format. BaseFee is a UInt64 → hex string without leading zeros.
 		if f.BaseFee != nil {
 			jsonObj["BaseFee"] = fmt.Sprintf("%x", *f.BaseFee)
 		}
@@ -430,7 +412,6 @@ func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 	return hex.DecodeString(hexStr)
 }
 
-// serializeAmendments serializes an amendments list to bytes using the XRPL binary codec.
 func serializeAmendments(amendments [][32]byte) ([]byte, error) {
 	// Amendment hashes become hex strings for the Vector256 field.
 	amendmentHexes := make([]string, len(amendments))
