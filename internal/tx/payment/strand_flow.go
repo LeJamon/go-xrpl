@@ -187,17 +187,19 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h line 130: size_t limitingStep = strand.size()
 	limitingStep := s
 	sb := NewChildSandbox(baseView)
-	// afView: the "all funds" view that tells a FOUND removal (an offer already
-	// unfunded/tiny before the flow ran) from a BECAME removal (one this flow's
-	// crossing drained). The caller threads afBaseView — a child of the pristine
-	// pre-flow view that the per-pass applies never touch — so the found-vs-became
-	// test stays anchored to pre-flow funds across a multi-pass crossing. When no
-	// such baseline is supplied (unit tests, single-pass callers), afView falls
-	// back to baseView, which the strand never modifies.
-	afView := baseView
-	if afBaseView != nil {
-		afView = afBaseView
-	}
+	// afView ("all funds" view) is a fresh child of the RUNNING sandbox, exactly
+	// like rippled's afView(&baseView) (StrandFlow.h:135), where baseView is the
+	// running multi-strand sandbox. It therefore reflects every prior committed
+	// iteration (best-strand applies AND the per-iteration offerDeletes), so an
+	// offer whose owner a PRIOR iteration drained reads unfunded here too. The
+	// found-vs-became test then classifies it FOUND-unfunded and promotes it to a
+	// perm removal that the multi-strand loop offerDeletes from the running view —
+	// matching rippled. Anchoring afView to a pristine pre-flow baseline instead
+	// kept such an offer classified BECAME (a discardable working-sandbox delete)
+	// and left it in the book across a multi-iteration crossing (the 99243845
+	// beyond-limit drained-maker offer that #1118 regressed).
+	_ = afBaseView
+	afView := NewChildSandbox(baseView)
 	var limitStepOut EitherAmount
 
 	// === REVERSE PASS ===
@@ -248,8 +250,11 @@ func ExecuteStrand(
 		} else if !step.EqualOut(actualOut, stepOut) {
 			// Limiting step found — actualOut < requested stepOut
 			// Reset BOTH sandboxes and re-execute ONLY this step
-			// Reference: rippled StrandFlow.h lines 180-217
+			// Reference: rippled StrandFlow.h lines 180-217. rippled resets BOTH sb
+			// (184) AND afView (185) on this branch (unlike the maxIn branch, which
+			// resets only sb at 152), so afView is re-rooted on the running sandbox.
 			sb.Reset()
+			afView.Reset()
 			limitingStep = i
 
 			// Re-execute with the limited output
