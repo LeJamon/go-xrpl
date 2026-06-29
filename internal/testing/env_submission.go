@@ -193,23 +193,23 @@ func (e *TestEnv) closeWithReplay() {
 	}
 	e.clock.Advance(resolution)
 
-	// Collect ALL transactions to replay in submission order:
-	// setup txns first (fund, trust, reimbursement), then user txns (fixture),
-	// then held transactions from previous ledgers.
-	// Submission order preserves dependencies (e.g., TrustSet before Payment).
+	// Setup txns (fund, trust, reimbursement, the DefaultRipple AccountSet) are
+	// scaffolding the runner synthesizes and master-signs; their go-xrpl-specific
+	// hashes cannot reproduce rippled's canonical salt, so reordering them
+	// canonically only risks separating a flag-setting AccountSet from the
+	// TrustSet that depends on it (an issuer's DefaultRipple must precede a
+	// holder's TrustSet, or the new line keeps the issuer's NoRipple and blocks
+	// rippling). Keep setup in submission order — the natural dependency order —
+	// and canonically order only the fixture's user txns, whose blob hashes do
+	// match rippled. Setup hashes are still folded into the salt so the user
+	// order is identical to canonically ordering the combined set.
 	//
-	// Note: rippled applies all txns in canonical (SHAMap-salted) order via
-	// buildLedger(). We use submission order because go-xrpl's setup txns have
-	// different hashes than rippled's, making the canonical salt impossible to
-	// match. Submission order produces the correct closed-ledger state for
-	// most cases because the retry mechanism handles ordering-dependent failures.
-	//
-	// heldHashes marks transactions carried over from a previous ledger as
-	// held. rippled retries held transactions against the OPEN ledger
-	// (LedgerMaster::applyHeldTransactions), so their fee-adequacy is judged
-	// with view.open()==true: a payer that cannot cover the fee yields the
-	// retryable terINSUF_FEE_B (no fee charged) and stays held, never the
-	// closed-ledger tecINSUFF_FEE that would claim its remaining balance.
+	// heldHashes marks transactions carried over from a previous ledger as held.
+	// rippled retries held transactions against the OPEN ledger
+	// (LedgerMaster::applyHeldTransactions), so their fee-adequacy is judged with
+	// view.open()==true: a payer that cannot cover the fee yields the retryable
+	// terINSUF_FEE_B (no fee charged) and stays held, never the closed-ledger
+	// tecINSUFF_FEE that would claim its remaining balance.
 	heldHashes := make(map[[32]byte]bool)
 	for _, held := range e.heldTxns {
 		for _, txn := range held {
@@ -218,32 +218,34 @@ func (e *TestEnv) closeWithReplay() {
 		}
 	}
 
-	// Collect the transactions to replay, de-duplicating by hash: a retryable
-	// txn is tracked in both openLedgerUserTxns and heldTxns, and the runner's
-	// queue retries re-submit the same object across ledgers. Applying the same
-	// txn twice in one ledger is never valid (the second hits tefPAST_SEQ).
+	// Collect setup and user txns, de-duplicating by hash: a retryable txn is
+	// tracked in both openLedgerUserTxns and heldTxns, and the runner's queue
+	// retries re-submit the same object across ledgers. Applying the same txn
+	// twice in one ledger is never valid (the second hits tefPAST_SEQ).
 	seen := make(map[[32]byte]bool)
-	var allTxns []tx.Transaction
-	addAll := func(list []tx.Transaction) {
+	dedupInto := func(dst []tx.Transaction, list []tx.Transaction) []tx.Transaction {
 		for _, txn := range list {
 			h, _ := tx.ComputeTransactionHash(txn)
 			if seen[h] {
 				continue
 			}
 			seen[h] = true
-			allTxns = append(allTxns, txn)
+			dst = append(dst, txn)
 		}
+		return dst
 	}
-	addAll(e.openLedgerSetupTxns)
-	addAll(e.openLedgerUserTxns)
+	setupTxns := dedupInto(nil, e.openLedgerSetupTxns)
+	var userTxns []tx.Transaction
+	userTxns = dedupInto(userTxns, e.openLedgerUserTxns)
 	for _, held := range e.heldTxns {
-		addAll(held)
+		userTxns = dedupInto(userTxns, held)
 	}
 
-	// Sort all transactions using SHAMap-salted canonical ordering.
-	// The salt is the SHAMap root hash of all transaction hashes,
-	// matching rippled's CanonicalTXSet (RCLConsensus.cpp onClose).
-	sortCanonicalSalted(allTxns)
+	sortCanonicalSalted(userTxns, setupTxns)
+
+	allTxns := make([]tx.Transaction, 0, len(setupTxns)+len(userTxns))
+	allTxns = append(allTxns, setupTxns...)
+	allTxns = append(allTxns, userTxns...)
 
 	// Clear held transactions -- they will be re-held if they still fail
 	e.heldTxns = nil
