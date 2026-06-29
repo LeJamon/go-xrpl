@@ -415,8 +415,8 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 	engine.mu.RLock()
 	postC := engine.disputeTracker.GetDispute(txC)
 	postD := engine.disputeTracker.GetDispute(txD)
-	_, stillInProposals := engine.proposals[bowingNode]
-	_, isDead := engine.deadNodes[bowingNode]
+	_, stillInProposals := engine.proposalTracker.proposals[bowingNode]
+	_, isDead := engine.proposalTracker.deadNodes[bowingNode]
 	engine.mu.RUnlock()
 
 	if stillInProposals {

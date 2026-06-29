@@ -1,20 +1,18 @@
 package ledger
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/internal/ledger/negativeunl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -39,7 +37,6 @@ const (
 	StateValidated
 )
 
-// String returns a string representation of the state
 func (s State) String() string {
 	switch s {
 	case StateOpen:
@@ -55,46 +52,36 @@ func (s State) String() string {
 
 // Reader provides read-only access to ledger state
 type Reader interface {
-	// Sequence returns the ledger sequence number
 	Sequence() uint32
 
 	// Hash returns the ledger hash (only valid for closed ledgers)
 	Hash() [32]byte
 
-	// ParentHash returns the parent ledger hash
 	ParentHash() [32]byte
 
-	// CloseTime returns the ledger close time
 	CloseTime() time.Time
 
 	// TotalDrops returns the total XRP in existence
 	TotalDrops() uint64
 
-	// State returns the current ledger state
 	State() State
 
-	// Read reads a ledger entry by its keylet
 	Read(k keylet.Keylet) ([]byte, error)
 
-	// Exists checks if a ledger entry exists
 	Exists(k keylet.Keylet) (bool, error)
 
-	// GetFees returns the current fee settings
 	GetFees() drops.Fees
 }
 
 // Writer provides write access to ledger state
 type Writer interface {
-	// Insert adds a new ledger entry
 	Insert(k keylet.Keylet, data []byte) error
 
-	// Update modifies an existing ledger entry
 	Update(k keylet.Keylet, data []byte) error
 
-	// Erase removes a ledger entry
 	Erase(k keylet.Keylet) error
 
-	// AdjustDropsDestroyed records XRP that has been destroyed (fees)
+	// AdjustDropsDestroyed records XRP destroyed as fees.
 	AdjustDropsDestroyed(drops drops.XRPAmount)
 }
 
@@ -102,17 +89,13 @@ type Writer interface {
 type Ledger struct {
 	mu sync.RWMutex
 
-	// Core data structures
-	stateMap *shamap.SHAMap // Account state tree
-	txMap    *shamap.SHAMap // Transaction tree
+	stateMap *shamap.SHAMap
+	txMap    *shamap.SHAMap
 
-	// Header information
 	header header.LedgerHeader
 
-	// Fee configuration
 	fees drops.Fees
 
-	// Current state
 	state State
 
 	// Drops destroyed in this ledger (transaction fees)
@@ -125,24 +108,16 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		return nil, errors.New("parent ledger cannot be nil")
 	}
 
-	// Snapshot the parent state map as mutable
 	stateMap, err := parent.stateMap.Snapshot(true)
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
 
-	// Create empty transaction map
 	txMap := shamap.New(shamap.TypeTransaction)
 
-	// Compute the child's close-time resolution dynamically. Rippled
-	// adjusts the bin width each close based on whether the prior
-	// round agreed (LedgerTiming.h:78-122, invoked from Ledger.cpp:291).
-	// The parent's CloseFlags already encode previousAgree via
-	// sLCF_NoConsensusTime (header.GetCloseAgree). Keeping the
-	// computation in the ledger constructor matches rippled exactly
-	// and lets every NewOpen callsite (consensus, service, replay,
-	// test env) pick up the dynamic binning without plumbing
-	// previousAgree through their signatures.
+	// Recompute close-time resolution per close from the parent's previousAgree
+	// (encoded in its CloseFlags) — matches rippled and avoids plumbing
+	// previousAgree through every NewOpen caller.
 	newLedgerSeq := parent.header.LedgerIndex + 1
 	newResolution := consensus.GetNextLedgerTimeResolution(
 		parent.header.CloseTimeResolution,
@@ -150,7 +125,6 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		newLedgerSeq,
 	)
 
-	// Create new header based on parent
 	newHeader := header.LedgerHeader{
 		LedgerIndex:         newLedgerSeq,
 		ParentHash:          parent.header.Hash,
@@ -204,8 +178,8 @@ func NewFromHeader(
 	}
 }
 
-// NewOpenWithHeader creates an open ledger with the exact header values provided.
-// This is useful for testing/replay scenarios where you want to control all header fields.
+// NewOpenWithHeader creates an open ledger with the exact header values provided
+// (testing/replay scenarios that control all header fields).
 func NewOpenWithHeader(
 	hdr header.LedgerHeader,
 	stateMap *shamap.SHAMap,
@@ -221,58 +195,50 @@ func NewOpenWithHeader(
 	}
 }
 
-// Sequence returns the ledger sequence number
 func (l *Ledger) Sequence() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.LedgerIndex
 }
 
-// Hash returns the ledger hash
 func (l *Ledger) Hash() [32]byte {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.Hash
 }
 
-// ParentHash returns the parent ledger hash
 func (l *Ledger) ParentHash() [32]byte {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.ParentHash
 }
 
-// CloseTime returns the ledger close time
 func (l *Ledger) CloseTime() time.Time {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.CloseTime
 }
 
-// ParentCloseTime returns the parent ledger's close time
 func (l *Ledger) ParentCloseTime() time.Time {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.ParentCloseTime
 }
 
-// CloseTimeResolution returns the ledger's close time resolution in seconds.
-// This value determines the granularity of close time rounding (typically 10s for genesis).
-// Reference: rippled LedgerTiming.h, Env.cpp:126
+// CloseTimeResolution returns the close-time resolution in seconds (granularity of
+// close-time rounding).
 func (l *Ledger) CloseTimeResolution() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.CloseTimeResolution
 }
 
-// TotalDrops returns the total XRP in existence
 func (l *Ledger) TotalDrops() uint64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.header.Drops
 }
 
-// State returns the current ledger state
 func (l *Ledger) State() State {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -286,46 +252,37 @@ func (l *Ledger) Header() header.LedgerHeader {
 	return l.header
 }
 
-// GetFees returns the current fee settings
 func (l *Ledger) GetFees() drops.Fees {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.fees
 }
 
-// IsOpen returns true if the ledger is open for modifications
 func (l *Ledger) IsOpen() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.state == StateOpen
 }
 
-// IsClosed returns true if the ledger is closed
+// IsClosed reports whether the ledger is closed (validated counts as closed).
 func (l *Ledger) IsClosed() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.state == StateClosed || l.state == StateValidated
 }
 
-// IsImmutable reports whether the ledger has been closed and its SHAMaps
-// frozen. Mirrors rippled's Ledger::isImmutable() (Ledger.h:278), which
-// gates ledger-replay/proof-path serving (see
-// LedgerReplayMsgHandler::processReplayDeltaRequest at
-// LedgerReplayMsgHandler.cpp:197). A closed ledger has its state and tx
-// SHAMaps marked immutable in Close(); IsImmutable is therefore equivalent
-// to IsClosed for this implementation.
+// IsImmutable reports whether the ledger is closed and its SHAMaps frozen.
+// Equivalent to IsClosed here: Close() marks both maps immutable.
 func (l *Ledger) IsImmutable() bool {
 	return l.IsClosed()
 }
 
-// IsValidated returns true if the ledger is validated
 func (l *Ledger) IsValidated() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.state == StateValidated
 }
 
-// Read reads a ledger entry by its keylet
 func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -341,24 +298,18 @@ func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
 	return item.Data(), nil
 }
 
-// SkipListHashes returns the decoded rolling 256-entry LedgerHashes skip-list
-// from this ledger's state map. Mirrors rippled's `ledger->read(keylet::skip())`
-// at NegativeUNLVote.cpp:179. Returns (nil, nil) when the entry is absent
-// (e.g. early ledgers before the skip-list has been populated).
+// SkipListHashes returns the decoded rolling 256-entry LedgerHashes skip-list,
+// or (nil, nil) when absent (early ledgers before it is populated).
 func (l *Ledger) SkipListHashes() ([][32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return readSkipListHashes(l.stateMap, keylet.LedgerHashes().Key)
+	return skiplist.ReadHashes(l.stateMap, keylet.LedgerHashes().Key)
 }
 
-// HashOfSeq returns the hash of ledger `seq` as recorded by this ledger,
-// mirroring rippled's hashOfSeq (View.cpp:959). It resolves this ledger's own
-// identity, its parent, any ancestor still inside the rolling 256-entry
-// LedgerHashes skip list, and 256-aligned ancestors enshrined in the historical
-// skip list. A non-256-aligned ancestor more than 256 behind is not directly
-// resolvable from a single ledger (rippled reaches it via a reference ledger
-// from getCandidateLedger); callers treat (zero,false) as "unresolvable from
-// this ledger".
+// HashOfSeq returns the hash of ledger seq as recorded by this ledger. It resolves
+// this ledger's identity, its parent, any ancestor inside the rolling 256-entry
+// skip list, and 256-aligned ancestors in the historical skip list. A non-256-aligned
+// ancestor more than 256 behind is unresolvable from one ledger → (zero, false).
 func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -376,7 +327,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	_, hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, _, err := skiplist.ReadLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -384,14 +335,13 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 		return hashes[uint32(len(hashes))-diff], true, nil
 	}
 
-	// Beyond the rolling window: only 256-aligned ancestors are enshrined in
-	// the historical skip list. Mirrors rippled hashOfSeq's deep branch
-	// (View.cpp:1005-1018): index back from the page's LastLedgerSequence in
+	// Beyond the rolling window only 256-aligned ancestors are enshrined in the
+	// historical skip list: index back from the page's LastLedgerSequence in
 	// 256-ledger strides.
 	if seq&0xff != 0 {
 		return [32]byte{}, false, nil
 	}
-	_, histHashes, lastSeq, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	_, histHashes, lastSeq, err := skiplist.ReadLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -403,7 +353,6 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	return [32]byte{}, false, nil
 }
 
-// Exists checks if a ledger entry exists
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -411,7 +360,6 @@ func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
 	return l.stateMap.Has(k.Key)
 }
 
-// Insert adds a new ledger entry
 func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -420,7 +368,6 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	// Check if entry already exists
 	exists, err := l.stateMap.Has(k.Key)
 	if err != nil {
 		return err
@@ -432,7 +379,6 @@ func (l *Ledger) Insert(k keylet.Keylet, data []byte) error {
 	return l.stateMap.Put(k.Key, data)
 }
 
-// Update modifies an existing ledger entry
 func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -441,7 +387,6 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 		return ErrLedgerImmutable
 	}
 
-	// Check if entry exists
 	exists, err := l.stateMap.Has(k.Key)
 	if err != nil {
 		return err
@@ -453,7 +398,6 @@ func (l *Ledger) Update(k keylet.Keylet, data []byte) error {
 	return l.stateMap.Put(k.Key, data)
 }
 
-// Erase removes a ledger entry
 func (l *Ledger) Erase(k keylet.Keylet) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -462,10 +406,17 @@ func (l *Ledger) Erase(k keylet.Keylet) error {
 		return ErrLedgerImmutable
 	}
 
+	exists, err := l.stateMap.Has(k.Key)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return ErrEntryNotFound
+	}
+
 	return l.stateMap.Delete(k.Key)
 }
 
-// AdjustDropsDestroyed records XRP that has been destroyed (fees)
 func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -473,15 +424,9 @@ func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	l.dropsDestroyed = l.dropsDestroyed.Add(drops)
 }
 
-// AdoptState replaces this ledger's state map, transaction map, and
-// destroyed-drops tally with those of src. It is the analogue of rippled's
-// OpenView::apply(view) — committing a sandbox's accumulated changes back
-// into the parent view in one shot (TxQ.cpp:1218 `sandbox.apply(view)`).
-//
-// src is expected to be a MutableSnapshot of this ledger that has since
-// been mutated; on commit it surrenders ownership of its maps to the
-// parent. Header and fees are unchanged (apply only touches state, the tx
-// tree, and dropsDestroyed before close).
+// AdoptState replaces this ledger's state map, tx map, and destroyed-drops tally
+// with src's — committing a mutated MutableSnapshot back into the parent in one
+// shot (rippled OpenView::apply). Header and fees are unchanged.
 func (l *Ledger) AdoptState(src *Ledger) error {
 	if src == nil {
 		return errors.New("ledger: AdoptState from nil source")
@@ -501,7 +446,6 @@ func (l *Ledger) AdoptState(src *Ledger) error {
 	return nil
 }
 
-// AddTransaction adds a transaction to the transaction tree
 func (l *Ledger) AddTransaction(txHash [32]byte, txData []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -513,8 +457,8 @@ func (l *Ledger) AddTransaction(txHash [32]byte, txData []byte) error {
 	return l.txMap.Put(txHash, txData)
 }
 
-// AddTransactionWithMeta adds a transaction with metadata to the transaction tree
-// This uses NodeTypeTransactionWithMeta for proper transaction tree hashing
+// AddTransactionWithMeta adds a tx with metadata, using NodeTypeTransactionWithMeta
+// for correct tx-tree hashing.
 func (l *Ledger) AddTransactionWithMeta(txHash [32]byte, txWithMetaData []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -526,7 +470,6 @@ func (l *Ledger) AddTransactionWithMeta(txHash [32]byte, txWithMetaData []byte) 
 	return l.txMap.PutWithNodeType(txHash, txWithMetaData, shamap.NodeTypeTransactionWithMeta)
 }
 
-// GetTransaction retrieves a transaction by its hash
 func (l *Ledger) GetTransaction(txHash [32]byte) ([]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -542,7 +485,6 @@ func (l *Ledger) GetTransaction(txHash [32]byte) ([]byte, bool, error) {
 	return item.Data(), true, nil
 }
 
-// HasTransaction checks if a transaction exists in this ledger
 func (l *Ledger) HasTransaction(txHash [32]byte) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -550,9 +492,7 @@ func (l *Ledger) HasTransaction(txHash [32]byte) (bool, error) {
 	return l.txMap.Has(txHash)
 }
 
-// TxExists returns true if a transaction with the given hash has already been
-// applied to this ledger. Delegates to the transaction SHAMap.
-// Reference: rippled ReadView::txExists()
+// TxExists reports whether a tx with the given hash is already in this ledger.
 func (l *Ledger) TxExists(txID [32]byte) bool {
 	exists, err := l.HasTransaction(txID)
 	if err != nil {
@@ -566,8 +506,7 @@ func (l *Ledger) Rules() *amendment.Rules {
 	return nil
 }
 
-// LedgerSeq returns the current ledger's sequence number.
-// Reference: rippled ReadView::seq().
+// LedgerSeq aliases Sequence for the ReadView interface.
 func (l *Ledger) LedgerSeq() uint32 {
 	return l.Sequence()
 }
@@ -581,26 +520,20 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 		return ErrInvalidState
 	}
 
-	// Guard the total-drops update against unsigned underflow before
-	// mutating any state: header.Drops is uint64, so an over-subtraction
-	// would silently wrap to a huge value and be hashed into the header,
-	// forking the chain. rippled subtracts on a signed int64 (XRPAmount),
-	// where the same bug goes negative and is detectable. Under correct
-	// operation the XRPNotCreated/fee invariants bound destroyed XRP well
-	// below supply, so this never triggers; if it does, hard-stop before
-	// any side effects to keep a latent accounting bug loud.
+	// Guard total-drops against unsigned underflow before mutating state:
+	// header.Drops is uint64, so over-subtraction would wrap to a huge value,
+	// be hashed into the header, and fork the chain. Invariants bound destroyed
+	// XRP below supply, so this never fires under correct operation.
 	if l.dropsDestroyed < 0 || uint64(l.dropsDestroyed) > l.header.Drops {
 		return fmt.Errorf("ledger: drops underflow closing ledger %d: destroyed %d exceeds total %d",
 			l.header.LedgerIndex, int64(l.dropsDestroyed), l.header.Drops)
 	}
 
 	// Update LedgerHashes skiplist before making state immutable.
-	// Matches rippled's updateSkipList() in Ledger.cpp:878-943.
 	if err := l.updateSkipList(); err != nil {
 		return fmt.Errorf("failed to update skip list: %w", err)
 	}
 
-	// Make maps immutable
 	if err := l.stateMap.SetImmutable(); err != nil {
 		return fmt.Errorf("failed to make state map immutable: %w", err)
 	}
@@ -610,7 +543,6 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 
 	l.header.Drops -= uint64(l.dropsDestroyed)
 
-	// Get hashes
 	accountHash, err := l.stateMap.Hash()
 	if err != nil {
 		return fmt.Errorf("failed to get state map hash: %w", err)
@@ -621,14 +553,12 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 		return fmt.Errorf("failed to get tx map hash: %w", err)
 	}
 
-	// Update header
 	l.header.AccountHash = accountHash
 	l.header.TxHash = txHash
 	l.header.CloseTime = closeTime
 	l.header.CloseFlags = closeFlags
 	l.header.Accepted = true
 
-	// Calculate ledger hash
 	l.header.Hash = calculateLedgerHash(l.header)
 
 	l.state = StateClosed
@@ -636,23 +566,10 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	return nil
 }
 
-// UpdateNegativeUNL applies pending ValidatorToDisable /
-// ValidatorToReEnable transitions on the NegativeUNL SLE, as part of
-// flag-ledger processing. Mirrors rippled Ledger.cpp:752-799.
-//
-// On a flag ledger (seq % 256 == 0), rippled processes the negUNL
-// transitions BEFORE applying any transactions. go-xrpl previously
-// skipped this step on the replay-delta path — every 256th ledger
-// would fail the final hash check on networks with
-// featureNegativeUNL and fall back to legacy catchup. R6b.1 adds
-// this method; the replay-delta Apply path calls it for flag
-// ledgers.
-//
-// Safe to call on any ledger. No-op when there's no NegativeUNL SLE
-// or when neither ValidatorToDisable nor ValidatorToReEnable is
-// set.
-//
-// Caller must NOT hold l.mu — this method acquires it internally.
+// UpdateNegativeUNL applies pending ValidatorToDisable / ValidatorToReEnable
+// transitions on the NegativeUNL SLE during flag-ledger (seq%256==0) processing,
+// before any transactions are applied. No-op on any other ledger or when neither
+// transition field is set. Caller must NOT hold l.mu — it acquires it internally.
 func (l *Ledger) UpdateNegativeUNL() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -661,315 +578,14 @@ func (l *Ledger) UpdateNegativeUNL() error {
 		return ErrInvalidState
 	}
 
-	// Read current NegativeUNL SLE.
-	key := keylet.NegativeUNL().Key
-	item, exists, err := l.stateMap.Get(key)
-	if err != nil || !exists || item == nil {
-		return nil // no SLE → nothing to do
-	}
-	data := item.Data()
-	if len(data) == 0 {
-		return nil
-	}
-
-	sle, err := pseudo.ParseNegativeUNLSLE(data)
-	if err != nil {
-		return fmt.Errorf("parse NegativeUNL SLE: %w", err)
-	}
-
-	hasToDisable := len(sle.ValidatorToDisable) > 0
-	hasToReEnable := len(sle.ValidatorToReEnable) > 0
-	if !hasToDisable && !hasToReEnable {
-		return nil
-	}
-
-	// Filter DisabledValidators: drop any entry matching
-	// ValidatorToReEnable. Matches rippled Ledger.cpp:765-776.
-	if hasToReEnable {
-		filtered := sle.DisabledValidators[:0]
-		for _, dv := range sle.DisabledValidators {
-			if bytes.Equal(dv.PublicKey, sle.ValidatorToReEnable) {
-				continue
-			}
-			filtered = append(filtered, dv)
-		}
-		sle.DisabledValidators = filtered
-	}
-
-	// Append ValidatorToDisable (if any) as a new DisabledValidators entry,
-	// stamping the flag-ledger sequence as sfFirstLedgerSequence (rippled
-	// Ledger.cpp:778-784).
-	if hasToDisable {
-		sle.DisabledValidators = append(sle.DisabledValidators, pseudo.DisabledValidator{
-			PublicKey:           sle.ValidatorToDisable,
-			FirstLedgerSequence: l.header.LedgerIndex,
-		})
-	}
-
-	// Clear the transition fields.
-	sle.ValidatorToDisable = nil
-	sle.ValidatorToReEnable = nil
-
-	// Serialize + write back (or erase if the SLE is now empty).
-	if len(sle.DisabledValidators) == 0 {
-		// Equivalent to rippled's rawErase(sle) at Ledger.cpp:797.
-		return l.stateMap.Delete(key)
-	}
-
-	newData, err := pseudo.SerializeNegativeUNLSLE(sle)
-	if err != nil {
-		return fmt.Errorf("serialize updated NegativeUNL SLE: %w", err)
-	}
-	return l.stateMap.Put(key, newData)
+	return negativeunl.Apply(l.stateMap, l.header.LedgerIndex)
 }
 
-// updateSkipList updates the LedgerHashes SLE(s) in the state map.
-// Called during Close() before making the state map immutable.
-// Caller holds l.mu.
+// updateSkipList updates the LedgerHashes SLE(s) in the state map. Caller holds l.mu.
 func (l *Ledger) updateSkipList() error {
-	return UpdateSkipListOnMap(l.stateMap, l.header.LedgerIndex, l.header.ParentHash)
+	return skiplist.UpdateOnMap(l.stateMap, l.header.LedgerIndex, l.header.ParentHash)
 }
 
-// UpdateSkipListOnMap updates the LedgerHashes SLE(s) on a mutable SHAMap.
-// Matches rippled's updateSkipList() in Ledger.cpp:878-943.
-//
-// Two operations:
-// 1. Every 256th ledger: append parentHash to the historical skiplist (keylet::skip(seq))
-// 2. Every ledger: append parentHash to the rolling-256 skiplist (keylet::skip())
-//
-// The function asserts the existing SLE — read from stateMap, which on the
-// consensus close path is the snapshot of the just-closed parent — is
-// internally consistent before mutating it. Specifically, an existing
-// LastLedgerSequence must equal prevIndex-1 (i.e. the parent's own parent
-// seq) and the existing Hashes vector must have the right length. If either
-// invariant is violated, the SLE was mutated by a path other than a clean
-// chain advance — typically a leak from a speculative consensus attempt
-// (see issue #470). Failing the close loudly here prevents goxrpl from
-// emitting a divergent ledger and forking the network.
-func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [32]byte) error {
-	prevIndex := ledgerSeq - 1
-
-	// Genesis ledger (seq 1) has no parent to record
-	if prevIndex == 0 {
-		return nil
-	}
-
-	// Operation 1: Historical skiplist (every 256th ledger).
-	// rippled appends without trimming; the historical list grows
-	// monotonically and never rolls. The size cap mirrors rippled's
-	// XRPL_ASSERT(hashes.size() <= 256) at Ledger.cpp:904-906 — a 64K
-	// window holds at most 65536/256 = 256 entries.
-	if (prevIndex & 0xff) == 0 {
-		histKey := keylet.LedgerHashesForSeq(prevIndex)
-		fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, histKey.Key)
-		if err != nil {
-			return fmt.Errorf("read historical skip list: %w", err)
-		}
-		if err := assertHistoricalSkipListConsistent(hashes, lastSeq, prevIndex); err != nil {
-			return fmt.Errorf("historical LedgerHashes (key %x): %w", histKey.Key, err)
-		}
-		hashes = append(hashes, parentHash)
-		if err := writeSkipList(stateMap, histKey.Key, fields, hashes, prevIndex); err != nil {
-			return fmt.Errorf("write historical skip list: %w", err)
-		}
-	}
-
-	// Operation 2: Rolling 256 skiplist (every ledger)
-	rollingKey := keylet.LedgerHashes()
-	fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
-	if err != nil {
-		return fmt.Errorf("read rolling skip list: %w", err)
-	}
-	if err := assertSkipListConsistent(hashes, lastSeq, prevIndex); err != nil {
-		return fmt.Errorf("rolling LedgerHashes (key %x): %w", rollingKey.Key, err)
-	}
-	// Trim to 256: remove oldest if at capacity
-	if len(hashes) >= 256 {
-		hashes = hashes[1:]
-	}
-	hashes = append(hashes, parentHash)
-	if err := writeSkipList(stateMap, rollingKey.Key, fields, hashes, prevIndex); err != nil {
-		return fmt.Errorf("write rolling skip list: %w", err)
-	}
-
-	return nil
-}
-
-// assertSkipListConsistent validates the parent's rolling-256 LedgerHashes
-// SLE before we append to it. An existing SLE must describe ledgers
-// 1..prevIndex-1 — equivalently, LastLedgerSequence == prevIndex-1 and
-// len(Hashes) == min(prevIndex-1, 256). Anything else means the SLE was
-// mutated by a path that isn't a clean chain advance (issue #470 traces
-// this to speculative-build leakage during consensus).
-//
-// An absent SLE is allowed: this is the first close after a fresh genesis,
-// or the parent state was never threaded through updateSkipList (initial
-// sync header-only adoption). Either way, we have nothing to validate.
-func assertSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) error {
-	if len(hashes) == 0 && lastSeq == 0 {
-		// Absent SLE — first append, nothing to assert.
-		return nil
-	}
-	wantLastSeq := prevIndex - 1
-	if lastSeq != wantLastSeq {
-		return fmt.Errorf("existing LastLedgerSequence=%d, want %d (prevIndex-1); state was mutated by a non-chain-advance path",
-			lastSeq, wantLastSeq)
-	}
-	wantLen := min(int(prevIndex-1), 256)
-	if len(hashes) != wantLen {
-		return fmt.Errorf("existing Hashes length=%d, want %d for prevIndex=%d; state was mutated by a non-chain-advance path",
-			len(hashes), wantLen, prevIndex)
-	}
-	return nil
-}
-
-// assertHistoricalSkipListConsistent validates the per-64K-window historical
-// LedgerHashes SLE before appending. Rippled's only invariant here is
-// `hashes.size() <= 256` (Ledger.cpp:904-906); we additionally require
-// LastLedgerSequence to be the most recent 256-aligned seq strictly below
-// prevIndex, which catches the same leak class as the rolling assertion
-// without crossing window boundaries (a window covers 65536 ledgers, so
-// within a single SLE lastSeq always == prevIndex - 256 after the prior
-// append).
-func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) error {
-	if len(hashes) == 0 && lastSeq == 0 {
-		return nil
-	}
-	if len(hashes) > 256 {
-		return fmt.Errorf("existing Hashes length=%d exceeds 256", len(hashes))
-	}
-	if wantLastSeq := prevIndex - 256; lastSeq != wantLastSeq {
-		return fmt.Errorf("existing LastLedgerSequence=%d, want %d (prevIndex-256); state was mutated by a non-chain-advance path",
-			lastSeq, wantLastSeq)
-	}
-	return nil
-}
-
-// readLedgerHashesSLE returns the decoded field map, Hashes, and
-// LastLedgerSequence for the LedgerHashes SLE at key, or (nil, nil, 0, nil)
-// when absent. The field map lets callers preserve every present field —
-// notably the optional FirstLedgerSequence — when rewriting the SLE.
-func readLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
-	item, found, err := stateMap.Get(key)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	if !found {
-		return nil, nil, 0, nil
-	}
-	jsonObj, err := binarycodec.DecodeBytes(item.Data())
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
-	}
-
-	hashes, err := decodeHashesField(jsonObj)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	lastSeq, err := decodeUint32Field(jsonObj, "LastLedgerSequence")
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	return jsonObj, hashes, lastSeq, nil
-}
-
-func decodeHashesField(jsonObj map[string]any) ([][32]byte, error) {
-	rawHashes, ok := jsonObj["Hashes"]
-	if !ok {
-		return nil, nil
-	}
-	var hashStrings []string
-	switch v := rawHashes.(type) {
-	case []string:
-		hashStrings = v
-	case []any:
-		hashStrings = make([]string, len(v))
-		for i, h := range v {
-			s, ok := h.(string)
-			if !ok {
-				return nil, fmt.Errorf("hash entry is not a string")
-			}
-			hashStrings[i] = s
-		}
-	default:
-		return nil, fmt.Errorf("Hashes field has unexpected type %T", rawHashes)
-	}
-
-	result := make([][32]byte, 0, len(hashStrings))
-	for _, hashStr := range hashStrings {
-		hashBytes, err := hex.DecodeString(hashStr)
-		if err != nil {
-			return nil, fmt.Errorf("decode hash hex: %w", err)
-		}
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-		result = append(result, hash)
-	}
-	return result, nil
-}
-
-// decodeUint32Field reads a STI_UINT32 field from a binarycodec-decoded
-// SLE. binarycodec/types.UInt32.ToJSON returns uint32, so that is the
-// only type we expect; any other type is a codec-drift signal worth
-// surfacing rather than silently coercing.
-func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
-	raw, ok := jsonObj[name]
-	if !ok {
-		return 0, nil
-	}
-	v, ok := raw.(uint32)
-	if !ok {
-		return 0, fmt.Errorf("%s field has unexpected type %T (want uint32)", name, raw)
-	}
-	return v, nil
-}
-
-// readSkipListHashes reads and decodes the Hashes array from an existing
-// LedgerHashes SLE in the state map. Returns nil if the entry doesn't exist.
-// Thin wrapper over readLedgerHashesSLE that drops the LastLedgerSequence
-// — kept for callers (SkipListHashes() exporter) that only need the vector.
-func readSkipListHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
-	_, hashes, _, err := readLedgerHashesSLE(stateMap, key)
-	return hashes, err
-}
-
-// writeSkipList serializes a LedgerHashes SLE and writes it to the state map.
-//
-// When fields is non-nil — the decoded map of an existing SLE — it updates
-// only Hashes and LastLedgerSequence and preserves every other present field,
-// mirroring rippled's in-place updateSkipList (Ledger.cpp:878-943). This keeps
-// the optional FirstLedgerSequence (and any future field) intact across the
-// per-close rewrite; rebuilding from a fixed field set would silently drop it
-// and shift the state-tree leaf, diverging account_hash.
-//
-// When fields is nil — no existing SLE — it creates a fresh entry. rippled's
-// updateSkipList likewise sets only Hashes and LastLedgerSequence on a newly
-// created SLE, so FirstLedgerSequence is intentionally absent here.
-func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, fields map[string]any, hashes [][32]byte, lastSeq uint32) error {
-	hashHexes := make([]string, len(hashes))
-	for i, h := range hashes {
-		hashHexes[i] = fmt.Sprintf("%064X", h)
-	}
-
-	jsonObj := fields
-	if jsonObj == nil {
-		jsonObj = map[string]any{
-			"LedgerEntryType": "LedgerHashes",
-			"Flags":           uint32(0),
-		}
-	}
-	jsonObj["Hashes"] = hashHexes
-	jsonObj["LastLedgerSequence"] = lastSeq
-
-	data, err := binarycodec.EncodeBytes(jsonObj)
-	if err != nil {
-		return fmt.Errorf("encode LedgerHashes: %w", err)
-	}
-
-	return stateMap.Put(key, data)
-}
-
-// SetValidated marks the ledger as validated
 func (l *Ledger) SetValidated() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -1008,15 +624,9 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 	}, nil
 }
 
-// MutableSnapshot returns a mutable deep copy of this ledger. Unlike
-// Snapshot() which returns an immutable clone, MutableSnapshot() produces
-// a working copy suitable for further apply operations — the analogue of
-// rippled's `std::make_shared<OpenView>(*current_)` (OpenLedger.cpp:61).
-//
-// The clone inherits `state` from the parent. Callers that want to apply
-// transactions to the clone must ensure the parent was open: see
-// OpenLedger.Modify which guards that invariant; tests use this helper
-// to materialise pre-Accept fixtures whose `state` happens to be closed.
+// MutableSnapshot returns a mutable deep copy suitable for further apply
+// operations (unlike the immutable Snapshot). The clone inherits state from the
+// parent; callers applying txs must ensure the parent was open (see OpenLedger.Modify).
 func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -1039,30 +649,25 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	}, nil
 }
 
-// StateMapHash returns the state map hash
 func (l *Ledger) StateMapHash() ([32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.stateMap.Hash()
 }
 
-// TxMapHash returns the transaction map hash
 func (l *Ledger) TxMapHash() ([32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.txMap.Hash()
 }
 
-// ForEach iterates over all state entries and calls fn for each.
-// If fn returns false, iteration stops early.
-// The callback receives the entry key and data.
+// ForEach calls fn for each state entry (key, data); return false to stop early.
 func (l *Ledger) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	return l.ForEachCtx(context.Background(), fn)
 }
 
-// ForEachCtx is the context-aware variant of ForEach. Iteration aborts
-// with ctx.Err() whenever the context is cancelled, even between leaf
-// callbacks (the SHAMap descent itself observes ctx).
+// ForEachCtx is the context-aware ForEach; iteration aborts with ctx.Err() even
+// between leaf callbacks (the SHAMap descent observes ctx).
 func (l *Ledger) ForEachCtx(ctx context.Context, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -1072,9 +677,7 @@ func (l *Ledger) ForEachCtx(ctx context.Context, fn func(key [32]byte, data []by
 	})
 }
 
-// Succ returns the first state entry with key > the given key.
-// Uses SHAMap's UpperBound for O(log n) lookup.
-// Reference: rippled ReadView::succ()
+// Succ returns the first state entry with key > the given key (O(log n) UpperBound).
 func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -1092,13 +695,10 @@ func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
 
-// IterateStateFrom walks state entries in ascending key order, starting with
-// the first entry whose key is strictly greater than `after`; pass the zero key
-// to start from the beginning. fn is called for each entry and returns false to
-// stop early. Iteration advances through the state map's upper bound (O(log n)
-// seek, O(n) walk), so a resume marker pointing at a since-deleted entry
-// continues from the next entry instead of rescanning from the start — and it
-// never silently yields nothing the way a "skip until key == marker" scan does.
+// IterateStateFrom walks state entries in ascending key order starting strictly
+// after `after` (zero key = from the beginning); fn returns false to stop. Using
+// strictly-greater UpperBound means a resume marker pointing at a since-deleted
+// entry continues from the next entry instead of rescanning or yielding nothing.
 func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(key [32]byte, data []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -1120,11 +720,9 @@ func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(k
 	return it.Err()
 }
 
-// DecrementKey returns key - 1, treating the 32-byte key as a big-endian
-// integer (wrapping at zero). It is the companion to IterateStateFrom's
-// strictly-greater (UpperBound) resume: recording DecrementKey(firstUnemittedKey)
-// as a page-full marker makes the next IterateStateFrom resume exactly on that
-// first un-emitted entry, whether or not the decremented value is itself a key.
+// DecrementKey returns key-1 as a big-endian 32-byte integer (wrapping at zero).
+// Recording DecrementKey(firstUnemittedKey) as a page marker makes the next
+// IterateStateFrom resume exactly on that first un-emitted entry.
 func DecrementKey(key [32]byte) [32]byte {
 	out := key
 	for i := 31; i >= 0; i-- {
@@ -1137,9 +735,7 @@ func DecrementKey(key [32]byte) [32]byte {
 	return out
 }
 
-// ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
-// If fn returns false, iteration stops early.
-// The callback receives the transaction hash and data.
+// ForEachTransaction calls fn for each tx (hash, data); return false to stop early.
 func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -1149,16 +745,14 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 	})
 }
 
-// TxCount returns the number of transactions in the tx map.
 func (l *Ledger) TxCount() uint32 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return uint32(l.txMap.Size())
 }
 
-// StateMapSnapshot returns a mutable snapshot of the state map.
-// This is useful for continuous replay where the state from one block
-// becomes the input for the next block.
+// StateMapSnapshot returns a mutable snapshot of the state map (e.g. for chaining
+// one block's output into the next during continuous replay).
 func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -1182,16 +776,13 @@ func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.stateMap.SetFamily(family)
 }
 
-// SerializeHeader returns the serialized ledger header bytes.
 func (l *Ledger) SerializeHeader() []byte {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return header.AddRaw(l.header, true)
 }
 
-// calculateLedgerHash computes the hash of a ledger header. The canonical
-// implementation lives in the header package; this thin wrapper keeps the
-// existing call sites readable.
+// calculateLedgerHash hashes a header via the canonical header.CalculateHash.
 func calculateLedgerHash(h header.LedgerHeader) [32]byte {
 	return header.CalculateHash(h)
 }

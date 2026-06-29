@@ -229,7 +229,7 @@ func TestEngine_OnProposal_DropsUntrusted(t *testing.T) {
 	}
 
 	engine.mu.Lock()
-	rp, pp := len(engine.recentProposals), len(engine.proposals)
+	rp, pp := len(engine.proposalTracker.recentProposals), len(engine.proposalTracker.proposals)
 	engine.mu.Unlock()
 	if rp != 0 {
 		t.Errorf("untrusted proposal buffered into recentProposals: %d entries", rp)

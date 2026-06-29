@@ -39,43 +39,29 @@ var (
 )
 
 // NetworkSender abstracts the P2P overlay for sending messages.
-// This allows testing the adaptor without a real network.
 type NetworkSender interface {
-	// BroadcastProposal / BroadcastValidation send OUR OWN traffic —
-	// unfiltered, because the squelch filter is deliberately omitted
-	// for self-originated broadcasts.
+	// BroadcastProposal / BroadcastValidation send our own traffic, unfiltered
+	// (the squelch filter applies only to relayed peer traffic).
 	BroadcastProposal(proposal *consensus.Proposal) error
 	BroadcastValidation(validation *consensus.Validation) error
 	BroadcastStatusChange(sc *message.StatusChange) error
-	// RelayProposal / RelayValidation forward a peer-originated message
-	// to other peers, subject to the per-peer squelch filter and
-	// excluding exceptPeer (the originator). Pass 0 for exceptPeer to
-	// broadcast to all peers unfiltered — used only by synthetic test
-	// paths. Proposal.SuppressionHash / Validation.SuppressionHash
-	// (populated by the consensus router) is used by the overlay to
-	// record each recipient under that key so a later duplicate from a
-	// different peer can look up the whole known-haver set and feed
-	// the reduce-relay slot with all of them.
+	// RelayProposal / RelayValidation forward a peer-originated message to
+	// other peers, subject to the squelch filter, excluding exceptPeer (the
+	// originator; 0 = unfiltered, test-only). SuppressionHash keys the
+	// overlay's reverse index so a later duplicate can recover the
+	// known-haver set for the reduce-relay slot.
 	RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error
 	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
 	// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
-	// originPeer AND every peer in seenPeers (peers known to already
-	// have the message per the overlay's reverse index). Drives the
-	// squelch selection logic. Implementations dedupe originPeer from
-	// seenPeers to avoid double-counting.
+	// originPeer and seenPeers (known-havers), driving squelch selection.
+	// Implementations dedupe originPeer from seenPeers.
 	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 	RequestTxSet(id consensus.TxSetID) error
-	// RequestTxSetMissingNodes requests specific SHAMap nodes for an
-	// in-progress tx-set acquisition: after the initial root request
-	// returns a partial tree, follow up with a request for each missing
-	// node by its SHAMap path-based NodeID. nodeIDs must each be exactly
-	// 33 bytes (32 path bytes + 1 depth byte). excluded carries peer IDs
-	// that should be skipped during this broadcast — populated by the
-	// router with peers that have repeatedly returned non-progressing
-	// TMLedgerData replies for this acquisition. A nil or empty map is
-	// the unrestricted case. indirect sets query_type=qtINDIRECT so peers
-	// relay the request on our behalf — set once the acquisition has timed
-	// out at least once (see RequestStateNodes).
+	// RequestTxSetMissingNodes requests specific SHAMap nodes (by 33-byte path
+	// NodeID: 32 path + 1 depth) for an in-progress tx-set acquisition.
+	// excluded peers are skipped (nil = unrestricted). indirect sets
+	// query_type=qtINDIRECT; set it once the acquisition has timed out at
+	// least once (see RequestStateNodes).
 	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
@@ -83,63 +69,48 @@ type NetworkSender interface {
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
 	// RequestStateNodes / RequestTransactionNodes fetch outstanding
 	// account-state / transaction SHAMap nodes of an in-flight acquisition.
-	// indirect sets query_type=qtINDIRECT, marking the request relayable by
-	// intermediary peers; it must be false on the first attempt and true
-	// once the acquisition has timed out at least once, mirroring rippled's
-	// InboundLedger::trigger timeouts_ != 0 gate.
+	// indirect (query_type=qtINDIRECT) must be false on the first attempt and
+	// true once the acquisition has timed out at least once
+	// (rippled InboundLedger::trigger timeouts_ != 0).
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error
 	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error
 	SendToPeer(peerID uint64, frame []byte) error
-	// PeerSupportsReplay reports whether the peer identified by peerID
-	// advertised the ledger-replay feature during handshake. Used by
-	// the catchup policy to skip replay-delta requests against peers
-	// that would silently drop them. Returns false conservatively when
-	// the peer is unknown or the handshake has not completed.
+	// PeerSupportsReplay reports whether the peer advertised the ledger-replay
+	// feature during handshake (false for unknown/incomplete handshakes), so
+	// the catchup policy can skip peers that would silently drop the request.
 	PeerSupportsReplay(peerID uint64) bool
-	// ReplayCapablePeersExcluding returns up to `max` peer IDs that
-	// advertised the ledger-replay feature in handshake, omitting
-	// peer IDs in `excluded`. Used by the replay-delta retry loop to
-	// rotate peers on a sub-task timeout. Returns an empty slice when
-	// no eligible peers exist.
+	// ReplayCapablePeersExcluding returns up to max peer IDs that advertised
+	// ledger-replay, omitting those in excluded. Used by the replay-delta
+	// retry loop to rotate peers on a sub-task timeout.
 	ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64
-	// IncPeerBadData attributes a malformed/invalid-data event to the
-	// peer so the overlay can charge it toward the eviction threshold.
-	// Called by the consensus router when verification of a peer-sent
-	// response (replay delta, ledger data, etc.) fails. Safe no-op for
-	// unknown peers. `reason` is a short stable label for logs.
+	// IncPeerBadData attributes a malformed/invalid-data event to the peer so
+	// the overlay can charge it toward the eviction threshold. No-op for
+	// unknown peers; reason is a short stable label for logs.
 	IncPeerBadData(peerID uint64, reason string)
-	// PeersThatHave returns the set of peer IDs the overlay knows have
-	// the message whose router-level suppression hash is
-	// suppressionHash (populated during outbound relay). Returns nil if
-	// unknown or the bucket has aged out. The router uses this to feed
-	// the reduce-relay slot with all known-havers on a duplicate
-	// arrival.
+	// PeersThatHave returns the peer IDs the overlay knows have the message
+	// keyed by suppressionHash (nil if unknown or aged out). The router feeds
+	// these known-havers into the reduce-relay slot on a duplicate arrival.
 	PeersThatHave(suppressionHash [32]byte) []uint64
-	// ShouldShedLedgerRequest reports whether a ledger-BODY request
-	// (liBASE / liAS_NODE / liTX_NODE) from peerID should be dropped
-	// under load: shed when the peer's send queue is saturated, or when
-	// the local node is fee-loaded (loadedLocal) and the peer is not a
-	// cluster member. NEVER call this for liTS_CANDIDATE (tx-set)
-	// requests — those are served on a separate branch that never
-	// reaches these gates, so consensus liveness is not starved.
-	// Returns false for unknown peers.
+	// ShouldShedLedgerRequest reports whether a ledger-BODY request (liBASE /
+	// liAS_NODE / liTX_NODE) from peerID should be dropped under load: peer
+	// send-queue saturated, or local node fee-loaded and peer not clustered.
+	// NEVER call for liTS_CANDIDATE (tx-set) requests — those serve on a
+	// separate branch so consensus liveness isn't starved. False for unknown peers.
 	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
 	// PeerWithLedger returns a connected peer (other than exclude) that can
-	// serve ledger (target, seq) — by advertised hash or covering seq
-	// range — used to relay an unsatisfiable GetLedger to a peer that can
-	// serve it. ok is false when none qualifies. See Overlay.PeerWithLedger.
+	// serve ledger (target, seq), to relay an unsatisfiable GetLedger.
+	// ok is false when none qualifies.
 	PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool)
-	// PeersWithLedger returns up to max connected peers (other than any id
-	// in excluded) that can serve ledger (target, seq), best-first. Used to
-	// broaden a stalled inbound acquisition's source set across several peers
-	// per no-progress timeout, mirroring InboundLedger::addPeers.
+	// PeersWithLedger returns up to max connected peers (other than excluded)
+	// that can serve ledger (target, seq), best-first, to broaden a stalled
+	// acquisition's source set per no-progress timeout.
 	PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64
 	// PeerWithTxSet returns a connected peer (other than exclude) that
-	// advertised tx-set root target, used to relay an unsatisfiable
-	// liTS_CANDIDATE GetLedger. See Overlay.PeerWithTxSet.
+	// advertised tx-set root target, to relay an unsatisfiable
+	// liTS_CANDIDATE GetLedger.
 	PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool)
-	// NotePeerHasTxSet records that peerID advertised tx-set root hash
-	// via mtHAVE_TRANSACTION_SET{tsHAVE}, feeding PeerWithTxSet.
+	// NotePeerHasTxSet records that peerID advertised tx-set root hash,
+	// feeding PeerWithTxSet.
 	NotePeerHasTxSet(peerID uint64, hash [32]byte)
 }
 
@@ -180,12 +151,8 @@ var _ consensus.Adaptor = (*Adaptor)(nil)
 // to the ledger service, transaction queue, and P2P network.
 type Adaptor struct {
 	// mu protects trustedValidators / trustedSet / trustedMasterKeys /
-	// quorum / operatingMode. Plain Mutex rather than RWMutex: the
-	// fields are mutated rarely (UNL changes, SetOperatingMode) and
-	// read from a handful of getters per round, so contention is low
-	// and the RWMutex overhead is not justified. The two hot RPC
-	// paths (operatingMode, peerLCLs) already escape this lock — one
-	// via the modeAtomic mirror, the other via peerLCLsMu.
+	// quorum / operatingMode. Plain Mutex: these are mutated rarely and read
+	// a few times per round, so RWMutex isn't justified.
 	mu sync.Mutex
 
 	ledgerService *service.Service
@@ -195,57 +162,43 @@ type Adaptor struct {
 	// UNL: trusted validator public keys
 	trustedValidators []consensus.NodeID
 	trustedSet        map[consensus.NodeID]struct{}
-	// trustedMasterKeys are the 33-byte master pubkeys for each entry
-	// in trustedValidators, index-aligned. Populated when the operator
-	// configures validators via base58 keys (the master pubkey is
-	// available pre-hash); empty when the UNL was supplied as raw
-	// NodeIDs (e.g. some tests). Required for NegativeUNL voting.
+	// trustedMasterKeys are the 33-byte master pubkeys index-aligned with
+	// trustedValidators; empty when the UNL was supplied as raw NodeIDs
+	// (some tests). Required for NegativeUNL voting.
 	trustedMasterKeys [][33]byte
 	quorum            int
 
-	// Operating mode
 	operatingMode consensus.OperatingMode
 
 	// stateAcct tracks transition counts and cumulative durations per
 	// operating mode for server_info.state_accounting.
 	stateAcct *stateAccounting
 
-	// Close time offset — adjusted each round toward network average.
-	// Stored as nanoseconds in an atomic so the consensus hot path
-	// (Now) avoids lock contention.
+	// Close-time offset, adjusted each round toward the network average.
+	// Atomic ns so the Now() hot path avoids lock contention.
 	closeOffsetNs atomic.Int64
 
-	// consensusPhaseCh serializes consensus-phase notifications to the
-	// ledger service's OnConsensusPhase hook. A single dispatcher
-	// goroutine (started once via consensusPhaseOnce on first emission)
-	// drains it in order, so two rapid phase transitions can't be
-	// delivered out of order — the prior per-event
-	// `go hooks.OnConsensusPhase(...)` raced. Enqueue is non-blocking
-	// (drops on a full buffer) so a slow hook can never stall the
-	// consensus path.
+	// consensusPhaseCh serializes consensus-phase notifications to the ledger
+	// service's OnConsensusPhase hook: a single dispatcher goroutine drains it
+	// in order (preventing out-of-order delivery). Enqueue is non-blocking, so
+	// a slow hook can't stall the consensus path.
 	consensusPhaseCh   chan string
 	consensusPhaseOnce sync.Once
 
-	// negUNLVoter produces the UNLModify pseudo-tx every voting ledger
-	// (one ToDisable + one ToReEnable at most). Holds the local
-	// NodeID and the new-validator skip table. Constructed in New()
-	// from identity.NodeID; nil for non-validating adaptors.
+	// negUNLVoter produces the UNLModify pseudo-tx each voting ledger (at most
+	// one ToDisable + one ToReEnable). nil for non-validating adaptors.
 	negUNLVoter *negativeunlvote.Voter
 
-	// validationHistorian provides per-ledger trusted validation
-	// lookups for buildScoreTable. Wired by the engine after the
-	// ValidationTracker is constructed (see rcl.Engine.Run). Nil
-	// before wiring — GenerateNegativeUNLPseudoTx degrades gracefully
-	// (no vote) until then.
+	// validationHistorian provides per-ledger trusted-validation lookups,
+	// wired by the engine after the ValidationTracker is built. Nil before
+	// wiring — GenerateNegativeUNLPseudoTx degrades to no vote.
 	validationHistorian consensus.ValidationHistorian
 
-	// Transaction set cache
 	txSetCache *TxSetCache
 
-	// Peer-reported last-closed ledger hashes, keyed by overlay peer
-	// ID. Populated by the router on every inbound statusChange so
-	// the engine can include peer LCLs in getNetworkLedger even when
-	// no fresh proposal has arrived from that peer yet.
+	// Peer-reported last-closed ledger hashes, keyed by overlay peer ID.
+	// Populated by the router on every inbound statusChange so getNetworkLedger
+	// can use peer LCLs even without a fresh proposal from that peer.
 	peerLCLsMu sync.RWMutex
 	peerLCLs   map[uint64]consensus.LedgerID
 
@@ -257,70 +210,50 @@ type Adaptor struct {
 	// at construction. Zero values mean "no vote".
 	feeVote FeeVoteStance
 
-	// amendmentStances is this validator's per-amendment voting
-	// stance, seeded from the registry's per-feature Vote behavior
-	// at construction and overridden by Config.AmendmentVote.
-	// Amendments not in the map default to VoteAbstain on lookup;
-	// obsolete amendments cannot be overridden to VoteUp.
+	// amendmentStances is this validator's per-amendment voting stance,
+	// seeded from registry Vote behavior and overridden by Config.AmendmentVote.
+	// Absent → VoteAbstain; obsolete amendments can't be overridden to VoteUp.
 	amendmentStances map[[32]byte]amendmentvote.Stance
 
 	// amendmentTable, when set, is the live amendment table this validator
-	// sources vote stances from each round (so operator veto/upvote changes —
-	// config or runtime feature RPC — take effect without restart) and into
-	// which it stashes the per-round vote tallies (lastVote). nil falls back to
-	// the construction-time amendmentStances map.
+	// sources vote stances from each round (so operator veto/upvote changes
+	// take effect without restart) and stashes per-round tallies into. nil
+	// falls back to the construction-time amendmentStances map.
 	amendmentTable *amendment.AmendmentTable
 
-	// trustedVotes caches per-validator amendment votes for 24h to
-	// dampen amendment "flapping" when a flaky validator drops
-	// briefly. See trusted_votes.go.
+	// trustedVotes caches per-validator amendment votes for 24h to dampen
+	// flapping when a flaky validator drops briefly.
 	trustedVotes *TrustedVotes
 
-	// onTxSetRequested fires before every RequestTxSet broadcast so
-	// the router can re-arm its in-flight tx-set acquisition state
-	// (clear attempts and lastRequest). Nil before SetOnTxSetRequested
-	// is called; nil callers are a no-op. Issue #420.
+	// onTxSetRequested fires before every RequestTxSet broadcast so the router
+	// can re-arm its in-flight tx-set acquisition state. nil-safe.
 	onTxSetRequested func(consensus.TxSetID)
 
-	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the
-	// overlay can broadcast mtHAVE_SET{tsHAVE} for it. Nil-safe — the
-	// callback is invoked only when wired.
+	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the overlay
+	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
 	logger *slog.Logger
 }
 
-// goxrplServerVersionTag identifies this implementation in the
-// sfServerVersion field. Rippled uses the top bit (0x8000...) as its
-// own identifier; go-xrpl must NOT set that — setting it would
-// misrepresent this node as a rippled instance in any peer counting
-// version statistics on the network. We pick a distinct non-rippled
-// high-byte pattern so operators running both implementations can
-// tell them apart at a glance.
+// goxrplServerVersionTag identifies go-xrpl in the sfServerVersion field.
+// rippled uses the top bit (0x8000...); we must NOT set it or this node
+// would be counted as a rippled instance in peer version statistics.
 const goxrplServerVersionTag uint64 = 0x4000_0000_0000_0000
 
-// FeeVoteStance is this validator's desired fee structure — what it
-// wants the network to converge on at the next flag ledger. Emitted
-// on every validation as either the legacy UINT triple
-// (BaseFee/ReserveBase/ReserveIncrement) or the post-XRPFees AMOUNT
-// triple (BaseFeeDrops/ReserveBaseDrops/ReserveIncrementDrops).
-// The adaptor picks which set to emit based on the parent ledger's
-// rules, gated on featureXRPFees.
-//
-// Zero values on any individual field mean "operator did not set
-// this field" — adaptor.New() substitutes the default fee setup so an
-// unconfigured validator votes toward those defaults rather than
-// abstaining.
+// FeeVoteStance is this validator's desired fee structure for the next flag
+// ledger, emitted on every validation (legacy UINT triple, or the post-XRPFees
+// AMOUNT triple under featureXRPFees). A zero field means "operator did not
+// set this field"; New() substitutes the default so an unconfigured validator
+// votes toward defaults rather than abstaining.
 type FeeVoteStance struct {
 	BaseFee          uint64
 	ReserveBase      uint32
 	ReserveIncrement uint32
 }
 
-// defaultFeeVote returns the default fee setup — a validator with no
-// [voting] stanza in its config votes toward these values
-// (reference_fee=10, account_reserve=10*DROPS_PER_XRP=10_000_000,
-// owner_reserve=2*DROPS_PER_XRP=2_000_000).
+// defaultFeeVote returns the fee setup a validator votes toward with no
+// [voting] config (reference_fee=10, account_reserve=10 XRP, owner_reserve=2 XRP).
 func defaultFeeVote() FeeVoteStance {
 	return FeeVoteStance{
 		BaseFee:          10,
@@ -329,42 +262,76 @@ func defaultFeeVote() FeeVoteStance {
 	}
 }
 
-// Config holds configuration for the Adaptor.
 type Config struct {
 	LedgerService *service.Service
 	Sender        NetworkSender
 	Identity      *ValidatorIdentity
 	Validators    []consensus.NodeID // UNL
-	// ValidatorMasterKeys are the 33-byte compressed master public
-	// keys for each entry in Validators, index-aligned. Optional —
-	// when supplied, the adaptor can participate in NegativeUNL
-	// voting (which requires emitting raw master pubkeys in the
-	// UNLModify tx). NewFromConfig populates this from the operator's
-	// base58-encoded [validators] stanza; bare-NodeID test fixtures
-	// can leave it nil and the adaptor will gracefully skip
-	// NegativeUNL votes.
+	// ValidatorMasterKeys are the 33-byte master pubkeys index-aligned with
+	// Validators. Optional — required for NegativeUNL voting (which emits raw
+	// master pubkeys); nil skips NegativeUNL votes (bare-NodeID test fixtures).
 	ValidatorMasterKeys [][33]byte
-	// FeeVote is the validator's fee-vote stance. Zero values mean no
-	// vote. Production callers wire this from the [voting] stanza of
-	// the toml config.
+	// FeeVote is the validator's fee-vote stance; zero means no vote.
 	FeeVote FeeVoteStance
-	// AmendmentVote lists amendments (by name, as defined in the
-	// amendment registry) this validator wishes to vote FOR on the
-	// next flag ledger. Unknown names are dropped at construction
-	// time with a warning; already-enabled amendments are filtered
-	// on every emission (not at construction) since the enabled set
-	// changes over time.
+	// AmendmentVote lists amendments (by registry name) to vote FOR on the next
+	// flag ledger. Unknown names are dropped at construction; already-enabled
+	// ones are filtered per-emission since the enabled set changes over time.
 	AmendmentVote []string
-	// AmendmentTable, when supplied, is the live amendment table that owns the
-	// operator's veto/upvote preferences and the enabled/blocked state. When set
-	// it is authoritative for amendment stances: vetoed amendments abstain and
-	// upvoted amendments vote up, layered over the registry defaults. The same
-	// instance is shared with the ledger service, which folds validated flag
-	// ledgers into it via DoValidatedLedger.
+	// AmendmentTable, when supplied, is the live amendment table owning the
+	// operator's veto/upvote preferences; authoritative for stances (vetoed →
+	// abstain, upvoted → up) over registry defaults. Shared with the ledger
+	// service, which folds validated flag ledgers in via DoValidatedLedger.
 	AmendmentTable *amendment.AmendmentTable
 }
 
-// New creates a new Adaptor.
+// generateCookie returns a non-zero random 64-bit cookie. On a read error it
+// falls back to a time-derived value (the value carries no security meaning).
+// Zero is bumped to 1 because the serializer treats zero as "omit".
+func generateCookie() uint64 {
+	var cookieBytes [8]byte
+	if _, err := rand.Read(cookieBytes[:]); err != nil {
+		binary.BigEndian.PutUint64(cookieBytes[:], uint64(time.Now().UnixNano()))
+	}
+	cookie := binary.BigEndian.Uint64(cookieBytes[:])
+	if cookie == 0 {
+		cookie = 1
+	}
+	return cookie
+}
+
+// seedAmendmentStances builds the initial per-amendment vote map: supported
+// features default to their registered VoteBehavior (DefaultYes → VoteUp,
+// DefaultNo → abstain, Obsolete → VoteObsolete), then operator amendmentVote
+// names are layered on as VoteUp. Unknown/obsolete/unsupported names are dropped.
+func seedAmendmentStances(amendmentVote []string, logger *slog.Logger) map[[32]byte]amendmentvote.Stance {
+	stances := make(map[[32]byte]amendmentvote.Stance)
+	for _, f := range amendment.AllFeatures() {
+		switch {
+		case f.Vote == amendment.VoteObsolete:
+			stances[f.ID] = amendmentvote.VoteObsolete
+		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
+			stances[f.ID] = amendmentvote.VoteUp
+		}
+	}
+	for _, name := range amendmentVote {
+		f := amendment.GetFeatureByName(name)
+		if f == nil {
+			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
+			continue
+		}
+		if f.Vote == amendment.VoteObsolete {
+			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
+		if f.Supported != amendment.SupportedYes {
+			logger.Warn("unsupported amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
+		stances[f.ID] = amendmentvote.VoteUp
+	}
+	return stances
+}
+
 func New(cfg Config) *Adaptor {
 	sender := cfg.Sender
 	if sender == nil {
@@ -376,67 +343,14 @@ func New(cfg Config) *Adaptor {
 		trustedSet[v] = struct{}{}
 	}
 
-	// Quorum: ceil(n * 0.8)
-	n := len(cfg.Validators)
-	quorum := (n*4 + 4) / 5 // equivalent to ceil(n * 0.8)
-	if quorum < 1 && n > 0 {
-		quorum = 1
-	}
+	// Quorum: ceil(n * 0.8). computeQuorum with zero disabled validators
+	// is equivalent and avoids duplicating the formula.
+	quorum := computeQuorum(len(cfg.Validators), 0)
 
-	// Cookie: generate a random 64-bit value once at boot, used for the
-	// lifetime of the instance. On the astronomically-improbable read
-	// error we fall back to a time-derived value — any non-zero cookie
-	// satisfies the wire format; the value carries no security-critical
-	// meaning.
-	var cookieBytes [8]byte
-	if _, err := rand.Read(cookieBytes[:]); err != nil {
-		binary.BigEndian.PutUint64(cookieBytes[:], uint64(time.Now().UnixNano()))
-	}
-	cookie := binary.BigEndian.Uint64(cookieBytes[:])
-	if cookie == 0 {
-		// Serializer treats zero as "omit" — bump to 1 in the
-		// infinitesimal case of an all-zero read so the field is
-		// always emitted.
-		cookie = 1
-	}
+	cookie := generateCookie()
 
-	// Seed per-amendment stances from the registry: every supported
-	// feature defaults to its registered VoteBehavior (DefaultYes →
-	// VoteUp, DefaultNo → VoteAbstain via map lookup, Obsolete →
-	// VoteObsolete).
 	logger := slog.Default().With("component", "consensus-adaptor")
-	amendmentStances := make(map[[32]byte]amendmentvote.Stance)
-	for _, f := range amendment.AllFeatures() {
-		switch {
-		case f.Vote == amendment.VoteObsolete:
-			amendmentStances[f.ID] = amendmentvote.VoteObsolete
-		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
-			amendmentStances[f.ID] = amendmentvote.VoteUp
-		}
-	}
-
-	// Layer Config.AmendmentVote on top as operator overrides to
-	// VoteUp. Unknown names are logged and dropped (stale config must
-	// not block boot). Obsolete amendments cannot be promoted to
-	// VoteUp.
-	for _, name := range cfg.AmendmentVote {
-		f := amendment.GetFeatureByName(name)
-		if f == nil {
-			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
-			continue
-		}
-		if f.Vote == amendment.VoteObsolete {
-			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
-			continue
-		}
-		if f.Supported != amendment.SupportedYes {
-			// Only supported amendments are voted for; an unsupported
-			// upvote is never broadcast.
-			logger.Warn("unsupported amendment cannot be voted up; ignoring", "name", name)
-			continue
-		}
-		amendmentStances[f.ID] = amendmentvote.VoteUp
-	}
+	amendmentStances := seedAmendmentStances(cfg.AmendmentVote, logger)
 
 	// Seed the amendment-vote cache with the initial UNL so
 	// RecordVotes accepts validations from round one. Re-call
@@ -444,10 +358,8 @@ func New(cfg Config) *Adaptor {
 	trustedVotes := NewTrustedVotes()
 	trustedVotes.TrustChanged(cfg.Validators)
 
-	// Substitute fee-setup defaults on a per-field basis: an operator
-	// may set BaseFee but leave reserves zero, and we want each unset
-	// field to fall back to the default rather than to "abstain". An
-	// empty config thus votes toward 10/10_000_000/2_000_000.
+	// Substitute fee defaults per-field: an unset field falls back to the
+	// default rather than "abstain".
 	feeVote := cfg.FeeVote
 	defaults := defaultFeeVote()
 	if feeVote.BaseFee == 0 {
@@ -460,12 +372,9 @@ func New(cfg Config) *Adaptor {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
-	// NegativeUNL voter: owned per-adaptor. Constructed only when we
-	// have a local validator identity AND master keys for the UNL — the
-	// algorithm needs both to vote (myID for the local-participation
-	// check, master keys for the emitted UNLModify tx). For
-	// non-validator nodes or bare-NodeID test fixtures, leave it nil
-	// and GenerateNegativeUNLPseudoTx returns no votes.
+	// NegativeUNL voter: constructed only with both a local identity and UNL
+	// master keys (needed for the local-participation check and the emitted
+	// UNLModify tx). nil otherwise — GenerateNegativeUNLPseudoTx returns no votes.
 	var negUNLVoter *negativeunlvote.Voter
 	var trustedMasterKeys [][33]byte
 	if cfg.Identity != nil && len(cfg.ValidatorMasterKeys) == len(cfg.Validators) && len(cfg.ValidatorMasterKeys) > 0 {
@@ -496,22 +405,18 @@ func New(cfg Config) *Adaptor {
 	}
 }
 
-// SetValidationHistorian wires per-ledger trusted-validation lookups
-// into the adaptor. The engine calls this once after constructing its
-// ValidationTracker (see rcl.Engine.Run). Required for NegativeUNL
-// voting; until set, GenerateNegativeUNLPseudoTx emits no votes
-// (graceful degradation). Satisfies consensus.WireableAdaptor.
+// SetValidationHistorian wires per-ledger trusted-validation lookups into the
+// adaptor; the engine calls it once after building its ValidationTracker.
+// Until set, GenerateNegativeUNLPseudoTx emits no votes.
 func (a *Adaptor) SetValidationHistorian(h consensus.ValidationHistorian) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.validationHistorian = h
 }
 
-// UpdatePeerLCL records the last-closed-ledger hash a peer reported
-// via statusChange. Called by the router on every inbound
-// TMStatusChange so getNetworkLedger can fall back to peer-reported
-// LCLs when proposal votes are absent or stale. The zero hash is
-// treated as "unknown" and removes any existing entry.
+// UpdatePeerLCL records the last-closed-ledger hash a peer reported via
+// statusChange, so getNetworkLedger can fall back to peer LCLs when proposal
+// votes are absent or stale. The zero hash removes any existing entry.
 func (a *Adaptor) UpdatePeerLCL(peerID uint64, ledger consensus.LedgerID) {
 	a.peerLCLsMu.Lock()
 	defer a.peerLCLsMu.Unlock()
@@ -522,9 +427,7 @@ func (a *Adaptor) UpdatePeerLCL(peerID uint64, ledger consensus.LedgerID) {
 	a.peerLCLs[peerID] = ledger
 }
 
-// PeerReportedLedgers returns a snapshot of all known peer LCL
-// hashes. Engine-side consensus.Adaptor implementation; see the
-// interface docstring for semantics.
+// PeerReportedLedgers returns a snapshot of all known peer LCL hashes.
 func (a *Adaptor) PeerReportedLedgers() []consensus.LedgerID {
 	a.peerLCLsMu.RLock()
 	defer a.peerLCLsMu.RUnlock()
@@ -546,46 +449,33 @@ func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
 	return a.sender.BroadcastValidation(validation)
 }
 
-// PeersThatHave returns the set of peer IDs the overlay knows have
-// the message whose suppression-hash is `suppressionHash`. Thin
-// delegate to NetworkSender.PeersThatHave so higher layers (the
-// consensus router) can query without pulling in the overlay import.
+// PeersThatHave delegates to NetworkSender so higher layers can query without
+// importing the overlay. See NetworkSender.PeersThatHave.
 func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
 	return a.sender.PeersThatHave(suppressionHash)
 }
 
-// RelayProposal forwards a peer-originated proposal to other peers,
-// excluding exceptPeer (the originator). Pass 0 for exceptPeer to
-// forward to everyone. Uses proposal.SuppressionHash (populated by
-// the consensus router) so the overlay can record each recipient in
-// its reverse index — queried by the router on later duplicates to
-// feed the full known-haver set into the reduce-relay slot.
+// RelayProposal forwards a peer-originated proposal, excluding exceptPeer
+// (0 = everyone). See NetworkSender.RelayProposal.
 func (a *Adaptor) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	return a.sender.RelayProposal(proposal, exceptPeer)
 }
 
-// RelayValidation forwards a peer-originated validation to other peers,
-// excluding exceptPeer (the originator). Mirrors RelayProposal; uses
-// validation.SuppressionHash for the reverse-index record.
+// RelayValidation forwards a peer-originated validation, excluding exceptPeer.
+// Mirrors RelayProposal.
 func (a *Adaptor) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
 	return a.sender.RelayValidation(validation, exceptPeer)
 }
 
-// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
-// originPeer AND every peer in seenPeers (known-havers). Called by
-// the consensus router on every trusted proposal/validation duplicate
-// to keep the squelch selection logic moving — feeding multiple
-// known-havers per duplicate is what lets selection converge quickly.
+// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with originPeer
+// and seenPeers (known-havers). See NetworkSender.UpdateRelaySlot.
 func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
-// SetOnTxSetRequested registers a callback invoked at the start of
-// every RequestTxSet. Used by the router so every active re-ask from
-// consensus resets the throttle/attempt bookkeeping on the in-flight
-// acquisition, letting the next inbound TMLedgerData broadcast
-// immediately. Set once at startup; not safe for concurrent
-// re-registration.
+// SetOnTxSetRequested registers a callback invoked at the start of every
+// RequestTxSet, so the router can reset throttle/attempt bookkeeping on the
+// in-flight acquisition. Set once at startup; not concurrency-safe.
 func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
 	a.onTxSetRequested = cb
 }
@@ -627,14 +517,9 @@ func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, no
 	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs, indirect)
 }
 
-// EngineConfigForReplay returns the shared (non-per-ledger)
-// tx.EngineConfig used when replaying a historical ledger anchored on
-// `parent`. Fees come from the parent's FeeSettings SLE; network and
-// logger come from the service config.
-//
-// The caller (typically ReplayDelta.Apply) overrides the per-ledger
-// fields — LedgerSequence, ParentCloseTime, ParentHash, Rules,
-// ApplyFlags, OpenLedger — from the verified target header.
+// EngineConfigForReplay returns the shared (non-per-ledger) tx.EngineConfig
+// for replaying a ledger anchored on parent (fees from parent's FeeSettings
+// SLE). The caller overrides the per-ledger fields from the target header.
 func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
 	if a.ledgerService == nil {
 		return tx.EngineConfig{}
@@ -642,38 +527,28 @@ func (a *Adaptor) EngineConfigForReplay(parent *ledger.Ledger) tx.EngineConfig {
 	return a.ledgerService.EngineConfigForReplay(parent)
 }
 
-// PeerSupportsReplay reports whether the peer advertised the ledger-replay
-// protocol feature during handshake. Delegates to the NetworkSender so the
-// same decision applies to both real overlay peers and test doubles.
+// PeerSupportsReplay reports whether the peer advertised ledger-replay during
+// handshake. Delegates to NetworkSender.
 func (a *Adaptor) PeerSupportsReplay(peerID uint64) bool {
 	return a.sender.PeerSupportsReplay(peerID)
 }
 
-// ReplayCapablePeersExcluding returns up to `max` peer IDs that
-// advertised ledger-replay, omitting peer IDs in `excluded`. Used by
-// the replay-delta retry loop to rotate peers on sub-task timeout.
+// ReplayCapablePeersExcluding returns up to max ledger-replay peers, omitting
+// excluded. See NetworkSender.ReplayCapablePeersExcluding.
 func (a *Adaptor) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
 	return a.sender.ReplayCapablePeersExcluding(excluded, max)
 }
 
-// IncPeerBadData attributes an invalid-data event to the peer via the
-// underlying network sender so the overlay can charge it toward the
-// eviction threshold. See NetworkSender.IncPeerBadData. Kept as a
-// thin delegator so Router can call through the adaptor rather than
-// reaching into the overlay directly.
+// IncPeerBadData delegates to NetworkSender so Router can charge a peer through
+// the adaptor. See NetworkSender.IncPeerBadData.
 func (a *Adaptor) IncPeerBadData(peerID uint64, reason string) {
 	a.sender.IncPeerBadData(peerID, reason)
 }
 
-// GetParentLedgerForReplay returns the closed ledger at seq-1, which is
-// the prior ledger needed to replay a delta into seq. Returns nil if the
-// parent is unknown, the request is for a ledger we cannot anchor on
-// (seq <= 1, no service wired), OR the parent is still open (its hash
-// is unset until Close, so it cannot serve as a chain anchor — a
-// goxrpl-1 enclave run reproduced a live-lock where the open ledger
-// was returned and the replay-delta verifier kept rejecting valid
-// responses against an all-zero parent hash). The parent ledger must
-// be locally available before issuing the delta request.
+// GetParentLedgerForReplay returns the closed ledger at seq-1 (the anchor for
+// replaying a delta into seq). Returns nil if the parent is unknown, seq <= 1,
+// no service is wired, or the parent is still open — an open ledger's hash is
+// unset until Close, so it cannot anchor the chain.
 func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 	if seq <= 1 || a.ledgerService == nil {
 		return nil
@@ -692,9 +567,8 @@ func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
 	return a.sender.SendToPeer(peerID, frame)
 }
 
-// ShouldShedLedgerRequest delegates to NetworkSender; see the interface
-// doc. Kept as a thin delegator so Router can gate ledger-body serving
-// through the adaptor rather than reaching into the overlay directly.
+// ShouldShedLedgerRequest delegates to NetworkSender so Router can gate
+// ledger-body serving through the adaptor.
 func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
 	return a.sender.ShouldShedLedgerRequest(peerID, loadedLocal)
 }
@@ -738,10 +612,9 @@ func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 	return WrapLedger(l), nil
 }
 
-// GetLedgerBySeq returns the locally-held CLOSED ledger at seq from the
-// service's adopted history (ledgerHistory[seq]). It reads adopted history
-// only — never the mutable open ledger — so the consensus catch-up walk can
-// never adopt an unclosed ledger as prevLedger.
+// GetLedgerBySeq returns the locally-held CLOSED ledger at seq from adopted
+// history only — never the mutable open ledger — so the catch-up walk can't
+// adopt an unclosed ledger as prevLedger.
 func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
 	l, err := a.ledgerService.GetAdoptedLedgerBySequence(seq)
 	if err != nil || l == nil {
@@ -758,11 +631,9 @@ func (a *Adaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	return WrapLedger(l), nil
 }
 
-// GetValidatedLedgerHash returns the hash of the most recent ledger
-// the node considers fully validated, used to populate sfValidatedHash.
-// Returns the zero LedgerID when no ledger has yet crossed
-// trusted-validation quorum (the engine-side consumer should not emit
-// the field in that case).
+// GetValidatedLedgerHash returns the hash of the most recent fully-validated
+// ledger (for sfValidatedHash), or the zero LedgerID when none has crossed
+// trusted-validation quorum.
 func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
 	vl := a.validatedLedger()
 	if vl == nil {
@@ -772,17 +643,14 @@ func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
 }
 
 func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool) (consensus.Ledger, error) {
-	// Unwrap the parent to get the concrete ledger for the service.
-	// This is critical for chain switching: the parent may differ from
-	// the service's internal closedLedger after wrong ledger detection.
+	// Unwrap the parent for the service. Critical for chain switching: the
+	// parent may differ from the service's closedLedger after wrong-ledger detection.
 	var parentLedger *ledger.Ledger
 	if w, ok := parent.(*LedgerWrapper); ok {
 		parentLedger = w.Unwrap()
 	}
-	// context.TODO: the consensus.Adaptor.BuildLedger interface does not
-	// propagate a context. Until that interface gains one, persistence
-	// here cannot be cancelled by the consensus engine. Tracked separately
-	// from this issue (#185).
+	// context.TODO: BuildLedger's interface has no context, so persistence
+	// here can't be cancelled by the engine (#185).
 	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), closeTime, closeTimeCorrect)
 	if err != nil {
 		return nil, err
@@ -811,8 +679,7 @@ func (a *Adaptor) ValidateLedger(ledger consensus.Ledger) error {
 }
 
 func (a *Adaptor) StoreLedger(ledger consensus.Ledger) error {
-	// Ledger is already persisted by AcceptConsensusResult in BuildLedger.
-	// This is a no-op for now; could be used for additional replication.
+	// Already persisted by AcceptConsensusResult in BuildLedger; no-op for now.
 	return nil
 }
 
@@ -827,10 +694,8 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 }
 
 // GetProposableTxs returns the tx set the node will propose this round.
-// parent is the prevLedger threaded through for future negative-UNL /
-// amendment-vote filtering; no filtering happens today so this returns
-// the same snapshot as GetPendingTxs, but the implementations will
-// diverge once filtering lands.
+// parent is threaded through for future negative-UNL / amendment-vote
+// filtering; today it returns the same snapshot as GetPendingTxs.
 func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
 	_ = parent
 	if a.ledgerService == nil {
@@ -882,10 +747,8 @@ func (a *Adaptor) filterNegativeUNL(vals []*consensus.Validation) []*consensus.V
 	return excludeNegativeUNL(vals, a.GetNegativeUNL())
 }
 
-// excludeNegativeUNL is the pure-arithmetic core of the negUNL
-// filter — extracted for testability without standing up a
-// NegativeUNL SLE in the ledger fixture. Empty negUNL returns vals
-// unchanged (no allocation).
+// excludeNegativeUNL is the pure core of the negUNL filter. Empty negUNL
+// returns vals unchanged.
 func excludeNegativeUNL(vals []*consensus.Validation, negUNL []consensus.NodeID) []*consensus.Validation {
 	if len(vals) == 0 || len(negUNL) == 0 {
 		return vals
@@ -924,11 +787,8 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 	return ts, nil
 }
 
-// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet,
-// after the set has been cached. The CLI wires this to
-// Overlay.BroadcastHaveTxSet so peers acquiring the set via
-// mtHAVE_SET{tsNEED} can find a source without polling. Safe to call
-// with nil to clear.
+// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet (after
+// caching); the CLI wires it to Overlay.BroadcastHaveTxSet. nil clears.
 func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
 	a.onTxSetBuilt = cb
 }
@@ -955,20 +815,14 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 }
 
 // AddPendingTx submits a tx blob through the persistent open-ledger view.
-//
-// local=true marks RPC-originated submissions, which get held in the
-// LocalTxs pool until they apply or age out. local=false is for
-// peer-relay submissions — the peer manages its own resends.
+// local=true (RPC) holds it in the LocalTxs pool until it applies or ages
+// out; local=false (peer-relay) leaves resends to the peer.
 func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 	_, _ = a.SubmitPendingTx(blob, local)
 }
 
-// SubmitPendingTx is AddPendingTx with the classification result surfaced
-// to the caller. The peer-relay path in Router.handleTransaction uses this
-// to gate immediate re-broadcast on a non-Failure result — relay only when
-// the tx applied, queued, or stayed plausible in a non-FULL mode, never on
-// the permanent-drop classes. AddPendingTx remains the void variant for
-// callers that don't care (RPC ingress, tests).
+// SubmitPendingTx is AddPendingTx with the classification result surfaced, so
+// the peer-relay path can gate re-broadcast on a non-Failure result.
 func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.Result, error) {
 	if a.ledgerService == nil {
 		return openledger.ResultFailure, errors.New("ledger service unavailable")
@@ -995,11 +849,9 @@ func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
 	return a.identity.NodeID, nil
 }
 
-// GetValidatorSigningKey returns the local validator's 33-byte compressed
-// signing public key (the ephemeral key in token mode, equal to the master
-// key in seed-only mode). This is the value fed to validator_info /
-// server_info; the 20-byte NodeID from GetValidatorKey must NOT be
-// substituted here.
+// GetValidatorSigningKey returns the validator's 33-byte signing pubkey
+// (ephemeral in token mode, master in seed-only mode) for validator_info /
+// server_info. The 20-byte NodeID from GetValidatorKey must NOT be used here.
 func (a *Adaptor) GetValidatorSigningKey() ([33]byte, error) {
 	if a.identity == nil {
 		return [33]byte{}, ErrNoValidatorKey
@@ -1044,28 +896,12 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	return result
 }
 
-// SetTrustedValidators replaces the operator-trusted validator set
-// atomically. Visible to subsequent GetTrustedValidators / IsTrusted /
-// GetQuorum / GetNegativeUNL reads, and to the consensus engine's
-// per-round delta scan in driveNegativeUNLNewValidatorsLocked — the
-// added entries flow into OnUNLChange so the NegativeUNL voter's
-// grace period (NewValidatorDisableSkip ledgers) covers them.
+// SetTrustedValidators atomically replaces the operator-trusted validator set.
 //
-// validators and masterKeys are index-aligned and MUST be the same
-// length (NodeIDs are derived from master keys via calcNodeID; every
-// trusted validator therefore has exactly one master pubkey). A
-// mismatch is logged at WARN and the trailing entries of whichever
-// slice is longer are dropped — defensive only, since the canonical
-// producer ParseValidatorKeysWithMaster always returns equal-length
-// slices. Pass two empty slices (nil, nil) to clear the trusted set
-// (standalone-mode transition).
-//
-// This is the single entry point every trigger (SIGHUP-driven config
-// reload, future RPC admin method, future TMValidatorList ingress)
-// plugs into.
-//
-// Safe for concurrent callers; copies inputs so callers may mutate
-// their slices after return.
+// validators and masterKeys are index-aligned and MUST be the same length; a
+// mismatch is logged at WARN and the longer slice truncated (defensive only).
+// Pass (nil, nil) to clear the set (standalone transition). The single entry
+// point for every UNL-change trigger. Concurrency-safe; copies its inputs.
 func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
 	if len(validators) != len(masterKeys) && (len(validators) > 0 || len(masterKeys) > 0) {
 		a.logger.Warn("SetTrustedValidators: validators / masterKeys length mismatch; truncating to shorter",
@@ -1095,12 +931,9 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.trustedMasterKeys = mkCopy
 	a.mu.Unlock()
 
-	// trustedVotes is assigned once in New (adaptor.go:384) and never
-	// reassigned thereafter, so the unlocked read is safe — TrustedVotes
-	// owns its own internal mutex for the call itself. Calling after
-	// releasing a.mu avoids lock nesting (TrustedVotes.TrustChanged
-	// takes its mutex on the way in). Safe to call with an empty slice;
-	// it just drops stale per-validator vote caches.
+	// trustedVotes is assigned once in New and never reassigned, so the
+	// unlocked read is safe (TrustedVotes has its own mutex). Called after
+	// releasing a.mu to avoid lock nesting.
 	if a.trustedVotes != nil {
 		a.trustedVotes.TrustChanged(vCopy)
 	}
@@ -1110,12 +943,8 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 // every call to account for negative-UNL changes:
 // max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
-	// Take a.mu around the trustedValidators read — the slice header is
-	// only mutated in New() today but the TrustChanged event will later
-	// be driven from the validator-manager wiring, after which an
-	// unlocked read becomes a data race against the writer.
-	// GetNegativeUNL has its own lock, so call it after release to
-	// avoid nesting locks.
+	// Lock a.mu for the trustedValidators read; GetNegativeUNL takes its own
+	// lock, so call it after release to avoid nesting.
 	a.mu.Lock()
 	trusted := len(a.trustedValidators)
 	a.mu.Unlock()
@@ -1123,23 +952,15 @@ func (a *Adaptor) GetQuorum() int {
 	return computeQuorum(trusted, disabled)
 }
 
-// computeQuorum is the pure arithmetic behind GetQuorum — extracted
-// for testability. Returns the minimum number of trusted, non-negUNL
-// validator signatures required to fully validate a ledger:
+// computeQuorum is the pure arithmetic behind GetQuorum: the minimum trusted,
+// non-negUNL signatures to fully validate a ledger.
 //
 //   - standalone (trusted==0): 0 — no quorum gate.
-//   - effective > 0: max(ceil(0.8 * effective), ceil(0.6 * trusted)).
-//     The ceil(0.6 * trusted) term is the AbsoluteMinimumQuorum floor
-//     the negative-UNL amendment introduced so a large negUNL cannot
-//     drop the bar below 60% of the full UNL. Within the negUNL's 25%
-//     cap the 0.8 term dominates and the floor never binds; it only
-//     engages beyond the cap. Both terms are >= 1 here, so the quorum
-//     stays live.
-//   - effective <= 0 with a non-empty trusted set (every validator
-//     on negUNL): math.MaxInt. We return an unreachable quorum so
-//     no validation count can ever fire checkFullValidation against
-//     a fully-disabled UNL. The alternative (quorum==1) would let
-//     any transient vote fire a spurious full-validation callback.
+//   - effective > 0: max(ceil(0.8 * effective), ceil(0.6 * trusted)). The 0.6
+//     term is the AbsoluteMinimumQuorum floor (negative-UNL amendment) so a
+//     large negUNL can't drop the bar below 60% of the full UNL.
+//   - effective <= 0 (whole UNL on negUNL): math.MaxInt — an unreachable
+//     quorum so no transient vote fires a spurious full-validation callback.
 func computeQuorum(trusted, disabled int) int {
 	if trusted == 0 {
 		return 0
@@ -1151,20 +972,10 @@ func computeQuorum(trusted, disabled int) int {
 	return max((effective*4+4)/5, (trusted*3+4)/5)
 }
 
-// GetNegativeUNLMasters reads the ltNEGATIVE_UNL SLE and returns the
-// raw 33-byte master pubkeys of disabled validators (not the derived
-// NodeIDs that GetNegativeUNL returns). Used by the `validators` RPC,
-// which surfaces these as base58 NodePublic strings under the
-// `NegativeUNL` key.
-//
-// Returns nil under the same conditions GetNegativeUNL does: no ledger
-// service, no validated ledger, no SLE, or parse failure.
-// disabledValidatorMasters reads the ltNEGATIVE_UNL SLE from the current
-// validated ledger and returns the 33-byte master public keys of every
-// disabled validator. Returns nil when no ledger service is wired, no
-// validated ledger exists yet, no NegativeUNL SLE has been created, or
-// the SLE is malformed (logged at warn and treated as empty so a bad SLE
-// can't wedge the tracker). Malformed individual entries are skipped.
+// disabledValidatorMasters reads the ltNEGATIVE_UNL SLE from the validated
+// ledger and returns the 33-byte master pubkeys of disabled validators.
+// Returns nil when there's no ledger service, no validated ledger, no SLE, or
+// a malformed SLE (logged at warn, treated as empty). Bad entries are skipped.
 func (a *Adaptor) disabledValidatorMasters() [][33]byte {
 	l := a.validatedLedger()
 	if l == nil {
@@ -1197,30 +1008,23 @@ func (a *Adaptor) disabledValidatorMasters() [][33]byte {
 	return out
 }
 
+// GetNegativeUNLMasters returns the 33-byte master pubkeys of disabled
+// validators (raw, not the NodeIDs GetNegativeUNL returns). Used by the
+// `validators` RPC.
 func (a *Adaptor) GetNegativeUNLMasters() [][33]byte {
 	return a.disabledValidatorMasters()
 }
 
-// GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
-// ledger and returns the NodeIDs of disabled validators. Without this the
-// ValidationTracker's negUNL filter (validations.go:SetNegativeUNL)
-// is dead code and a negative-UNL'd validator's vote would still
-// count toward quorum on mainnet.
-//
-// Returns nil when:
-//   - no ledger service is wired (test env);
-//   - no validated ledger yet (pre-sync);
-//   - no NegativeUNL SLE has been created (cluster is healthy);
-//   - the SLE exists but parse fails (logged at warn, treated as empty
-//     so a malformed SLE doesn't lock the tracker).
+// GetNegativeUNL returns the NodeIDs of validators disabled on the validated
+// ledger's ltNEGATIVE_UNL SLE. Returns nil when there's no ledger service, no
+// validated ledger, no SLE, or a parse failure (logged at warn).
 func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
 	masters := a.disabledValidatorMasters()
 	if masters == nil {
 		return nil
 	}
-	// NegativeUNL entries store 33-byte master public keys; the in-memory
-	// NodeID they must match against is the 20-byte calcNodeID(master)
-	// digest.
+	// NegativeUNL stores 33-byte master keys; match against the 20-byte
+	// calcNodeID(master) digest.
 	out := make([]consensus.NodeID, 0, len(masters))
 	for _, master := range masters {
 		out = append(out, consensus.CalcNodeID(master))
@@ -1234,29 +1038,16 @@ func (a *Adaptor) GetCookie() uint64 {
 	return a.cookie
 }
 
-// GetServerVersion returns the 64-bit version identifier this
-// validator advertises via sfServerVersion. The encoding deliberately
-// differs from rippled's (top bit 0x8000...) to avoid misrepresenting
-// go-xrpl as rippled in peer version-counting statistics; we use
-// 0x4000... as a go-xrpl tag and OR in a package version number.
+// GetServerVersion returns the 64-bit sfServerVersion identifier. It avoids
+// rippled's top bit (0x8000...) so go-xrpl isn't counted as rippled in peer
+// version statistics.
 func (a *Adaptor) GetServerVersion() uint64 {
-	// Low bits are available for a semantic version encoding in the
-	// future; for now they stay zero so the tag byte is sufficient to
-	// identify a go-xrpl validator.
+	// Low bits reserved for a future semantic version; zero for now.
 	return goxrplServerVersionTag
 }
 
-// GetFeeVote returns this validator's fee-vote stance and whether the
-// post-XRPFees rules should apply. postXRPFees is read from the
-// parent ledger's rules so voting switches the instant the amendment
-// activates. Zero stance values mean "no vote" and the serializer will
-// omit the fields.
-//
-// GetLoadFee returns the local load_fee advertised on outbound
-// validations: the max of the local and cluster fee. We return 0 —
-// which the serializer treats as "omit" — whenever the max collapses
-// to LoadBase (the local/cluster floors prevent values below
-// LoadBase).
+// GetLoadFee returns the local load_fee for outbound validations: the max of
+// the local and cluster fee, or 0 ("omit") when that collapses to LoadBase.
 func (a *Adaptor) GetLoadFee() uint32 {
 	if a.ledgerService == nil {
 		return 0
@@ -1275,35 +1066,21 @@ func (a *Adaptor) GetLoadFee() uint32 {
 	return fee
 }
 
-func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
-	return a.feeVote.BaseFee,
-		uint64(a.feeVote.ReserveBase),
-		uint64(a.feeVote.ReserveIncrement),
-		a.IsFeatureEnabled("XRPFees")
+// GetFeeVote returns this validator's fee-vote stance and whether the
+// post-XRPFees rules apply (featureXRPFees enabled).
+func (a *Adaptor) GetFeeVote() consensus.FeeVoteResult {
+	return consensus.FeeVoteResult{
+		BaseFee:          a.feeVote.BaseFee,
+		ReserveBase:      uint64(a.feeVote.ReserveBase),
+		ReserveIncrement: uint64(a.feeVote.ReserveIncrement),
+		PostXRPFees:      a.IsFeatureEnabled("XRPFees"),
+	}
 }
 
-// GetAmendmentVote returns the list of amendment IDs this validator
-// wishes to vote FOR on the next flag ledger, filtered against the
-// current ledger's already-enabled amendments so we don't re-vote for
-// active ones.
-//
-// Returns nil when:
-//   - the validator has no configured vote (AmendmentVote empty);
-//   - no ledger is available to filter against (pre-sync);
-//   - every configured amendment is already enabled on the current ledger.
-//
-// Output is a freshly-allocated slice; the result is canonically
-// sorted by amendment ID so two validators with the same stance
-// produce byte-identical validations.
 // currentAmendmentStances returns the validator's live per-amendment vote
-// stances. When a live amendment table is wired, stances are derived fresh from
-// it (registry defaults, then operator veto → abstain and upvote → VoteUp) so
-// config or runtime feature-RPC changes take effect without restart; otherwise
-// the construction-time map is returned.
-//
-// This is the single owner of amendment vote policy: the amendment table holds
-// only the raw veto/upvote state, and the mapping to validator stances lives
-// here (and in the construction-time seed above).
+// stances. With a live amendment table wired, stances are derived fresh from it
+// (registry defaults, then operator veto → abstain, upvote → VoteUp) so changes
+// take effect without restart; otherwise the construction-time map is returned.
 func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 	if a.amendmentTable == nil {
 		return a.amendmentStances
@@ -1316,8 +1093,7 @@ func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 		case a.amendmentTable.IsVetoed(f.ID):
 			// vetoed → abstain (leave unset)
 		case f.Supported == amendment.SupportedYes && a.amendmentTable.IsUpVoted(f.ID):
-			// Operator upvote, but only for supported amendments — an
-			// unsupported amendment is never voted for however it was voted.
+			// Operator upvote, supported amendments only.
 			stances[f.ID] = amendmentvote.VoteUp
 		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
 			stances[f.ID] = amendmentvote.VoteUp
@@ -1360,15 +1136,18 @@ func featureEnabled(rules *amendment.Rules, name string, unknownDefault bool) bo
 	return rules.Enabled(f.ID)
 }
 
+// GetAmendmentVote returns the amendment IDs this validator votes FOR on the
+// next flag ledger, filtered against already-enabled amendments and canonically
+// sorted (so equal stances yield byte-identical validations). nil when there's
+// nothing to vote for.
 func (a *Adaptor) GetAmendmentVote() [][32]byte {
 	stances := a.currentAmendmentStances()
 	if len(stances) == 0 {
 		return nil
 	}
 
-	// Filter out amendments already enabled on the currently-validated
-	// ledger. Absence of a ledger or rules defaults to "nothing
-	// filtered" — safe because an un-synced node isn't validating.
+	// Filter out amendments already enabled on the validated ledger. No
+	// ledger/rules → nothing filtered (an un-synced node isn't validating).
 	rules := a.validatedRules()
 
 	out := make([][32]byte, 0, len(stances))
@@ -1385,45 +1164,24 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 		return nil
 	}
 
-	// Canonical sort — sfAmendments is written in sorted order, so emit
-	// the same ordering for byte-identical validations between two
-	// validators with the same stance.
+	// Canonical sort for byte-identical validations across validators.
 	sort.Slice(out, func(i, j int) bool {
 		return bytes.Compare(out[i][:], out[j][:]) < 0
 	})
 	return out
 }
 
-// IsFeatureEnabled reports whether the named amendment is enabled on
-// the rules of the currently-validated ledger. Used by the engine to
-// gate optional STValidation fields that are only emitted under specific
-// amendments (sfValidatedHash under featureHardenedValidations, etc).
-//
-// Returns true on "unknown" as a safe default:
-//   - no ledger service wired (test harness): preserves mainnet-default
-//     emission so behavior-pinning tests that don't bother with rules
-//     still see the fields they expect;
-//   - no validated ledger yet (pre-sync): we haven't learned the
-//     network rules, but emission of fields gated by default-yes
-//     amendments (like HardenedValidations, VoteDefaultYes) is the
-//     safe assumption on mainnet;
-//   - unknown feature name: treat as enabled so a typo doesn't silently
-//     drop emission on mainnet. The test path exercises the false case
-//     explicitly by passing rules with the feature disabled.
+// IsFeatureEnabled reports whether the named amendment is enabled on the
+// validated ledger's rules, gating optional STValidation fields (e.g.
+// sfValidatedHash under featureHardenedValidations). Returns true on "unknown"
+// (no service, pre-sync, or unrecognised name) as the safe mainnet default.
 func (a *Adaptor) IsFeatureEnabled(name string) bool {
 	return featureEnabled(a.validatedRules(), name, true)
 }
 
-// IsFeatureEnabledOnLedger reports whether the named amendment is
-// enabled in the rules of the supplied ledger: rules are read from
-// THAT specific ledger, not from the validated view, and a miss in the
-// amendment table is "not enabled" (not "assume enabled" — the lax
-// default of IsFeatureEnabled is for the validation-broadcast path,
-// not for engine-level gates).
-//
-// Returns false when the ledger is nil, when it does not unwrap to
-// a *ledger.Ledger this adaptor recognises, when rules are nil, or
-// when the feature name is unknown — a strict gate.
+// IsFeatureEnabledOnLedger reports whether the named amendment is enabled in
+// the supplied ledger's own rules — a strict gate: any miss (nil ledger,
+// unrecognised type, nil rules, unknown name) is "not enabled".
 func (a *Adaptor) IsFeatureEnabledOnLedger(l consensus.Ledger, name string) bool {
 	if l == nil {
 		return false
@@ -1466,11 +1224,9 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 	return 30 * time.Second // protocol default
 }
 
-// AdjustCloseTime computes the weighted average of raw close times
-// and applies quarter-step damping to converge on the network's view
-// of time. All arithmetic is in whole seconds — NetClock is
-// second-granular, and a straight nanosecond replace would never decay
-// toward zero on small |by|.
+// AdjustCloseTime weight-averages raw close times and applies quarter-step
+// damping toward the network's view of time. Arithmetic is in whole seconds:
+// NetClock is second-granular and a ns replace would never decay toward zero.
 func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 	if rawCloseTimes.Self.IsZero() {
 		return
@@ -1525,20 +1281,16 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	defer a.mu.Unlock()
 	a.operatingMode = mode
 	if a.stateAcct != nil {
-		// Held under a.mu so the operatingMode field and the
-		// accounting transition observe the same serialization
-		// order. The tracker has its own mutex; this nested take
-		// is short and never re-enters a.mu.
+		// Held under a.mu so the field and the accounting transition share one
+		// serialization order; the tracker's own mutex never re-enters a.mu.
 		a.stateAcct.transition(mode)
 	}
 }
 
-// StateAccounting returns the snapshot used by server_info to populate
-// state_accounting + the top-level server_state_duration_us /
-// initial_sync_duration_us fields. Returns the zero value when the
-// adaptor was constructed without a tracker (legacy tests). stateAcct
-// is set once in New() and never reassigned, so no Adaptor-level lock
-// is needed; the tracker has its own mutex.
+// StateAccounting returns the snapshot server_info uses for state_accounting
+// and the server_state_duration_us / initial_sync_duration_us fields. Zero
+// value when constructed without a tracker. stateAcct is set once in New(), so
+// no Adaptor lock is needed (the tracker has its own mutex).
 func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 	if a.stateAcct == nil {
 		return StateAccountingSnapshot{}
@@ -1546,15 +1298,11 @@ func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 	return a.stateAcct.snapshot()
 }
 
-// OnConsensusReached logs the close and fires the consensus-phase hook.
-// The persistent open-ledger view has already been advanced by
-// Service.AcceptConsensusResult → OpenLedger.Accept, so there is
-// nothing to do for the tx pool.
+// OnConsensusReached logs the close and fires the consensus-phase hook; the
+// open-ledger view is already advanced by AcceptConsensusResult.
 //
-// NOTE: we intentionally do NOT mark the ledger validated here. The
-// validated_ledger pointer only advances once trusted-validation quorum
-// is reached — see OnLedgerFullyValidated, driven by the engine's
-// ValidationTracker. Local consensus != network agreement.
+// Does NOT mark the ledger validated — that only happens at trusted-validation
+// quorum (OnLedgerFullyValidated). Local consensus != network agreement.
 func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation, roundTime time.Duration) {
 	a.logger.Info("Consensus reached",
 		"ledger_seq", ledger.Seq(),
@@ -1563,8 +1311,7 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 	)
 
 	if a.ledgerService != nil {
-		// Pass the round's wall-clock duration into the ledger service
-		// so the TxQ's processClosedLedger sees the timeLeap flag when
+		// Feed round duration to the service so TxQ sees the timeLeap flag when
 		// consensus crossed the 5s slow-consensus threshold.
 		a.ledgerService.SetLastConsensusRoundTime(roundTime)
 
@@ -1574,12 +1321,9 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 	a.maybePromoteAfterConsensus(ledger)
 }
 
-// emitConsensusPhase delivers a consensus-phase notification to the ledger
-// service's OnConsensusPhase hook through a single ordered dispatcher (see
-// consensusPhaseCh). The dispatcher goroutine starts on first use and runs
-// for the adaptor's lifetime — a process singleton in production. Enqueue
-// is non-blocking: under a slow hook the notification is dropped rather
-// than stalling the consensus path, since phase notifications are advisory.
+// emitConsensusPhase delivers a consensus-phase notification through a single
+// ordered dispatcher (started on first use). Enqueue is non-blocking: a slow
+// hook drops the (advisory) notification rather than stalling consensus.
 func (a *Adaptor) emitConsensusPhase(phase string) {
 	if a.ledgerService == nil {
 		return
@@ -1603,26 +1347,15 @@ func (a *Adaptor) emitConsensusPhase(phase string) {
 }
 
 // maybePromoteAfterConsensus auto-promotes the operating mode after a
-// successful consensus close: a completed round is itself evidence
-// that we are aligned with the network, so we advance without waiting
-// for a peer-acquired ledger.
+// successful consensus close (a completed round is evidence we're aligned):
 //
 //	CONNECTED | SYNCING  → TRACKING
 //	CONNECTED | TRACKING → FULL when the just-closed ledger is recent
-//	                           (now < ledger.CloseTime() + 2 * resolution)
+//	                       (now < ledger.CloseTime() + 2 * resolution)
 //
-// Both branches are gated on !networkLedgerDiffers(ledger): the
-// preferred LCL is picked from trusted validations weighted through the
-// ancestry trie, with peer-reported LCLs as the fallback when no
-// trusted validations exist. The gate stays conservative: when neither
-// trusted validations nor peer LCL data are available (typical
-// fresh-bootstrap), the preferred LCL is our own and we promote.
-//
-// Without this, a fresh genesis bootstrap deadlocks at OpModeConnected
-// because none of the existing OpModeTracking transitions fire (they
-// all require a peer ahead of us to acquire from). With it, the first
-// successful observer round graduates us to FULL and the next round
-// proposes normally.
+// Both branches are gated on !networkLedgerDiffers(ledger). Without this a
+// fresh genesis bootstrap would deadlock at OpModeConnected (no peer to acquire
+// from fires the normal Tracking transitions).
 func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 	if ledger == nil {
 		return
@@ -1661,10 +1394,9 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 	)
 }
 
-// networkLedgerDiffers reports whether the network-preferred last
-// closed ledger differs from the one we just closed — the signal the
-// promotion gate keys off. Returns false when the preferred LCL is our
-// own ledger, so promotion proceeds.
+// networkLedgerDiffers reports whether the network-preferred LCL differs from
+// the one we just closed (the promotion gate's signal). False when the
+// preferred LCL is our own.
 func (a *Adaptor) networkLedgerDiffers(ledger consensus.Ledger, mode consensus.OperatingMode) bool {
 	ourLCL := ledger.ID()
 	return a.preferredLCL(ourLCL, ledger.Seq(), mode) != ourLCL
@@ -1682,33 +1414,25 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 		minSeq = a.ledgerService.GetValidatedLedgerIndex()
 	}
 
-	// largestIssued is the highest seq THIS node has issued a validation
-	// for — used to seed the trie's uncommitted support (the
-	// GetPreferred floor). A non-validator observer issues none, so its
-	// value is 0; a validator's tracks the ledgers it signed, for which
-	// the just-closed seq is the faithful proxy (the same value
-	// rcl/engine.go:3347 passes from its FULL-mode round boundary).
+	// largestIssued is the highest seq this node has validated, seeding the
+	// trie's uncommitted support (GetPreferred floor). 0 for a non-validator;
+	// the just-closed seq is the validator's faithful proxy.
 	var largestIssued uint32
 	if a.IsValidator() {
 		largestIssued = ourSeq
 	}
 
-	// Trusted-validation branch. GetPreferred consults the ancestry
-	// trie; PreferredFromValidations is its no-trie fallback, matching
-	// the engine's round-boundary jump (engine.go GetPreferred →
-	// PreferredFromValidations).
+	// Trusted-validation branch: GetPreferred consults the ancestry trie,
+	// PreferredFromValidations is the no-trie fallback.
 	if h := a.validationHistorian; h != nil {
 		id, seq, ok := h.GetPreferred(largestIssued)
 		if !ok {
 			id, seq, ok = h.PreferredFromValidations(minSeq)
 		}
 		if ok {
-			// Reconcile the raw trie tip against our current ledger:
-			// a preferred ledger that is not ahead of us — our own
-			// ledger or a same-chain ancestor — is not a switch, so we
-			// stick with ours. Approximated as seq >= ourSeq, the same
-			// guard rcl/engine.go:3347 uses on this pair, since per-seq
-			// ancestry is not available here.
+			// A preferred ledger not ahead of us (ours or a same-chain
+			// ancestor) is not a switch; approximated as seq >= ourSeq since
+			// per-seq ancestry isn't available here.
 			if id != ourLCL && seq >= ourSeq && seq >= minSeq {
 				return id
 			}
@@ -1736,18 +1460,10 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 	return best
 }
 
-// OnLedgerFullyValidated fires when the engine's ValidationTracker sees
-// trusted-validation quorum for a ledger. We flip the service's
-// validated_ledger only if our stored ledger at that seq has the matching
-// hash — fork safety, keyed on the specific ledger, not seq alone.
-//
-// After marking validated, we also refresh the LoadFeeTrack remoteFee
-// from the median LoadFee across trusted validations for this ledger:
-// collect sfLoadFee (defaulting to LoadBase when omitted), take the
-// median, and call setRemoteFee. We key validations by the attested
-// LedgerID, so we collect for the current hash only — the median
-// converges identically once a few ledgers' worth of validations
-// accumulate.
+// OnLedgerFullyValidated fires at trusted-validation quorum. It advances the
+// service's validated_ledger only if our stored ledger at that seq has the
+// matching hash (fork safety, keyed on the ledger not seq alone), then refreshes
+// LoadFeeTrack's remoteFee from the median sfLoadFee across trusted validations.
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])

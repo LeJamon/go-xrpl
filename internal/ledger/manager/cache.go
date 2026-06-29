@@ -30,11 +30,11 @@ type LedgerCache struct {
 	misses atomic.Uint64
 }
 
-type LedgerCacheConfig struct {
+type ledgerCacheConfig struct {
 	MaxRecentLedgers int
 }
 
-func NewLedgerCache(config LedgerCacheConfig) (*LedgerCache, error) {
+func newLedgerCache(config ledgerCacheConfig) (*LedgerCache, error) {
 	if config.MaxRecentLedgers <= 0 {
 		config.MaxRecentLedgers = 256
 	}
@@ -56,7 +56,6 @@ func NewLedgerCache(config LedgerCacheConfig) (*LedgerCache, error) {
 	}, nil
 }
 
-// Get retrieves a ledger by sequence number from cache
 func (c *LedgerCache) Get(seq uint32) (*ledger.Ledger, bool) {
 	ledgerValue, found := c.recentBySeq.Get(seq)
 	if found {
@@ -68,7 +67,6 @@ func (c *LedgerCache) Get(seq uint32) (*ledger.Ledger, bool) {
 	return nil, false
 }
 
-// GetByHash retrieves a ledger by hash from cache
 func (c *LedgerCache) GetByHash(hash [32]byte) (*ledger.Ledger, bool) {
 	ledgerValue, found := c.recentByHash.Get(hash)
 	if found {
@@ -80,7 +78,6 @@ func (c *LedgerCache) GetByHash(hash [32]byte) (*ledger.Ledger, bool) {
 	return nil, false
 }
 
-// Put stores a ledger in cache
 func (c *LedgerCache) Put(ledger *ledger.Ledger) {
 	seq := ledger.Sequence()
 	hash := ledger.Hash()
@@ -91,11 +88,10 @@ func (c *LedgerCache) Put(ledger *ledger.Ledger) {
 	c.recentByHash.Add(hash, ledger)
 }
 
-// Remove removes a ledger from cache
 func (c *LedgerCache) Remove(seq uint32) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	// Get the ledger first to remove from hash cache too
+	// Look up the hash to evict it from the hash cache too.
 	if ledgerValue, found := c.recentBySeq.Peek(seq); found {
 		hash := ledgerValue.Hash()
 		c.recentByHash.Remove(hash)
@@ -104,7 +100,6 @@ func (c *LedgerCache) Remove(seq uint32) {
 	c.recentBySeq.Remove(seq)
 }
 
-// MarkComplete marks a ledger sequence as complete locally
 func (c *LedgerCache) MarkComplete(seq uint32) {
 	c.completenessMu.Lock()
 	defer c.completenessMu.Unlock()
@@ -112,7 +107,6 @@ func (c *LedgerCache) MarkComplete(seq uint32) {
 	c.completeness.Add(seq)
 }
 
-// MarkCompleteRange marks a range of ledger sequences as complete
 func (c *LedgerCache) MarkCompleteRange(start, end uint32) {
 	c.completenessMu.Lock()
 	defer c.completenessMu.Unlock()
@@ -120,7 +114,6 @@ func (c *LedgerCache) MarkCompleteRange(start, end uint32) {
 	c.completeness.AddRange(start, end)
 }
 
-// IsComplete checks if we have a ledger sequence complete locally
 func (c *LedgerCache) IsComplete(seq uint32) bool {
 	c.completenessMu.RLock()
 	defer c.completenessMu.RUnlock()
@@ -128,7 +121,6 @@ func (c *LedgerCache) IsComplete(seq uint32) bool {
 	return c.completeness.Contains(seq)
 }
 
-// GetCompleteRange returns the range of complete ledgers
 func (c *LedgerCache) GetCompleteRange() (min, max uint32, hasAny bool) {
 	c.completenessMu.RLock()
 	defer c.completenessMu.RUnlock()
@@ -136,7 +128,6 @@ func (c *LedgerCache) GetCompleteRange() (min, max uint32, hasAny bool) {
 	return c.completeness.Range()
 }
 
-// FindMissingInRange finds missing ledger sequences in a range
 func (c *LedgerCache) FindMissingInRange(start, end uint32) []uint32 {
 	c.completenessMu.RLock()
 	defer c.completenessMu.RUnlock()
@@ -144,9 +135,8 @@ func (c *LedgerCache) FindMissingInRange(start, end uint32) []uint32 {
 	return c.completeness.FindMissing(start, end)
 }
 
-// Clear removes all cached ledgers (but keeps completeness tracking).
-// Holds writeMu so a concurrent Put cannot leave one cache populated while
-// the other is empty — the seq/hash double-write invariant Put/Remove rely on.
+// Clear removes all cached ledgers (keeping completeness). Holds writeMu so the
+// seq/hash double-write invariant Put/Remove rely on is preserved.
 func (c *LedgerCache) Clear() {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -154,7 +144,6 @@ func (c *LedgerCache) Clear() {
 	c.recentByHash.Purge()
 }
 
-// ClearCompleteness clears the completeness tracking
 func (c *LedgerCache) ClearCompleteness() {
 	c.completenessMu.Lock()
 	defer c.completenessMu.Unlock()
@@ -162,8 +151,7 @@ func (c *LedgerCache) ClearCompleteness() {
 	c.completeness.Clear()
 }
 
-// Stats returns cache statistics
-func (c *LedgerCache) Stats() CacheStats {
+func (c *LedgerCache) stats() cacheStats {
 	hits := c.hits.Load()
 	misses := c.misses.Load()
 
@@ -173,7 +161,7 @@ func (c *LedgerCache) Stats() CacheStats {
 		hitRate = float64(hits) / float64(total)
 	}
 
-	return CacheStats{
+	return cacheStats{
 		Hits:         hits,
 		Misses:       misses,
 		HitRate:      hitRate,
@@ -182,8 +170,7 @@ func (c *LedgerCache) Stats() CacheStats {
 	}
 }
 
-// CacheStats holds cache performance metrics
-type CacheStats struct {
+type cacheStats struct {
 	Hits         uint64
 	Misses       uint64
 	HitRate      float64

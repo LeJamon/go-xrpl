@@ -1,27 +1,7 @@
-// Package negativeunlvote ports rippled's NegativeUNLVote
-// (src/xrpld/app/misc/NegativeUNLVote.{h,cpp}) — the producer side
-// that decides whether to inject a UNLModify pseudo-tx into the
-// consensus tx set on a flag-ledger boundary, based on per-validator
-// participation in the last FlagLedgerInterval ledgers.
-//
-// The algorithm:
-//
-//  1. Build a reliability score table — for each trusted validator,
-//     count its validations across the last FlagLedgerInterval (256)
-//     ledgers, indexed by the parent ledger's skip list. Refuse to
-//     vote if our local node's count is below MinLocalValsToVote
-//     (the local view is too narrow to trust).
-//
-//  2. Find candidates using the (low|high)-water-mark thresholds and
-//     a 25% cap on listed validators. ToDisable picks unreliable
-//     validators not already on the negUNL; ToReEnable picks recovered
-//     validators currently on the negUNL.
-//
-//  3. Pick at most one candidate per category, deterministically by
-//     XOR with prevLedger.hash so every validator on the network
-//     converges on the same choice without coordination.
-//
-//  4. Serialize each picked candidate as a UNLModify pseudo-tx.
+// Package negativeunlvote decides whether to inject a UNLModify pseudo-tx
+// into the consensus tx set at a flag-ledger boundary, scoring each
+// validator's participation over the last FlagLedgerInterval ledgers and
+// picking candidates deterministically. Mirrors rippled NegativeUNLVote.
 package negativeunlvote
 
 import (
@@ -33,56 +13,34 @@ import (
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// ErrLocalCountExceedsWindow is returned when the local node's validation
-// count over the score-table window exceeds FlagLedgerInterval. Mirrors
-// rippled's "Too many!" branch at NegativeUNLVote.cpp:236-244, which
-// rippled logs at error severity. Callers should treat this as a no-vote
-// (the returned blob list is nil) and surface the error for operator
-// visibility — the impossible-state branch indicates an upstream bug
-// (e.g. duplicate validations attributed to the local node).
+// ErrLocalCountExceedsWindow signals the local node's validation count
+// exceeded FlagLedgerInterval — an impossible state pointing to an upstream
+// bug. Callers treat it as a no-vote (nil blobs) and surface it for visibility.
 var ErrLocalCountExceedsWindow = errors.New("negativeunlvote: local validation count exceeds flag-ledger window")
 
 const (
-	// flagLedgerInterval is the period (in ledgers) the producer
-	// scores validators over. Mirrors consensus.FlagLedgerInterval;
-	// duplicated here as a uint32 constant so the threshold
-	// constants below can be evaluated at compile time.
+	// scoring window in ledgers; duplicates consensus.FlagLedgerInterval as
+	// a uint32 so the thresholds below are compile-time constants
 	flagLedgerInterval uint32 = 256
 
-	// LowWaterMark is the validation-count threshold below which a
-	// trusted validator is considered unreliable and becomes a
-	// ToDisable candidate. Matches rippled's
-	// negativeUNLLowWaterMark = FLAG_LEDGER_INTERVAL * 50 / 100.
+	// below this score a validator is unreliable → ToDisable candidate
 	LowWaterMark uint32 = flagLedgerInterval * 50 / 100
 
-	// HighWaterMark is the validation-count threshold above which a
-	// currently-disabled validator becomes a ToReEnable candidate.
-	// Matches rippled's negativeUNLHighWaterMark =
-	// FLAG_LEDGER_INTERVAL * 80 / 100.
+	// above this score a disabled validator → ToReEnable candidate
 	HighWaterMark uint32 = flagLedgerInterval * 80 / 100
 
-	// MinLocalValsToVote is the minimum number of validations the
-	// local node itself must have produced over the score-table
-	// window for the local view to be considered reliable. Below
-	// this threshold the producer refuses to vote — its local
-	// reliability measurement could be wrong. Matches rippled's
-	// negativeUNLMinLocalValsToVote = FLAG_LEDGER_INTERVAL * 90 / 100.
+	// minimum local validations to trust our own view; below it, abstain
 	MinLocalValsToVote uint32 = flagLedgerInterval * 90 / 100
 
-	// NewValidatorDisableSkip is the number of ledgers a freshly-
-	// added validator is exempt from ToDisable voting. Matches
-	// rippled's newValidatorDisableSkip = FLAG_LEDGER_INTERVAL * 2.
+	// ledgers a freshly-added validator is exempt from ToDisable voting
 	NewValidatorDisableSkip uint32 = flagLedgerInterval * 2
 
-	// MaxListedFraction caps the proportion of the UNL that may
-	// appear on the NegativeUNL at any one time. ToDisable
-	// candidates are dropped once this cap is reached. Matches
-	// rippled's negativeUNLMaxListed = 0.25.
+	// max fraction of the UNL that may be on the NegativeUNL at once
 	MaxListedFraction float64 = 0.25
 )
 
@@ -94,37 +52,23 @@ const (
 	ToReEnable Modify = 0 // UNLModify with sfUNLModifyDisabling=0
 )
 
-// State captures the NegativeUNL ledger entry of the parent ledger:
-// the currently-disabled set plus any pending change a previous
-// flag-ledger UNLModify staged but that hasn't taken effect yet.
+// State captures the parent ledger's NegativeUNL entry: the disabled set
+// plus any pending change not yet in effect.
 //
-// Mirrors prevLedger->negativeUNL() / validatorToDisable() /
-// validatorToReEnable() at NegativeUNLVote.cpp:61-78.
-//
-// Invariant: ToDisablePending and ToReEnablePending must not reference
-// the same validator key. The NegativeUNL SLE enforces this at the tx
-// layer (UNLModify Apply rejects a re-enable for a validator already
-// staged for disable, and vice versa). The producer relies on that
-// invariant; passing both pointers set to the same key would silently
-// drop the validator from effectiveNegUNL.
+// Invariant: ToDisablePending and ToReEnablePending must not be the same
+// key (the UNLModify tx layer enforces it). The producer relies on this —
+// aliasing them would silently drop the validator from effectiveNegUNL.
 type State struct {
-	// DisabledKeys are the master pubkeys currently on the
-	// negUNL — i.e. excluded from quorum.
+	// master pubkeys currently on the negUNL (excluded from quorum)
 	DisabledKeys [][33]byte
-	// ToDisablePending stages a validator for disabling on the
-	// upcoming flag ledger. Nil when no change is pending. Must not
-	// alias ToReEnablePending — see the State doc comment.
+	// stages a validator for disabling next flag ledger; nil if none
 	ToDisablePending *[33]byte
-	// ToReEnablePending stages a validator for re-enabling on the
-	// upcoming flag ledger. Nil when no change is pending. Must not
-	// alias ToDisablePending — see the State doc comment.
+	// stages a validator for re-enabling next flag ledger; nil if none
 	ToReEnablePending *[33]byte
 }
 
-// effectiveNegUNL applies the pending changes from State to produce
-// the negUNL the upcoming flag ledger will see. Mirrors the
-// negUnlKeys.insert / negUnlKeys.erase handling at
-// NegativeUNLVote.cpp:61-67.
+// effectiveNegUNL applies State's pending changes to yield the negUNL the
+// upcoming flag ledger will see.
 func (s State) effectiveNegUNL() map[[33]byte]struct{} {
 	out := make(map[[33]byte]struct{}, len(s.DisabledKeys)+1)
 	for _, k := range s.DisabledKeys {
@@ -139,8 +83,10 @@ func (s State) effectiveNegUNL() map[[33]byte]struct{} {
 	return out
 }
 
-// Voter is the producer state. Holds the local node's identifier and
-// the new-validator skip table. Methods are safe for concurrent use.
+// Voter is the producer state: the local node ID and the new-validator
+// skip table, which must persist across rounds (newly-trusted validators
+// are exempt from ToDisable for NewValidatorDisableSkip ledgers). The mutex
+// guards that table; methods are safe for concurrent use.
 type Voter struct {
 	myID consensus.NodeID
 
@@ -148,9 +94,8 @@ type Voter struct {
 	newValidators map[consensus.NodeID]uint32 // ledger seq when added
 }
 
-// NewVoter constructs a Voter for the local node. myID is the 20-byte
-// consensus.NodeID — the calcNodeID(masterKey) digest, the same value
-// that keys the score table. The adaptor passes cfg.Identity.NodeID.
+// NewVoter constructs a Voter; myID is the 20-byte NodeID that also keys
+// the score table.
 func NewVoter(myID consensus.NodeID) *Voter {
 	return &Voter{
 		myID:          myID,
@@ -158,20 +103,14 @@ func NewVoter(myID consensus.NodeID) *Voter {
 	}
 }
 
-// MyID returns the local node's NodeID used by DoVoting for the
-// local-participation gate. Exposed for callers that need to look
-// up the local validator's score in their own score table before
-// invoking DoVoting (e.g. the adaptor's buildScoreTable wrapper,
-// which short-circuits on insufficient local participation to
-// avoid building an unused candidate list).
+// MyID returns the local NodeID, exposed so callers can look up their own
+// score before invoking DoVoting.
 func (v *Voter) MyID() consensus.NodeID {
 	return v.myID
 }
 
-// NewValidators registers a set of newly-trusted validators at the
-// given ledger sequence so they are exempt from ToDisable voting for
-// the next NewValidatorDisableSkip ledgers. Mirrors
-// NegativeUNLVote.cpp:322-337.
+// NewValidators registers newly-trusted validators at seq, exempting them
+// from ToDisable for the next NewValidatorDisableSkip ledgers.
 func (v *Voter) NewValidators(seq uint32, nowTrusted []consensus.NodeID) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -182,9 +121,8 @@ func (v *Voter) NewValidators(seq uint32, nowTrusted []consensus.NodeID) {
 	}
 }
 
-// PurgeNewValidators removes any new-validator entry that is older
-// than NewValidatorDisableSkip ledgers relative to seq. Mirrors
-// NegativeUNLVote.cpp:339-355.
+// PurgeNewValidators drops entries older than NewValidatorDisableSkip
+// ledgers relative to seq.
 func (v *Voter) PurgeNewValidators(seq uint32) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -195,43 +133,22 @@ func (v *Voter) PurgeNewValidators(seq uint32) {
 	}
 }
 
-// keyToNodeID derives the canonical 20-byte consensus.NodeID from a
-// 33-byte master pubkey via RIPEMD-160(SHA256(pubkey)). Matches
-// rippled's calcNodeID at PublicKey.cpp:319-327. The 33-byte pubkey
-// travels on the wire as sfUNLModifyValidator while the score table
-// is keyed by the calcNodeID-derived NodeID — same shape rippled uses
-// for trust / negUNL maps, so a Go validator and a rippled validator
-// on the same network converge on the same picked candidate.
+// keyToNodeID derives the 20-byte NodeID from a 33-byte master pubkey. The
+// pubkey travels on the wire (sfUNLModifyValidator) while the score table
+// is NodeID-keyed, so Go and rippled validators converge on the same pick.
 func keyToNodeID(k [33]byte) consensus.NodeID {
 	return consensus.CalcNodeID(k)
 }
 
-// DoVoting runs the producer end-to-end and returns the serialized
-// UNLModify pseudo-tx blobs to inject (zero, one, or two — at most
-// one ToDisable plus at most one ToReEnable). prevLedgerSeq is the
-// sequence of the parent ledger; the upcoming ledger is therefore
-// prevLedgerSeq + 1. prevLedgerHash is used as the deterministic
-// random pad for candidate picking. unlKeys lists the trusted
-// validator master keys; state describes the parent ledger's
-// NegativeUNL SLE; scoreTable maps each trusted validator's NodeID
-// to its validation count over the last FlagLedgerInterval ledgers.
+// DoVoting runs the producer end-to-end and returns the UNLModify blobs to
+// inject (at most one ToDisable plus one ToReEnable). The upcoming ledger is
+// prevLedgerSeq + 1; prevLedgerHash is the deterministic pad for picking.
+// Returns nil when there's nothing to vote (insufficient local participation
+// or no candidates).
 //
-// Returns nil when no pseudo-tx is needed or when the producer
-// chooses not to vote (insufficient local participation, no
-// candidates). Errors from pseudo-tx serialization are returned to
-// the caller; the engine treats a non-nil error as a producer
-// failure and falls through to no-injection rather than blocking the
-// round.
-//
-// scoreTable contract: callers may pass a table keyed by any NodeID
-// they observed validations from — over- or under-populated. DoVoting
-// restricts it to the UNL: every UNL key missing from scoreTable is
-// treated as score 0, and every non-UNL key is dropped. This
-// reproduces rippled's buildScoreTable invariant
-// (NegativeUNLVote.cpp:197-211) where the table is seeded with exactly
-// the UNL (each at 0) and only existing keys are incremented, so the
-// score table is always a subset of the UNL. Callers need neither
-// pre-fill nor pre-filter.
+// scoreTable contract: callers may pass any table; DoVoting restricts it to
+// the UNL (missing UNL keys score 0, non-UNL keys dropped), so no pre-fill or
+// pre-filter is needed.
 func (v *Voter) DoVoting(
 	prevLedgerSeq uint32,
 	prevLedgerHash [32]byte,
@@ -245,37 +162,17 @@ func (v *Voter) DoVoting(
 		unlNodeIDs[keyToNodeID(k)] = k
 	}
 
-	// Establish rippled's scoreTable invariant: the table holds exactly
-	// the UNL members, each defaulting to 0 (NegativeUNLVote.cpp:197-211
-	// seeds the UNL with 0, then increments only keys already present).
-	// Restricting to the UNL drops any non-UNL NodeID the caller scored —
-	// a validator removed from the UNL mid-window keeps a decaying entry,
-	// and leaving it in could make it a phantom ToDisable candidate that
-	// displaces the legitimate pick (forking the flag-ledger vote) or
-	// aborts the round when the stray wins `choose` but has no master key
-	// in the lookup table. Built on a local copy so the caller's map is
-	// not mutated.
+	// Restrict the score table to the UNL (each missing key 0): a non-UNL
+	// stray could become a phantom ToDisable candidate that forks the vote
+	// or aborts the round. Local copy so the caller's map isn't mutated.
 	filledScoreTable := make(map[consensus.NodeID]uint32, len(unlNodeIDs))
 	for n := range unlNodeIDs {
 		filledScoreTable[n] = scoreTable[n]
 	}
 
-	// Refuse to vote if local participation is insufficient. Mirrors
-	// buildScoreTable's myValidationCount branching at
-	// NegativeUNLVote.cpp:216-244, reading the local count from the
-	// UNL-restricted table just as rippled reads it from the UNL-seeded
-	// scoreTable — a local node absent from the UNL therefore counts 0
-	// and abstains. The boundaries are exact:
-	//   < MinLocalValsToVote        → no vote (low participation)
-	//   == MinLocalValsToVote       → no vote (rippled's else branch
-	//                                 catches the boundary because the
-	//                                 else-if uses strict `>`)
-	//   > FlagLedgerInterval        → no vote AND surface
-	//                                 ErrLocalCountExceedsWindow so
-	//                                 the caller can log at error
-	//                                 severity. Rippled logs the same
-	//                                 condition with JLOG(j_.error())
-	//                                 and returns empty (no vote).
+	// Refuse to vote if local participation is insufficient. The <= gate is
+	// exact: == MinLocalValsToVote is also a no-vote (rippled's else-if uses
+	// strict >). A count above the window is impossible → surface the error.
 	myCount := filledScoreTable[v.myID]
 	if myCount <= MinLocalValsToVote {
 		return nil, nil
@@ -284,8 +181,7 @@ func (v *Voter) DoVoting(
 		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, flagLedgerInterval)
 	}
 
-	// Resolve the effective negUNL for the upcoming flag ledger
-	// (current set ± any pending change).
+	// effective negUNL for the upcoming flag ledger (current ± pending)
 	negUnlKeys := state.effectiveNegUNL()
 	negUnlNodeIDs := make(map[consensus.NodeID]struct{}, len(negUnlKeys))
 	keyByNode := make(map[consensus.NodeID][33]byte, len(unlKeys)+len(negUnlKeys))
@@ -337,10 +233,8 @@ type candidateSet struct {
 	toReEnable []consensus.NodeID
 }
 
-// findAllCandidates is the score-table → candidate-set step. Mirrors
-// NegativeUNLVote.cpp:247-320 including the 25% cap, the
-// new-validator skip, and the "drop validators that left the UNL"
-// fallback for ToReEnable.
+// findAllCandidates turns the score table into candidates: 25% cap,
+// new-validator skip, and the left-the-UNL ToReEnable fallback.
 func (v *Voter) findAllCandidates(
 	unl map[consensus.NodeID][33]byte,
 	negUNL map[consensus.NodeID]struct{},
@@ -371,10 +265,8 @@ func (v *Voter) findAllCandidates(
 		}
 	}
 
-	// Fallback: if a previously-disabled validator has been removed
-	// from the UNL entirely, re-enable it on the negUNL since it's
-	// no longer eligible. Only consulted when the score-driven
-	// re-enable list is empty (NegativeUNLVote.cpp:309-318).
+	// Fallback (only when no score-driven re-enable): re-enable a disabled
+	// validator that left the UNL entirely.
 	if len(c.toReEnable) == 0 {
 		for n := range negUNL {
 			if _, inUNL := unl[n]; !inUNL {
@@ -386,17 +278,10 @@ func (v *Voter) findAllCandidates(
 	return c
 }
 
-// choose deterministically picks one NodeID from candidates using
-// the prevLedger hash as the random pad. Mirrors
-// NegativeUNLVote::choose at NegativeUNLVote.cpp:142-161 — XOR with
-// the pad and pick the minimum. This converges every validator on
-// the same choice without coordination.
-//
-// consensus.NodeID is already the 20-byte calcNodeID(masterKey)
-// digest rippled uses, so the comparator XORs candidates directly
-// against the first 20 bytes of the 32-byte randomPad — no rehash —
-// matching rippled byte-for-byte and preserving cross-implementation
-// vote convergence on a mixed Go+rippled validator network.
+// choose deterministically picks one NodeID by XORing each against the
+// prevLedger hash pad and taking the minimum, so every validator converges
+// without coordination. NodeID is already rippled's 20-byte digest, so the
+// XOR is direct (no rehash) and matches rippled byte-for-byte.
 func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID {
 	if len(candidates) == 0 {
 		var zero consensus.NodeID
@@ -414,12 +299,7 @@ func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID 
 	return best
 }
 
-// xorCalcNodeID computes NodeID ^ randomPad[:20]. Matches rippled's
-// `candidates[j] ^ randomPad` at NegativeUNLVote.cpp:155 once
-// randomPad is truncated via
-// `NodeID::fromVoid(randomPadData.data())` at NegativeUNLVote.cpp:151.
-// consensus.NodeID is already the 20-byte calcNodeID(masterKey) value
-// rippled uses; XORing the input directly avoids a redundant rehash.
+// xorCalcNodeID computes NodeID ^ randomPad[:20].
 func xorCalcNodeID(n consensus.NodeID, pad [32]byte) [20]byte {
 	var out [20]byte
 	for i := range 20 {
@@ -440,17 +320,16 @@ func compareNodeID20(a, b [20]byte) int {
 	return 0
 }
 
-// buildUNLModifyTx serializes a UNLModify pseudo-tx for inclusion in
-// the proposal initial set. Wire format mirrors rippled's
-// NegativeUNLVote::addTx at NegativeUNLVote.cpp:110-140 — zero
-// account, zero fee, empty signing pubkey, sequence 0.
+// buildUNLModifyTx serializes a UNLModify pseudo-tx: zero account/fee/key,
+// sequence 0.
 func buildUNLModifyTx(seq uint32, validator [33]byte, modify Modify) ([]byte, error) {
 	disabling := uint8(modify)
-	utx := &pseudo.UNLModify{
-		BaseTx:             *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount),
-		UNLModifyDisabling: &disabling,
-		LedgerSequence:     &seq,
-		UNLModifyValidator: hex.EncodeToString(validator[:]),
-	}
-	return pseudo.EncodePseudoTx(utx)
+	return common.BuildPseudoTx(tx.TypeUNLModify, func(base tx.BaseTx) tx.Transaction {
+		return &pseudo.UNLModify{
+			BaseTx:             base,
+			UNLModifyDisabling: &disabling,
+			LedgerSequence:     &seq,
+			UNLModifyValidator: hex.EncodeToString(validator[:]),
+		}
+	})
 }

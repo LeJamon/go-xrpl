@@ -271,8 +271,8 @@ var Specs = []Entry{
 	{
 		Name: "LedgerHashes",
 		Fields: []Field{
-			// sfFlags is soeREQUIRED (commonFields) — writeSkipList serializes
-			// Flags=0 on every LedgerHashes; the typed decoder must accept it.
+			// sfFlags is soeREQUIRED (commonFields) — the skip-list writer
+			// serializes Flags=0 on every LedgerHashes; the typed decoder must accept it.
 			{Name: "Flags"},
 			{Name: "FirstLedgerSequence"},
 			{Name: "LastLedgerSequence"},

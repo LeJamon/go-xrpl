@@ -1,40 +1,6 @@
-// Package amendmentvote ports rippled's AmendmentTableImpl::doVoting
-// (src/xrpld/app/misc/detail/AmendmentTable.cpp:847-941) — the
-// producer side that decides whether to inject EnableAmendment
-// pseudo-txs into the consensus tx set on a flag-ledger boundary.
-//
-// The algorithm:
-//
-//  1. Compute the validator threshold from trustedValidations.
-//     Pre-fixAmendmentMajorityCalc: 204/256 ≈ 79.7%; post-fix:
-//     80/100 = 80%. threshold = max(1, trustedValidations × frac).
-//
-//  2. For every amendment the local server knows about that isn't
-//     already enabled, classify against three signals:
-//
-//     - hasValMajority — did votes ≥ threshold (lax) or > threshold
-//     (strict, post-fixAmendmentMajorityCalc)? With exactly one
-//     trusted validator, both modes degrade to ≥.
-//     - hasLedgerMajority — is the amendment recorded in the
-//     parent ledger's majority list (the sfMajorities SLE)?
-//     - vote — is this server voting yes locally (Stance == Up)?
-//
-//  3. Emit one of three actions, mirroring AmendmentTable.cpp:902-924:
-//
-//     - tfGotMajority — validators say yes, ledger doesn't yet
-//     record majority, AND we're voting yes locally.
-//     - tfLostMajority — ledger records majority but validators
-//     fell off (regardless of local stance).
-//     - 0 (enable) — ledger records majority, the timer has
-//     expired (majorityTime + majorityTimeout ≤ closeTime), AND
-//     we're voting yes locally.
-//
-//     All other classifications produce no action.
-//
-//  4. Each entry is serialized as an EnableAmendment pseudo-tx
-//     with sfAmendment, sfLedgerSequence, and sfFlags (omitted
-//     when 0; rippled writes only when non-zero per
-//     AmendmentTable.h:172-174).
+// Package amendmentvote decides whether to inject EnableAmendment
+// pseudo-txs into the consensus tx set at a flag-ledger boundary.
+// Mirrors rippled AmendmentTableImpl::doVoting (AmendmentTable.cpp:847-941).
 package amendmentvote
 
 import (
@@ -43,28 +9,21 @@ import (
 	"sort"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const (
-	// PreFixThresholdNum / PreFixThresholdDen express the
-	// pre-fixAmendmentMajorityCalc threshold fraction (204/256 ≈
-	// 79.69%). Mirrors rippled SystemParameters.h:81.
+	// pre-fixAmendmentMajorityCalc threshold fraction (204/256 ≈ 79.69%)
 	PreFixThresholdNum = 204
 	PreFixThresholdDen = 256
 
-	// PostFixThresholdNum / PostFixThresholdDen express the
-	// post-fixAmendmentMajorityCalc threshold fraction (80/100 =
-	// 80%). Mirrors rippled SystemParameters.h:83.
+	// post-fixAmendmentMajorityCalc threshold fraction (80/100)
 	PostFixThresholdNum = 80
 	PostFixThresholdDen = 100
 
-	// TfGotMajority / TfLostMajority are the EnableAmendment
-	// sfFlags values that signal a state-change pseudo-tx (as
-	// opposed to an enable, which carries no flags). Mirrors
-	// rippled TxFlags.h:128-129.
+	// EnableAmendment sfFlags for a state-change pseudo-tx (enable carries none)
 	TfGotMajority  uint32 = 0x00010000
 	TfLostMajority uint32 = 0x00020000
 )
@@ -72,103 +31,62 @@ const (
 // Amendment is the 32-byte hash uniquely identifying an amendment.
 type Amendment = [32]byte
 
-// Stance is the local server's voting stance toward an amendment.
-// Mirrors rippled's AmendmentVote enum.
+// Stance is the local server's vote toward an amendment.
 type Stance int
 
 const (
-	// VoteAbstain is the default — the server has no opinion. Used
-	// for amendments rippled is aware of but the operator hasn't
-	// taken a position on. Mirrors AmendmentVote::down — abstaining
-	// counts as "no" for tally purposes.
+	// default: no opinion, counts as "no" for tally
 	VoteAbstain Stance = iota
-	// VoteUp — the server actively votes yes. Required for the
-	// gotMajority and enable actions; the lostMajority action does
-	// not require it (it fires regardless of local stance, because
-	// the ledger needs to record the majority loss either way).
+	// actively votes yes; required for gotMajority and enable (not lostMajority)
 	VoteUp
-	// VoteObsolete — vetoed locally; never propose enable, never
-	// propose gotMajority. Mirrors AmendmentVote::obsolete.
+	// vetoed locally; never propose enable or gotMajority
 	VoteObsolete
 )
 
-// Inputs aggregates everything DoVoting needs to decide. The
-// caller resolves rules / per-ledger state into these primitive
-// shapes — the algorithm itself is pure and testable in isolation.
+// Inputs aggregates everything DoVoting needs; the algorithm is pure.
 type Inputs struct {
-	// UpcomingSeq is the sequence the EnableAmendment tx will
-	// carry (parent + 1).
+	// sequence the EnableAmendment tx will carry (parent + 1)
 	UpcomingSeq uint32
 
-	// CloseTime is the parent ledger's close time. Used as the
-	// "now" reference for the majority-held-long-enough check.
-	// Mirrors AmendmentTable.cpp:849.
+	// parent ledger close time; the "now" for the majority-held check
 	CloseTime time.Time
 
-	// MajorityTimeout is the duration an amendment must hold
-	// majority on the ledger before it can be enabled. Mainnet:
-	// 14 days. Mirrors majorityTime_ at AmendmentTable.cpp:423.
+	// how long majority must hold before enable (mainnet 14 days)
 	MajorityTimeout time.Duration
 
-	// TrustedValidations is the count of trusted validators whose
-	// votes are tallied this round. Used to compute the threshold.
+	// count of trusted validators tallied this round; sets the threshold
 	TrustedValidations int
 
-	// Votes counts trusted upVotes per amendment. Mirrors the
-	// AmendmentSet::votes_ map at AmendmentTable.cpp:318.
+	// trusted up-votes per amendment
 	Votes map[Amendment]int
 
-	// Enabled is the set of amendments already enabled on the
-	// parent ledger (from the sfAmendments SLE). Already-enabled
-	// amendments are skipped at AmendmentTable.cpp:877-882.
+	// amendments already enabled on the parent ledger (skipped)
 	Enabled map[Amendment]bool
 
-	// Majority maps amendment → time it gained majority on the
-	// ledger (from the sfMajorities SLE). Empty time.Time means
-	// "no entry"; this matches AmendmentTable.cpp:886-893's
-	// std::optional handling.
+	// amendment → time it gained ledger majority; zero time means no entry
 	Majority map[Amendment]time.Time
 
-	// Stances is this server's per-amendment voting stance, keyed
-	// by amendment hash. Amendments not in the map default to
-	// VoteAbstain. Mirrors AmendmentState::vote at
-	// AmendmentTable.cpp:286.
+	// this server's per-amendment stance; absent defaults to VoteAbstain
 	Stances map[Amendment]Stance
 
-	// Known is the set of amendments this server supports — the walk
-	// domain for Decide, mirroring rippled's doVoting iterating
-	// amendmentMap_ (AmendmentTable.cpp:875). amendmentMap_ is seeded
-	// from the supported (Supported::yes) set (AmendmentTable.cpp:556),
-	// which includes DefaultYes, DefaultNo and Obsolete amendments alike
-	// but NOT unsupported ones. So a supported-but-down amendment that
-	// lost ledger majority still emits LostMajority, while an amendment
-	// that is unsupported, or recorded only in the parent ledger's
-	// sfMajorities but unknown to this server, never does. When nil,
-	// Decide treats every amendment appearing in Stances/Votes/Majority
-	// as known (the union walk) — appropriate only for callers whose
-	// inputs are already restricted to known amendments, e.g. focused
-	// unit tests.
+	// amendments this server supports — the walk domain for Decide.
+	// Includes DefaultYes/DefaultNo/Obsolete but not unsupported, so a
+	// supported-but-down amendment can still emit LostMajority. Nil walks
+	// the union of Stances/Votes/Majority (test-only; inputs assumed known).
 	Known map[Amendment]bool
 
-	// StrictMajority is true once fixAmendmentMajorityCalc is
-	// enabled. Selects the post-fix threshold fraction (80/100 vs
-	// 204/256) AND switches the passes-comparison from ≥ to >.
-	// Mirrors AmendmentTable.cpp:328-340 + 372-376.
+	// fixAmendmentMajorityCalc: post-fix fraction (80/100), switches ≥ to >
 	StrictMajority bool
 }
 
-// Decision is one entry of the doVoting return map at
-// AmendmentTable.cpp:872. Flags is 0 (enable), TfGotMajority, or
-// TfLostMajority.
+// Decision is one voting outcome; Flags is 0 (enable), TfGotMajority, or TfLostMajority.
 type Decision struct {
 	Amendment Amendment
 	Flags     uint32
 }
 
-// Threshold returns the vote count an amendment needs to pass.
-// Pre-fix: (trusted * 204) / 256. Post-fix: (trusted * 80) / 100.
-// Both clamp to a minimum of 1 to keep the gate reachable on tiny
-// validator sets. Mirrors AmendmentTable.cpp:325-341.
+// Threshold is the vote count an amendment needs to pass, clamped to a
+// minimum of 1 so the gate stays reachable on tiny validator sets.
 func Threshold(trustedValidations int, strict bool) int {
 	num, den := PreFixThresholdNum, PreFixThresholdDen
 	if strict {
@@ -181,10 +99,8 @@ func Threshold(trustedValidations int, strict bool) int {
 	return t
 }
 
-// passes is the per-amendment quorum check. With exactly one
-// trusted validator, both pre-fix and post-fix degrade to ≥
-// (otherwise the gate would be unreachable). Otherwise post-fix
-// uses strict >. Mirrors AmendmentTable.cpp:359-377.
+// passes is the per-amendment quorum check. A single trusted validator
+// degrades to ≥ (else unreachable); otherwise post-fix uses strict >.
 func passes(votes, threshold, trustedValidations int, strict bool) bool {
 	if !strict || trustedValidations == 1 {
 		return votes >= threshold
@@ -192,26 +108,12 @@ func passes(votes, threshold, trustedValidations int, strict bool) bool {
 	return votes > threshold
 }
 
-// Decide is the pure-algorithm step. Returns a deterministic,
-// hash-sorted slice of Decisions — at most one per amendment —
-// classifying each tracked amendment as gotMajority / lostMajority
-// / enable, or omitting it entirely. Result order is stable
-// across runs to keep the tx-set hash deterministic; rippled's
-// std::map iterates in hash-key order, so we match by sorting on
-// amendment bytes.
+// Decide classifies each tracked amendment as gotMajority/lostMajority/
+// enable (or omits it). Hash-sorted so the tx-set hash is deterministic.
 func Decide(in Inputs) []Decision {
 	threshold := Threshold(in.TrustedValidations, in.StrictMajority)
 
-	// Walk domain: the amendments this server knows about, mirroring
-	// rippled's doVoting over amendmentMap_ (AmendmentTable.cpp:875).
-	// When Known is supplied it is authoritative — an amendment recorded
-	// only in the parent ledger's sfMajorities (in.Majority) but absent
-	// from Known is one this server doesn't recognize, and rippled emits
-	// nothing for it. Known amendments with no votes and no ledger
-	// majority produce no decision, so restricting to Known yields the
-	// same result set as walking it. When Known is nil, fall back to the
-	// union of the input maps (the caller asserts they're all known).
-	// An amendment with no Stance entry is treated as VoteAbstain.
+	// Walk domain: Known when supplied, else the union of the input maps.
 	var seen map[Amendment]struct{}
 	if in.Known != nil {
 		seen = make(map[Amendment]struct{}, len(in.Known))
@@ -234,8 +136,7 @@ func Decide(in Inputs) []Decision {
 	var out []Decision
 	for amendment := range seen {
 		if in.Enabled[amendment] {
-			// Already enabled — never produces a pseudo-tx.
-			// Mirrors AmendmentTable.cpp:877-882.
+			// already enabled — never produces a pseudo-tx
 			continue
 		}
 
@@ -246,30 +147,21 @@ func Decide(in Inputs) []Decision {
 
 		switch {
 		case hasValMajority && !hasLedgerMajority && stance == VoteUp:
-			// Validators say yes; ledger doesn't record majority
-			// yet; we vote yes locally. Inject GotMajority so the
-			// ledger starts the majority-held timer.
-			// AmendmentTable.cpp:902-909.
+			// validators yes, ledger not yet recording, local yes → start the majority timer
 			out = append(out, Decision{Amendment: amendment, Flags: TfGotMajority})
 
 		case !hasValMajority && hasLedgerMajority:
-			// Ledger records majority, validators fell off.
-			// Inject LostMajority regardless of local stance —
-			// the ledger needs to clear the timer either way.
-			// AmendmentTable.cpp:910-915.
+			// ledger records majority but validators fell off — clear the timer (any stance)
 			out = append(out, Decision{Amendment: amendment, Flags: TfLostMajority})
 
 		case hasLedgerMajority &&
 			!majoritySince.Add(in.MajorityTimeout).After(in.CloseTime) &&
 			stance == VoteUp:
-			// Majority has held on the ledger for at least
-			// MajorityTimeout; we still vote yes locally; emit the
-			// enable pseudo-tx. AmendmentTable.cpp:916-924.
+			// majority held ≥ MajorityTimeout and local yes → emit enable
 			out = append(out, Decision{Amendment: amendment, Flags: 0})
 
 		default:
-			// Logging-only branches in rippled — no pseudo-tx.
-			// AmendmentTable.cpp:926-935.
+			// logging-only in rippled — no pseudo-tx
 		}
 	}
 
@@ -289,9 +181,9 @@ func lessAmendment(a, b Amendment) bool {
 	return false
 }
 
-// DoVoting runs Decide and serializes each Decision as an
-// EnableAmendment pseudo-tx wire blob. Returns nil when no
-// pseudo-txs apply.
+// DoVoting runs Decide and serializes each Decision as an EnableAmendment
+// pseudo-tx blob. Returns nil when no pseudo-txs apply. Stateless: a pure
+// function of the per-round Inputs.
 func DoVoting(in Inputs) ([][]byte, error) {
 	decisions := Decide(in)
 	if len(decisions) == 0 {
@@ -309,20 +201,19 @@ func DoVoting(in Inputs) ([][]byte, error) {
 	return out, nil
 }
 
-// buildEnableAmendmentTx serializes an EnableAmendment pseudo-tx.
-// Wire format mirrors AmendmentTable.h:165-187: zero account, zero
-// fee, empty signing key, sequence 0; sfAmendment carries the
-// 32-byte hash; sfLedgerSequence carries the upcoming seq; sfFlags
-// is set only when non-zero (got/lost majority).
+// buildEnableAmendmentTx serializes an EnableAmendment pseudo-tx: zero
+// account/fee/key, sequence 0; sfFlags set only when non-zero.
 func buildEnableAmendmentTx(seq uint32, amendment Amendment, flags uint32) ([]byte, error) {
-	etx := &pseudo.EnableAmendment{
-		BaseTx:         *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
-		Amendment:      hex.EncodeToString(amendment[:]),
-		LedgerSequence: &seq,
-	}
-	if flags != 0 {
-		f := flags
-		etx.Common.Flags = &f
-	}
-	return pseudo.EncodePseudoTx(etx)
+	return common.BuildPseudoTx(tx.TypeAmendment, func(base tx.BaseTx) tx.Transaction {
+		etx := &pseudo.EnableAmendment{
+			BaseTx:         base,
+			Amendment:      hex.EncodeToString(amendment[:]),
+			LedgerSequence: &seq,
+		}
+		if flags != 0 {
+			f := flags
+			etx.Common.Flags = &f
+		}
+		return etx
+	})
 }
