@@ -82,9 +82,8 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_ENTRY
 	}
 
-	// The CheckID must reference a Check. rippled reads through the typed
-	// keylet::check, which returns tecNO_ENTRY when the index holds any other
-	// object type; an untyped read here must reject non-Check entries the same way.
+	// View.Read is untyped, so reject a CheckID that resolves to a non-Check
+	// object, matching rippled's tecNO_ENTRY.
 	if state.EntryType(checkData) != "Check" {
 		return ter.TecNO_ENTRY
 	}
