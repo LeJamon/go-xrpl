@@ -197,17 +197,48 @@ func (e *TestEnv) closeWithReplay() {
 	// scaffolding the runner synthesizes and master-signs; their go-xrpl-specific
 	// hashes cannot reproduce rippled's canonical salt, so reordering them
 	// canonically only risks separating a flag-setting AccountSet from the
-	// TrustSet that depends on it (e.g. an issuer's DefaultRipple must precede a
+	// TrustSet that depends on it (an issuer's DefaultRipple must precede a
 	// holder's TrustSet, or the new line keeps the issuer's NoRipple and blocks
 	// rippling). Keep setup in submission order — the natural dependency order —
 	// and canonically order only the fixture's user txns, whose blob hashes do
 	// match rippled. Setup hashes are still folded into the salt so the user
 	// order is identical to canonically ordering the combined set.
-	setupTxns := append([]tx.Transaction(nil), e.openLedgerSetupTxns...)
-	var userTxns []tx.Transaction
-	userTxns = append(userTxns, e.openLedgerUserTxns...)
+	//
+	// heldHashes marks transactions carried over from a previous ledger as held.
+	// rippled retries held transactions against the OPEN ledger
+	// (LedgerMaster::applyHeldTransactions), so their fee-adequacy is judged with
+	// view.open()==true: a payer that cannot cover the fee yields the retryable
+	// terINSUF_FEE_B (no fee charged) and stays held, never the closed-ledger
+	// tecINSUFF_FEE that would claim its remaining balance.
+	heldHashes := make(map[[32]byte]bool)
 	for _, held := range e.heldTxns {
-		userTxns = append(userTxns, held...)
+		for _, txn := range held {
+			h, _ := tx.ComputeTransactionHash(txn)
+			heldHashes[h] = true
+		}
+	}
+
+	// Collect setup and user txns, de-duplicating by hash: a retryable txn is
+	// tracked in both openLedgerUserTxns and heldTxns, and the runner's queue
+	// retries re-submit the same object across ledgers. Applying the same txn
+	// twice in one ledger is never valid (the second hits tefPAST_SEQ).
+	seen := make(map[[32]byte]bool)
+	dedupInto := func(dst []tx.Transaction, list []tx.Transaction) []tx.Transaction {
+		for _, txn := range list {
+			h, _ := tx.ComputeTransactionHash(txn)
+			if seen[h] {
+				continue
+			}
+			seen[h] = true
+			dst = append(dst, txn)
+		}
+		return dst
+	}
+	setupTxns := dedupInto(nil, e.openLedgerSetupTxns)
+	var userTxns []tx.Transaction
+	userTxns = dedupInto(userTxns, e.openLedgerUserTxns)
+	for _, held := range e.heldTxns {
+		userTxns = dedupInto(userTxns, held)
 	}
 
 	sortCanonicalSalted(userTxns, setupTxns)
@@ -237,7 +268,7 @@ func (e *TestEnv) closeWithReplay() {
 
 	// Apply all transactions with retry passes.
 	// Setup and user txns are in a single list in submission order.
-	remaining := e.applyWithRetry(allTxns, maxRetryPasses, maxTotalPasses)
+	remaining := e.applyWithRetry(allTxns, heldHashes, maxRetryPasses, maxTotalPasses)
 
 	// Any remaining transactions that still failed go back into the held
 	// map for retry in the next ledger.
@@ -343,7 +374,7 @@ func (e *TestEnv) applyPendingAmendments() {
 // final pass (certainRetry=false), TapRETRY is cleared so tec results
 // ARE applied (fee consumed, sequence advanced).
 // Reference: rippled BuildLedger.cpp lines 98-178
-func (e *TestEnv) applyWithRetry(txns []tx.Transaction, maxRetryPasses, maxTotalPasses int) []tx.Transaction {
+func (e *TestEnv) applyWithRetry(txns []tx.Transaction, heldHashes map[[32]byte]bool, maxRetryPasses, maxTotalPasses int) []tx.Transaction {
 	remaining := txns
 	certainRetry := true
 
@@ -352,7 +383,8 @@ func (e *TestEnv) applyWithRetry(txns []tx.Transaction, maxRetryPasses, maxTotal
 		changes := 0
 
 		for _, txn := range remaining {
-			result, applied := e.applyForReplay(txn, certainRetry)
+			h, _ := tx.ComputeTransactionHash(txn)
+			result, applied := e.applyForReplay(txn, certainRetry, heldHashes[h])
 
 			switch {
 			case applied:
@@ -488,6 +520,7 @@ func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.En
 		NetworkID:                 e.networkID,
 		ParentHash:                view.ParentHash(),
 		OpenLedger:                opts.openLedger,
+		ViewOpen:                  e.viewOpen,
 		EnforceLoadFee:            opts.enforceLoadFee,
 		ApplyFlags:                opts.applyFlags,
 	}
@@ -850,12 +883,14 @@ func (e *TestEnv) drainQueue() {
 
 // applyForReplay applies a single transaction during the replay-on-close
 // process. When certainRetry is true, TapRETRY is set so that tec results
-// are not applied (matching rippled's retry pass behavior).
+// are not applied (matching rippled's retry pass behavior). When held is true
+// the txn was carried over from a prior ledger; rippled retries held txns on
+// the open ledger, so its fee-adequacy is judged with view.open()==true.
 // Returns the result code and whether the transaction was actually applied.
-func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (ter.Result, bool) {
+func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry, held bool) (ter.Result, bool) {
 	// Header-based ParentCloseTime matches applyDirect so time-dependent checks
 	// produce the same result during initial apply and during replay.
-	opts := engineConfigOpts{openLedger: e.openLedger}
+	opts := engineConfigOpts{openLedger: e.openLedger || held}
 	if certainRetry {
 		opts.applyFlags = tx.TapRETRY
 	}

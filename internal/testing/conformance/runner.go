@@ -1006,8 +1006,13 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	// in execTx() so the fee adequacy check fires.
 	//
 	// TxQ suites need open-ledger mode so fee escalation triggers queuing.
+	//
+	// The view stays open even so: SetViewOpen keeps view.open() true without the
+	// fee floor, so the open-view fee branch (terINSUF_FEE_B, not closed-only
+	// tecINSUFF_FEE) matches rippled. See TestEnv.viewOpen.
 	if !r.enableTxQ {
 		r.env.SetOpenLedger(false)
+		r.env.SetViewOpen(true)
 	}
 
 	// Register master account
@@ -1456,13 +1461,17 @@ func (r *runner) retryHeldTxs() {
 }
 
 // retryQueuedTxs retries TxQ-queued transactions on ledger close.
-// In rippled, TxQ::accept() processes queued ter* transactions during
-// close. Retries that still return ter* stay queued; tec results charge
-// the fee; tef/tem results are dropped.
+// In rippled, TxQ::accept() processes queued ter* transactions against the
+// fresh open ledger, so a payer that cannot cover the fee yields the retryable
+// terINSUF_FEE_B (stays queued, no fee charged) rather than the closed-ledger
+// tecINSUFF_FEE that would claim its remaining balance. Retries that still
+// return ter* stay queued; tec results charge the fee; tef/tem results dropped.
 func (r *runner) retryQueuedTxs() {
 	if len(r.pendingQueued) == 0 {
 		return
 	}
+	r.env.SetOpenLedger(true)
+	defer r.env.SetOpenLedger(false)
 	remaining := r.pendingQueued[:0]
 	for _, txn := range r.pendingQueued {
 		result := r.env.Submit(txn)

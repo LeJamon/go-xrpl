@@ -85,6 +85,12 @@ type TestEnv struct {
 	// sufficient when the ledger is open."
 	openLedger bool
 
+	// viewOpen marks the apply view as open (rippled's view.open()) WITHOUT the
+	// fee-adequacy floor that openLedger controls. Conformance non-TxQ suites turn
+	// openLedger off but still need the open-view fee branch (terINSUF_FEE_B vs the
+	// closed-only tecINSUFF_FEE) and its internal-failure variants.
+	viewOpen bool
+
 	// Optional state map family for backed SHAMaps (PebbleDB on disk).
 	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
 	// When nil, SHAMaps use unbacked mode (fast, full in-memory clones).
@@ -338,6 +344,12 @@ func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 // When false, fee adequacy checks are skipped (matching rippled's closed-ledger behavior).
 func (e *TestEnv) SetOpenLedger(open bool) {
 	e.openLedger = open
+}
+
+// SetViewOpen marks the apply view as open without the fee-adequacy floor
+// (see the viewOpen field).
+func (e *TestEnv) SetViewOpen(open bool) {
+	e.viewOpen = open
 }
 
 // SetBypassTxQ temporarily bypasses TxQ routing. When true, Submit() goes
