@@ -487,6 +487,7 @@ func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.En
 		NetworkID:                 e.networkID,
 		ParentHash:                view.ParentHash(),
 		OpenLedger:                opts.openLedger,
+		ViewOpen:                  e.viewOpen,
 		EnforceLoadFee:            opts.enforceLoadFee,
 		ApplyFlags:                opts.applyFlags,
 	}
