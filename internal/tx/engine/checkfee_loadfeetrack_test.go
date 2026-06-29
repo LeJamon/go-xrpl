@@ -128,14 +128,11 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 	}
 }
 
-// TestCheckFee_InsufficientBalance verifies the balance-below-fee branch of
-// checkFee, mirroring rippled Transactor::checkFee: the deterministic
-// tecINSUFF_FEE fires only when the balance is non-zero AND the view is closed
-// (!ctx.view.open()); a zero balance or any open view stays retryable as
-// terINSUF_FEE_B. The view is open whenever IsViewOpen() is true — the direct
-// open-ledger path (OpenLedger), the TxQ apply/accept paths (EnforceLoadFee),
-// or the open-ledger submit / held-tx replay path (ViewOpen) — not just
-// OpenLedger.
+// TestCheckFee_InsufficientBalance covers the balance-below-fee branch:
+// deterministic tecINSUFF_FEE only when balance>0 AND the view is closed, else
+// the retryable terINSUF_FEE_B. The view counts as open for OpenLedger, the TxQ
+// paths (EnforceLoadFee), or the open-ledger submit path (ViewOpen) — not just
+// OpenLedger. Reference: rippled Transactor::checkFee.
 func TestCheckFee_InsufficientBalance(t *testing.T) {
 	const baseFee = 10
 
