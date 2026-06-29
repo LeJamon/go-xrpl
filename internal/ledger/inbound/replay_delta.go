@@ -608,12 +608,10 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 
 	// R6b.1: on a flag ledger with featureNegativeUNL, apply pending
 	// ValidatorToDisable / ValidatorToReEnable transitions BEFORE
-	// applying any txs. Mirrors rippled BuildLedger.cpp:50-53. Without
-	// this, every 256th ledger's replay-delta produces a wrong
-	// AccountHash on networks with featureNegativeUNL and falls back
-	// to legacy catchup. seq%256==0 is rippled's isFlagLedger check
-	// (Ledger.cpp:946-958).
-	if child.Sequence()%256 == 0 && engineCfg.Rules != nil && engineCfg.Rules.Enabled(amendment.FeatureNegativeUNL) {
+	// applying any txs. Without this, every flag ledger's replay-delta
+	// produces a wrong AccountHash on networks with featureNegativeUNL
+	// and falls back to legacy catchup.
+	if protocol.IsFlagLedger(child.Sequence()) && engineCfg.Rules != nil && engineCfg.Rules.Enabled(amendment.FeatureNegativeUNL) {
 		if err := child.UpdateNegativeUNL(); err != nil {
 			return nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
 		}

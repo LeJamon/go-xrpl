@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/negativeunlvote"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // GenerateNegativeUNLPseudoTx produces the UNLModify pseudo-tx blobs
@@ -182,12 +183,12 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 	historian consensus.ValidationHistorian,
 ) (map[consensus.NodeID]uint32, bool) {
 	ancestors, err := prev.SkipListHashes()
-	if err != nil || uint32(len(ancestors)) < consensus.FlagLedgerInterval {
+	if err != nil || uint32(len(ancestors)) < protocol.FlagLedgerInterval {
 		return nil, false
 	}
 
 	n := uint32(len(ancestors))
-	window := consensus.FlagLedgerInterval
+	window := protocol.FlagLedgerInterval
 	scoreTable := make(map[consensus.NodeID]uint32)
 	for i := range window {
 		ledgerHash := ancestors[n-1-i]
