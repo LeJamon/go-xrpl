@@ -662,11 +662,10 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 	}
 
 	if result.Queued {
-		// Transaction was queued in the TxQ (fee escalation queue).
-		// Also add to held transactions so it can be retried after a close
-		// if it gets kicked out of the TxQ.
-		// Reference: rippled NetworkOPs::apply adds queued txns to held map.
-		e.addHeldTransaction(accountAddr, txn)
+		// Queued txns are owned by the TxQ, so they join the local-tx set (drained
+		// only at close), not the held set (retried mid-window): retrying a queued
+		// entry mid-window would let it bypass the queue into the open ledger.
+		e.addLocalTransaction(accountAddr, txn)
 
 		return TxResult{
 			Code:    ter.TerQUEUED.String(),
@@ -675,18 +674,16 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 		}
 	}
 
-	// Handle retryable results by holding the transaction.
-	// Reference: rippled NetworkOPs::apply holds isTerRetry results in
-	// LedgerMaster's held transaction map.
-	//
-	// Also hold tel results (telCAN_NOT_QUEUE_FULL, telCAN_NOT_QUEUE_FEE, etc.)
-	// because rippled's localTxs mechanism retries ALL locally-submitted
-	// transactions at the next close, regardless of result code. This is
-	// critical for TxQ tests where transactions rejected with tel codes get
-	// re-queued after the queue drains during close.
-	// Reference: rippled NetworkOPs.cpp:1677-1682 (m_localTX->push_back)
-	if isRetryable(result.Result) || isTelLocal(result.Result) {
+	// A retryable (ter*) result means the transaction could not be applied yet
+	// because of a sequence gap; hold it for the mid-window retry that runs when
+	// the gap-filling transaction applies.
+	if isRetryable(result.Result) {
 		e.addHeldTransaction(accountAddr, txn)
+	} else if isTelLocal(result.Result) {
+		// A tel (local) result joins the local-tx set: rippled replays every
+		// locally-submitted tx at the next open-ledger build regardless of result
+		// code, so these apply only at close, never mid-window.
+		e.addLocalTransaction(accountAddr, txn)
 	}
 
 	return TxResult{
@@ -710,8 +707,8 @@ func isTelLocal(result ter.Result) bool {
 	return result >= -399 && result <= -300
 }
 
-// addHeldTransaction adds a transaction to the held map for later retry.
-// Reference: rippled LedgerMaster::addHeldTransaction
+// addHeldTransaction records a sequence-gap-held (ter*) transaction for the
+// mid-window retry.
 func (e *TestEnv) addHeldTransaction(accountAddr string, txn tx.Transaction) {
 	if e.heldTxns == nil {
 		e.heldTxns = make(map[string][]tx.Transaction)
@@ -719,27 +716,38 @@ func (e *TestEnv) addHeldTransaction(accountAddr string, txn tx.Transaction) {
 	e.heldTxns[accountAddr] = append(e.heldTxns[accountAddr], txn)
 }
 
-// retryAllHeldViaTxQ retries ALL held transactions through the TxQ.
-// This mirrors rippled's OpenLedger::accept() step (d) which iterates
-// localTxs and calls TxQ::apply() for each after the queue drain.
-// This allows transactions that were previously rejected (tel codes,
-// ter codes, etc.) to be re-queued or applied now that the queue has
-// been drained and conditions may have changed.
-// Reference: rippled OpenLedger.cpp:117-118
+// addLocalTransaction records a TxQ-owned transaction (queued or tel-rejected)
+// in the local-tx set, replayed only at the close-time open-ledger rebuild.
+func (e *TestEnv) addLocalTransaction(accountAddr string, txn tx.Transaction) {
+	if e.localTxns == nil {
+		e.localTxns = make(map[string][]tx.Transaction)
+	}
+	e.localTxns[accountAddr] = append(e.localTxns[accountAddr], txn)
+}
+
+// retryAllHeldViaTxQ retries every held and local transaction through the TxQ
+// after the close-time drain, mirroring rippled's OpenLedger::accept: it iterates
+// localTxs and calls TxQ::apply once the queue has drained, so previously rejected
+// txns can re-queue or apply. Both sets are replayed here; the local set only at
+// this close-time point, never mid-window.
+// Reference: rippled OpenLedger.cpp:117-118.
 func (e *TestEnv) retryAllHeldViaTxQ() {
-	if e.heldTxns == nil || len(e.heldTxns) == 0 {
+	if len(e.heldTxns) == 0 && len(e.localTxns) == 0 {
 		return
 	}
 
-	// Collect all held transactions from all accounts
+	// Collect all held and local transactions from all accounts.
 	var allHeld []tx.Transaction
 	for _, txns := range e.heldTxns {
 		allHeld = append(allHeld, txns...)
 	}
+	for _, txns := range e.localTxns {
+		allHeld = append(allHeld, txns...)
+	}
 
-	// Clear all held transactions before retrying
-	// (successfully retried ones may get re-added if they result in ter/tel)
+	// Clear both sets before retrying (re-added if they fail again with ter/tel).
 	e.heldTxns = nil
+	e.localTxns = nil
 
 	// Sort by canonical order (account, sequence) for deterministic processing
 	sortCanonical(allHeld)
@@ -762,9 +770,11 @@ func (e *TestEnv) retryAllHeldViaTxQ() {
 //
 // This pass intentionally handles ONLY replacements: held transactions that are
 // not already represented in the queue are left for retryAllHeldViaTxQ (run
-// after the drain), so they only enter once the drain frees space.
+// after the drain), so they only enter once the drain frees space. Both the
+// sequence-gap held set and the TxQ-owned local set are scanned, since a
+// higher-fee replacement may have been recorded in either.
 func (e *TestEnv) retryHeldReplacementsIntoQueue() {
-	if len(e.heldTxns) == 0 {
+	if len(e.heldTxns) == 0 && len(e.localTxns) == 0 {
 		return
 	}
 
@@ -774,17 +784,17 @@ func (e *TestEnv) retryHeldReplacementsIntoQueue() {
 	}
 	var replacements []replacement
 
-	for accountAddr, txns := range e.heldTxns {
+	scan := func(accountAddr string, txns []tx.Transaction) {
 		_, acctBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountAddr)
 		if err != nil {
-			continue
+			return
 		}
 		var accountID [20]byte
 		copy(accountID[:], acctBytes)
 
 		queued := e.txQueue.GetAccountTxs(accountID)
 		if len(queued) == 0 {
-			continue
+			return
 		}
 
 		for _, txn := range txns {
@@ -792,13 +802,30 @@ func (e *TestEnv) retryHeldReplacementsIntoQueue() {
 			if !ok {
 				continue
 			}
+			heldFeeLevel := e.txFeeLevel(txn)
 			for _, qc := range queued {
-				if qc.SeqProxy == sp {
-					replacements = append(replacements, replacement{accountID, txn})
-					break
+				if qc.SeqProxy != sp {
+					continue
 				}
+				// Only a genuinely higher-fee submission replaces the queued
+				// entry. A held copy carrying the same (or lower) fee IS the
+				// entry already in the queue; re-applying it would let it bypass
+				// the queue straight into the open ledger once the load floor
+				// drops — something rippled never does mid-window. Such entries
+				// must wait for the close-time drain.
+				if heldFeeLevel > qc.FeeLevel {
+					replacements = append(replacements, replacement{accountID, txn})
+				}
+				break
 			}
 		}
+	}
+
+	for accountAddr, txns := range e.heldTxns {
+		scan(accountAddr, txns)
+	}
+	for accountAddr, txns := range e.localTxns {
+		scan(accountAddr, txns)
 	}
 
 	// Apply directly through the TxQ (not submitViaTxQ) so the held set is not
@@ -809,6 +836,26 @@ func (e *TestEnv) retryHeldReplacementsIntoQueue() {
 		txID := e.computeTxID(r.txn)
 		e.txQueue.Apply(ctx, r.txn, txID, r.accountID)
 	}
+}
+
+// txFeeLevel returns the TxQ fee level a transaction pays: ToFeeLevel(feePaid,
+// baseFee) using the transaction-type base fee (batch txns and the free
+// SetRegularKey password change adjust it), matching the fee level the TxQ
+// records for the corresponding queued candidate.
+func (e *TestEnv) txFeeLevel(txn tx.Transaction) txq.FeeLevel {
+	common := txn.GetCommon()
+	if common == nil {
+		return 0
+	}
+	feePaid, _ := strconv.ParseUint(common.Fee, 10, 64)
+	baseFee := e.baseFee
+	if calc, ok := txn.(baseFeeCalculator); ok {
+		baseFee = calc.CalculateMinimumFee(e.baseFee)
+	}
+	if e.isFreeRegularKeySet(txn) {
+		baseFee = 0
+	}
+	return txq.ToFeeLevel(feePaid, baseFee)
 }
 
 // heldSeqProxy returns the SeqProxy a transaction would occupy in the TxQ.
@@ -1515,23 +1562,7 @@ func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
 		return
 	}
 
-	feePaid, _ := strconv.ParseUint(common.Fee, 10, 64)
-	baseFee := e.baseFee
-
-	// Use the actual base fee for the transaction type (e.g., batch tx may
-	// have a higher base fee). The TxQ apply context uses GetBaseFee which
-	// calls CalculateMinimumFee for batch transactions.
-	if calc, ok := txn.(baseFeeCalculator); ok {
-		baseFee = calc.CalculateMinimumFee(e.baseFee)
-	}
-
-	// SetRegularKey free password change: baseFee = 0 when signed with master key.
-	// Reference: rippled SetRegularKey.cpp calculateBaseFee + TxQ.cpp getFeeLevelPaid
-	if e.isFreeRegularKeySet(txn) {
-		baseFee = 0
-	}
-
-	feeLevel := txq.ToFeeLevel(feePaid, baseFee)
+	feeLevel := e.txFeeLevel(txn)
 	e.closingFeeLevels = append(e.closingFeeLevels, feeLevel)
 
 	// Inner batch txns are counted as separate entries in the closed ledger's
