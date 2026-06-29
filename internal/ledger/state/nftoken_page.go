@@ -10,6 +10,15 @@ type NFTokenPageData struct {
 	PreviousPageMin [32]byte
 	NextPageMin     [32]byte
 	NFTokens        []NFTokenData
+	// PreviousTxnID / PreviousTxnLgrSeq thread the page's modification history.
+	// They must round-trip so a no-op modify (e.g. an NFTokenModify that sets a
+	// URI to its current value) re-serializes byte-identically, letting the apply
+	// layer's unchanged-entry guard prune it — matching rippled, which emits no
+	// ModifiedNode and threads no PreviousTxnID when nothing changed
+	// (ApplyStateTable.cpp:154-157). Zero when the page has never been threaded;
+	// omitted on serialize in that case.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // NFTokenData represents an individual NFToken within a page
@@ -54,10 +63,17 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 		switch f.TypeCode {
 		case stHash256:
 			switch f.FieldCode {
+			case 5: // PreviousTxnID
+				page.PreviousTxnID = f.Hash256()
 			case 26: // PreviousPageMin
 				page.PreviousPageMin = f.Hash256()
 			case 27: // NextPageMin
 				page.NextPageMin = f.Hash256()
+			}
+
+		case stUInt32:
+			if f.FieldCode == 5 { // PreviousTxnLgrSeq
+				page.PreviousTxnLgrSeq = f.UInt32()
 			}
 
 		case stArray:
