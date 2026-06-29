@@ -1006,8 +1006,13 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	// in execTx() so the fee adequacy check fires.
 	//
 	// TxQ suites need open-ledger mode so fee escalation triggers queuing.
+	//
+	// The view stays open even so: SetViewOpen keeps view.open() true without the
+	// fee floor, so the open-view fee branch (terINSUF_FEE_B, not closed-only
+	// tecINSUFF_FEE) matches rippled. See TestEnv.viewOpen.
 	if !r.enableTxQ {
 		r.env.SetOpenLedger(false)
+		r.env.SetViewOpen(true)
 	}
 
 	// Register master account
