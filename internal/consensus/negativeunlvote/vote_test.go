@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,17 +47,6 @@ func fullScoreTable(myID consensus.NodeID, keys [][33]byte) map[consensus.NodeID
 		st[nid] = HighWaterMark + 1
 	}
 	return st
-}
-
-// TestFlagLedgerIntervalMatchesConsensus guards against drift between
-// this package's compile-time flagLedgerInterval constant (duplicated so
-// the watermark thresholds can be evaluated at compile time) and the
-// canonical consensus.FlagLedgerInterval.
-func TestFlagLedgerIntervalMatchesConsensus(t *testing.T) {
-	if flagLedgerInterval != consensus.FlagLedgerInterval {
-		t.Fatalf("flagLedgerInterval (%d) drifted from consensus.FlagLedgerInterval (%d)",
-			flagLedgerInterval, consensus.FlagLedgerInterval)
-	}
 }
 
 func TestDoVoting_RefusesWhenLocalParticipationLow(t *testing.T) {
@@ -544,7 +534,7 @@ func TestDoVoting_LocalCountAboveWindow(t *testing.T) {
 	unl := [][33]byte{myKey, weak}
 
 	scoreTable := map[consensus.NodeID]uint32{
-		v.myID:            flagLedgerInterval + 1,
+		v.myID:            protocol.FlagLedgerInterval + 1,
 		keyToNodeID(weak): LowWaterMark - 1,
 	}
 

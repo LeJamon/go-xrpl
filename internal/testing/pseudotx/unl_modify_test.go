@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -51,7 +52,7 @@ func TestUNLModify_NotFlagLedger(t *testing.T) {
 
 	// Default ledger sequence is typically 2 or 3 (not a flag ledger = multiple of 256)
 	seq := env.Ledger().Sequence()
-	require.NotEqual(t, uint32(0), seq%256, "Test setup: ledger should not be on a flag ledger")
+	require.False(t, protocol.IsFlagLedger(seq), "Test setup: ledger should not be on a flag ledger")
 
 	u := newUNLModify(1, seq, validatorKey1)
 	result := env.SubmitPseudo(u)
@@ -235,10 +236,10 @@ func TestUNLModify_AlreadyHasToReEnable(t *testing.T) {
 	jtx.RequireTxFail(t, result, "tefFAILURE")
 }
 
-// advanceToFlagLedger advances the test environment to a flag ledger (seq % 256 == 0).
+// advanceToFlagLedger advances the test environment to a flag ledger.
 func advanceToFlagLedger(t *testing.T, env *jtx.TestEnv) {
 	t.Helper()
-	for env.Ledger().Sequence()%256 != 0 {
+	for !protocol.IsFlagLedger(env.Ledger().Sequence()) {
 		env.Close()
 	}
 }

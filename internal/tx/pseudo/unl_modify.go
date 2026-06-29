@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // UNLModify is a pseudo-transaction that modifies the Negative UNL.
@@ -51,7 +52,7 @@ func (u *UNLModify) IsPseudoTransaction() bool {
 func (u *UNLModify) Apply(ctx *tx.ApplyContext) ter.Result {
 	// 1. Validate flag ledger
 	// Reference: rippled lines 390-395
-	if !isFlagLedger(ctx.Config.LedgerSequence) {
+	if !protocol.IsFlagLedger(ctx.Config.LedgerSequence) {
 		ctx.Log.Warn("unl modify: not a flag ledger",
 			"ledgerSequence", ctx.Config.LedgerSequence,
 		)
@@ -173,12 +174,6 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
-}
-
-// isFlagLedger returns true if the ledger sequence is a flag ledger (multiple of 256).
-// Reference: rippled isFlagLedger()
-func isFlagLedger(seq uint32) bool {
-	return seq%256 == 0
 }
 
 // isValidPublicKeyType validates that the byte slice is a valid public key.

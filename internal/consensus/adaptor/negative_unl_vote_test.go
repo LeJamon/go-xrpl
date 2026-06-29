@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/negativeunlvote"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,7 +155,7 @@ func TestBuildScoreTable_RejectsShortSkipList(t *testing.T) {
 func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 	a := newTestAdaptor(t)
 
-	ancestors := make([][32]byte, consensus.FlagLedgerInterval)
+	ancestors := make([][32]byte, protocol.FlagLedgerInterval)
 	for i := range ancestors {
 		ancestors[i] = [32]byte{byte(i), 0xAB}
 	}
@@ -186,7 +187,7 @@ func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 	a := newTestAdaptor(t)
 
-	ancestors := make([][32]byte, consensus.FlagLedgerInterval)
+	ancestors := make([][32]byte, protocol.FlagLedgerInterval)
 	for i := range ancestors {
 		ancestors[i] = [32]byte{byte(i >> 8), byte(i), 0xCD}
 	}
@@ -213,7 +214,7 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 	require.True(t, ok, "a full skip-list of FlagLedgerInterval ancestors builds the table")
 	require.NotNil(t, scoreTable)
 
-	assert.Equal(t, consensus.FlagLedgerInterval, scoreTable[myID], "local validator scored on every ancestor")
+	assert.Equal(t, protocol.FlagLedgerInterval, scoreTable[myID], "local validator scored on every ancestor")
 	assert.Equal(t, uint32(50), scoreTable[offline], "offline validator scored only on first 50 ancestors")
 }
 

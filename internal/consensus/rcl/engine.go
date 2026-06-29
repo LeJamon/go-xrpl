@@ -1880,12 +1880,12 @@ func (e *Engine) closeLedger() {
 	if e.prevLedger != nil && (e.mode == consensus.ModeProposing || e.adaptor.IsStandalone()) {
 		prev := e.prevLedger
 		switch {
-		case consensus.IsFlagLedger(prev.Seq()):
+		case protocol.IsFlagLedger(prev.Seq()):
 			parentVals := e.parentValidations(prev.ParentID())
 			if extra := e.adaptor.GenerateFlagLedgerPseudoTxs(prev, parentVals); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}
-		case consensus.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabledOnLedger(prev, "NegativeUNL"):
+		case protocol.IsVotingLedger(prev.Seq()) && e.adaptor.IsFeatureEnabledOnLedger(prev, "NegativeUNL"):
 			if extra := e.adaptor.GenerateNegativeUNLPseudoTx(prev); len(extra) > 0 {
 				txs = append(txs, extra...)
 			}
@@ -3103,7 +3103,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		}
 		validation.Cookie = cookie
 
-		if consensus.IsVotingLedger(ledger.Seq()) {
+		if protocol.IsVotingLedger(ledger.Seq()) {
 			serverVersion := e.adaptor.GetServerVersion()
 			if serverVersion == 0 {
 				slog.Warn("sendValidation: serverVersion is zero on voting ledger under HardenedValidations — adaptor must advertise a build tag; emitting without serverVersion")
@@ -3114,7 +3114,7 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 
 	// Fee + amendment votes only on voting (flag) ledgers; emitting every
 	// ledger inflates bandwidth ~256× and confuses peer aggregators.
-	if consensus.IsVotingLedger(ledger.Seq()) {
+	if protocol.IsVotingLedger(ledger.Seq()) {
 		// Fee vote: AMOUNT triple under post-XRPFees rules, legacy UINT triple
 		// otherwise (never both). Zero = no vote, serializer omits.
 		if fv := e.adaptor.GetFeeVote(); fv.BaseFee != 0 || fv.ReserveBase != 0 || fv.ReserveIncrement != 0 {

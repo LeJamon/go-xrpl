@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ErrLocalCountExceedsWindow signals the local node's validation count
@@ -24,21 +25,17 @@ import (
 var ErrLocalCountExceedsWindow = errors.New("negativeunlvote: local validation count exceeds flag-ledger window")
 
 const (
-	// scoring window in ledgers; duplicates consensus.FlagLedgerInterval as
-	// a uint32 so the thresholds below are compile-time constants
-	flagLedgerInterval uint32 = 256
-
 	// below this score a validator is unreliable → ToDisable candidate
-	LowWaterMark uint32 = flagLedgerInterval * 50 / 100
+	LowWaterMark uint32 = protocol.FlagLedgerInterval * 50 / 100
 
 	// above this score a disabled validator → ToReEnable candidate
-	HighWaterMark uint32 = flagLedgerInterval * 80 / 100
+	HighWaterMark uint32 = protocol.FlagLedgerInterval * 80 / 100
 
 	// minimum local validations to trust our own view; below it, abstain
-	MinLocalValsToVote uint32 = flagLedgerInterval * 90 / 100
+	MinLocalValsToVote uint32 = protocol.FlagLedgerInterval * 90 / 100
 
 	// ledgers a freshly-added validator is exempt from ToDisable voting
-	NewValidatorDisableSkip uint32 = flagLedgerInterval * 2
+	NewValidatorDisableSkip uint32 = protocol.FlagLedgerInterval * 2
 
 	// max fraction of the UNL that may be on the NegativeUNL at once
 	MaxListedFraction float64 = 0.25
@@ -177,8 +174,8 @@ func (v *Voter) DoVoting(
 	if myCount <= MinLocalValsToVote {
 		return nil, nil
 	}
-	if myCount > flagLedgerInterval {
-		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, flagLedgerInterval)
+	if myCount > protocol.FlagLedgerInterval {
+		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, protocol.FlagLedgerInterval)
 	}
 
 	// effective negUNL for the upcoming flag ledger (current ± pending)

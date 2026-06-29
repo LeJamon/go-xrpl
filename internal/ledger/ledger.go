@@ -567,7 +567,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 }
 
 // UpdateNegativeUNL applies pending ValidatorToDisable / ValidatorToReEnable
-// transitions on the NegativeUNL SLE during flag-ledger (seq%256==0) processing,
+// transitions on the NegativeUNL SLE during flag-ledger processing,
 // before any transactions are applied. No-op on any other ledger or when neither
 // transition field is set. Caller must NOT hold l.mu — it acquires it internally.
 func (l *Ledger) UpdateNegativeUNL() error {
