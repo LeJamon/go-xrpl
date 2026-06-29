@@ -229,11 +229,7 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	c := tx.GetCommon()
 
-	// Fast path: when the raw signed bytes are present the id is a pure
-	// function of them, unchanged until SetRawBytes replaces them. It is
-	// memoised on first computation and reused thereafter, so the open-ledger
-	// apply strand reads the precomputed id instead of re-hashing the blob.
-	// Mirrors rippled's STTx::tid_.
+	// Fast path: id is memoised from the raw signed bytes (see cachedTxID).
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
 		if c != nil && c.txIDCached {
 			return c.cachedTxID, nil
@@ -246,8 +242,7 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 		return hash, nil
 	}
 
-	// No raw bytes: serialize from current field state via Flatten and hash.
-	// This blob is rebuilt each call, so it is not memoised.
+	// No raw bytes: rebuilt from current field state each call, so not memoised.
 	txMap, err := tx.Flatten()
 	if err != nil {
 		return [32]byte{}, err
@@ -263,8 +258,7 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	return hashWithTxnPrefix(txBytes), nil
 }
 
-// hashWithTxnPrefix returns SHA512Half of the transactionID prefix
-// ("TXN\x00" = 0x54584E00) concatenated with txBytes.
+// hashWithTxnPrefix returns SHA512Half of the "TXN\x00" prefix + txBytes.
 func hashWithTxnPrefix(txBytes []byte) [32]byte {
 	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // static 4-byte composite literal followed by a single append
 	return common.Sha512Half(append(prefix, txBytes...))

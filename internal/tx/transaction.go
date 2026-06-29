@@ -222,15 +222,12 @@ type Common struct {
 	// before the parsed transaction is shared with any other goroutine.
 	sigVerified bool
 
-	// cachedTxID memoises this transaction's id — SHA512Half of the
-	// transactionID prefix concatenated with RawBytes — mirroring rippled's
-	// STTx::tid_, which is computed once at construction. The id is a pure
-	// function of RawBytes, so the cache stays valid until SetRawBytes
-	// replaces them (which clears it). Carries the same single-goroutine,
-	// unsynchronised contract as sigVerified: the apply path reuses one parsed
-	// transaction across preflight/preclaim/apply, so the id is computed once
-	// (off the open-ledger apply strand at ingress) and read under the strand
-	// without re-hashing the blob.
+	// cachedTxID memoises this transaction's id. The id is a pure function of
+	// RawBytes, so the cache stays valid until SetRawBytes replaces them (which
+	// clears it). Carries the same single-goroutine, unsynchronised contract as
+	// sigVerified: the apply path reuses one parsed transaction across
+	// preflight/preclaim/apply, so the id is computed once at ingress and read
+	// under the strand without re-hashing.
 	cachedTxID [32]byte
 	txIDCached bool
 }
