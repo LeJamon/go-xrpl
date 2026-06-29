@@ -89,19 +89,6 @@ func Flow(
 	// Create the main sandbox that accumulates all changes
 	accumSandbox := NewChildSandbox(baseView)
 
-	// afBaseView is the "all funds" baseline used to tell a FOUND removal (an
-	// offer already unfunded/tiny before this flow ran) from a BECAME removal
-	// (an offer the flow's own crossing drained). It is a child of the pristine
-	// pre-flow baseView, taken ONCE and never mutated by the per-pass applies
-	// that accumulate into accumSandbox. rippled re-derives its cancelView_ from
-	// the per-pass accumulator, which makes a multi-pass crossing misread an
-	// offer this tx drained in an earlier pass as "found-unfunded": both the
-	// working view and the (accumulator-rooted) cancel view see the drained
-	// balance, so original_funds == ownerFunds and the became-removal is wrongly
-	// promoted to permToRemove and survives a FillOrKill kill. Anchoring the
-	// baseline to the pre-flow state keeps the found-vs-became test honest across
-	// passes, so a became-unfunded offer stays a conditional, rolled-back removal.
-	afBaseView := NewChildSandbox(baseView)
 	allOfrsToRm := make(map[[32]byte]bool)
 
 	// Initialize result accumulators
@@ -284,7 +271,7 @@ func Flow(
 
 			// Execute this strand with the potentially limited output.
 			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
-			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut, afBaseView)
+			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
 
 			// Every removal a BookStep now reports is a perm removal (rippled's
 			// permToRemove_), deleted from both views regardless of TER. A

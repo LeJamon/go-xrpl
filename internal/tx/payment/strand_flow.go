@@ -81,16 +81,12 @@ func strandPermRemovals(strand Strand, dst map[[32]byte]bool) {
 // (e.g., trust lines that increase reserves) that would poison earlier steps
 // if not reset.
 //
-// afBaseView is the pristine pre-flow baseline used for the found-vs-became
-// removal test (see the afView comment below); pass nil to fall back to baseView.
-//
 // Reference: rippled/src/xrpld/app/paths/detail/StrandFlow.h flow()
 func ExecuteStrand(
 	baseView *PaymentSandbox,
 	strand Strand,
 	maxIn *EitherAmount,
 	requestedOut EitherAmount,
-	afBaseView *PaymentSandbox,
 ) (result StrandResult) {
 	if len(strand) == 0 {
 		return StrandResult{
@@ -198,7 +194,6 @@ func ExecuteStrand(
 	// kept such an offer classified BECAME (a discardable working-sandbox delete)
 	// and left it in the book across a multi-iteration crossing (the 99243845
 	// beyond-limit drained-maker offer that #1118 regressed).
-	_ = afBaseView
 	afView := NewChildSandbox(baseView)
 	var limitStepOut EitherAmount
 
