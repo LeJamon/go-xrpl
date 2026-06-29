@@ -128,34 +128,43 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 	}
 }
 
-// TestCheckFee_InsufficientBalance verifies the balance-below-fee branch of
-// checkFee, mirroring rippled Transactor::checkFee lines 304-316: on a closed
-// ledger a non-zero balance below the fee is a deterministic tecINSUFF_FEE,
-// while a zero balance (or any open-ledger case) stays retryable as
-// terINSUF_FEE_B.
+// TestCheckFee_InsufficientBalance covers the balance-below-fee branch:
+// deterministic tecINSUFF_FEE only when balance>0 AND the view is closed, else
+// the retryable terINSUF_FEE_B. The view counts as open for OpenLedger, the TxQ
+// paths (EnforceLoadFee), or the open-ledger submit path (ViewOpen) — not just
+// OpenLedger. Reference: rippled Transactor::checkFee.
 func TestCheckFee_InsufficientBalance(t *testing.T) {
 	const baseFee = 10
 
 	tests := []struct {
-		name       string
-		balance    uint64
-		openLedger bool
-		want       ter.Result
+		name           string
+		balance        uint64
+		openLedger     bool
+		enforceLoadFee bool
+		viewOpen       bool
+		want           ter.Result
 	}{
 		{name: "closed ledger, non-zero balance below fee", balance: 50, openLedger: false, want: ter.TecINSUFF_FEE},
 		{name: "closed ledger, zero balance", balance: 0, openLedger: false, want: ter.TerINSUF_FEE_B},
 		{name: "open ledger, non-zero balance below fee", balance: 50, openLedger: true, want: ter.TerINSUF_FEE_B},
 		{name: "open ledger, zero balance", balance: 0, openLedger: true, want: ter.TerINSUF_FEE_B},
+		{name: "open view via EnforceLoadFee (TxQ apply/accept), non-zero balance below fee", balance: 50, enforceLoadFee: true, want: ter.TerINSUF_FEE_B},
+		{name: "open view via ViewOpen (open-ledger submit), non-zero balance below fee", balance: 50, viewOpen: true, want: ter.TerINSUF_FEE_B},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := &Engine{config: txcore.EngineConfig{BaseFee: baseFee, OpenLedger: tt.openLedger}}
+			e := &Engine{config: txcore.EngineConfig{
+				BaseFee:        baseFee,
+				OpenLedger:     tt.openLedger,
+				EnforceLoadFee: tt.enforceLoadFee,
+				ViewOpen:       tt.viewOpen,
+			}}
 			account := &state.AccountRoot{Balance: tt.balance}
 			// Fee of 100 drops exceeds both balances yet clears the open-ledger
 			// base-fee floor, so the balance branch is the one under test.
 			txn := newFeeTestTx("100")
 			if got := e.checkFee(txn, txn.GetCommon(), account); got != tt.want {
-				t.Errorf("checkFee(balance=%d, open=%v) = %v, want %v", tt.balance, tt.openLedger, got, tt.want)
+				t.Errorf("checkFee(balance=%d, viewOpen=%v) = %v, want %v", tt.balance, e.config.IsViewOpen(), got, tt.want)
 			}
 		})
 	}
