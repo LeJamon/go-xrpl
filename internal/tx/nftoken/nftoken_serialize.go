@@ -37,12 +37,9 @@ func serializeNFTokenPage(page *state.NFTokenPageData) ([]byte, error) {
 		jsonObj["NextPageMin"] = strings.ToUpper(hex.EncodeToString(page.NextPageMin[:]))
 	}
 
-	// PreviousTxnID / PreviousTxnLgrSeq thread modification history. Emit them only
-	// when the page has been threaded before (a freshly created page has neither
-	// until the apply layer stamps it), so a no-op NFTokenModify round-trips
-	// byte-identically and the apply layer's unchanged-entry guard prunes it —
-	// rippled writes no ModifiedNode and bumps no PreviousTxnID when nothing
-	// changed (ApplyStateTable.cpp:154-157).
+	// Emit only once threaded (fresh pages are stamped by the apply layer) so a no-op
+	// modify round-trips byte-identically and the unchanged-entry guard prunes it
+	// (ApplyStateTable.cpp:154-157).
 	if page.PreviousTxnID != emptyHash {
 		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(page.PreviousTxnID[:]))
 		jsonObj["PreviousTxnLgrSeq"] = page.PreviousTxnLgrSeq

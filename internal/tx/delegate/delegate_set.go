@@ -180,8 +180,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 
-		// Preserve the existing OwnerNode and threading pointers by parsing the old
-		// entry and re-serializing.
+		// Preserve the existing OwnerNode and threading pointers.
 		existingEntry, parseErr := state.ParseDelegate(existingData)
 		if parseErr == nil {
 			newData, serErr = state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode, existingEntry.PreviousTxnID, existingEntry.PreviousTxnLgrSeq)

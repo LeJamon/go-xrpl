@@ -15,13 +15,8 @@ type PermissionedDomainData struct {
 	Sequence            uint32
 	OwnerNode           uint64
 	AcceptedCredentials []PermissionedDomainCredential
-	// PreviousTxnID / PreviousTxnLgrSeq thread the PermissionedDomain SLE's
-	// modification history. They must round-trip so a no-op PermissionedDomainSet
-	// (re-submitting the current credential set) re-serializes byte-identically,
-	// letting the apply layer's unchanged-entry guard prune it — matching rippled,
-	// which emits no ModifiedNode and threads no PreviousTxnID when nothing
-	// changed (ApplyStateTable.cpp:154-157). Zero when the domain has never been
-	// threaded; omitted on serialize in that case.
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
@@ -58,10 +53,7 @@ func SerializePermissionedDomain(pd *PermissionedDomainData, ownerAddress string
 		"AcceptedCredentials": creds,
 	}
 
-	// Emit the threading pointers only when the domain has been threaded before (a
-	// freshly created domain has neither until the apply layer stamps it), so a
-	// no-op modification round-trips byte-identically and the apply layer's
-	// unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if pd.PreviousTxnID != emptyHash {
 		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(pd.PreviousTxnID[:]))

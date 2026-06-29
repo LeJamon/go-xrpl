@@ -10,13 +10,8 @@ type NFTokenPageData struct {
 	PreviousPageMin [32]byte
 	NextPageMin     [32]byte
 	NFTokens        []NFTokenData
-	// PreviousTxnID / PreviousTxnLgrSeq thread the page's modification history.
-	// They must round-trip so a no-op modify (e.g. an NFTokenModify that sets a
-	// URI to its current value) re-serializes byte-identically, letting the apply
-	// layer's unchanged-entry guard prune it — matching rippled, which emits no
-	// ModifiedNode and threads no PreviousTxnID when nothing changed
-	// (ApplyStateTable.cpp:154-157). Zero when the page has never been threaded;
-	// omitted on serialize in that case.
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }

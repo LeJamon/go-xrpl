@@ -16,12 +16,8 @@ type DIDData struct {
 	URI         string // hex-encoded
 	DIDDocument string // hex-encoded
 	Data        string // hex-encoded
-	// PreviousTxnID / PreviousTxnLgrSeq thread the DID SLE's modification history.
-	// They must round-trip so a no-op DIDSet (re-submitting current field values)
-	// re-serializes byte-identically, letting the apply layer's unchanged-entry
-	// guard prune it — matching rippled, which emits no ModifiedNode and threads
-	// no PreviousTxnID when nothing changed (ApplyStateTable.cpp:154-157). Zero
-	// when the DID has never been threaded; omitted on serialize in that case.
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
@@ -45,10 +41,7 @@ func SerializeDID(did *DIDData, accountAddress string) ([]byte, error) {
 		jsonObj["Data"] = did.Data
 	}
 
-	// Emit the threading pointers only when the DID has been threaded before (a
-	// freshly created DID has neither until the apply layer stamps it), so a
-	// no-op modification round-trips byte-identically and the apply layer's
-	// unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if did.PreviousTxnID != emptyHash {
 		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(did.PreviousTxnID[:]))
