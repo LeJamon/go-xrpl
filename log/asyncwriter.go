@@ -2,6 +2,7 @@ package log
 
 import (
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -25,10 +26,12 @@ const asyncFlushTimeout = 2 * time.Second
 // A full queue drops and counts records — logging is best-effort, never a brake
 // on the hot path.
 type asyncWriter struct {
-	dst     io.Writer
-	queue   chan []byte
-	flushCh chan chan struct{}
-	dropped atomic.Uint64
+	dst       io.Writer
+	queue     chan []byte
+	flushCh   chan chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	dropped   atomic.Uint64
 }
 
 func newAsyncWriter(dst io.Writer, depth int) *asyncWriter {
@@ -39,6 +42,7 @@ func newAsyncWriter(dst io.Writer, depth int) *asyncWriter {
 		dst:     dst,
 		queue:   make(chan []byte, depth),
 		flushCh: make(chan chan struct{}),
+		done:    make(chan struct{}),
 	}
 	go w.drain()
 	return w
@@ -65,6 +69,9 @@ func (w *asyncWriter) drain() {
 		case ack := <-w.flushCh:
 			w.drainPending()
 			close(ack)
+		case <-w.done:
+			w.drainPending()
+			return
 		}
 	}
 }
@@ -94,6 +101,14 @@ func (w *asyncWriter) flush(timeout time.Duration) {
 	case <-ack:
 	case <-time.After(timeout):
 	}
+}
+
+// close stops the drain goroutine after writing everything currently queued.
+// The root logger is a process-lifetime singleton, so production never calls
+// this; it lets a writer created for a test or other transient scope shut its
+// goroutine down rather than leak it. Idempotent.
+func (w *asyncWriter) close() {
+	w.closeOnce.Do(func() { close(w.done) })
 }
 
 func (w *asyncWriter) DroppedRecords() uint64 {

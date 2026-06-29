@@ -32,6 +32,7 @@ func (s *syncBuf) String() string {
 func TestAsyncWriter_FlushDeliversRecords(t *testing.T) {
 	dst := &syncBuf{}
 	w := newAsyncWriter(dst, 0)
+	t.Cleanup(w.close)
 
 	for _, s := range []string{"alpha\n", "bravo\n", "charlie\n"} {
 		if _, err := w.Write([]byte(s)); err != nil {
@@ -69,6 +70,7 @@ func (b *blockingWriter) Write(p []byte) (int, error) {
 func TestAsyncWriter_DropsWhenFull(t *testing.T) {
 	bw := &blockingWriter{entered: make(chan struct{}), release: make(chan struct{})}
 	w := newAsyncWriter(bw, 1) // queue depth 1
+	t.Cleanup(w.close)
 
 	// First record is dequeued by the drain goroutine, which then blocks in the
 	// destination's Write — leaving the depth-1 queue empty.
@@ -100,6 +102,7 @@ func TestNewHandler_Async(t *testing.T) {
 	if aw == nil {
 		t.Fatal("NewHandler did not install an async writer for Async config")
 	}
+	t.Cleanup(aw.close)
 	aw.flush(time.Second)
 
 	if !strings.Contains(dst.String(), "async-hello") {
@@ -116,6 +119,11 @@ func TestSync_FlushesAsyncQueue(t *testing.T) {
 	dst := &syncBuf{}
 	cfg := &Config{Level: LevelInfo, Format: "text", Output: dst, Async: true}
 	l := New(NewHandler(cfg), cfg)
+	t.Cleanup(func() {
+		if aw := cfg.asyncOut.Load(); aw != nil {
+			aw.close()
+		}
+	})
 	rootCfg.Store(cfg)
 
 	l.Error("abort-record")
