@@ -630,15 +630,9 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 	}
 
 	if result.Queued {
-		// Transaction was queued in the TxQ (fee escalation queue). It is now
-		// owned by the queue, so it joins the local-tx set rather than the held
-		// set: the close-time drain (TxQ::accept) and the close-time local-tx
-		// replay advance it, but it is NOT retried mid-window. Mirroring it into
-		// the mid-window held set would let the entry bypass the queue straight
-		// into the open ledger as soon as the load floor drops mid-window —
-		// double-charging the account and consuming tickets/sequences the queue
-		// had reserved (TxQ_test.cpp "clear queue failure (load)" and "Queue
-		// full drop penalty"). Reference: rippled m_localTX.
+		// Queued txns are owned by the TxQ, so they join the local-tx set (drained
+		// only at close), not the held set (retried mid-window): retrying a queued
+		// entry mid-window would let it bypass the queue into the open ledger.
 		e.addLocalTransaction(accountAddr, txn)
 
 		return TxResult{
@@ -650,15 +644,13 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 
 	// A retryable (ter*) result means the transaction could not be applied yet
 	// because of a sequence gap; hold it for the mid-window retry that runs when
-	// the gap-filling transaction applies (rippled mHeldTransactions).
+	// the gap-filling transaction applies.
 	if isRetryable(result.Result) {
 		e.addHeldTransaction(accountAddr, txn)
 	} else if isTelLocal(result.Result) {
-		// A tel (local) result — telCAN_NOT_QUEUE_FULL, telCAN_NOT_QUEUE_FEE,
-		// etc. rippled retries ALL locally-submitted transactions at the next
-		// open-ledger build regardless of result code (m_localTX), so these join
-		// the local-tx set and are replayed only at close, never mid-window.
-		// Reference: rippled NetworkOPs.cpp m_localTX->push_back.
+		// A tel (local) result joins the local-tx set: rippled replays every
+		// locally-submitted tx at the next open-ledger build regardless of result
+		// code, so these apply only at close, never mid-window.
 		e.addLocalTransaction(accountAddr, txn)
 	}
 
@@ -683,8 +675,8 @@ func isTelLocal(result ter.Result) bool {
 	return result >= -399 && result <= -300
 }
 
-// addHeldTransaction adds a sequence-gap-held (ter*) transaction to the held
-// map for the mid-window retry. Reference: rippled LedgerMaster::addHeldTransaction.
+// addHeldTransaction records a sequence-gap-held (ter*) transaction for the
+// mid-window retry.
 func (e *TestEnv) addHeldTransaction(accountAddr string, txn tx.Transaction) {
 	if e.heldTxns == nil {
 		e.heldTxns = make(map[string][]tx.Transaction)
@@ -692,9 +684,8 @@ func (e *TestEnv) addHeldTransaction(accountAddr string, txn tx.Transaction) {
 	e.heldTxns[accountAddr] = append(e.heldTxns[accountAddr], txn)
 }
 
-// addLocalTransaction adds a TxQ-owned transaction (queued or tel-rejected) to
-// the local-tx set, replayed only at the close-time open-ledger rebuild.
-// Reference: rippled m_localTX.
+// addLocalTransaction records a TxQ-owned transaction (queued or tel-rejected)
+// in the local-tx set, replayed only at the close-time open-ledger rebuild.
 func (e *TestEnv) addLocalTransaction(accountAddr string, txn tx.Transaction) {
 	if e.localTxns == nil {
 		e.localTxns = make(map[string][]tx.Transaction)
@@ -703,12 +694,10 @@ func (e *TestEnv) addLocalTransaction(accountAddr string, txn tx.Transaction) {
 }
 
 // retryAllHeldViaTxQ retries every held and local transaction through the TxQ
-// after the close-time drain. This mirrors rippled's OpenLedger::accept() step
-// (d), which iterates localTxs and calls TxQ::apply() for each once the queue
-// has been drained, letting previously rejected (tel/ter) transactions re-queue
-// or apply now that conditions may have changed. Both the sequence-gap held set
-// (mHeldTransactions) and the TxQ-owned local set (m_localTX) are replayed here;
-// the local set is replayed ONLY at this close-time point, never mid-window.
+// after the close-time drain, mirroring rippled's OpenLedger::accept: it iterates
+// localTxs and calls TxQ::apply once the queue has drained, so previously rejected
+// txns can re-queue or apply. Both sets are replayed here; the local set only at
+// this close-time point, never mid-window.
 // Reference: rippled OpenLedger.cpp:117-118.
 func (e *TestEnv) retryAllHeldViaTxQ() {
 	if len(e.heldTxns) == 0 && len(e.localTxns) == 0 {

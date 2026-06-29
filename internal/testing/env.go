@@ -130,22 +130,17 @@ type TestEnv struct {
 	// Reset on Close().
 	closingFeeLevels []txq.FeeLevel
 
-	// heldTxns stores transactions that got terPRE_SEQ or other retryable
-	// (ter*) results — i.e. they could not be applied yet because of a
-	// sequence gap. After a successful transaction for the same account these
-	// are retried mid-window, mirroring rippled's LedgerMaster::mHeldTransactions
-	// drained by NetworkOPs::apply -> popAcctTransaction.
-	// Key: account address string -> slice of held transactions.
+	// heldTxns stores transactions that hit a retryable (ter*) result because of a
+	// sequence gap. They are retried mid-window once a transaction for the same
+	// account succeeds, mirroring rippled's mHeldTransactions. Keyed by account.
 	heldTxns map[string][]tx.Transaction
 
-	// localTxns stores transactions the TxQ owns: successfully queued entries
-	// and transactions rejected with a tel* (local) code. These mirror
-	// rippled's m_localTX, which is re-applied ONLY when a new open ledger is
-	// built (on close), never mid-window — the close-time drain (TxQ::accept)
-	// is what advances them. Keeping them out of the mid-window retry prevents
-	// a queued entry from bypassing the queue into the open ledger as soon as
-	// the load floor drops (double-charging / consuming reserved tickets).
-	// Key: account address string -> slice of local transactions.
+	// localTxns stores TxQ-owned transactions: successfully queued entries and tel*
+	// (local) rejections. Like rippled's m_localTX, they are replayed only when a
+	// new open ledger is built at close, never mid-window — holding them out of the
+	// mid-window retry stops a queued entry from bypassing the queue into the open
+	// ledger when the load floor drops (double-charging / consuming reserved
+	// tickets). Keyed by account.
 	localTxns map[string][]tx.Transaction
 
 	// replayOnClose enables the open-ledger consensus replay behavior.
