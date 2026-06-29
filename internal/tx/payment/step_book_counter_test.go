@@ -117,6 +117,10 @@ func TestBookStep_ErasesDanglingDirectoryEntry(t *testing.T) {
 	gwStr := state.EncodeAccountIDSafe(gw)
 
 	view := newPaymentMockLedgerView()
+	// Fund the owner above the reserve so the real offer is a funded survivor the
+	// walk yields — getNextOfferSkipVisited now applies the funded/groom rule and
+	// would otherwise groom an unfunded owner's offer, leaving nothing to return.
+	view.createAccount(owner, 1_000_000_000, 1)
 
 	inIssue := Issue{Currency: "USD", Issuer: gw}
 	outIssue := Issue{Currency: "XRP"}

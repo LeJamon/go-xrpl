@@ -81,16 +81,12 @@ func strandPermRemovals(strand Strand, dst map[[32]byte]bool) {
 // (e.g., trust lines that increase reserves) that would poison earlier steps
 // if not reset.
 //
-// afBaseView is the pristine pre-flow baseline used for the found-vs-became
-// removal test (see the afView comment below); pass nil to fall back to baseView.
-//
 // Reference: rippled/src/xrpld/app/paths/detail/StrandFlow.h flow()
 func ExecuteStrand(
 	baseView *PaymentSandbox,
 	strand Strand,
 	maxIn *EitherAmount,
 	requestedOut EitherAmount,
-	afBaseView *PaymentSandbox,
 ) (result StrandResult) {
 	if len(strand) == 0 {
 		return StrandResult{
@@ -147,13 +143,13 @@ func ExecuteStrand(
 	// restorePermRemovals unions every BookStep's unconditional ("perm")
 	// removals back into ofrsToRm. These are rippled's FlowOfferStream
 	// permToRemove offers (self-crossed, authorization-failed, expired,
-	// deep-frozen, domain-removed) which survive "even if the strand is not
-	// applied" and are never rolled back by a limiting-step reset. A reset's
-	// over-walk discard (deferredDiscard) targets only "became unfunded"
-	// removals; calling this afterwards guarantees a perm removal a discarded
-	// over-walk produced is kept, matching rippled's monotonic permToRemove.
-	// Reference: rippled OfferStream.h permToRemove_; StrandFlow.h (ofrsToRm is
-	// passed by reference into every rev/fwd and never reset).
+	// deep-frozen, domain-removed, found-unfunded, found-tiny) which survive "even
+	// if the strand is not applied" and are never rolled back by a limiting-step
+	// reset. It guarantees ofrsToRm carries the full perm set on the failure and
+	// success exits even though the per-step writes already accumulate it, matching
+	// rippled's monotonic permToRemove. Reference: rippled OfferStream.h
+	// permToRemove_; StrandFlow.h (ofrsToRm is passed by reference into every
+	// rev/fwd and never reset).
 	restorePermRemovals := func() {
 		for _, step := range strand {
 			bs, ok := step.(*BookStep)
@@ -187,17 +183,18 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h line 130: size_t limitingStep = strand.size()
 	limitingStep := s
 	sb := NewChildSandbox(baseView)
-	// afView: the "all funds" view that tells a FOUND removal (an offer already
-	// unfunded/tiny before the flow ran) from a BECAME removal (one this flow's
-	// crossing drained). The caller threads afBaseView — a child of the pristine
-	// pre-flow view that the per-pass applies never touch — so the found-vs-became
-	// test stays anchored to pre-flow funds across a multi-pass crossing. When no
-	// such baseline is supplied (unit tests, single-pass callers), afView falls
-	// back to baseView, which the strand never modifies.
-	afView := baseView
-	if afBaseView != nil {
-		afView = afBaseView
-	}
+	// afView ("all funds" view) is a fresh child of the RUNNING sandbox, exactly
+	// like rippled's afView(&baseView) (StrandFlow.h:135), where baseView is the
+	// running multi-strand sandbox. It therefore reflects every prior committed
+	// iteration (best-strand applies AND the per-iteration offerDeletes), so an
+	// offer whose owner a PRIOR iteration drained reads unfunded here too. The
+	// found-vs-became test then classifies it FOUND-unfunded and promotes it to a
+	// perm removal that the multi-strand loop offerDeletes from the running view —
+	// matching rippled. Anchoring afView to a pristine pre-flow baseline instead
+	// kept such an offer classified BECAME (a discardable working-sandbox delete)
+	// and left it in the book across a multi-iteration crossing (the 99243845
+	// beyond-limit drained-maker offer that #1118 regressed).
+	afView := NewChildSandbox(baseView)
 	var limitStepOut EitherAmount
 
 	// === REVERSE PASS ===
@@ -205,36 +202,15 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h lines 138-221
 	stepOut := requestedOut
 
-	// deferredDiscard maps each offer a limiting step removed during its
-	// over-extended reverse walk to the strand index of that step. Whether the
-	// removal survives depends on what ultimately limited the strand:
-	//   - if a step closer to the input (lower index) limited further
-	//     (limitingStep < recorded index), the over-walk requested more output
-	//     than the input could buy, so those extra offers were never really
-	//     reached — their removals are spurious and stay discarded.
-	//   - otherwise the recording step is itself the final limiting step: the
-	//     offers were genuinely reached and their owners drained by the actual
-	//     cross, so rippled removes them — the removals must be restored.
-	deferredDiscard := make(map[[32]byte]int)
-
+	// ofrsToRm now holds only perm removals (rippled's permToRemove_): every offer
+	// the grooming rule adds here is paired with recordPermRm, while a BECAME
+	// removal is a working-sandbox delete that the sb.Reset() below rolls back on a
+	// limiting step. So, like rippled's monotonic permToRemove_, this set is never
+	// discarded on a reset — a perm removal an over-walk produced is genuinely
+	// removable (already unfunded/tiny in the pristine view) and survives even when
+	// the strand is reset or fails. Reference: rippled OfferStream.h permToRemove_.
 	for i := s - 1; i >= 0; i-- {
 		step := strand[i]
-
-		// Snapshot the offers-to-remove set before this step's (possibly
-		// over-extended) reverse walk, so a limiting-step reset can drop the
-		// removals the over-walk added; see maxInCapped/deferredDiscard above for
-		// when those are later restored.
-		rmBefore := make(map[[32]byte]bool, len(ofrsToRm))
-		for k := range ofrsToRm {
-			rmBefore[k] = true
-		}
-		restoreRmAfterReset := func() {
-			for k := range ofrsToRm {
-				if !rmBefore[k] {
-					delete(ofrsToRm, k)
-				}
-			}
-		}
 
 		actualIn, actualOut := step.Rev(sb, afView, ofrsToRm, stepOut)
 
@@ -248,7 +224,6 @@ func ExecuteStrand(
 			// Reset sandbox and re-execute step 0 with Fwd(maxIn)
 			// Reference: rippled StrandFlow.h lines 148-178
 			sb.Reset()
-			restoreRmAfterReset()
 			limitingStep = 0
 
 			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, *maxIn)
@@ -270,14 +245,11 @@ func ExecuteStrand(
 		} else if !step.EqualOut(actualOut, stepOut) {
 			// Limiting step found — actualOut < requested stepOut
 			// Reset BOTH sandboxes and re-execute ONLY this step
-			// Reference: rippled StrandFlow.h lines 180-217
+			// Reference: rippled StrandFlow.h lines 180-217. rippled resets BOTH sb
+			// (184) AND afView (185) on this branch (unlike the maxIn branch, which
+			// resets only sb at 152), so afView is re-rooted on the running sandbox.
 			sb.Reset()
-			for k := range ofrsToRm {
-				if !rmBefore[k] {
-					deferredDiscard[k] = i
-				}
-			}
-			restoreRmAfterReset()
+			afView.Reset()
 			limitingStep = i
 
 			// Re-execute with the limited output
@@ -304,16 +276,6 @@ func ExecuteStrand(
 		} else {
 			// Not limiting — continue to previous step
 			stepOut = actualIn
-		}
-	}
-
-	// Restore a deferred over-walk removal only when its recording step is the
-	// final limiting step (no lower-index step reduced the throughput further).
-	// If a step closer to the input limited more (limitingStep < idx), the cross
-	// never actually reached that offer, so the removal stays discarded.
-	for k, idx := range deferredDiscard {
-		if limitingStep >= idx {
-			ofrsToRm[k] = true
 		}
 	}
 

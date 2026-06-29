@@ -698,7 +698,7 @@ func TestExecuteStrand_XRPPayment(t *testing.T) {
 	// Execute with 10 XRP requested output
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := ExecuteStrand(sandbox, strand, nil, requestedOut, nil)
+	result := ExecuteStrand(sandbox, strand, nil, requestedOut)
 
 	if !result.Success {
 		t.Error("expected successful execution")

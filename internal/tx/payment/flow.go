@@ -89,19 +89,6 @@ func Flow(
 	// Create the main sandbox that accumulates all changes
 	accumSandbox := NewChildSandbox(baseView)
 
-	// afBaseView is the "all funds" baseline used to tell a FOUND removal (an
-	// offer already unfunded/tiny before this flow ran) from a BECAME removal
-	// (an offer the flow's own crossing drained). It is a child of the pristine
-	// pre-flow baseView, taken ONCE and never mutated by the per-pass applies
-	// that accumulate into accumSandbox. rippled re-derives its cancelView_ from
-	// the per-pass accumulator, which makes a multi-pass crossing misread an
-	// offer this tx drained in an earlier pass as "found-unfunded": both the
-	// working view and the (accumulator-rooted) cancel view see the drained
-	// balance, so original_funds == ownerFunds and the became-removal is wrongly
-	// promoted to permToRemove and survives a FillOrKill kill. Anchoring the
-	// baseline to the pre-flow state keeps the found-vs-became test honest across
-	// passes, so a became-unfunded offer stays a conditional, rolled-back removal.
-	afBaseView := NewChildSandbox(baseView)
 	allOfrsToRm := make(map[[32]byte]bool)
 
 	// Initialize result accumulators
@@ -153,17 +140,6 @@ func Flow(
 	// the strand still owes output — the engine couldn't converge in time.
 	// Reference: rippled StrandFlow.h lines 643-650.
 	var curTry uint32
-	// anyStrandApplied records whether any iteration committed a crossing (applied
-	// a best strand's sandbox). "Became unfunded"/"became tiny" removals are only
-	// real once some cross has actually drained an owner; before any cross commits,
-	// a strand that reads an offer unfunded did so only via its own discardable
-	// over-walk (e.g. a tfPassive taker whose sole strand — an autobridge leg — is
-	// rejected by limitQuality). rippled keeps such became-unfunded deletes in the
-	// per-strand sandbox and only the best strand's are committed (best->sb.apply),
-	// so gate the best strand's conditional removals on a committed crossing here.
-	// Perm removals (rippled permToRemove) are unaffected and always applied.
-	// Reference: rippled StrandFlow.h flow()/OfferStream::step.
-	var anyStrandApplied bool
 	for {
 		// Mirror rippled's while-guard: continue only while remainingOut > 0 and
 		// (no sendMax or remainingIn > 0). A non-positive remainingOut (zero OR
@@ -258,11 +234,6 @@ func Flow(
 			out     EitherAmount
 			sandbox *PaymentSandbox
 			quality Quality
-			// condOfrsToRm is this strand's CONDITIONAL (became-unfunded/tiny)
-			// removal set. Only the best strand's sandbox is applied (rippled
-			// best->sb.apply), so only its conditional removals reach the ledger;
-			// non-best strands' became-unfunded reads live in discarded sandboxes.
-			condOfrsToRm map[[32]byte]bool
 		}
 		var best *bestStrand
 		var markInactiveOnUse int = -1
@@ -300,21 +271,17 @@ func Flow(
 
 			// Execute this strand with the potentially limited output.
 			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
-			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut, afBaseView)
+			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
 
-			// Split the strand's removals: perm (rippled permToRemove, deleted even
-			// when the strand fails) into iterOfrsToRm; the remaining conditional
-			// (became unfunded/tiny) into a per-strand set carried on bestStrand,
-			// so only the applied strand's conditional removals reach the ledger.
+			// Every removal a BookStep now reports is a perm removal (rippled's
+			// permToRemove_), deleted from both views regardless of TER. A
+			// became-unfunded/tiny offer is no longer split out here: it is a plain
+			// working-sandbox delete that reaches the ledger only through the applied
+			// strand's best.sandbox.Apply below, exactly as rippled's best->sb.apply,
+			// so a non-best or no-cross strand's drained-owner reads never erase it.
 			strandPerm := make(map[[32]byte]bool)
 			strandPermRemovals(*strand, strandPerm)
 			maps.Copy(iterOfrsToRm, strandPerm)
-			strandCond := make(map[[32]byte]bool)
-			for k := range result.OffsToRm {
-				if !strandPerm[k] {
-					strandCond[k] = true
-				}
-			}
 
 			// Track total offers considered across ALL strands
 			offersConsidered += result.OffersUsed
@@ -343,11 +310,10 @@ func Flow(
 					next = append(next, strand)
 				}
 				best = &bestStrand{
-					in:           result.In,
-					out:          result.Out,
-					sandbox:      result.Sandbox,
-					quality:      q,
-					condOfrsToRm: strandCond,
+					in:      result.In,
+					out:     result.Out,
+					sandbox: result.Sandbox,
+					quality: q,
 				}
 				// Push remaining strands to next
 				for ri := strandIndex + 1; ri < len(cur); ri++ {
@@ -377,11 +343,10 @@ func Flow(
 					markInactiveOnUse = -1
 				}
 				best = &bestStrand{
-					in:           result.In,
-					out:          result.Out,
-					sandbox:      result.Sandbox,
-					quality:      q,
-					condOfrsToRm: strandCond,
+					in:      result.In,
+					out:     result.Out,
+					sandbox: result.Sandbox,
+					quality: q,
 				}
 			}
 		}
@@ -427,24 +392,11 @@ func Flow(
 					}
 				}
 			}
-			// A crossing committed this iteration: from here on, became-unfunded
-			// grooming reflects real drains, so the conditional removals are real.
-			anyStrandApplied = true
 			// Update AMM iteration counter
 			// Reference: rippled StrandFlow.h line 798: ammContext.update()
 			if ammCtx != nil {
 				ammCtx.Update()
 			}
-		}
-
-		// Fold the applied (best) strand's conditional ("became unfunded"/"became
-		// tiny") removals into the deletion set, once a crossing has committed.
-		// rippled reaches the ledger only through best->sb.apply, so a non-best or
-		// no-cross strand's became-unfunded reads — discardable over-walk phantoms
-		// (e.g. a tfPassive taker whose only strand, an autobridge leg, is rejected
-		// by limitQuality) — never erase the offer. Perm removals are unaffected.
-		if anyStrandApplied && best != nil && best.condOfrsToRm != nil {
-			maps.Copy(iterOfrsToRm, best.condOfrsToRm)
 		}
 
 		// Delete removable offers from the accumulating sandbox
