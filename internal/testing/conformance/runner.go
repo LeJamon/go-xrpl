@@ -456,6 +456,15 @@ var feeVoteLookup = map[string]feeVoteConfig{
 	"ripple.app.PayChan/Account Delete":     {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
 	"ripple.app.AMM/Auto Delete":            {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 257},
 	"ripple.app.AccountDelete/Resurrection": {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	// These fixtures fund accounts with 10,000 XRP but exceed the object count
+	// affordable under the 200/50 XRP reserve the env seeds at genesis; they only
+	// pass once the seq-256 fee vote drops the reserve to 10/2.
+	"ripple.app.NFTokenBurnBaseUtil/Burn random":          {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnAllFeatures/Burn random":       {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnWOfixFungTokens/Burn random":   {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnWOFixNFTPageLinks/Burn random": {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnWOFixTokenRemint/Burn random":  {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenDir/NFToken consecutive packing":   {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
 }
 
 // txqTimeLeapLookup maps TxQ fixture test case names to the step indices

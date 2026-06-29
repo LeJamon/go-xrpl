@@ -5,23 +5,8 @@
 # To bring a suite into scope, remove or comment out the line.
 
 # Not implemented yet
-app/Vault
 app/Batch
-app/EscrowToken
+app/Delegate
+app/Vault
 app/XChain
 app/XChainSim
-app/Delegate
-app/Credentials
-
-# Partially implemented / known gaps
-app/NFTokenAuth
-app/NFTokenBurnAllFeatures
-app/NFTokenBurnBaseUtil
-app/NFTokenBurnWOfixFungTokens
-app/NFTokenBurnWOFixNFTPageLinks
-app/NFTokenBurnWOFixTokenRemint
-app/NFTokenDir
-app/Regression
-app/ThinBook
-app/Transaction_ordering
-ledger/BookDirs
