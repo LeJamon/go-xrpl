@@ -411,7 +411,7 @@ func peerRelayScore(p *Peer) int {
 		spLatency   = 30
 		spNoLatency = 8000
 	)
-	score := mrand.IntN(spRandomMax+1) + spHaveItem
+	score := mrand.IntN(spRandomMax+1) + spHaveItem //nolint:gosec // G404: non-security peer timing/selection jitter
 	if lat, ok := p.Latency(); ok {
 		score -= int(lat.Milliseconds()) * spLatency
 	} else {
@@ -827,7 +827,7 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 // Run starts the overlay and blocks until the context is cancelled.
 func (o *Overlay) Run(ctx context.Context) error {
 	o.lifecycleMu.Lock()
-	o.ctx, o.cancel = context.WithCancel(ctx)
+	o.ctx, o.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancel stored in struct field and deferred, called on shutdown
 	cancel := o.cancel
 	o.lifecycleMu.Unlock()
 	defer cancel()

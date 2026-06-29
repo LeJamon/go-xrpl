@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -43,7 +44,8 @@ func startGRPCServer(
 	}
 
 	addr := p.GetBindAddress()
-	lis, err := net.Listen("tcp", addr)
+	var lc net.ListenConfig
+	lis, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, "", fmt.Errorf("grpc listen on %s: %w", addr, err)
 	}

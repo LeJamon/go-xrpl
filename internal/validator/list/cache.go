@@ -179,7 +179,7 @@ func (a *Aggregator) flushCacheWrites() {
 			continue
 		}
 		tmp := w.path + ".tmp"
-		if err := os.WriteFile(tmp, w.body, 0o644); err != nil {
+		if err := os.WriteFile(tmp, w.body, 0o600); err != nil {
 			a.logger.Debug("validator list: cache write failed",
 				"publisher", hex.EncodeToString(pk[:]),
 				"error", err)

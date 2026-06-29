@@ -253,7 +253,7 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 	}
 
 	// Prefix is "TXN\x00" = 0x54584E00
-	prefix := []byte{0x54, 0x58, 0x4E, 0x00}
+	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // prealloc: static 4-byte composite literal followed by a single append
 	data := append(prefix, txBytes...)
 
 	hash = common.Sha512Half(data)

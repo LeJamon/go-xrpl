@@ -38,7 +38,7 @@ func NewSim() *Sim {
 		Net:        NewBasicNetwork(scheduler),
 		TrustGraph: NewTrustGraph(),
 		Collectors: NewCollectors(),
-		Rng:        rand.New(rand.NewSource(0)),
+		Rng:        rand.New(rand.NewSource(0)), //nolint:gosec // G404: deterministic simulation RNG, not security-sensitive
 		peers:      make([]*Peer, 0),
 		allPeers:   NewPeerGroup(),
 		nextID:     0,
@@ -49,7 +49,7 @@ func NewSim() *Sim {
 // NewSimWithSeed creates a new simulation with a specific random seed.
 func NewSimWithSeed(seed int64) *Sim {
 	sim := NewSim()
-	sim.Rng = rand.New(rand.NewSource(seed))
+	sim.Rng = rand.New(rand.NewSource(seed)) //nolint:gosec // G404: deterministic simulation RNG, not security-sensitive
 	return sim
 }
 

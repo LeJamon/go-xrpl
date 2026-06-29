@@ -124,9 +124,9 @@ func (n NodeID) ChildNodeID(branch uint8) (NodeID, error) {
 	isHighNibble := n.depth%2 == 0
 
 	if isHighNibble {
-		newID[byteIndex] = (newID[byteIndex] & 0x0F) | (branch << 4)
+		newID[byteIndex] = (newID[byteIndex] & 0x0F) | (branch << 4) //nolint:gosec // G602: byteIndex < 32 guarded above
 	} else {
-		newID[byteIndex] = (newID[byteIndex] & 0xF0) | branch
+		newID[byteIndex] = (newID[byteIndex] & 0xF0) | branch //nolint:gosec // G602: byteIndex < 32 guarded above
 	}
 
 	return NodeID{depth: newDepth, id: newID}, nil

@@ -112,5 +112,5 @@ func writeJSONFile(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o644) //nolint:gosec // G306: developer replay dump, world-readable by intent
 }

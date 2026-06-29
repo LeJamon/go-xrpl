@@ -552,7 +552,7 @@ func writeDiffJSON(w io.Writer, path string, added, removed []stateEntry, modifi
 	if err != nil {
 		return fmt.Errorf("encoding diff: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0644); err != nil { //nolint:gosec // G306: developer CLI diff output, world-readable by intent
 		return fmt.Errorf("writing diff file %q: %w", path, err)
 	}
 	fmt.Fprintf(w, "Diff written to: %s\n", path)

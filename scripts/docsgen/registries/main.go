@@ -41,7 +41,7 @@ func writeTransactions() error {
 	for _, r := range rows {
 		fmt.Fprintf(&b, "| `%s` | %d |\n", r.name, r.code)
 	}
-	return os.WriteFile("docs/supported-transactions.md", []byte(b.String()), 0o644)
+	return os.WriteFile("docs/supported-transactions.md", []byte(b.String()), 0o644) //nolint:gosec // G306: generated docs artifact, world-readable by intent
 }
 
 func yesNo(v bool) string {
@@ -68,7 +68,7 @@ func writeAmendments() error {
 	for _, f := range feats {
 		fmt.Fprintf(&b, "| `%s` | %s | %s |\n", f.Name, yesNo(f.IsSupported()), yesNo(f.IsDefaultYes()))
 	}
-	return os.WriteFile("docs/amendments.md", []byte(b.String()), 0o644)
+	return os.WriteFile("docs/amendments.md", []byte(b.String()), 0o644) //nolint:gosec // G306: generated docs artifact, world-readable by intent
 }
 
 func main() {

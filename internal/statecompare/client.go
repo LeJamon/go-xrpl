@@ -18,6 +18,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	_ "github.com/lib/pq" // PostgreSQL driver
@@ -132,7 +133,9 @@ func NewClient(cfg Config, blobCfg BlobStoreConfig) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
-	if err := db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connecting to database: %w", err)
 	}

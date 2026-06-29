@@ -40,10 +40,10 @@ func main() {
 		formatted, err := format.Source(content)
 		if err != nil {
 			// Write the un-formatted source so the user can debug.
-			_ = os.WriteFile(path+".broken", content, 0o644)
+			_ = os.WriteFile(path+".broken", content, 0o644) //nolint:gosec // G306: generated source artifact, world-readable by intent
 			log.Fatalf("gofmt %s: %v (wrote %s.broken)", path, err, path)
 		}
-		if err := os.WriteFile(path, formatted, 0o644); err != nil {
+		if err := os.WriteFile(path, formatted, 0o644); err != nil { //nolint:gosec // G306: generated source artifact, world-readable by intent
 			log.Fatalf("write %s: %v", path, err)
 		}
 		fmt.Printf("wrote %s (%d fields)\n", path, len(entry.Fields))

@@ -29,6 +29,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded PR corpus-replay runs; scheduled discovery runs are never
+# cancelled (they grow the cached corpus).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # PR gate: deterministic, replays committed corpus only.
   corpus:
@@ -37,12 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.24"
-          cache: true
+      - uses: ./.github/actions/setup
       - run: ./scripts/fuzz.sh --corpus
 
   # Out-of-band discovery: mutation fuzzing, sharded by subsystem.
@@ -66,12 +67,7 @@ jobs:
             packages: ./shamap
     steps:
       - uses: actions/checkout@v5
-      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.24"
-          cache: true
+      - uses: ./.github/actions/setup
       - name: Select fuzztime
         id: cfg
         run: |

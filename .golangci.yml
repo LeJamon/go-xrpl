@@ -8,6 +8,7 @@ linters:
   enable:
     - bidichk
     - copyloopvar
+    - depguard
     - durationcheck
     - gocheckcompilerdirectives
     - govet
@@ -22,6 +23,23 @@ linters:
     - usetesting
     - whitespace
   settings:
+    depguard:
+      # Enforce the public/internal boundary: the exported packages (codec/,
+      # crypto/, shamap/, keylet/, ledger/entry/, …) must stay importable by
+      # external consumers, so they may not depend on internal/. cmd/, scripts/,
+      # internal/ itself, and test files are exempt. Currently clean — this
+      # locks that in.
+      rules:
+        public-no-internal:
+          list-mode: lax
+          files:
+            - "!**/internal/**"
+            - "!**/cmd/**"
+            - "!**/scripts/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/LeJamon/go-xrpl/internal
+              desc: "public packages must not import internal/ — keep the exported API self-contained"
     staticcheck:
       checks:
         - -QF1*

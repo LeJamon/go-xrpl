@@ -340,7 +340,7 @@ func RpcErrorNotStandalone(message string) *RpcError {
 // api_version (jss::invalid_API_version). rippled emits it bare — no numeric
 // code, no message — on every transport; only the envelope differs
 // (ServerHandler.cpp:454-455, 689, 694-695).
-const InvalidApiVersionToken = "invalid_API_version"
+const InvalidApiVersionToken = "invalid_API_version" //nolint:gosec // G101: error-code/name string, not a credential
 
 // WrongVersionJSONRPCCode is the JSON-RPC error code rippled attaches to an
 // invalid-api_version batch element via make_json_error (ServerHandler.cpp:608,

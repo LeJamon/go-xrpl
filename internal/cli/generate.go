@@ -39,7 +39,7 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 
 	content := generateConfigContent(networkID)
 
-	if err := os.WriteFile(generateOutput, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(generateOutput, []byte(content), 0644); err != nil { //nolint:gosec // G306: generated output, world-readable by intent
 		return fmt.Errorf("writing config file: %w", err)
 	}
 

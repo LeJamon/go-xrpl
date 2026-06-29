@@ -11,7 +11,8 @@ import (
 // type 19 field 1) carrying payloadLen raw bytes behind the XRPL single-byte
 // length prefix. payloadLen must be <= 192 so the prefix stays one byte.
 func indexesField(payloadLen int) []byte {
-	b := []byte{0x01, 0x13, byte(payloadLen)} // field header + 1-byte VL length
+	b := make([]byte, 0, 3+payloadLen)
+	b = append(b, 0x01, 0x13, byte(payloadLen)) // field header + 1-byte VL length
 	return append(b, make([]byte, payloadLen)...)
 }
 

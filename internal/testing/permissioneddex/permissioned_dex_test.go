@@ -1597,8 +1597,8 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	dex := SetupPermissionedDEX(t, env)
 
-	var offerSeqs []uint32
 	const dirCount = 100
+	offerSeqs := make([]uint32, 0, dirCount)
 
 	for range dirCount {
 		bobSeq := env.Seq(dex.Bob)

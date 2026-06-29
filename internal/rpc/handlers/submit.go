@@ -210,7 +210,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 func CalculateTxHash(txBlobHex string) string {
 	// The transaction hash is SHA512Half of prefix + transaction blob
 	// Prefix is "TXN\x00" = 0x54584E00
-	prefix := []byte{0x54, 0x58, 0x4E, 0x00}
+	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // prealloc: static 4-byte composite literal followed by a single append
 
 	txBytes, err := hex.DecodeString(txBlobHex)
 	if err != nil {

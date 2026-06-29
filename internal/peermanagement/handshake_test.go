@@ -194,7 +194,7 @@ func TestParsePublicKeyToken_RejectsEd25519Prefix(t *testing.T) {
 		keyBytes[i] = byte(i)
 	}
 
-	payload := make([]byte, 1+CompressedPubKeyLen)
+	payload := make([]byte, 1+CompressedPubKeyLen, 1+CompressedPubKeyLen+ChecksumLen)
 	payload[0] = NodePublicKeyPrefix
 	copy(payload[1:], keyBytes)
 	checksum := doubleSHA256Identity(payload)[:ChecksumLen]

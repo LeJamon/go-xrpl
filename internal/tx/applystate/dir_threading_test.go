@@ -71,7 +71,7 @@ func applyModify(t *testing.T, bookKey [32]byte, orig, cur []byte, txHash [32]by
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	var out []affectedView
+	out := make([]affectedView, 0, len(meta.AffectedNodes))
 	for _, an := range meta.AffectedNodes {
 		out = append(out, affectedView{
 			idx:       an.LedgerIndex,

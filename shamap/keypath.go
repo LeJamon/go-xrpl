@@ -18,7 +18,7 @@ func selectBranch(nodeID NodeID, key [32]byte) uint8 {
 	if byteIndex >= 32 {
 		return 0
 	}
-	b := key[byteIndex]
+	b := key[byteIndex] //nolint:gosec // G602: byteIndex < 32 guarded above
 	if depth%2 == 0 {
 		return b >> 4
 	}
@@ -34,7 +34,7 @@ func getBranchAtDepth(key [32]byte, depth int) int {
 	if byteIndex >= 32 {
 		return 0
 	}
-	b := key[byteIndex]
+	b := key[byteIndex] //nolint:gosec // G602: byteIndex < 32 guarded above
 	if depth%2 == 0 {
 		return int(b >> 4)
 	}

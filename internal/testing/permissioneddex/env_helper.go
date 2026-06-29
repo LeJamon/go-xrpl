@@ -50,7 +50,7 @@ func (e *PermissionedDEXEnv) DomainIDHexStr() string {
 func SetupPermissionedDEX(t *testing.T, env *jtx.TestEnv) *PermissionedDEXEnv {
 	t.Helper()
 
-	const credType = "7065726d6465782d6162636465" // hex("permdex-abcde")
+	const credType = "7065726d6465782d6162636465" //nolint:gosec // G101: test fixture constant, not a credential // hex("permdex-abcde")
 
 	gw := jtx.NewAccount("permdex-gateway")
 	domainOwner := jtx.NewAccount("permdex-domainOwner")

@@ -46,7 +46,8 @@ func TestReproByteDiff_DirPagination(t *testing.T) {
 
 	src := jtx.NewAccountFromSeed("src", srcSeed)
 	issuers := make([]*jtx.Account, 33)
-	all := []*jtx.Account{src}
+	all := make([]*jtx.Account, 0, 34)
+	all = append(all, src)
 	for i := range 33 {
 		issuers[i] = jtx.NewAccountFromSeed(fmt.Sprintf("iss%02d", i), issuerSeeds[i])
 		all = append(all, issuers[i])

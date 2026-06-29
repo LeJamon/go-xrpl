@@ -210,7 +210,7 @@ func TestParseSTValidation_UnknownFieldsSkipped(t *testing.T) {
 
 	// Simpler approach: append an unknown Hash256 field (type=5, field=15 → 0x5F)
 	// right before sfSigningPubKey in the blob.
-	modified = nil
+	modified = nil //nolint:prealloc // prealloc: insertion-driven builder, no static capacity
 	insertPos := -1
 	for i := range blob {
 		if blob[i] == 0x73 {

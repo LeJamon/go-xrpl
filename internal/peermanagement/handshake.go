@@ -107,7 +107,7 @@ func DefaultHandshakeConfig() HandshakeConfig {
 
 // BuildHandshakeRequest builds an HTTP upgrade request for peer connection.
 func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig) (*http.Request, error) {
-	req, err := http.NewRequest("GET", "/", nil)
+	req, err := http.NewRequest("GET", "/", nil) //nolint:noctx // request is serialized via Write to a raw conn, not sent through an http.Client
 	if err != nil {
 		return nil, err
 	}
