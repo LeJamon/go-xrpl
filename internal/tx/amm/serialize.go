@@ -58,6 +58,13 @@ func parseAMMData(data []byte) (*AMMData, error) {
 		amm.OwnerNode, _ = parseHexUint64(ownerNodeStr)
 	}
 
+	// PreviousTxnID / PreviousTxnLgrSeq (threading pointers) — preserve them so a
+	// no-op modification re-serializes byte-identically (see AMMData docs).
+	if prevTxnID, ok := fields["PreviousTxnID"].(string); ok {
+		amm.PreviousTxnID = prevTxnID
+	}
+	amm.PreviousTxnLgrSeq = getFieldUint32(fields, "PreviousTxnLgrSeq")
+
 	// LPTokenBalance (Amount object)
 	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
 		bal, err := amountMapToAmount(lptObj)
@@ -169,6 +176,12 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	// state. Emitting TradingFee:0 forks account_hash.
 	if amm.TradingFee != 0 {
 		jsonObj["TradingFee"] = amm.TradingFee
+	}
+
+	// soeOPTIONAL: emit only once the apply layer has threaded the AMM (see AMMData docs).
+	if amm.PreviousTxnID != "" {
+		jsonObj["PreviousTxnID"] = amm.PreviousTxnID
+		jsonObj["PreviousTxnLgrSeq"] = amm.PreviousTxnLgrSeq
 	}
 
 	// VoteSlots (STArray of VoteEntry objects)
