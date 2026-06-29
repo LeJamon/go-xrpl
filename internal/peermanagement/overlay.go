@@ -1243,8 +1243,10 @@ func (o *Overlay) forwardTransaction(msg *InboundMessage) {
 	select {
 	case o.txMessages <- msg:
 	default:
+		// Counted via droppedTransactions (jq_trans_overflow); log at Debug so a
+		// shed storm under load cannot itself flood the single log writer.
 		o.droppedTransactions.Add(1)
-		slog.Info("Transaction queue is full", "t", "Overlay",
+		slog.Debug("Transaction queue is full", "t", "Overlay",
 			"pending", len(o.txMessages), "max", cap(o.txMessages), "peer", msg.PeerID)
 	}
 }

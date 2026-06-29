@@ -77,6 +77,10 @@ func (c *LoggingConfig) Validate() error {
 func (c *LoggingConfig) ToLogConfig(debugLogfile string) (*xrpllog.Config, error) {
 	cfg := xrpllog.DefaultConfig()
 
+	// The live node logs asynchronously so a slow or blocked output never
+	// stalls a logging caller — notably the consensus strand under its lock.
+	cfg.Async = true
+
 	// Level
 	if c.Level != "" {
 		if level, ok := parseLevelString(c.Level); ok {

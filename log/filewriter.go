@@ -96,14 +96,19 @@ func Rotate() error {
 	return fw.Rotate()
 }
 
-// Sync flushes the root logger's file output to stable storage on a best-effort
-// basis, returning nil when logging is not file-backed (stdout/stderr writers
-// are flushed by syncing their own descriptors, not through here). It exists for
-// the abort path, where os.Exit skips deferred Close/Sync hooks.
+// Sync drains any async queue, then flushes the root logger's file output to
+// stable storage on a best-effort basis. It returns nil when logging is not
+// file-backed (stdout/stderr writers are flushed by syncing their own
+// descriptors, not through here), but the async drain still runs so buffered
+// records reach the destination. It exists for the abort path, where os.Exit
+// skips deferred Close/Sync hooks.
 func Sync() error {
 	cfg := rootCfg.Load()
 	if cfg == nil {
 		return nil
+	}
+	if aw := cfg.asyncOut.Load(); aw != nil {
+		aw.flush(asyncFlushTimeout)
 	}
 	fw, ok := cfg.Output.(*FileWriter)
 	if !ok {

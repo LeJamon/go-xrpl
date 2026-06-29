@@ -2949,7 +2949,7 @@ func (e *Engine) updateCloseTimePosition() {
 		ourPosCT = e.state.OurPosition.CloseTime.Unix() - protocol.RippleEpochUnix
 		ourPosSeq = e.state.OurPosition.Position
 	}
-	slog.Info("close-time avalanche",
+	slog.Debug("close-time avalanche",
 		"t", "consensus",
 		"event", "ct-avalanche",
 		"seq", e.state.Round.Seq,
