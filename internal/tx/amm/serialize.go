@@ -178,12 +178,7 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 		jsonObj["TradingFee"] = amm.TradingFee
 	}
 
-	// PreviousTxnID / PreviousTxnLgrSeq thread modification history. Emit them only
-	// when the AMM has been threaded before (a freshly created AMM has neither
-	// until the apply layer stamps it), so a no-op modification round-trips
-	// byte-identically and the apply layer's unchanged-entry guard prunes it —
-	// rippled writes no ModifiedNode and bumps no PreviousTxnID when nothing
-	// changed (ApplyStateTable.cpp:154-157).
+	// soeOPTIONAL: emit only once the apply layer has threaded the AMM (see AMMData docs).
 	if amm.PreviousTxnID != "" {
 		jsonObj["PreviousTxnID"] = amm.PreviousTxnID
 		jsonObj["PreviousTxnLgrSeq"] = amm.PreviousTxnLgrSeq
