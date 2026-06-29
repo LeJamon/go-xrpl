@@ -212,7 +212,7 @@ func (e *TestEnv) closeWithReplay() {
 
 	sortCanonicalSalted(userTxns, setupTxns)
 
-	var allTxns []tx.Transaction
+	allTxns := make([]tx.Transaction, 0, len(setupTxns)+len(userTxns))
 	allTxns = append(allTxns, setupTxns...)
 	allTxns = append(allTxns, userTxns...)
 
