@@ -22,7 +22,7 @@ type AmendmentsSLE struct {
 
 	// Round-trips so a no-op modify re-serializes byte-identically and the apply
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
-	PreviousTxnID     []byte
+	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
 
@@ -127,8 +127,8 @@ func ParseAmendmentsSLE(data []byte) (*AmendmentsSLE, error) {
 
 	// PreviousTxnID/PreviousTxnLgrSeq are threaded as a pair.
 	if ptid, ok := jsonObj["PreviousTxnID"].(string); ok {
-		if b, err := hex.DecodeString(ptid); err == nil {
-			sle.PreviousTxnID = b
+		if b, err := hex.DecodeString(ptid); err == nil && len(b) == 32 {
+			copy(sle.PreviousTxnID[:], b)
 			sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
 		}
 	}
@@ -167,8 +167,9 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 	}
 
 	// Carry the pointers through a no-op modify; absent on a brand-new entry.
-	if len(sle.PreviousTxnID) > 0 {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID))
+	var emptyHash [32]byte
+	if sle.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID[:]))
 		jsonObj["PreviousTxnLgrSeq"] = sle.PreviousTxnLgrSeq
 	}
 

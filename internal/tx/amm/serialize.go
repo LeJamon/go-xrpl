@@ -127,6 +127,15 @@ func parseAMMData(data []byte) (*AMMData, error) {
 		amm.AuctionSlot = slot
 	}
 
+	// PreviousTxnID/PreviousTxnLgrSeq round-trip the threading pointers, present
+	// once the AMM has been threaded under fixPreviousTxnID.
+	if ptid, ok := fields["PreviousTxnID"].(string); ok {
+		if b, err := hex.DecodeString(ptid); err == nil && len(b) == 32 {
+			copy(amm.PreviousTxnID[:], b)
+			amm.PreviousTxnLgrSeq = getFieldUint32(fields, "PreviousTxnLgrSeq")
+		}
+	}
+
 	return amm, nil
 }
 
@@ -229,6 +238,14 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 			auctionSlot["AuthAccounts"] = authAccounts
 		}
 		jsonObj["AuctionSlot"] = auctionSlot
+	}
+
+	// Carry the threading pointers through a no-op modify; absent until the apply
+	// layer stamps a freshly created AMM (ApplyStateTable.cpp:154-157).
+	var emptyHash [32]byte
+	if amm.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(amm.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = amm.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

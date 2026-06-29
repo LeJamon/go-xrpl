@@ -27,6 +27,11 @@ type AMMData struct {
 	VoteSlots []VoteSlotData
 	// AuctionSlot contains the current auction slot state (optional)
 	AuctionSlot *AuctionSlotData
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157). AMM is
+	// threaded only under fixPreviousTxnID, so these are absent pre-amendment.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // VoteSlotData holds a single vote slot entry.
