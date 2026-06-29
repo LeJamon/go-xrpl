@@ -45,7 +45,7 @@ func newAsyncWriter(dst io.Writer, depth int) *asyncWriter {
 }
 
 // Write copies p — slog reuses its buffer once Handle returns — and enqueues it
-// without blocking. A full queue drops the record and bumps the counter.
+// without blocking.
 func (w *asyncWriter) Write(p []byte) (int, error) {
 	b := make([]byte, len(p))
 	copy(b, p)
@@ -96,7 +96,6 @@ func (w *asyncWriter) flush(timeout time.Duration) {
 	}
 }
 
-// DroppedRecords reports how many records were dropped on a full queue.
 func (w *asyncWriter) DroppedRecords() uint64 {
 	return w.dropped.Load()
 }
