@@ -221,6 +221,15 @@ type Common struct {
 	// on the same goroutine, so the write happens-before the in-strand read and
 	// before the parsed transaction is shared with any other goroutine.
 	sigVerified bool
+
+	// cachedTxID memoises this transaction's id. The id is a pure function of
+	// RawBytes, so the cache stays valid until SetRawBytes replaces them (which
+	// clears it). Carries the same single-goroutine, unsynchronised contract as
+	// sigVerified: the apply path reuses one parsed transaction across
+	// preflight/preclaim/apply, so the id is computed once at ingress and read
+	// under the strand without re-hashing.
+	cachedTxID [32]byte
+	txIDCached bool
 }
 
 // Validate validates the common fields. preflightCommonFields catches these
@@ -256,9 +265,11 @@ func (c *Common) GetRawBytes() []byte {
 	return c.RawBytes
 }
 
-// SetRawBytes stores the original serialized bytes
+// SetRawBytes stores the original serialized bytes, invalidating any memoised
+// transaction id since the id is derived from these bytes.
 func (c *Common) SetRawBytes(data []byte) {
 	c.RawBytes = data
+	c.txIDCached = false
 }
 
 // SetFlags sets the flags field

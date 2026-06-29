@@ -227,35 +227,39 @@ func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
 // computeTransactionHash computes the hash of a transaction
 // The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction
 func computeTransactionHash(tx Transaction) ([32]byte, error) {
-	var hash [32]byte
-	var txBytes []byte
+	c := tx.GetCommon()
 
-	// Use raw bytes if available (from parsing), otherwise re-serialize
+	// Fast path: id is memoised from the raw signed bytes (see cachedTxID).
 	if rawBytes := tx.GetRawBytes(); len(rawBytes) > 0 {
-		txBytes = rawBytes
-	} else {
-		// Serialize the transaction using Flatten
-		txMap, err := tx.Flatten()
-		if err != nil {
-			return hash, err
+		if c != nil && c.txIDCached {
+			return c.cachedTxID, nil
 		}
-
-		// Encode to binary using the binary codec
-		hexStr, err := binarycodec.Encode(txMap)
-		if err != nil {
-			return hash, err
+		hash := hashWithTxnPrefix(rawBytes)
+		if c != nil {
+			c.cachedTxID = hash
+			c.txIDCached = true
 		}
-
-		txBytes, err = hex.DecodeString(hexStr)
-		if err != nil {
-			return hash, err
-		}
+		return hash, nil
 	}
 
-	// Prefix is "TXN\x00" = 0x54584E00
-	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // prealloc: static 4-byte composite literal followed by a single append
-	data := append(prefix, txBytes...)
+	// No raw bytes: rebuilt from current field state each call, so not memoised.
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	hexStr, err := binarycodec.Encode(txMap)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	txBytes, err := hex.DecodeString(hexStr)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return hashWithTxnPrefix(txBytes), nil
+}
 
-	hash = common.Sha512Half(data)
-	return hash, nil
+// hashWithTxnPrefix returns SHA512Half of the "TXN\x00" prefix + txBytes.
+func hashWithTxnPrefix(txBytes []byte) [32]byte {
+	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // static 4-byte composite literal followed by a single append
+	return common.Sha512Half(append(prefix, txBytes...))
 }
