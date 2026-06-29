@@ -125,12 +125,9 @@ type Engine struct {
 	// degraded resync rather than freezing.
 	wrongLedgerAcquireFailures int
 
-	// wrongLedgerSince is when we last entered ModeWrongLedger; zero when not
-	// pinned. It measures continuous time stuck regardless of how often the
-	// target hash churns, arming a watchdog that drops to a degraded resync
-	// even when no acquisition reports a clean failure (a livelocked
-	// acquisition) or the clean failures land on a stale target the hatch no
-	// longer recognises (the network advancing past us).
+	// wrongLedgerSince is when we last entered ModeWrongLedger (zero when not
+	// pinned); it measures continuous time stuck regardless of target-hash
+	// churn, arming the wrongLedgerStuckTimeout watchdog.
 	wrongLedgerSince time.Time
 
 	// degradedResyncUntil, when in the future, suppresses re-pinning
@@ -1364,12 +1361,9 @@ func (e *Engine) checkAndStartRoundInner() {
 	e.startRoundLocked(round, proposing, false)
 }
 
-// checkStuckWrongLedger drops to a degraded resync when pinned in
-// ModeWrongLedger continuously past wrongLedgerStuckTimeout, backing the
-// clean-failure hatch which can't arm under a livelock or moving target. Run
-// every tick regardless of phase: a pin taken while phase==PhaseAccepted
-// (acceptLedger's preferred-LCL jump) advances no rounds, so checkLedger never
-// runs. Caller must hold e.mu.
+// checkStuckWrongLedger drops to a degraded resync once pinned in
+// ModeWrongLedger past wrongLedgerStuckTimeout, backing the clean-failure hatch
+// which can't arm under a livelock or moving target. Caller must hold e.mu.
 func (e *Engine) checkStuckWrongLedger() {
 	if e.mode == consensus.ModeWrongLedger && !e.wrongLedgerSince.IsZero() &&
 		e.adaptor.Now().Sub(e.wrongLedgerSince) > wrongLedgerStuckTimeout {
@@ -1657,18 +1651,13 @@ const (
 	wrongLedgerAcquireMaxFailures = 3
 	degradedResyncCooldown        = 20 * time.Second
 
-	// wrongLedgerStuckTimeout is the watchdog bound on continuous time pinned
-	// in ModeWrongLedger. The clean-failure hatch can fail to arm: an inbound
-	// acquisition can livelock (it keeps attaching frontier nodes, so it never
-	// times out, but never completes), and when the network advances past us
-	// each clean failure lands on a stale target the hatch no longer matches,
-	// so wrongLedgerAcquireFailures never climbs. Either way the node closes no
-	// ledgers and wedges forever. Past this bound the watchdog drops to a
-	// degraded resync regardless, so closes resume and recovery continues. Set
-	// above the clean-failure budget (~wrongLedgerAcquireMaxFailures full
-	// acquire cycles) so it only backstops a genuinely stuck node, and well
-	// under the fatal stall watchdog (90s default) so degraded resync engages
-	// before the node aborts.
+	// wrongLedgerStuckTimeout bounds continuous time pinned in ModeWrongLedger.
+	// The clean-failure hatch can fail to arm — a livelocked acquisition never
+	// times out, and a target moving as the network advances leaves each clean
+	// failure on a stale id the hatch ignores — so without this bound the node
+	// wedges forever. Set above the clean-failure budget (only backstop a
+	// genuinely stuck node) and under the 90s fatal stall watchdog (so degraded
+	// resync engages before the node aborts).
 	wrongLedgerStuckTimeout = 60 * time.Second
 )
 
@@ -1704,10 +1693,10 @@ func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 }
 
 // dropToDegradedResync demotes a node that cannot acquire its wrongLedger
-// target to a degraded resync: ModeObserving keeps rounds (and the stall
-// watchdog heartbeat) advancing while checkLedger retries, so closes resume
-// and the network recovers. Reached both from the clean-failure hatch at its
-// limit and from the stuck-acquisition watchdog. Caller must hold e.mu.
+// target: ModeObserving keeps rounds (and the stall watchdog heartbeat)
+// advancing while checkLedger retries, so closes resume. Reached from both the
+// clean-failure hatch (at its limit) and the stuck-acquisition watchdog. Caller
+// must hold e.mu.
 func (e *Engine) dropToDegradedResync(reason string) {
 	slog.Warn("wrongLedger ledger unacquirable; dropping to degraded resync",
 		"t", "consensus",
@@ -1740,9 +1729,8 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	// old or new — fine for the snapshot.
 	e.modeAtomic.Store(int32(newMode))
 
-	// Stamp the continuous-wrongLedger clock on entry and clear it on exit, so
-	// the watchdog measures uninterrupted time pinned even as the target hash
-	// churns (re-pins to a fresh hash keep the same mode, so this runs once).
+	// Stamp wrongLedgerSince on entry to ModeWrongLedger, clear on exit. A re-pin
+	// stays in the same mode, so the stamp survives a churning target.
 	switch {
 	case newMode == consensus.ModeWrongLedger && oldMode != consensus.ModeWrongLedger:
 		e.wrongLedgerSince = e.adaptor.Now()
