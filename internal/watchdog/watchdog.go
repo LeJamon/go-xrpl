@@ -12,10 +12,9 @@
 // Behaviour mirrors rippled's LoadManager (LoadManager.cpp): warn at >=10s
 // without a heartbeat (repeated every reporting interval, with a full
 // goroutine stack dump on the first warning so the wedged loop is visible),
-// fatal log at >=90s, and process abort at >=600s. The slog handlers in use are
-// synchronous, so the abort record reaches the underlying writer before exit;
-// the abort path additionally fsyncs the stdout/stderr/file descriptors so those
-// final bytes survive os.Exit, which skips deferred Sync hooks. Only the
+// fatal log at >=90s, and process abort at >=600s. The abort path drains the
+// async log queue and fsyncs the stdout/stderr/file descriptors so the final
+// abort record survives os.Exit, which skips deferred Sync hooks. Only the
 // stall-detection half of LoadManager is reproduced here; the local-fee
 // raise/lower half already lives in internal/feetrack.
 package watchdog
@@ -132,9 +131,9 @@ func New(cfg Config, logger *slog.Logger) *Watchdog {
 		heartbeats: make(map[string]time.Time),
 	}
 	// exit terminates the process so an orchestrator can restart the wedged node
-	// — rippled's LogicError abort. The slog handlers are synchronous, so the
-	// abort record has already reached the writer; sync (called by check before
-	// exit) fsyncs the descriptors so those bytes survive os.Exit.
+	// — rippled's LogicError abort. sync (called by check before exit) drains the
+	// async log queue and fsyncs the descriptors so the abort record survives
+	// os.Exit, which under async logging would otherwise leave it still queued.
 	w.exit = func() { os.Exit(1) }
 	return w
 }
@@ -238,17 +237,16 @@ func (w *Watchdog) check(tick time.Duration) {
 	}
 }
 
-// syncLogDescriptors best-effort fsyncs the destinations the node's logs can
-// reach so the final abort record survives os.Exit, which does not flush
-// kernel-buffered file output. The slog handlers write synchronously, so by this
-// point the record is already in the writer; this only forces it to stable
-// storage. stdout/stderr cover the default and "stderr" config outputs;
-// xrpllog.Sync covers a file-backed [logging] output. All errors are ignored —
-// the process is aborting regardless.
+// syncLogDescriptors best-effort flushes the node's logs so the final abort
+// record survives os.Exit, which does not flush kernel-buffered output.
+// xrpllog.Sync runs first: it drains the async log queue into the destination
+// (and fsyncs a file-backed [logging] output). The stdout/stderr fsyncs then
+// cover the default and "stderr" config outputs. All errors are ignored — the
+// process is aborting regardless.
 func syncLogDescriptors() {
+	_ = xrpllog.Sync()
 	_ = os.Stderr.Sync()
 	_ = os.Stdout.Sync()
-	_ = xrpllog.Sync()
 }
 
 // allGoroutineStacks returns a dump of every goroutine's stack — the Go

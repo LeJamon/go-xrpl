@@ -39,15 +39,15 @@ func (l *logger) Error(msg string, args ...any) {
 	l.inner.Error(msg, args...)
 }
 
-// Fatal emits an Error record then exits. The handlers in this package
-// (slog.NewTextHandler / slog.NewJSONHandler) are unbuffered, so the final
-// record reaches the underlying writer before exit. The os-level descriptor is
-// not fsynced here: defaultExit goes straight to os.Exit and will not run
-// deferred Sync hooks. Callers that need the file-backed output flushed to
-// stable storage before aborting should call Sync first (see the abort path in
-// internal/watchdog).
+// Fatal emits an Error record then exits. Sync runs before exit so the final
+// record reaches the destination even under async logging, where the record
+// would otherwise still be queued when defaultExit calls os.Exit (which skips
+// deferred Sync hooks). It does not fsync the os-level descriptor; callers that
+// need the file flushed to stable storage rely on Sync's file path or the
+// watchdog abort path's descriptor fsync.
 func (l *logger) Fatal(msg string, args ...any) {
 	l.inner.Error(msg, args...)
+	_ = Sync()
 	defaultExit()
 }
 

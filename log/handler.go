@@ -42,10 +42,25 @@ type Config struct {
 	// Omitted partitions use the global Level.
 	Partitions map[string]Level
 
+	// Async, when set, routes records through a bounded background queue
+	// (drop-on-full) instead of writing them on the calling goroutine, so a
+	// slow or blocked output can never stall a logging caller — in particular
+	// the consensus strand, which logs under its engine lock. Leave unset for
+	// tests and library use, where output must be synchronous and deterministic.
+	Async bool
+
+	// AsyncQueueDepth bounds the records buffered when Async is set.
+	// Zero uses asyncQueueDepth.
+	AsyncQueueDepth int
+
 	// dyn holds live LevelVars initialised by initDyn. Stored as
 	// atomic.Pointer so concurrent first-touches don't race on the
 	// pointer, and so Config itself remains copy-safe (no embedded mutex).
 	dyn atomic.Pointer[configDynamic]
+
+	// asyncOut holds the live async writer when Async is set, so Sync can drain
+	// it on the abort path. Set once by NewHandler.
+	asyncOut atomic.Pointer[asyncWriter]
 }
 
 // initDyn lazily initialises the dynamic state from the static Level fields.
@@ -135,6 +150,7 @@ func DefaultConfig() *Config {
 // Text format uses slog.NewTextHandler; JSON uses slog.NewJSONHandler.
 // NewHandler initialises cfg's dynamic LevelVars so that SetLevel /
 // SetPartitionLevel calls on the same *Config take effect immediately.
+// When cfg.Async is set the output is wrapped so writes never block the caller.
 func NewHandler(cfg *Config) slog.Handler {
 	if cfg == nil {
 		cfg = &Config{Level: LevelInfo, Format: "text", Output: os.Stdout}
@@ -142,6 +158,11 @@ func NewHandler(cfg *Config) slog.Handler {
 	out := cfg.Output
 	if out == nil {
 		out = os.Stdout
+	}
+	if cfg.Async {
+		aw := newAsyncWriter(out, cfg.AsyncQueueDepth)
+		cfg.asyncOut.Store(aw)
+		out = aw
 	}
 
 	d := cfg.initDyn() // ensure globalVar is live
