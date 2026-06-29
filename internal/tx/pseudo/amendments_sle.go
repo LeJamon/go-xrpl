@@ -19,6 +19,16 @@ type AmendmentsSLE struct {
 	// Majorities tracks amendments that have reached majority with their close times.
 	// Each entry has an amendment hash and the close time when majority was achieved.
 	Majorities []MajorityEntry
+
+	// PreviousTxnID / PreviousTxnLgrSeq are the threading pointers stamped by the
+	// last EnableAmendment pseudo-tx that modified this entry. They must survive
+	// the parse → modify → serialize round-trip so a no-op majority/enable update
+	// re-serializes byte-identically and the apply layer's unchanged-entry guard
+	// prunes it — rippled writes no ModifiedNode and bumps no PreviousTxnID when
+	// nothing changed (ApplyStateTable.cpp:154-157). Absent on a brand-new entry
+	// (the apply layer threads the creating tx in afterwards).
+	PreviousTxnID     []byte
+	PreviousTxnLgrSeq uint32
 }
 
 // MajorityEntry represents a single entry in the sfMajorities array.
@@ -120,6 +130,15 @@ func ParseAmendmentsSLE(data []byte) (*AmendmentsSLE, error) {
 		}
 	}
 
+	// Parse the threading pointers (present together once a tx has touched the
+	// entry; rippled always threads the pair, so read them as a pair).
+	if ptid, ok := jsonObj["PreviousTxnID"].(string); ok {
+		if b, err := hex.DecodeString(ptid); err == nil {
+			sle.PreviousTxnID = b
+			sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
+		}
+	}
+
 	return sle, nil
 }
 
@@ -151,6 +170,15 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 			}
 		}
 		jsonObj["Majorities"] = arr
+	}
+
+	// Preserve the threading pointers if present. They are absent on a brand-new
+	// entry (the apply layer threads the creating tx in afterwards) but must be
+	// carried through a no-op modification so it round-trips byte-identically and
+	// the apply layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	if len(sle.PreviousTxnID) > 0 {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID))
+		jsonObj["PreviousTxnLgrSeq"] = sle.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

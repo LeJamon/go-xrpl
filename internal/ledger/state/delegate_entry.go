@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -17,6 +18,15 @@ type DelegateData struct {
 	Authorize   [20]byte // Account that received the delegation
 	OwnerNode   uint64
 	Permissions []uint32 // Permission values (txType+1 or granular permission)
+	// PreviousTxnID / PreviousTxnLgrSeq thread the Delegate SLE's modification
+	// history. They must round-trip so a no-op DelegateSet (re-submitting the
+	// current permission set) re-serializes byte-identically, letting the apply
+	// layer's unchanged-entry guard prune it — matching rippled, which emits no
+	// ModifiedNode and threads no PreviousTxnID when nothing changed
+	// (ApplyStateTable.cpp:154-157). Zero when the entry has never been threaded;
+	// omitted on serialize in that case.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // ParseDelegate parses a Delegate ledger entry from binary data.
@@ -27,9 +37,17 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 
 	err := WalkFields(data, func(f Field) error {
 		switch f.TypeCode {
+		case stUInt32:
+			if f.FieldCode == 5 { // PreviousTxnLgrSeq
+				entry.PreviousTxnLgrSeq = f.UInt32()
+			}
 		case stUInt64:
 			if f.FieldCode == 4 { // OwnerNode
 				entry.OwnerNode = f.UInt64()
+			}
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				entry.PreviousTxnID = f.Hash256()
 			}
 		case stAccountID:
 			switch f.FieldCode {
@@ -81,9 +99,11 @@ func parseDelegatePermissions(content []byte) ([]uint32, error) {
 	return perms, err
 }
 
-// SerializeDelegate serializes a Delegate ledger entry.
+// SerializeDelegate serializes a Delegate ledger entry. prevTxnID/prevTxnLgrSeq
+// are the threading pointers carried over from an existing entry on the modify
+// path; pass the zero hash on create (the apply layer stamps them afterward).
 // Reference: rippled DelegateSet.cpp doApply()
-func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64) ([]byte, error) {
+func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerNode uint64, prevTxnID [32]byte, prevTxnLgrSeq uint32) ([]byte, error) {
 	accountAddr, err := addresscodec.EncodeAccountIDToClassicAddress(account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)
@@ -110,6 +130,16 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 		"Permissions":     permsArray,
 		"OwnerNode":       fmt.Sprintf("%X", ownerNode),
 		"Flags":           uint32(0),
+	}
+
+	// Emit the threading pointers only when the entry has been threaded before (a
+	// freshly created entry has neither until the apply layer stamps it), so a
+	// no-op modification round-trips byte-identically and the apply layer's
+	// unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	var emptyHash [32]byte
+	if prevTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(prevTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = prevTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

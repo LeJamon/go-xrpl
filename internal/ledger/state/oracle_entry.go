@@ -20,6 +20,15 @@ type OracleData struct {
 	PriceDataSeries []OraclePriceData
 	URI             string // hex-encoded, optional
 	Flags           uint32
+	// PreviousTxnID / PreviousTxnLgrSeq thread the Oracle SLE's modification
+	// history. They must round-trip so a no-op OracleSet (re-submitting the
+	// current price data) re-serializes byte-identically, letting the apply
+	// layer's unchanged-entry guard prune it — matching rippled, which emits no
+	// ModifiedNode and threads no PreviousTxnID when nothing changed
+	// (ApplyStateTable.cpp:154-157). Zero when the Oracle has never been threaded;
+	// omitted on serialize in that case.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // OraclePriceData holds parsed fields of a single price data entry within an Oracle.
@@ -57,6 +66,8 @@ func ParseOracle(data []byte) (*OracleData, error) {
 			switch f.FieldCode {
 			case 2: // Flags
 				oracle.Flags = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				oracle.PreviousTxnLgrSeq = f.UInt32()
 			case fieldLastUpdateTime: // 15
 				oracle.LastUpdateTime = f.UInt32()
 			}
@@ -64,6 +75,11 @@ func ParseOracle(data []byte) (*OracleData, error) {
 		case stUInt64:
 			if f.FieldCode == fieldOwnerNode { // 4
 				oracle.OwnerNode = f.UInt64()
+			}
+
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				oracle.PreviousTxnID = f.Hash256()
 			}
 
 		case stAccountID:
@@ -206,6 +222,16 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 
 	if o.URI != "" {
 		jsonObj["URI"] = o.URI
+	}
+
+	// Emit the threading pointers only when the Oracle has been threaded before
+	// (a freshly created Oracle has neither until the apply layer stamps it), so
+	// a no-op modification round-trips byte-identically and the apply layer's
+	// unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	var emptyHash [32]byte
+	if o.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(o.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
 	}
 
 	// Build PriceDataSeries as []map[string]any
