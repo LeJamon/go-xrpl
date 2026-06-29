@@ -559,11 +559,6 @@ func (s *BookStep) forEachOffer(
 		}
 	}
 
-	// The trailing groom is no longer a separate gated drain: the do-while above
-	// runs one more getNextOfferSkipVisited after the demand-meeting take, which
-	// grooms the trailing unfunded/became/tiny run in this (committed) pass before
-	// the next callback returns false — matching rippled's `while(offers.step())`.
-
 	// If no CLOB offers found, try the AMM alone.
 	if firstCLOB {
 		tryAMM(nil)
