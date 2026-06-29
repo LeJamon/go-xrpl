@@ -311,10 +311,12 @@ func adjustTrustLineBalance(sb *PaymentSandbox, account, issuer [20]byte, curren
 		return err
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
-	tl.PreviousTxnID = txHash
-	tl.PreviousTxnLgrSeq = ledgerSeq
-
+	// Do NOT stamp PreviousTxnID/PreviousTxnLgrSeq here: threading is the
+	// ApplyStateTable's job and runs only after its no-op (Original == Current)
+	// check. A dust crossing whose recomputed balance rounds back to the same
+	// value would otherwise differ only in the bumped threading pointers,
+	// defeating that check and emitting a ghost ModifiedNode (plus a bogus
+	// PreviousTxnID bump). Mirrors the offer path in step_book_consume.go.
 	newData, err := state.SerializeRippleState(tl)
 	if err != nil {
 		return err
