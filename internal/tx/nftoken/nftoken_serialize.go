@@ -37,6 +37,14 @@ func serializeNFTokenPage(page *state.NFTokenPageData) ([]byte, error) {
 		jsonObj["NextPageMin"] = strings.ToUpper(hex.EncodeToString(page.NextPageMin[:]))
 	}
 
+	// Emit only once threaded (fresh pages are stamped by the apply layer) so a no-op
+	// modify round-trips byte-identically and the unchanged-entry guard prunes it
+	// (ApplyStateTable.cpp:154-157).
+	if page.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(page.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = page.PreviousTxnLgrSeq
+	}
+
 	if len(page.NFTokens) > 0 {
 		nfTokens := make([]map[string]any, len(page.NFTokens))
 		for i, token := range page.NFTokens {

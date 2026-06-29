@@ -20,6 +20,10 @@ type OracleData struct {
 	PriceDataSeries []OraclePriceData
 	URI             string // hex-encoded, optional
 	Flags           uint32
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // OraclePriceData holds parsed fields of a single price data entry within an Oracle.
@@ -57,6 +61,8 @@ func ParseOracle(data []byte) (*OracleData, error) {
 			switch f.FieldCode {
 			case 2: // Flags
 				oracle.Flags = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				oracle.PreviousTxnLgrSeq = f.UInt32()
 			case fieldLastUpdateTime: // 15
 				oracle.LastUpdateTime = f.UInt32()
 			}
@@ -64,6 +70,11 @@ func ParseOracle(data []byte) (*OracleData, error) {
 		case stUInt64:
 			if f.FieldCode == fieldOwnerNode { // 4
 				oracle.OwnerNode = f.UInt64()
+			}
+
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				oracle.PreviousTxnID = f.Hash256()
 			}
 
 		case stAccountID:
@@ -206,6 +217,13 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 
 	if o.URI != "" {
 		jsonObj["URI"] = o.URI
+	}
+
+	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
+	var emptyHash [32]byte
+	if o.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(o.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
 	}
 
 	// Build PriceDataSeries as []map[string]any

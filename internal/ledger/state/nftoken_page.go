@@ -10,6 +10,10 @@ type NFTokenPageData struct {
 	PreviousPageMin [32]byte
 	NextPageMin     [32]byte
 	NFTokens        []NFTokenData
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // NFTokenData represents an individual NFToken within a page
@@ -54,10 +58,17 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 		switch f.TypeCode {
 		case stHash256:
 			switch f.FieldCode {
+			case 5: // PreviousTxnID
+				page.PreviousTxnID = f.Hash256()
 			case 26: // PreviousPageMin
 				page.PreviousPageMin = f.Hash256()
 			case 27: // NextPageMin
 				page.NextPageMin = f.Hash256()
+			}
+
+		case stUInt32:
+			if f.FieldCode == 5 { // PreviousTxnLgrSeq
+				page.PreviousTxnLgrSeq = f.UInt32()
 			}
 
 		case stArray:

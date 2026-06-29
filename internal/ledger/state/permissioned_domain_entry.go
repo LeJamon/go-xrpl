@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
@@ -14,6 +15,10 @@ type PermissionedDomainData struct {
 	Sequence            uint32
 	OwnerNode           uint64
 	AcceptedCredentials []PermissionedDomainCredential
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // PermissionedDomainCredential is a single accepted credential entry within a PermissionedDomain.
@@ -48,6 +53,13 @@ func SerializePermissionedDomain(pd *PermissionedDomainData, ownerAddress string
 		"AcceptedCredentials": creds,
 	}
 
+	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
+	var emptyHash [32]byte
+	if pd.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(pd.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = pd.PreviousTxnLgrSeq
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, err
@@ -63,12 +75,19 @@ func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
 	err := WalkFields(data, func(f Field) error {
 		switch f.TypeCode {
 		case stUInt32:
-			if f.FieldCode == 4 { // Sequence
+			switch f.FieldCode {
+			case 4: // Sequence
 				pd.Sequence = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				pd.PreviousTxnLgrSeq = f.UInt32()
 			}
 		case stUInt64:
 			if f.FieldCode == 4 { // OwnerNode
 				pd.OwnerNode = f.UInt64()
+			}
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				pd.PreviousTxnID = f.Hash256()
 			}
 		case stAccountID:
 			if f.FieldCode == 2 { // Owner

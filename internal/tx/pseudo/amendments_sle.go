@@ -19,6 +19,11 @@ type AmendmentsSLE struct {
 	// Majorities tracks amendments that have reached majority with their close times.
 	// Each entry has an amendment hash and the close time when majority was achieved.
 	Majorities []MajorityEntry
+
+	// Round-trips so a no-op modify re-serializes byte-identically and the apply
+	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // MajorityEntry represents a single entry in the sfMajorities array.
@@ -120,6 +125,14 @@ func ParseAmendmentsSLE(data []byte) (*AmendmentsSLE, error) {
 		}
 	}
 
+	// PreviousTxnID/PreviousTxnLgrSeq are threaded as a pair.
+	if ptid, ok := jsonObj["PreviousTxnID"].(string); ok {
+		if b, err := hex.DecodeString(ptid); err == nil && len(b) == 32 {
+			copy(sle.PreviousTxnID[:], b)
+			sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
+		}
+	}
+
 	return sle, nil
 }
 
@@ -151,6 +164,13 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 			}
 		}
 		jsonObj["Majorities"] = arr
+	}
+
+	// Carry the pointers through a no-op modify; absent on a brand-new entry.
+	var emptyHash [32]byte
+	if sle.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = sle.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

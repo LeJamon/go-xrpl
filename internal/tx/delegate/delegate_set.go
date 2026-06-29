@@ -175,15 +175,15 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 
 		// Update the existing delegate with new permissions
-		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0)
+		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0, [32]byte{}, 0)
 		if serErr != nil {
 			return ter.TefINTERNAL
 		}
 
-		// Preserve the existing OwnerNode by parsing old entry and re-serializing
+		// Preserve the existing OwnerNode and threading pointers.
 		existingEntry, parseErr := state.ParseDelegate(existingData)
 		if parseErr == nil {
-			newData, serErr = state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode)
+			newData, serErr = state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode, existingEntry.PreviousTxnID, existingEntry.PreviousTxnLgrSeq)
 			if serErr != nil {
 				return ter.TefINTERNAL
 			}
@@ -207,7 +207,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
-	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0)
+	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0, [32]byte{}, 0)
 	if serErr != nil {
 		return ter.TefINTERNAL
 	}
@@ -227,7 +227,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Update OwnerNode on the delegate entry if page != 0
 	if dirResult.Page != 0 {
-		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, dirResult.Page)
+		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, dirResult.Page, [32]byte{}, 0)
 		if serErr != nil {
 			return ter.TefINTERNAL
 		}
