@@ -27,6 +27,15 @@ type AMMData struct {
 	VoteSlots []VoteSlotData
 	// AuctionSlot contains the current auction slot state (optional)
 	AuctionSlot *AuctionSlotData
+	// PreviousTxnID / PreviousTxnLgrSeq thread the AMM SLE's modification history.
+	// They must round-trip through parse/serialize so that a no-op modification
+	// (e.g. an idempotent re-vote that re-submits the same TradingFee) produces a
+	// byte-identical SLE, letting the apply layer's unchanged-entry guard prune it
+	// — matching rippled, which emits no ModifiedNode and threads no PreviousTxnID
+	// when nothing changed (ApplyStateTable.cpp:154-157). Empty/zero when the AMM
+	// has never been threaded (freshly created); omitted on serialize in that case.
+	PreviousTxnID     string
+	PreviousTxnLgrSeq uint32
 }
 
 // VoteSlotData holds a single vote slot entry.
