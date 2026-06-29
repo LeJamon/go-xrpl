@@ -376,26 +376,35 @@ func SolveQuadraticEqSmallest(a, b, c tx.Amount) *tx.Amount {
 // ChangeSpotPriceQuality generates an AMM offer so that either the updated
 // Spot Price Quality (SPQ) equals the LOB quality, or the AMM offer quality
 // equals the LOB quality.
+//
+// When ok is false, blocked distinguishes the two failure modes that rippled
+// signals via different control flow: blocked=false is a plain calc failure
+// (rippled returns std::nullopt, allowing a maxOffer fallback), while
+// blocked=true means the generated offer's quality is worse than the LOB tip
+// (rippled Throws, which suppresses the AMM offer entirely). blocked is only
+// ever set on the pre-fixAMMv1_1 path; post-fix never throws.
 // Reference: rippled AMMHelpers.h changeSpotPriceQuality()
-func ChangeSpotPriceQuality(poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsXRP bool) (in, out tx.Amount, ok bool) {
+func ChangeSpotPriceQuality(poolIn, poolOut tx.Amount, quality Quality, tfee uint16, fixAMMv1_1 bool, outIsXRP bool) (in, out tx.Amount, ok, blocked bool) {
 	if !fixAMMv1_1 {
 		return changeSpotPriceQualityPreFix(poolIn, poolOut, quality, tfee)
 	}
 
 	// Post-fixAMMv1_1: start with the XRP side for better rounding
 	if outIsXRP {
-		return getAMMOfferStartWithTakerGets(poolIn, poolOut, quality, tfee)
+		in, out, ok = getAMMOfferStartWithTakerGets(poolIn, poolOut, quality, tfee)
+	} else {
+		in, out, ok = getAMMOfferStartWithTakerPays(poolIn, poolOut, quality, tfee)
 	}
-	return getAMMOfferStartWithTakerPays(poolIn, poolOut, quality, tfee)
+	return in, out, ok, false
 }
 
 // changeSpotPriceQualityPreFix is the pre-fixAMMv1_1 implementation.
 // Solves: i^2*(1-fee) + i*I*(2-fee) + I^2 - I*O/quality = 0
 // Reference: rippled AMMHelpers.h changeSpotPriceQuality() pre-amendment path
-func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tfee uint16) (in, out tx.Amount, ok bool) {
+func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tfee uint16) (in, out tx.Amount, ok, blocked bool) {
 	qRate := qualityToRate(quality)
 	if qRate.IsZero() {
-		return tx.Amount{}, tx.Amount{}, false
+		return tx.Amount{}, tx.Amount{}, false, false
 	}
 
 	// Convert to Number for uniform arithmetic
@@ -415,7 +424,7 @@ func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tf
 	four := state.NewIssuedAmountFromValue(4e15, -15, "", "")
 	disc := ammSub(b.Mul(b, false), four.Mul(a, false).Mul(c, false))
 	if disc.Signum() < 0 {
-		return tx.Amount{}, tx.Amount{}, false
+		return tx.Amount{}, tx.Amount{}, false, false
 	}
 
 	sqrtDisc := disc.Sqrt()
@@ -424,13 +433,13 @@ func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tf
 	nTakerPaysPropose := ammAdd(neg_b, sqrtDisc).Div(two.Mul(a, false), false)
 
 	if nTakerPaysPropose.Signum() <= 0 {
-		return tx.Amount{}, tx.Amount{}, false
+		return tx.Amount{}, tx.Amount{}, false, false
 	}
 
 	// Constraint: i <= O / q - I / f
 	constraint := ammSub(nPoolOut.Mul(qRate, false), nPoolIn.Div(f, false))
 	if constraint.Signum() <= 0 {
-		return tx.Amount{}, tx.Amount{}, false
+		return tx.Amount{}, tx.Amount{}, false, false
 	}
 	if nTakerPaysPropose.Compare(constraint) > 0 {
 		nTakerPaysPropose = constraint
@@ -440,15 +449,19 @@ func changeSpotPriceQualityPreFix(poolIn, poolOut tx.Amount, quality Quality, tf
 	takerPays := fromNumberRoundUp(nTakerPaysPropose, poolIn)
 	takerGets := SwapAssetIn(poolIn, poolOut, takerPays, tfee, false)
 
+	// If the generated offer quality is worse than the target and not within
+	// the relative-distance tolerance, rippled Throws rather than returning
+	// nullopt. The throw suppresses the AMM offer entirely (no maxOffer
+	// fallback), leaving the AMM blocked by the LOB tip.
 	offerQ := QualityFromAmounts(toEitherAmt(takerPays), toEitherAmt(takerGets))
 	if offerQ.WorseThan(quality) {
 		rd := RelativeDistance(offerQ, quality)
 		if rd >= 1e-7 {
-			return tx.Amount{}, tx.Amount{}, false
+			return tx.Amount{}, tx.Amount{}, false, true
 		}
 	}
 
-	return takerPays, takerGets, true
+	return takerPays, takerGets, true, false
 }
 
 // getAMMOfferStartWithTakerGets generates AMM offer starting with takerGets.

@@ -193,27 +193,28 @@ func (e *TestEnv) closeWithReplay() {
 	}
 	e.clock.Advance(resolution)
 
-	// Collect ALL transactions to replay in submission order:
-	// setup txns first (fund, trust, reimbursement), then user txns (fixture),
-	// then held transactions from previous ledgers.
-	// Submission order preserves dependencies (e.g., TrustSet before Payment).
-	//
-	// Note: rippled applies all txns in canonical (SHAMap-salted) order via
-	// buildLedger(). We use submission order because go-xrpl's setup txns have
-	// different hashes than rippled's, making the canonical salt impossible to
-	// match. Submission order produces the correct closed-ledger state for
-	// most cases because the retry mechanism handles ordering-dependent failures.
-	var allTxns []tx.Transaction
-	allTxns = append(allTxns, e.openLedgerSetupTxns...)
-	allTxns = append(allTxns, e.openLedgerUserTxns...)
+	// Setup txns (fund, trust, reimbursement, the DefaultRipple AccountSet) are
+	// scaffolding the runner synthesizes and master-signs; their go-xrpl-specific
+	// hashes cannot reproduce rippled's canonical salt, so reordering them
+	// canonically only risks separating a flag-setting AccountSet from the
+	// TrustSet that depends on it (e.g. an issuer's DefaultRipple must precede a
+	// holder's TrustSet, or the new line keeps the issuer's NoRipple and blocks
+	// rippling). Keep setup in submission order — the natural dependency order —
+	// and canonically order only the fixture's user txns, whose blob hashes do
+	// match rippled. Setup hashes are still folded into the salt so the user
+	// order is identical to canonically ordering the combined set.
+	setupTxns := append([]tx.Transaction(nil), e.openLedgerSetupTxns...)
+	var userTxns []tx.Transaction
+	userTxns = append(userTxns, e.openLedgerUserTxns...)
 	for _, held := range e.heldTxns {
-		allTxns = append(allTxns, held...)
+		userTxns = append(userTxns, held...)
 	}
 
-	// Sort all transactions using SHAMap-salted canonical ordering.
-	// The salt is the SHAMap root hash of all transaction hashes,
-	// matching rippled's CanonicalTXSet (RCLConsensus.cpp onClose).
-	sortCanonicalSalted(allTxns)
+	sortCanonicalSalted(userTxns, setupTxns)
+
+	var allTxns []tx.Transaction
+	allTxns = append(allTxns, setupTxns...)
+	allTxns = append(allTxns, userTxns...)
 
 	// Clear held transactions -- they will be re-held if they still fail
 	e.heldTxns = nil

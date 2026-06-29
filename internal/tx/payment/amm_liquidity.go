@@ -163,12 +163,18 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 	}
 
 	// Single-path with CLOB quality: match spot price to CLOB quality
-	offerIn, offerOut, ok := ChangeSpotPriceQuality(
+	offerIn, offerOut, ok, blocked := ChangeSpotPriceQuality(
 		poolIn, poolOut, *clobQuality, l.tradingFee,
 		l.fixAMMv1_1, l.issueOut.IsXRP(),
 	)
 	if ok {
 		return NewAMMOffer(l, offerIn, offerOut, poolIn, poolOut)
+	}
+
+	// Quality-worse case: rippled Throws, which the generic catch turns into
+	// nullopt with no maxOffer fallback. The AMM stays blocked by the LOB tip.
+	if blocked {
+		return nil
 	}
 
 	// ChangeSpotPriceQuality failed. In rippled this can be either:

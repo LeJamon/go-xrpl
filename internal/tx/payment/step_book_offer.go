@@ -255,6 +255,81 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 	}
 }
 
+// firstCrossableTipQuality returns the quality of the first funded, crossable
+// offer in the book, walking quality order and skipping the offers rippled's
+// OfferStream::step grooms (missing SLE, expired, out-of-domain, deep-frozen,
+// zero, unfunded, tiny). Unlike getNextOfferSkipVisited it ignores the taker's
+// quality limit and mutates nothing. It reproduces the quality rippled seeds the
+// AMM with: tryAMM(offers.tip().quality()) offers the raw book tip to the AMM
+// regardless of the limit, and only the crossing is gated by the quality
+// threshold. Returns nil when the book holds no crossable offer.
+func (s *BookStep) firstCrossableTipQuality(sb *PaymentSandbox, ofrsToRm, visited map[[32]byte]bool) *Quality {
+	bookBase := s.bookBaseKey()
+	bookPrefix := bookBase[:24]
+	searchKey := bookBase
+	for {
+		foundKey, foundData, found, err := sb.Succ(searchKey)
+		if err != nil || !found {
+			return nil
+		}
+		if !bytes.Equal(foundKey[:24], bookPrefix) {
+			return nil
+		}
+		dir, err := state.ParseDirectoryNode(foundData)
+		if err != nil {
+			searchKey = foundKey
+			continue
+		}
+		rootKey := foundKey
+		for {
+			for _, idx := range dir.Indexes {
+				var offerKey [32]byte
+				copy(offerKey[:], idx[:])
+				if (ofrsToRm != nil && ofrsToRm[offerKey]) || (visited != nil && visited[offerKey]) {
+					continue
+				}
+				offerData, rerr := sb.Read(keylet.Keylet{Key: offerKey})
+				if rerr != nil || offerData == nil {
+					continue
+				}
+				offer, perr := state.ParseLedgerOffer(offerData)
+				if perr != nil {
+					continue
+				}
+				if s.offerExpired(offer) || s.offerOutOfDomain(sb, offer) {
+					continue
+				}
+				offerOwner, derr := state.DecodeAccountID(offer.Account)
+				if derr != nil {
+					continue
+				}
+				if offer.TakerGets.IsZero() ||
+					s.isDeepFrozen(sb, offerOwner, s.book.In.Currency, s.book.In.Issuer) {
+					continue
+				}
+				funds := s.getOfferFundedAmount(sb, offer)
+				if funds.IsZero() || s.shouldRmSmallIncreasedQOffer(sb, offer, funds) {
+					continue
+				}
+				q := s.offerQuality(offer)
+				return &q
+			}
+			if dir.IndexNext == 0 {
+				break
+			}
+			pageData, rerr := sb.Read(keylet.DirPage(rootKey, dir.IndexNext))
+			if rerr != nil || pageData == nil {
+				break
+			}
+			dir, rerr = state.ParseDirectoryNode(pageData)
+			if rerr != nil {
+				break
+			}
+		}
+		searchKey = foundKey
+	}
+}
+
 // isFoundPermGroomable reports whether a beyond-limit non-own offer is one that
 // rippled's OfferStream::step would perm-remove as a FOUND removal — i.e. it was
 // already removable in the pristine view before any crossing touched it. This is

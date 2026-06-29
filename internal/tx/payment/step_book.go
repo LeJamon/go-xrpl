@@ -559,9 +559,16 @@ func (s *BookStep) forEachOffer(
 		}
 	}
 
-	// If no CLOB offers found, try the AMM alone.
+	// The bounded walk yielded no crossable tip. Either the book is empty, or its
+	// only funded offers sit beyond the taker's quality limit and the walk stopped
+	// before crossing any. rippled still seeds the AMM with the raw book tip's
+	// quality in the latter case (offers.step() is unbounded by the limit; only
+	// the cross is gated), which lets a low-quality LOB tip block an AMM that
+	// would otherwise produce its maximum offer. Probe the raw funded tip and seed
+	// the AMM with it; fall back to nil only when the book truly has no crossable
+	// offer.
 	if firstCLOB {
-		tryAMM(nil)
+		tryAMM(s.firstCrossableTipQuality(sb, ofrsToRm, visited))
 	}
 }
 

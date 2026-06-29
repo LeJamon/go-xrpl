@@ -1063,7 +1063,7 @@ func TestAMMBookStep_FixChangeSpotPriceQuality(t *testing.T) {
 				poolIn := parsePool(tc.poolInStr, poolInIsXRP)
 				poolOut := parsePool(tc.poolOutStr, poolOutIsXRP)
 
-				takerPays, takerGets, ok := paymenttx.ChangeSpotPriceQuality(
+				takerPays, takerGets, ok, _ := paymenttx.ChangeSpotPriceQuality(
 					poolIn, poolOut, tc.quality, tc.fee, fixAMMv1_1, poolOutIsXRP,
 				)
 
