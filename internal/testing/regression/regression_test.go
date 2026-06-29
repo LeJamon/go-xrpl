@@ -101,14 +101,13 @@ func TestRegression_InvalidTxObjectIDType(t *testing.T) {
 	aliceKey := keylet.Account(alice.AccountID())
 	aliceIndex := hex.EncodeToString(aliceKey.Key[:])
 
-	// Try to cash a "check" using alice's account index.
-	// Rippled: tecNO_ENTRY (object is not a check)
-	// Go engine: tecNO_PERMISSION (fails an earlier check)
-	// Reference: rippled Regression_test.cpp:274-277
+	// Cash a "check" at alice's account index. The object there is an
+	// AccountRoot, not a Check, so it is rejected with tecNO_ENTRY.
+	// Reference: rippled Regression_test.cpp:274-276
 	result := env.Submit(
 		check.CheckCashAmount(alice, aliceIndex, tx.NewXRPAmount(100_000_000)).Build(),
 	)
-	jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
+	jtx.RequireTxClaimed(t, result, "tecNO_ENTRY")
 }
 
 // TestRegression_FeeEscalation tests that the fee escalation mechanism works.

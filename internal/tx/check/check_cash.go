@@ -131,6 +131,12 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_ENTRY
 	}
 
+	// View.Read is untyped, so reject a CheckID that resolves to a non-Check
+	// object, matching rippled's tecNO_ENTRY.
+	if state.EntryType(checkData) != "Check" {
+		return ter.TecNO_ENTRY
+	}
+
 	// Parse check
 	check, err := state.ParseCheck(checkData)
 	if err != nil {
