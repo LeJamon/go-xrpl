@@ -52,7 +52,7 @@ func TestUNLModify_NotFlagLedger(t *testing.T) {
 
 	// Default ledger sequence is typically 2 or 3 (not a flag ledger = multiple of 256)
 	seq := env.Ledger().Sequence()
-	require.NotEqual(t, uint32(0), seq%256, "Test setup: ledger should not be on a flag ledger")
+	require.False(t, protocol.IsFlagLedger(seq), "Test setup: ledger should not be on a flag ledger")
 
 	u := newUNLModify(1, seq, validatorKey1)
 	result := env.SubmitPseudo(u)
