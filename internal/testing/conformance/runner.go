@@ -1007,12 +1007,9 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	//
 	// TxQ suites need open-ledger mode so fee escalation triggers queuing.
 	//
-	// The view is still OPEN, though: rippled applies user txns to an OpenView
-	// in both Env::submit and consensus buildLedger, so view.open() is true on
-	// every apply path. SetViewOpen carries that open-view signal without the
-	// fee floor, so the open-view fee branch (terINSUF_FEE_B, not the closed-only
-	// tecINSUFF_FEE) and internal-failure variants match rippled across the
-	// initial apply and replay-on-close.
+	// The view stays open even so: SetViewOpen keeps view.open() true without the
+	// fee floor, so the open-view fee branch (terINSUF_FEE_B, not closed-only
+	// tecINSUFF_FEE) matches rippled. See TestEnv.viewOpen.
 	if !r.enableTxQ {
 		r.env.SetOpenLedger(false)
 		r.env.SetViewOpen(true)
