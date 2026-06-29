@@ -554,10 +554,8 @@ func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
 // number freshly attached. A node whose ancestor is still a hash-only stub
 // (NodeReRequest) is dropped without counting as a reject — the next
 // getMissingNodes walk re-requests the correct frontier and it returns on a
-// later reply, matching rippled's addKnownNode "attach-or-re-request". The
-// first genuinely invalid node stops harvesting the rest of the reply,
-// mirroring receiveNode's stop-on-first-bad (InboundLedger.cpp:920-927).
-// Caller holds l.mu.
+// later reply. The first genuinely invalid node stops harvesting the rest of
+// the reply. Caller holds l.mu.
 func (l *Ledger) applyKnownNodes(m *shamap.SHAMap, nodes []message.LedgerNode, label string) int {
 	added := 0
 	for _, node := range nodes {
