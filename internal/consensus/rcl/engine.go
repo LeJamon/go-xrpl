@@ -125,6 +125,11 @@ type Engine struct {
 	// degraded resync rather than freezing.
 	wrongLedgerAcquireFailures int
 
+	// wrongLedgerSince is when we last entered ModeWrongLedger (zero when not
+	// pinned); it measures continuous time stuck regardless of target-hash
+	// churn, arming the wrongLedgerStuckTimeout watchdog.
+	wrongLedgerSince time.Time
+
 	// degradedResyncUntil, when in the future, suppresses re-pinning
 	// ModeWrongLedger so the node keeps closing ledgers (observer-mode
 	// advancement) while it retries acquisition. Engine-global: every
@@ -1291,6 +1296,10 @@ func (e *Engine) timerEntry() {
 		return
 	}
 
+	// Runs every tick regardless of phase: a WrongLedger pin taken at
+	// PhaseAccepted advances no rounds, so the checkLedger path below never runs.
+	e.checkStuckWrongLedger()
+
 	// checkLedger runs in every non-disconnected mode — the Syncing/Tracking
 	// → Full recovery path; gating on Full would wedge us after a wrongLedger
 	// demotion.
@@ -1350,6 +1359,16 @@ func (e *Engine) checkAndStartRoundInner() {
 		ParentHash: ledger.ID(),
 	}
 	e.startRoundLocked(round, proposing, false)
+}
+
+// checkStuckWrongLedger drops to a degraded resync once pinned in
+// ModeWrongLedger past wrongLedgerStuckTimeout, backing the clean-failure hatch
+// which can't arm under a livelock or moving target. Caller must hold e.mu.
+func (e *Engine) checkStuckWrongLedger() {
+	if e.mode == consensus.ModeWrongLedger && !e.wrongLedgerSince.IsZero() &&
+		e.adaptor.Now().Sub(e.wrongLedgerSince) > wrongLedgerStuckTimeout {
+		e.dropToDegradedResync("stuck-watchdog")
+	}
 }
 
 // checkLedger compares prevLedger against the network-preferred ledger
@@ -1631,6 +1650,15 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 const (
 	wrongLedgerAcquireMaxFailures = 3
 	degradedResyncCooldown        = 20 * time.Second
+
+	// wrongLedgerStuckTimeout bounds continuous time pinned in ModeWrongLedger.
+	// The clean-failure hatch can fail to arm — a livelocked acquisition never
+	// times out, and a target moving as the network advances leaves each clean
+	// failure on a stale id the hatch ignores — so without this bound the node
+	// wedges forever. Set above the clean-failure budget (only backstop a
+	// genuinely stuck node) and under the 90s fatal stall watchdog (so degraded
+	// resync engages before the node aborts).
+	wrongLedgerStuckTimeout = 60 * time.Second
 )
 
 // OnLedgerAcquireFailed reports a clean acquisition failure for id. If
@@ -1660,16 +1688,24 @@ func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 		return
 	}
 
-	// Persistent failure: validated ledger unacquirable. Drop to a degraded
-	// resync — ModeObserving keeps rounds (and the watchdog heartbeat)
-	// advancing while checkLedger retries; demote OpModeFull.
+	// Persistent clean failure: validated ledger unacquirable.
+	e.dropToDegradedResync("acquire-max-failures")
+}
+
+// dropToDegradedResync demotes a node that cannot acquire its wrongLedger
+// target: ModeObserving keeps rounds (and the stall watchdog heartbeat)
+// advancing while checkLedger retries, so closes resume. Reached from both the
+// clean-failure hatch (at its limit) and the stuck-acquisition watchdog. Caller
+// must hold e.mu.
+func (e *Engine) dropToDegradedResync(reason string) {
 	slog.Warn("wrongLedger ledger unacquirable; dropping to degraded resync",
 		"t", "consensus",
 		"event", "wrong-lcl-degraded",
-		"hash", fmt.Sprintf("%x", id[:8]),
-		"failures", e.wrongLedgerAcquireFailures,
+		"reason", reason,
 	)
 	e.wrongLedgerAcquireFailures = 0
+	// Un-pin so the next checkLedger re-resolves and re-requests.
+	e.wrongLedgerID = consensus.LedgerID{}
 	e.degradedResyncUntil = e.adaptor.Now().Add(degradedResyncCooldown)
 	if e.state != nil {
 		e.state.HaveCorrectLCL = false
@@ -1692,6 +1728,15 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	// the e.mu-held write above; an int32 store can't tear, so a reader sees
 	// old or new — fine for the snapshot.
 	e.modeAtomic.Store(int32(newMode))
+
+	// Stamp wrongLedgerSince on entry to ModeWrongLedger, clear on exit. A re-pin
+	// stays in the same mode, so the stamp survives a churning target.
+	switch {
+	case newMode == consensus.ModeWrongLedger && oldMode != consensus.ModeWrongLedger:
+		e.wrongLedgerSince = e.adaptor.Now()
+	case newMode != consensus.ModeWrongLedger:
+		e.wrongLedgerSince = time.Time{}
+	}
 
 	e.eventBus.Publish(&consensus.ModeChangedEvent{
 		OldMode:   oldMode,
