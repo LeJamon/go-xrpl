@@ -1,0 +1,35 @@
+name: "Setup Go + CGO toolchain"
+description: >
+  Sets up Go (version pinned via go.mod's go/toolchain directives) with build
+  caching, and installs the CGO dev headers (OpenSSL, libsecp256k1) that the
+  peertls handshake and the libsecp256k1 verify path link against. Cross-platform
+  (apt on Linux, brew on macOS). Centralizes the setup every CI job repeats so the
+  Go version and dependency list live in one place.
+
+inputs:
+  cgo:
+    description: "Install the CGO dev headers (OpenSSL + libsecp256k1)."
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install CGO dev headers (Linux)
+      if: inputs.cgo == 'true' && runner.os == 'Linux'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
+
+    - name: Install CGO dev headers (macOS)
+      if: inputs.cgo == 'true' && runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew install openssl@3 secp256k1 pkg-config
+        echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+    # go-version-file reads the `go` directive from go.mod; the `toolchain`
+    # directive (go1.24.4) then pins the exact compiler the `go` command uses at
+    # build time via GOTOOLCHAIN=auto. One source of truth, no floating "1.24".
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: go.mod
+        cache: true

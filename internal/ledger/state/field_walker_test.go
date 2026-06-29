@@ -168,10 +168,11 @@ func TestWalkFields_MPTAmount(t *testing.T) {
 
 	// Build a minimal STObject by hand: LedgerEntryType (0x11 + 2 bytes) then an
 	// Amount field (type 6, field 8 -> header 0x68) holding a 33-byte MPT value.
-	data := []byte{0x11, 0x00, 0x6f} // pretend Offer type
-	data = append(data, 0x68)        // Amount, field 8
 	mpt := make([]byte, 33)
 	mpt[0] = 0x20 // MPT marker: high bit clear, 0x20 set
+	data := make([]byte, 0, 4+len(mpt))
+	data = append(data, 0x11, 0x00, 0x6f) // pretend Offer type
+	data = append(data, 0x68)             // Amount, field 8
 	data = append(data, mpt...)
 
 	_, values := collectFields(t, data)

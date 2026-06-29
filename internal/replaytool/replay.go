@@ -818,7 +818,7 @@ func writeResultJSON(path string, result *ReplayResult) error {
 		return err
 	}
 
-	return os.WriteFile(path, data, 0o644)
+	return os.WriteFile(path, data, 0o644) //nolint:gosec // G306: developer replay output, world-readable by intent
 }
 
 // extractFeesFromState reads the fee schedule from the FeeSettings entry in a

@@ -22,7 +22,7 @@ import (
 const (
 	TecAMM_BALANCE        = "tecAMM_BALANCE"
 	TecAMM_FAILED         = "tecAMM_FAILED"
-	TecAMM_INVALID_TOKENS = "tecAMM_INVALID_TOKENS"
+	TecAMM_INVALID_TOKENS = "tecAMM_INVALID_TOKENS" //nolint:gosec // G101: test fixture constant, not a credential
 	TecAMM_NOT_EMPTY      = "tecAMM_NOT_EMPTY"
 	TecUNFUNDED_AMM       = "tecUNFUNDED_AMM"
 	TecDUPLICATE          = "tecDUPLICATE"
@@ -39,7 +39,7 @@ const (
 	TerNO_RIPPLE         = "terNO_RIPPLE"
 	TerADDRESS_COLLISION = "terADDRESS_COLLISION"
 
-	TemBAD_AMM_TOKENS = "temBAD_AMM_TOKENS"
+	TemBAD_AMM_TOKENS = "temBAD_AMM_TOKENS" //nolint:gosec // G101: test fixture constant, not a credential
 	TemBAD_AMOUNT     = "temBAD_AMOUNT"
 	TemBAD_CURRENCY   = "temBAD_CURRENCY"
 	TemBAD_ISSUER     = "temBAD_ISSUER"

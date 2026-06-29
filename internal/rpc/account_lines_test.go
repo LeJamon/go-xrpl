@@ -861,7 +861,7 @@ func TestAccountLinesPagination(t *testing.T) {
 			},
 			setupMock: func() {
 				// Create multiple trust lines
-				lines := []types.TrustLine{}
+				lines := make([]types.TrustLine, 0, 10)
 				for range 10 {
 					lines = append(lines, types.TrustLine{
 						Account:  "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",

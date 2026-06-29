@@ -37,6 +37,13 @@ type PendingTx struct {
 	// Sequence. LocalTxs.Sweep uses this to switch between the seq-
 	// advance check and the ticket-burn check.
 	IsTicket bool
+	// Parsed is the decoded transaction produced while building this PendingTx.
+	// Ingress carries it through to SubmitDetailed so the apply path reuses this
+	// object instead of re-decoding the blob under the open-ledger apply mutex —
+	// and so any signature verdict prewarmed off-strand reaches the in-strand
+	// check. May be nil for PendingTx values built without ParsePendingTx (e.g.
+	// hand-constructed in tests), in which case SubmitDetailed re-parses.
+	Parsed tx.Transaction
 }
 
 // Result classifies the outcome of applying a single transaction in the
@@ -90,6 +97,7 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		LastLedgerSequence:    lastLedger,
 		HasLastLedgerSequence: hasLastLedger,
 		IsTicket:              common.TicketSequence != nil,
+		Parsed:                transaction,
 	}, nil
 }
 

@@ -1079,7 +1079,8 @@ func TestAmount_ToJson(t *testing.T) {
 			// it and silently re-normalize on the next Encode.
 			name: "fail - non-canonical IOU mantissa below cMinValue",
 			malleate: func(t *testing.T) *serdes.BinaryParser {
-				token := []byte{0x80, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+				token := make([]byte, 0, 48)
+				token = append(token, 0x80, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00)
 				token = append(token, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x55, 0x53, 0x44, 0, 0, 0, 0, 0) // USD
 				for range 20 {
 					token = append(token, 0x01) // issuer

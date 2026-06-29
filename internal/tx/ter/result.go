@@ -254,7 +254,7 @@ const (
 // (with the extra underscore) but the canonical rippled identifier is
 // "temCANNOT_PREAUTH_SELF" — see rippled include/xrpl/protocol/TER.h:120.
 // The constant name is the Go-side oddity; the string is correct.
-var resultNames = map[Result]string{
+var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code name table, not credentials
 	TesSUCCESS:                            "tesSUCCESS",
 	TecCLAIM:                              "tecCLAIM",
 	TecPATH_PARTIAL:                       "tecPATH_PARTIAL",
@@ -514,7 +514,7 @@ func (r Result) Message() string {
 // human-readable description, transcribed from rippled transResults(). Codes
 // absent here (e.g. tecHOOK_REJECTED) have no description in rippled either;
 // Message() returns "-" for them.
-var resultMessages = map[Result]string{
+var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code name string, not a credential
 	TecAMM_BALANCE:                        "AMM has invalid balance.",
 	TecAMM_INVALID_TOKENS:                 "AMM invalid LP tokens.",
 	TecAMM_FAILED:                         "AMM transaction failed.",

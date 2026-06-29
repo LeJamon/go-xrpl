@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -698,6 +699,12 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	ptx, err := openledger.ParsePendingTx(blob)
 	if err != nil {
 		return openledger.ResultFailure, err
+	}
+	// Verify the signature off the open-ledger apply mutex so the dominant
+	// per-tx cost runs concurrently across ingress workers instead of serialising
+	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
+	if !cfg.SkipSignatureVerification {
+		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
 	}
 	_, res := ov.Submit(ptx, cfg, queue)
 

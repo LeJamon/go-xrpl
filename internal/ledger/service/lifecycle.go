@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -52,6 +53,11 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			return 0, err
 		}
 		retriableTxs = built
+	} else {
+		// flag-ledger close with no pending txs still needs the NegativeUNL transition
+		if err := s.applyFlagLedgerNegativeUNL(s.openLedger); err != nil {
+			return 0, err
+		}
 	}
 
 	s.pendingTxs = nil
@@ -124,6 +130,23 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 // ledger from s.closedLedger, hoists committed txs into s.txIndex, and installs
 // the result as s.openLedger, returning the txs left in retry state. Shared by
 // the standalone and consensus close paths. Caller must hold s.mu.
+// applyFlagLedgerNegativeUNL applies the pending NegativeUNL transition on a
+// flag ledger (seq%256==0) when featureNegativeUNL is enabled; skipping it on
+// the local close path forks account_hash from the network. Caller must hold s.mu.
+func (s *Service) applyFlagLedgerNegativeUNL(l *ledger.Ledger) error {
+	if l.Sequence()%256 != 0 {
+		return nil
+	}
+	rules := rulesFromLedger(s.closedLedger, s.logger)
+	if rules == nil || !rules.Enabled(amendment.FeatureNegativeUNL) {
+		return nil
+	}
+	if err := l.UpdateNegativeUNL(); err != nil {
+		return fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
+	}
+	return nil
+}
+
 func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Time, skipSigVerify bool) ([]openledger.PendingTx, error) {
 	// Salt = SHAMap root of the tx set (rippled consensus-build convention).
 	canonicalSort(pending, computeSalt(pending))
@@ -131,6 +154,11 @@ func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Ti
 	freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
+	}
+
+	// On a flag ledger the NegativeUNL transition must be applied before any txs.
+	if err := s.applyFlagLedgerNegativeUNL(freshLedger); err != nil {
+		return nil, err
 	}
 
 	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
@@ -388,6 +416,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		canonicalTxHashes = make([]string, 0, len(pending))
 		for _, ptx := range pending {
 			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
+		}
+	} else {
+		// empty consensus tx set still needs the flag-ledger NegativeUNL transition
+		if err := s.applyFlagLedgerNegativeUNL(s.openLedger); err != nil {
+			return 0, err
 		}
 	}
 

@@ -188,7 +188,7 @@ func EncodeForSigningBatch(json map[string]any) (string, error) {
 
 	txIDsLengthType := &types.UInt32{}
 	txIDsLength := len(txIDsInterface)
-	if txIDsLength > math.MaxUint32 {
+	if uint64(txIDsLength) > math.MaxUint32 {
 		return "", ErrBatchTxIDsLengthTooLong
 	}
 	txIDsLengthBytes, err := txIDsLengthType.FromJSON(uint32(txIDsLength))

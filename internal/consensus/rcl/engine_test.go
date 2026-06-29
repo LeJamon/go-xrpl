@@ -409,7 +409,7 @@ func (a *mockAdaptor) IsTrusted(nodeID consensus.NodeID) bool {
 func (a *mockAdaptor) GetTrustedValidators() []consensus.NodeID {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	var result []consensus.NodeID
+	result := make([]consensus.NodeID, 0, len(a.trusted))
 	for nodeID := range a.trusted {
 		result = append(result, nodeID)
 	}
@@ -968,6 +968,31 @@ func TestEngine_IsProposing(t *testing.T) {
 
 	if !engine.IsProposing() {
 		t.Error("Should be proposing after starting round as proposer")
+	}
+}
+
+func TestEngine_IsValidating(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Not configured as a validator: never validating, even when synced.
+	adaptor.validator = false
+	adaptor.opMode = consensus.OpModeFull
+	if engine.IsValidating() {
+		t.Error("non-validator should not be validating")
+	}
+
+	// Configured validator but not yet synced to FULL: not validating.
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeTracking
+	if engine.IsValidating() {
+		t.Error("validator below OpModeFull should not be validating")
+	}
+
+	// Validator synced to FULL: validating.
+	adaptor.opMode = consensus.OpModeFull
+	if !engine.IsValidating() {
+		t.Error("validator synced to OpModeFull should be validating")
 	}
 }
 

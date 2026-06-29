@@ -449,7 +449,7 @@ func TestStvParseSTValidation_EndOfObjectMarker(t *testing.T) {
 	// Build a minimal valid blob, then insert 0x00 at a point that would
 	// terminate the loop early — the parser should stop and return
 	// errMissingFields since required fields weren't all parsed.
-	var buf []byte
+	buf := make([]byte, 0, 51)
 	buf = append(buf, 0x00) // immediate EOO → missing fields
 	buf = append(buf, make([]byte, 50)...)
 	_, err := parseSTValidation(buf)

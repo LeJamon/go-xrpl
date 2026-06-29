@@ -43,7 +43,8 @@ func (o *Overlay) admitInboundEndpoint(addr string) bool {
 
 // startListener creates and starts the TCP/TLS listener.
 func (o *Overlay) startListener() error {
-	tcpListener, err := net.Listen("tcp", o.cfg.ListenAddr)
+	var lc net.ListenConfig
+	tcpListener, err := lc.Listen(o.ctx, "tcp", o.cfg.ListenAddr)
 	if err != nil {
 		return err
 	}
@@ -269,7 +270,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		if peerRemote != nil {
 			remoteAddr = peerRemote.String()
 		}
-		errResp := BuildHandshakeErrorResponse(
+		errResp := BuildHandshakeErrorResponse( //nolint:bodyclose // locally-built response serialized via Write; nothing to close
 			hsCfg.UserAgent,
 			remoteAddr,
 			"Unable to agree on a protocol version",
@@ -303,7 +304,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		return errInboundRejected
 	}
 
-	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol)
+	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol) //nolint:bodyclose // locally-built response serialized via Write; nothing to close
 	addAddressHeaders(resp.Header, hsCfg, peerRemote)
 	if err := resp.Write(tlsConn); err != nil {
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)

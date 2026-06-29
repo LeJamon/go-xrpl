@@ -30,7 +30,7 @@ func TestDiagnosticMultiPage(t *testing.T) {
 	env.Close()
 
 	const nftCount = 33 // Just enough to trigger one page split
-	var nftIDs []string
+	nftIDs := make([]string, 0, nftCount)
 	for i := range nftCount {
 		id := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 		result := env.Submit(nft.NFTokenMint(alice, 0).Build())
@@ -2714,7 +2714,7 @@ func TestFixNFTokenRemint(t *testing.T) {
 			env.Close()
 
 			// minter mints 500 NFTs for alice
-			var nftIDs []string
+			nftIDs := make([]string, 0, 500)
 			for range 500 {
 				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 				nftIDs = append(nftIDs, nftokenID)
@@ -2871,7 +2871,7 @@ func TestFixNFTokenRemint(t *testing.T) {
 			jtx.RequireOwnerCount(t, env, alice, 100)
 
 			// alice mints 50 NFTs using tickets
-			var nftIDs []string
+			nftIDs := make([]string, 0, 50)
 			for range 50 {
 				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 				nftIDs = append(nftIDs, nftokenID)
@@ -3036,7 +3036,7 @@ func TestFixNFTokenRemint(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, minter, 100)
 
 		// minter mints 50 NFTs for alice using tickets
-		var nftIDs []string
+		nftIDs := make([]string, 0, 50)
 		for range 50 {
 			nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
 			nftIDs = append(nftIDs, nftokenID)

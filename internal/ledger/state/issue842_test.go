@@ -122,7 +122,7 @@ func TestParseLedgerOffer_SkipArrayStructural(t *testing.T) {
 	// Hand-built offer blob. Field order is irrelevant to the parser; what
 	// matters is that the trailing Expiration is reached only if skipArray
 	// consumes the whole array despite the booby-trapped payload.
-	var blob []byte
+	blob := make([]byte, 0, 45)
 
 	// Unrecognized STArray (type 15, nth=20 — not AdditionalBooks/13).
 	blob = append(blob, 0xF0, 0x14)

@@ -421,7 +421,7 @@ func (s *ValidatorSlot) getSquelchDuration(numPeers int) time.Duration {
 
 	// The duration is drawn inclusive on both ends; IntN(span+1)
 	// makes maxSecs reachable.
-	return time.Duration(minSecs+rand.IntN(maxSecs-minSecs+1)) * time.Second
+	return time.Duration(minSecs+rand.IntN(maxSecs-minSecs+1)) * time.Second //nolint:gosec // G404: non-security relay timing/selection jitter
 }
 
 // Relay manages reduce-relay for all validators.

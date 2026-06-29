@@ -67,7 +67,7 @@ func TestBookStep_OffersUsed_CountsEveryWalkedOffer(t *testing.T) {
 
 	const expiredCount = 3
 	const unfundedCount = 3
-	var indexes [][32]byte
+	indexes := make([][32]byte, 0, expiredCount+unfundedCount)
 	seq := uint32(1)
 	// Expired offers: Expiration <= parentCloseTime, removed during the walk.
 	for range expiredCount {

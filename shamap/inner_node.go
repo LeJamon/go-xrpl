@@ -386,7 +386,7 @@ func parseCompressedInnerNode(data []byte) (*innerNode, error) {
 		copy(hash[:], data[i:i+32])
 
 		// Read 1-byte position
-		position := data[i+32]
+		position := data[i+32] //nolint:gosec // G602: len(data) is a multiple of chunkSize=33 (guarded above), so i+32 is in range
 		if position >= BranchFactor {
 			return nil, fmt.Errorf("invalid branch position: %d >= %d", position, BranchFactor)
 		}

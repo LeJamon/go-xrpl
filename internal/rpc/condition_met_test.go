@@ -154,3 +154,42 @@ func TestConditionMet_NonStandaloneFreshPasses(t *testing.T) {
 	}
 	assert.Nil(t, conditionMet(types.NeedsCurrentLedger, ctxWith(types.ApiVersion1, m)))
 }
+
+// TestConditionMet_ValidatorStatePasses guards the regression in #1106: a
+// validator reports server_state "proposing" or "validating" — both FULL-mode
+// aliases above the SYNCING floor — and must satisfy NeedsCurrentLedger rather
+// than be rejected with noNetwork.
+func TestConditionMet_ValidatorStatePasses(t *testing.T) {
+	for _, state := range []string{"proposing", "validating"} {
+		t.Run(state, func(t *testing.T) {
+			m := newMockLedgerService()
+			m.serverInfo = types.LedgerServerInfo{
+				ServerState:              state,
+				OpenLedgerSeq:            200,
+				ClosedLedgerSeq:          199,
+				HaveValidated:            true,
+				ValidatedLedgerSeq:       199,
+				ValidatedLedgerCloseTime: rippleNow(),
+			}
+			assert.Nil(t, conditionMet(types.NeedsCurrentLedger, ctxWith(types.ApiVersion1, m)))
+		})
+	}
+}
+
+func TestAtLeastSyncing(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		want  bool
+	}{
+		{"disconnected", false},
+		{"connected", false},
+		{"syncing", true},
+		{"tracking", true},
+		{"full", true},
+		{"proposing", true},
+		{"validating", true},
+		{"bogus", false},
+	} {
+		assert.Equal(t, tc.want, atLeastSyncing(tc.state), "atLeastSyncing(%q)", tc.state)
+	}
+}

@@ -89,7 +89,7 @@ func TestDoVoting_LocalNotInUNLAbstains(t *testing.T) {
 	// A UNL of four members (so the 25% toDisable cap allows one) with one
 	// weak member that WOULD be disabled if the round proceeded. myKey is
 	// deliberately absent from this UNL.
-	unl := [][33]byte{}
+	unl := make([][33]byte, 0, 4)
 	for i := range 4 {
 		unl = append(unl, makeKey(byte(0xB0+i)))
 	}

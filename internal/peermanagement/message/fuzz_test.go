@@ -123,7 +123,7 @@ func FuzzReadMessage(f *testing.F) {
 
 	// Seed: valid uncompressed message (header payload=4, type=Ping, then 4 bytes payload)
 	{
-		hdr := make([]byte, HeaderSizeUncompressed)
+		hdr := make([]byte, HeaderSizeUncompressed, HeaderSizeUncompressed+4)
 		_ = EncodeHeader(hdr, 4, TypePing, AlgorithmNone, 0)
 		msg := append(hdr, 0xDE, 0xAD, 0xBE, 0xEF)
 		f.Add(msg)
@@ -138,7 +138,7 @@ func FuzzReadMessage(f *testing.F) {
 
 	// Seed: valid compressed message (header + some payload)
 	{
-		hdr := make([]byte, HeaderSizeCompressed)
+		hdr := make([]byte, HeaderSizeCompressed, HeaderSizeCompressed+3)
 		_ = EncodeHeader(hdr, 3, TypeTransaction, AlgorithmLZ4, 100)
 		msg := append(hdr, 0x01, 0x02, 0x03)
 		f.Add(msg)

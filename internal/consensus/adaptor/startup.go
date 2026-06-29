@@ -416,15 +416,12 @@ func NewFromConfig(
 	// (cache empty, no overlay) are absorbed inside SendLocalManifestTo.
 	overlay.SetPeerConnectCallback(router.HandlePeerConnect)
 
-	// Wire operating mode into ledger service for server_info. Report
-	// "proposing" only when both in full operating mode and actively
-	// proposing in consensus.
+	// Surface the consensus role in server_info's server_state so an external
+	// observer can tell a participating validator from a passive full node.
+	// rippled restricts the "proposing"/"validating" aliases to admin callers;
+	// goXRPL exposes them to every caller by design.
 	ledgerSvc.SetServerStateFunc(func() string {
-		opMode := adaptor.GetOperatingMode()
-		if opMode == consensus.OpModeFull && engine.IsProposing() {
-			return "proposing"
-		}
-		return opMode.String()
+		return consensusServerState(adaptor.GetOperatingMode(), engine.Mode(), engine.IsValidating())
 	})
 
 	c := &Components{
@@ -454,6 +451,23 @@ func NewFromConfig(
 	}
 
 	return c, nil
+}
+
+// consensusServerState maps the operating mode and consensus role to the
+// server_state string, mirroring rippled's strOperatingMode precedence: a FULL
+// node that is not on the wrong ledger reports "proposing" when proposing its
+// position, else "validating" when issuing validations; otherwise it reports
+// the plain operating-mode name.
+func consensusServerState(opMode consensus.OperatingMode, mode consensus.Mode, validating bool) string {
+	if opMode == consensus.OpModeFull && mode != consensus.ModeWrongLedger {
+		switch {
+		case mode == consensus.ModeProposing:
+			return "proposing"
+		case validating:
+			return "validating"
+		}
+	}
+	return opMode.String()
 }
 
 // snapshotStatic returns deep copies of the current static validator

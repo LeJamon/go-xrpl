@@ -61,7 +61,7 @@ func (o *Overlay) writeInboundRedirect(tlsConn peertls.PeerConn) {
 		remoteAddr = dialer.String()
 	}
 
-	resp := BuildRedirectResponse(o.cfg.UserAgent, remoteAddr, peerIPs)
+	resp := BuildRedirectResponse(o.cfg.UserAgent, remoteAddr, peerIPs) //nolint:bodyclose // locally-built response serialized via Write; nothing to close
 	_ = resp.Write(tlsConn)
 }
 

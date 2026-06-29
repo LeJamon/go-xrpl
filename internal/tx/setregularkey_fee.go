@@ -1,9 +1,6 @@
 package tx
 
 import (
-	"encoding/hex"
-
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
@@ -28,19 +25,5 @@ func SetRegularKeyFeeWaived(skipSigVerification bool, common *Common, account *s
 	if account.Flags&state.LsfPasswordSpent != 0 {
 		return false
 	}
-	if spk := common.SigningPubKey; spk != "" {
-		// Validate the public-key type before deriving an address, matching
-		// rippled's publicKeyType() guard — otherwise an arbitrary payload
-		// could hex-encode into a master-looking address.
-		spkBytes, decErr := hex.DecodeString(spk)
-		if decErr != nil || !IsValidPublicKey(spkBytes) {
-			return false
-		}
-		sigAddr, addrErr := addresscodec.EncodeClassicAddressFromPublicKey(spkBytes)
-		return addrErr == nil && sigAddr == common.Account
-	}
-	// No SigningPubKey: in standalone/test mode signature verification is
-	// skipped and a single-signed transaction is treated as master-signed. A
-	// multi-signed transaction (Signers present) is never master-signed.
-	return skipSigVerification && len(common.Signers) == 0
+	return SignedWithMasterKey(skipSigVerification, common)
 }
