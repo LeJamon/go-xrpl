@@ -1299,6 +1299,10 @@ func (e *Engine) timerEntry() {
 		return
 	}
 
+	// Runs every tick regardless of phase: a WrongLedger pin taken at
+	// PhaseAccepted advances no rounds, so the checkLedger path below never runs.
+	e.checkStuckWrongLedger()
+
 	// checkLedger runs in every non-disconnected mode — the Syncing/Tracking
 	// → Full recovery path; gating on Full would wedge us after a wrongLedger
 	// demotion.
@@ -1360,20 +1364,22 @@ func (e *Engine) checkAndStartRoundInner() {
 	e.startRoundLocked(round, proposing, false)
 }
 
-// checkLedger compares prevLedger against the network-preferred ledger
-// and calls handleWrongLedger on a mismatch.
-func (e *Engine) checkLedger() {
-	// Defense in depth against a wedged wrongLedger pin. The clean-failure
-	// hatch (OnLedgerAcquireFailed) can never arm under a livelocked
-	// acquisition or a target that keeps moving, so back it with a wall-clock
-	// bound on continuous time pinned: past it, drop to a degraded resync
-	// regardless so the node resumes closing ledgers.
+// checkStuckWrongLedger drops to a degraded resync when pinned in
+// ModeWrongLedger continuously past wrongLedgerStuckTimeout, backing the
+// clean-failure hatch which can't arm under a livelock or moving target. Run
+// every tick regardless of phase: a pin taken while phase==PhaseAccepted
+// (acceptLedger's preferred-LCL jump) advances no rounds, so checkLedger never
+// runs. Caller must hold e.mu.
+func (e *Engine) checkStuckWrongLedger() {
 	if e.mode == consensus.ModeWrongLedger && !e.wrongLedgerSince.IsZero() &&
 		e.adaptor.Now().Sub(e.wrongLedgerSince) > wrongLedgerStuckTimeout {
 		e.dropToDegradedResync("stuck-watchdog")
-		return
 	}
+}
 
+// checkLedger compares prevLedger against the network-preferred ledger
+// and calls handleWrongLedger on a mismatch.
+func (e *Engine) checkLedger() {
 	if e.prevLedger == nil {
 		return
 	}

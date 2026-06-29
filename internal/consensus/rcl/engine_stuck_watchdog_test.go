@@ -55,10 +55,9 @@ func TestEngine_WrongLedgerStuckWatchdog_DropsToDegradedResync(t *testing.T) {
 	e.setMode(consensus.ModeWrongLedger)
 	e.wrongLedgerID = consensus.LedgerID{0x01}
 
-	// Before the timeout the watchdog must not fire. prevLedger is nil, so
-	// checkLedger returns right after the watchdog gate — isolating it.
+	// Before the timeout the watchdog must not fire.
 	a.now = start.Add(wrongLedgerStuckTimeout - time.Second)
-	e.checkLedger()
+	e.checkStuckWrongLedger()
 	if e.mode != consensus.ModeWrongLedger {
 		t.Fatalf("watchdog fired early at %v, mode=%v", a.now.Sub(start), e.mode)
 	}
@@ -73,7 +72,7 @@ func TestEngine_WrongLedgerStuckWatchdog_DropsToDegradedResync(t *testing.T) {
 
 	// Past the timeout the watchdog drops to a degraded resync so closes resume.
 	a.now = start.Add(wrongLedgerStuckTimeout + time.Second)
-	e.checkLedger()
+	e.checkStuckWrongLedger()
 
 	if e.mode != consensus.ModeObserving {
 		t.Fatalf("stuck watchdog must drop to ModeObserving, got %v", e.mode)
@@ -89,5 +88,31 @@ func TestEngine_WrongLedgerStuckWatchdog_DropsToDegradedResync(t *testing.T) {
 	}
 	if !e.wrongLedgerSince.IsZero() {
 		t.Fatal("leaving ModeWrongLedger must clear the watchdog clock")
+	}
+}
+
+// TestEngine_WrongLedgerStuckWatchdog_FiresAtPhaseAccepted covers the
+// phase==PhaseAccepted pin: acceptLedger's preferred-LCL jump can pin
+// ModeWrongLedger while the phase is still Accepted, a state that advances no
+// rounds and never calls checkLedger. The watchdog runs every tick from
+// timerEntry regardless of phase, so the pin is still bounded; the mode drop
+// then lets the next checkAndStartRoundInner restart a round.
+func TestEngine_WrongLedgerStuckWatchdog_FiresAtPhaseAccepted(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+
+	start := a.now
+	e.setMode(consensus.ModeWrongLedger)
+	e.wrongLedgerID = consensus.LedgerID{0x01}
+	e.phase = consensus.PhaseAccepted
+
+	a.now = start.Add(wrongLedgerStuckTimeout + time.Second)
+	e.checkStuckWrongLedger()
+
+	if e.mode != consensus.ModeObserving {
+		t.Fatalf("watchdog must drop to ModeObserving even at PhaseAccepted, got %v", e.mode)
+	}
+	if e.phase != consensus.PhaseAccepted {
+		t.Fatalf("watchdog drops the mode only; the round restart advances the phase, got %v", e.phase)
 	}
 }
