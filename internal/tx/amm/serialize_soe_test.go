@@ -1,6 +1,7 @@
 package amm
 
 import (
+	"strings"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -128,6 +129,67 @@ func TestSerializeAMM_RoundTrip(t *testing.T) {
 		if voteEntryHasTradingFee(t, fields) != (fee != 0) {
 			t.Errorf("fee=%d: VoteEntry.TradingFee presence wrong after round trip", fee)
 		}
+	}
+}
+
+// TestSerializeAMM_PreviousTxnRoundTrip asserts the soeOPTIONAL threading
+// pointers are omitted on an un-threaded AMM and round-trip faithfully once set,
+// so a no-op modification re-serializes with PreviousTxnID intact and the apply
+// layer's unchanged-entry guard prunes it instead of writing a ghost ModifiedNode.
+func TestSerializeAMM_PreviousTxnRoundTrip(t *testing.T) {
+	// Un-threaded: both soeOPTIONAL pointers absent.
+	data, err := serializeAMMData(buildTestAMM(t, 500))
+	if err != nil {
+		t.Fatalf("serialize (un-threaded): %v", err)
+	}
+	f := decodeFieldsBytes(t, data)
+	if _, ok := f["PreviousTxnID"]; ok {
+		t.Error("PreviousTxnID must be absent on an un-threaded AMM (soeOPTIONAL)")
+	}
+	if _, ok := f["PreviousTxnLgrSeq"]; ok {
+		t.Error("PreviousTxnLgrSeq must be absent on an un-threaded AMM (soeOPTIONAL)")
+	}
+
+	// Threaded: both present, correct, and stable across serialize → parse → serialize.
+	const prevTxnID = "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
+	const prevLgrSeq = uint32(98948137)
+	amm := buildTestAMM(t, 500)
+	amm.PreviousTxnID = prevTxnID
+	amm.PreviousTxnLgrSeq = prevLgrSeq
+
+	data2, err := serializeAMMData(amm)
+	if err != nil {
+		t.Fatalf("serialize (threaded): %v", err)
+	}
+	f2 := decodeFieldsBytes(t, data2)
+	if got, ok := f2["PreviousTxnID"].(string); !ok || !strings.EqualFold(got, prevTxnID) {
+		t.Errorf("serialized PreviousTxnID = %v, want %s", f2["PreviousTxnID"], prevTxnID)
+	}
+	if got := toUint64(f2["PreviousTxnLgrSeq"]); got != uint64(prevLgrSeq) {
+		t.Errorf("serialized PreviousTxnLgrSeq = %d, want %d", got, prevLgrSeq)
+	}
+
+	parsed, err := ParseAMMData(data2)
+	if err != nil {
+		t.Fatalf("parse (threaded): %v", err)
+	}
+	if !strings.EqualFold(parsed.PreviousTxnID, prevTxnID) {
+		t.Errorf("round-trip PreviousTxnID = %s, want %s", parsed.PreviousTxnID, prevTxnID)
+	}
+	if parsed.PreviousTxnLgrSeq != prevLgrSeq {
+		t.Errorf("round-trip PreviousTxnLgrSeq = %d, want %d", parsed.PreviousTxnLgrSeq, prevLgrSeq)
+	}
+
+	data3, err := serializeAMMData(parsed)
+	if err != nil {
+		t.Fatalf("re-serialize (threaded): %v", err)
+	}
+	f3 := decodeFieldsBytes(t, data3)
+	if _, ok := f3["PreviousTxnID"]; !ok {
+		t.Error("PreviousTxnID must remain present after round trip")
+	}
+	if _, ok := f3["PreviousTxnLgrSeq"]; !ok {
+		t.Error("PreviousTxnLgrSeq must remain present after round trip")
 	}
 }
 

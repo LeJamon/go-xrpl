@@ -85,6 +85,12 @@ type TestEnv struct {
 	// sufficient when the ledger is open."
 	openLedger bool
 
+	// viewOpen marks the apply view as open (rippled's view.open()) WITHOUT the
+	// fee-adequacy floor that openLedger controls. Conformance non-TxQ suites turn
+	// openLedger off but still need the open-view fee branch (terINSUF_FEE_B vs the
+	// closed-only tecINSUFF_FEE) and its internal-failure variants.
+	viewOpen bool
+
 	// Optional state map family for backed SHAMaps (PebbleDB on disk).
 	// Only set when using NewTestEnvBacked() for heavy tests that would OOM otherwise.
 	// When nil, SHAMaps use unbacked mode (fast, full in-memory clones).
@@ -130,12 +136,18 @@ type TestEnv struct {
 	// Reset on Close().
 	closingFeeLevels []txq.FeeLevel
 
-	// heldTxns stores transactions that got terPRE_SEQ or other retryable
-	// results. After a successful transaction for the same account, held
-	// transactions are retried. This mirrors rippled's LedgerMaster held
-	// transaction mechanism.
-	// Key: account address string -> slice of held transactions.
+	// heldTxns stores transactions that hit a retryable (ter*) result because of a
+	// sequence gap. They are retried mid-window once a transaction for the same
+	// account succeeds, mirroring rippled's mHeldTransactions. Keyed by account.
 	heldTxns map[string][]tx.Transaction
+
+	// localTxns stores TxQ-owned transactions: successfully queued entries and tel*
+	// (local) rejections. Like rippled's m_localTX, they are replayed only when a
+	// new open ledger is built at close, never mid-window — holding them out of the
+	// mid-window retry stops a queued entry from bypassing the queue into the open
+	// ledger when the load floor drops (double-charging / consuming reserved
+	// tickets). Keyed by account.
+	localTxns map[string][]tx.Transaction
 
 	// replayOnClose enables the open-ledger consensus replay behavior.
 	// When true, Close() rebuilds the closed ledger from the parent
@@ -338,6 +350,12 @@ func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 // When false, fee adequacy checks are skipped (matching rippled's closed-ledger behavior).
 func (e *TestEnv) SetOpenLedger(open bool) {
 	e.openLedger = open
+}
+
+// SetViewOpen marks the apply view as open without the fee-adequacy floor
+// (see the viewOpen field).
+func (e *TestEnv) SetViewOpen(open bool) {
+	e.viewOpen = open
 }
 
 // SetBypassTxQ temporarily bypasses TxQ routing. When true, Submit() goes

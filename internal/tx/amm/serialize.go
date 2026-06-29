@@ -58,6 +58,13 @@ func parseAMMData(data []byte) (*AMMData, error) {
 		amm.OwnerNode, _ = parseHexUint64(ownerNodeStr)
 	}
 
+	// PreviousTxnID / PreviousTxnLgrSeq (threading pointers) — preserve them so a
+	// no-op modification re-serializes byte-identically (see AMMData docs).
+	if prevTxnID, ok := fields["PreviousTxnID"].(string); ok {
+		amm.PreviousTxnID = prevTxnID
+	}
+	amm.PreviousTxnLgrSeq = getFieldUint32(fields, "PreviousTxnLgrSeq")
+
 	// LPTokenBalance (Amount object)
 	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
 		bal, err := amountMapToAmount(lptObj)
@@ -127,15 +134,6 @@ func parseAMMData(data []byte) (*AMMData, error) {
 		amm.AuctionSlot = slot
 	}
 
-	// PreviousTxnID/PreviousTxnLgrSeq round-trip the threading pointers, present
-	// once the AMM has been threaded under fixPreviousTxnID.
-	if ptid, ok := fields["PreviousTxnID"].(string); ok {
-		if b, err := hex.DecodeString(ptid); err == nil && len(b) == 32 {
-			copy(amm.PreviousTxnID[:], b)
-			amm.PreviousTxnLgrSeq = getFieldUint32(fields, "PreviousTxnLgrSeq")
-		}
-	}
-
 	return amm, nil
 }
 
@@ -178,6 +176,12 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	// state. Emitting TradingFee:0 forks account_hash.
 	if amm.TradingFee != 0 {
 		jsonObj["TradingFee"] = amm.TradingFee
+	}
+
+	// soeOPTIONAL: emit only once the apply layer has threaded the AMM (see AMMData docs).
+	if amm.PreviousTxnID != "" {
+		jsonObj["PreviousTxnID"] = amm.PreviousTxnID
+		jsonObj["PreviousTxnLgrSeq"] = amm.PreviousTxnLgrSeq
 	}
 
 	// VoteSlots (STArray of VoteEntry objects)
@@ -238,14 +242,6 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 			auctionSlot["AuthAccounts"] = authAccounts
 		}
 		jsonObj["AuctionSlot"] = auctionSlot
-	}
-
-	// Carry the threading pointers through a no-op modify; absent until the apply
-	// layer stamps a freshly created AMM (ApplyStateTable.cpp:154-157).
-	var emptyHash [32]byte
-	if amm.PreviousTxnID != emptyHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(amm.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = amm.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

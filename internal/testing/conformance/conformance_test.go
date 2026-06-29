@@ -54,6 +54,13 @@ var skipTests = map[string]string{
 	// MPT-escrow preclaim logic is exercised by the escrow unit tests.
 	"app/EscrowToken/MPT_Finish_Preclaim": "referenced MPT issuance deleted via open-ledger surgery not representable in fixtures",
 	"app/EscrowToken/MPT_Cancel_Preclaim": "referenced MPT issuance deleted via open-ledger surgery not representable in fixtures",
+	// rippled grows the TxQ's open-ledger capacity (txnsExpected) via the
+	// amendment-vote pseudo-transactions injected at flag ledgers over these 513
+	// closes; the fixture records those closes as empty, so go-xrpl never sees them
+	// and stays at the harness-minimum capacity, queuing sooner. The admission and
+	// escalation logic itself is exercised by the other TxQMetaInfo and
+	// TxQPosNegFlows fixtures.
+	"app/TxQMetaInfo/Re-execute_preflight": "open-ledger capacity depends on rippled-internal amendment-vote consensus activity not captured in the fixture's empty closes",
 }
 
 func TestConformance(t *testing.T) {
