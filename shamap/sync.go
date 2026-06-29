@@ -18,6 +18,31 @@ var (
 	ErrParentNotInTree   = errors.New("parent node not yet loaded for path")
 )
 
+// AddNodeResult classifies the outcome of placing a peer-supplied node by
+// NodeID, mirroring rippled's SHAMapAddNode (SHAMapSync.cpp). It lets the
+// inbound caller tell a genuinely bad node from one that is simply ahead of
+// its frontier and should be re-requested rather than counted as a reject.
+type AddNodeResult int
+
+const (
+	// NodeInvalid: the node is provably wrong for this map — a hash mismatch,
+	// an inner node where only a leaf may live, or a path through a branch
+	// this map does not reference (a node from another tree). The caller
+	// should stop harvesting the rest of the reply.
+	NodeInvalid AddNodeResult = iota
+	// NodeUseful: a fresh node was attached at its slot.
+	NodeUseful
+	// NodeDuplicate: the slot was already populated, or the path consolidated
+	// into a mid-path leaf — nothing to do.
+	NodeDuplicate
+	// NodeReRequest: the node is well-formed but an ancestor on its path is
+	// still a hash-only stub, so it cannot be hooked yet. Not an error: the
+	// next getMissingNodes walk re-requests the correct frontier and the node
+	// returns on a later reply. Mirrors rippled's descend()→nullptr with
+	// iNodeID != node returning useful() (re-requested by getMissingNodes).
+	NodeReRequest
+)
+
 // SyncFilter is an interface for filtering which nodes should be fetched during sync.
 // This allows callers to avoid fetching nodes they already have locally.
 type SyncFilter interface {
@@ -302,18 +327,18 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 // parent's stored child hash at the target branch.
 //
 // Returns the same results as AddKnownNodeByID.
-func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (added bool, err error) {
+func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (AddNodeResult, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if sm.state != StateSyncing {
-		return false, ErrSyncNotInProgress
+		return NodeInvalid, ErrSyncNotInProgress
 	}
 	if nodeID.IsRoot() {
-		return false, ErrUnexpectedNode
+		return NodeInvalid, ErrUnexpectedNode
 	}
 	if len(data) == 0 {
-		return false, ErrInvalidNodeData
+		return NodeInvalid, ErrInvalidNodeData
 	}
 
 	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
@@ -328,29 +353,27 @@ func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (added bool
 // Mirrors rippled's SHAMap::addKnownNode (SHAMapSync.cpp:578-673): descent
 // through the partial tree is driven by the NodeID, not by hash-searching.
 //
-// Returns:
-//   - added=true, nil on a fresh attach (rippled SHAMapAddNode::useful())
-//   - added=false, nil when the slot is already populated
-//     (duplicate, matching rippled's SHAMapAddNode::duplicate())
-//   - ErrEmptyBranchOnPath when descent hits an empty branch — peer sent
-//     a node we never asked for
-//   - ErrParentNotInTree when an intermediate ancestor on the path is
-//     still a hash-only stub — caller must acquire ancestors first
-//   - ErrNodeHashMismatch when the computed hash doesn't match what the
-//     parent expects at the target branch
-//   - ErrSyncNotInProgress / ErrInvalidNodeData on misuse
-func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (added bool, err error) {
+// Returns an AddNodeResult and, only for NodeInvalid, the underlying error:
+//   - NodeUseful, nil on a fresh attach
+//   - NodeDuplicate, nil when the slot is already populated or the path
+//     consolidated into a mid-path leaf
+//   - NodeReRequest, nil when an ancestor on the path is still a hash-only
+//     stub: not a reject, re-requested by the next getMissingNodes walk
+//   - NodeInvalid with ErrEmptyBranchOnPath (path into a branch this map does
+//     not reference), ErrNodeHashMismatch, ErrUnexpectedNode (inner where only
+//     a leaf may live), or ErrSyncNotInProgress / ErrInvalidNodeData on misuse
+func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (AddNodeResult, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if sm.state != StateSyncing {
-		return false, ErrSyncNotInProgress
+		return NodeInvalid, ErrSyncNotInProgress
 	}
 	if nodeID.IsRoot() {
-		return false, ErrUnexpectedNode
+		return NodeInvalid, ErrUnexpectedNode
 	}
 	if len(data) == 0 {
-		return false, ErrInvalidNodeData
+		return NodeInvalid, ErrInvalidNodeData
 	}
 
 	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
@@ -359,18 +382,19 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (added bool, err 
 }
 
 // attachKnownNodeAt descends along nodeID's path and attaches the node
-// produced by deserialize at the target branch after verifying its hash
-// against the parent's stored child hash. deserialize runs only once the
-// target slot is known to be empty, so a duplicate (slot already
-// populated, or a consolidated leaf mid-path) short-circuits without
-// parsing the peer's data. added distinguishes a fresh attach from a
-// duplicate, mirroring rippled's SHAMapAddNode useful()/duplicate()
-// (SHAMapSync.cpp:653, 671-672). Shared by AddKnownNodeByID and
-// AddKnownNodeFromPrefix. Caller must hold the write lock and have
-// validated state and nodeID.
-func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, error)) (added bool, err error) {
+// produced by deserialize at the first hash-only slot, after verifying its
+// hash against the parent's stored child hash. deserialize runs only once the
+// target slot is known to be empty, so a duplicate (slot already populated, or
+// a consolidated leaf mid-path) short-circuits without parsing the peer's
+// data. The AddNodeResult mirrors rippled's SHAMapAddNode (SHAMapSync.cpp):
+// reaching a hash-only ancestor before the target depth is NodeReRequest, not
+// an error, so off-frontier fat-reply nodes converge over re-requests instead
+// of flooding the reject log. Shared by AddKnownNodeByID and
+// AddKnownNodeFromPrefix. Caller must hold the write lock and have validated
+// state and nodeID.
+func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, error)) (AddNodeResult, error) {
 	if sm.root == nil {
-		return false, ErrParentNotInTree
+		return NodeInvalid, ErrParentNotInTree
 	}
 
 	targetDepth := int(nodeID.Depth())
@@ -383,36 +407,43 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 
 		child, childHash, isSet := parent.LoadChild(branch)
 		if !isSet {
-			return false, ErrEmptyBranchOnPath
+			// A materialized ancestor has no child here: the offered node is
+			// not part of this map (a node from another tree). rippled
+			// isEmptyBranch → SHAMapAddNode::invalid (SHAMapSync.cpp:601).
+			return NodeInvalid, ErrEmptyBranchOnPath
 		}
 
 		if curDepth+1 == targetDepth {
 			if child != nil {
-				return false, nil
+				return NodeDuplicate, nil
 			}
 			newNode, err := deserialize()
 			if err != nil {
-				return false, fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
+				return NodeInvalid, fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 			}
 			// At leaf depth, an inner node is provably invalid — mark the
 			// map and bail (mirrors rippled SHAMapSync.cpp:632-638).
 			if _, isInner := newNode.(*innerNode); isInner && targetDepth == MaxDepth {
 				sm.state = StateInvalid
-				return false, ErrUnexpectedNode
+				return NodeInvalid, ErrUnexpectedNode
 			}
 			if err := newNode.UpdateHash(); err != nil {
-				return false, fmt.Errorf("failed to compute node hash: %w", err)
+				return NodeInvalid, fmt.Errorf("failed to compute node hash: %w", err)
 			}
 			if newNode.Hash() != childHash {
-				return false, ErrNodeHashMismatch
+				return NodeInvalid, ErrNodeHashMismatch
 			}
 			// rippled SHAMapSync.cpp:653 canonicalizeChild
 			parent.SetChildIfNil(branch, newNode)
-			return true, nil
+			return NodeUseful, nil
 		}
 
 		if child == nil {
-			return false, ErrParentNotInTree
+			// Ancestor still a hash-only stub: cannot hook the node yet. The
+			// next getMissingNodes walk re-requests the correct frontier and
+			// it returns on a later reply (rippled descend()→nullptr with
+			// iNodeID != node → useful(), SHAMapSync.cpp:643-651).
+			return NodeReRequest, nil
 		}
 		nextInner, ok := child.(*innerNode)
 		if !ok {
@@ -420,12 +451,12 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 			// slot (SHAMap consolidates lone leaves above leafDepth).
 			// Rippled exits the !isInner() loop and returns duplicate
 			// (SHAMapSync.cpp:597, 671-672).
-			return false, nil
+			return NodeDuplicate, nil
 		}
 		parent = nextInner
 	}
 
-	return false, ErrUnexpectedNode
+	return NodeInvalid, ErrUnexpectedNode
 }
 
 // insertKnownNode inserts a node at the correct location in the tree.

@@ -242,7 +242,13 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"error", err.Error())
 			continue
 		}
-		if _, err := txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+		res, err := txMap.AddKnownNodeByID(parsedID, node.NodeData)
+		if res == shamap.NodeReRequest {
+			// Ahead of its frontier: re-requested by the next getMissingNodes
+			// walk, not a poisoned reply.
+			continue
+		}
+		if res == shamap.NodeInvalid {
 			replyValid = false
 			r.logger.Debug("tx-set sync: node rejected",
 				"t", "consensus", "event", "txset-node-reject",
