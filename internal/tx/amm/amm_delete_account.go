@@ -91,21 +91,21 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return ter.TecINTERNAL
 	}
 
-	// rippled empties an AMM's pool lines during the withdrawal payout, where
-	// rippleCreditIOU drives the AMM (reserve) side to zero: it clears that
-	// side's reserve flag on the line and decrements the line owner's OwnerCount
-	// before trustDelete erases the line. Both mutations must be recorded
-	// in-place so the resulting DeletedNode metadata carries PreviousFields
-	// (line Flags 0x..020000 -> 0x..000000, owner OwnerCount n -> n-1). Mirror
-	// that here for each side holding a reserve, before the line is erased.
+	// Clear the reserve flag only on the AMM side, reproducing rippled: it
+	// releases the AMM side's reserve during the payout credit and leaves the
+	// non-AMM (holder) side's flag set (e.g. on the LP-token line).
 	if rs.Flags&state.LsfLowReserve != 0 {
-		rs.Flags &^= state.LsfLowReserve
+		if ammLow {
+			rs.Flags &^= state.LsfLowReserve
+		}
 		if err := decrementLineOwner(view, lowAccountID, lowAccount, ammLow); err != nil {
 			return ter.TecINTERNAL
 		}
 	}
 	if rs.Flags&state.LsfHighReserve != 0 {
-		rs.Flags &^= state.LsfHighReserve
+		if ammHigh {
+			rs.Flags &^= state.LsfHighReserve
+		}
 		if err := decrementLineOwner(view, highAccountID, highAccount, ammHigh); err != nil {
 			return ter.TecINTERNAL
 		}

@@ -201,7 +201,9 @@ func xrpTransferInSandbox(sb *PaymentSandbox, from, to [20]byte, drops int64) er
 	}
 
 	var zeroAccount [20]byte
-	txHash, ledgerSeq := sb.GetTransactionContext()
+
+	// Adjust balances only — ApplyStateTable threads PreviousTxnID after its
+	// no-op check; stamping here risks a ghost ModifiedNode (see adjustTrustLineBalance).
 
 	// Debit source (skip if zero account — XRPEndpointStep handles actual source)
 	if from != zeroAccount {
@@ -222,8 +224,6 @@ func xrpTransferInSandbox(sb *PaymentSandbox, from, to [20]byte, drops int64) er
 			return errInsufficientFunds
 		}
 		fromAcct.Balance = fromAcct.Balance - uint64(drops)
-		fromAcct.PreviousTxnID = txHash
-		fromAcct.PreviousTxnLgrSeq = ledgerSeq
 		newFromData, _ := state.SerializeAccountRoot(fromAcct)
 		sb.Update(fromKey, newFromData)
 	}
@@ -240,8 +240,6 @@ func xrpTransferInSandbox(sb *PaymentSandbox, from, to [20]byte, drops int64) er
 			return err
 		}
 		toAcct.Balance = toAcct.Balance + uint64(drops)
-		toAcct.PreviousTxnID = txHash
-		toAcct.PreviousTxnLgrSeq = ledgerSeq
 		newToData, _ := state.SerializeAccountRoot(toAcct)
 		sb.Update(toKey, newToData)
 	}
@@ -311,10 +309,9 @@ func adjustTrustLineBalance(sb *PaymentSandbox, account, issuer [20]byte, curren
 		return err
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
-	tl.PreviousTxnID = txHash
-	tl.PreviousTxnLgrSeq = ledgerSeq
-
+	// Do NOT stamp PreviousTxnID/PreviousTxnLgrSeq here — the ApplyStateTable
+	// threads them after its no-op (Original == Current) check, which a round-back
+	// stamp would defeat (ghost ModifiedNode). Mirrors step_book_consume.go.
 	newData, err := state.SerializeRippleState(tl)
 	if err != nil {
 		return err

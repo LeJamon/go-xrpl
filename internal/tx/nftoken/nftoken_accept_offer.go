@@ -474,8 +474,15 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
 			if !fixV1_2 || buyOffer == nil {
 				needed := tx.NewXRPAmount(int64(sellOffer.Amount))
-				funds := tx.AccountFunds(ctx.View, accountID, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-				if funds.Compare(needed) < 0 {
+				// rippled checks the submitter's native funds in preclaim on the
+				// PRE-fee balance; goXRPL folds this into Apply (post-fee), so use
+				// PriorBalance, else a fee straddling reserve(OwnerCount) flips the TER.
+				reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
+				var liquid uint64
+				if pb := ctx.PriorBalance(); pb > reserve {
+					liquid = pb - reserve
+				}
+				if liquid < uint64(needed.Drops()) {
 					return ter.TecINSUFFICIENT_FUNDS
 				}
 			}
