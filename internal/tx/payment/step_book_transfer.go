@@ -127,8 +127,13 @@ func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int6
 		sb.CreditHook(from, xrpAccount, amount, preCreditBalance)
 
 		fromAccount.Balance -= uint64(drops)
-		fromAccount.PreviousTxnID = txHash
-		fromAccount.PreviousTxnLgrSeq = ledgerSeq
+		// Do NOT stamp PreviousTxnID/PreviousTxnLgrSeq here: threading is the
+		// ApplyStateTable's job and runs after its no-op (Original == Current)
+		// check. A net-zero autobridge transfer (this account pays out one leg
+		// then receives the same drops back in another) would otherwise differ
+		// only in the bumped threading pointers, defeating that check and
+		// emitting a ghost ModifiedNode. rippled transferXRP only sets sfBalance;
+		// same fix as the sibling IOU paths (adjustTrustLineBalance, consumeOffer).
 
 		fromAccountData, err := state.SerializeAccountRoot(fromAccount)
 		if err != nil {
@@ -160,8 +165,8 @@ func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int6
 		sb.CreditHook(xrpAccount, to, amount, receiverPreBalance)
 
 		toAccount.Balance += uint64(drops)
-		toAccount.PreviousTxnID = txHash
-		toAccount.PreviousTxnLgrSeq = ledgerSeq
+		// No PreviousTxnID stamp — see the sender branch above; threading is
+		// deferred to the ApplyStateTable's post-no-op-check pass.
 
 		toAccountData, err := state.SerializeAccountRoot(toAccount)
 		if err != nil {
