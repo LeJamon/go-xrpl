@@ -137,8 +137,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// rippled runs these reserve/funding checks in preclaim against the pre-fee
 	// ReadView; goXRPL folds them into Apply, where ctx.View has the fee already
 	// deducted, so evaluate against the pre-fee PriorBalance. Otherwise a fee
-	// straddling reserve(OwnerCount+1)+amount flips the TER (the #1147 class).
-	// Reference: rippled PayChan.cpp preclaim() lines 209-213
+	// straddling reserve(OwnerCount+1)+amount flips the TER.
 	priorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if priorBalance < reserve {

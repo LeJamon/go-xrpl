@@ -9,9 +9,7 @@ import (
 // TestPaymentChannelCreateFundingBoundary pins PayChanCreate's reserve and
 // funding checks to the pre-fee balance. rippled runs them in preclaim against
 // the pre-fee ReadView (PayChan.cpp:209-213), so a base fee that straddles
-// reserve(OwnerCount+1) or reserve(OwnerCount+1)+amount must not flip the TER
-// (the issue #1147 class: a folded-preclaim native check reading the post-fee
-// balance).
+// reserve(OwnerCount+1) or reserve(OwnerCount+1)+amount must not flip the TER.
 func TestPaymentChannelCreateFundingBoundary(t *testing.T) {
 	const settleDelay = uint32(3600)
 
