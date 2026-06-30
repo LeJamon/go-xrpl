@@ -285,10 +285,9 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// 4. Fund check for buy offers (both XRP and IOU). rippled rejects a buy
-	// offer whose creator has no available funds, regardless of nativeness:
-	// accountFunds().signum() <= 0 → tecUNFUNDED_OFFER (post-fixNonFungibleTokensV1_2),
-	// accountHolds().signum() <= 0 otherwise.
+	// 4. Fund check for buy offers. rippled's preclaim rejects a creator with no
+	// available funds → tecUNFUNDED_OFFER: accountFunds().signum() <= 0
+	// (post-fixNonFungibleTokensV1_2) or accountHolds().signum() <= 0 otherwise.
 	// Reference: rippled tokenOfferCreatePreclaim lines 947-967.
 	if !isSellOffer {
 		if n.Amount.IsNative() {
@@ -402,15 +401,12 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Increase owner count
 	ctx.Account.OwnerCount++
 
-	// Check reserve against mPriorBalance — the source balance before its own
-	// fee was deducted — so the offer can dip into the reserve to pay the fee.
-	mPriorBalance := ctx.PriorBalance()
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
-	if mPriorBalance < reserve {
-		return ter.TecINSUFFICIENT_RESERVE
+	// The offer adds an owned object; charge its reserve against the pre-fee
+	// balance so the source can still dip into the reserve to pay the fee.
+	if r := ctx.CheckReserveWithFee(ctx.Account.OwnerCount); r != ter.TesSUCCESS {
+		return r
 	}
 
 	return ter.TesSUCCESS
