@@ -48,6 +48,15 @@ func TestPaymentChannelCreateFundingBoundary(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 	})
 
+	t.Run("InsufficientReserve", func(t *testing.T) {
+		// Pre-fee balance is genuinely below reserve(1); the reserve check fires
+		// before the funding check, independent of amount.
+		result := create(t, drops(1), func(env *jtx.TestEnv) uint64 {
+			return env.ReserveBase() + env.ReserveIncrement() - uint64(xrp(1))
+		})
+		jtx.RequireTxClaimed(t, result, "tecINSUFFICIENT_RESERVE")
+	})
+
 	t.Run("Unfunded", func(t *testing.T) {
 		// Pre-fee balance is genuinely below reserve(1)+amount.
 		amount := xrp(10)
