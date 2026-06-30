@@ -3247,6 +3247,58 @@ func TestBuyerReserve(t *testing.T) {
 }
 
 // ===========================================================================
+// TestNFTokenCreateBuyOfferReserve
+// Reference: rippled NFToken_test.cpp testFixNFTokenBuyerReserve
+// ===========================================================================
+
+// TestNFTokenCreateBuyOfferReserve pins the native buy-offer funds check to the
+// pre-fee balance: a base fee that straddles reserve(OwnerCount) must yield
+// tecINSUFFICIENT_RESERVE, not a spurious tecUNFUNDED_OFFER (issue #1147).
+func TestNFTokenCreateBuyOfferReserve(t *testing.T) {
+	// buyOffer funds a fresh buyer to balanceFor(env), then has it create a
+	// native buy offer against a transferable NFT owned by alice.
+	buyOffer := func(t *testing.T, balanceFor func(env *jtx.TestEnv) uint64) jtx.TxResult {
+		t.Helper()
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.Fund(alice)
+		env.Close()
+
+		nftID := nft.GetNextNFTokenID(env, alice, 0, nftoken.NFTokenFlagTransferable, 0)
+		jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build()))
+		env.Close()
+
+		env.FundAmount(bob, balanceFor(env))
+		env.Close()
+
+		return env.Submit(nft.NFTokenCreateBuyOffer(bob, nftID, tx.NewXRPAmount(1), alice).Build())
+	}
+
+	t.Run("FeeStraddlesReserveBoundary", func(t *testing.T) {
+		// Pre-fee balance clears reserve(0) by 8 drops, so the funds check passes
+		// and the offer falls through to the reserve check (which needs
+		// reserve(1)). Evaluating the post-fee balance would short-circuit to
+		// tecUNFUNDED_OFFER — the bug.
+		result := buyOffer(t, func(env *jtx.TestEnv) uint64 { return env.ReserveBase() + 8 })
+		jtx.RequireTxClaimed(t, result, "tecINSUFFICIENT_RESERVE")
+	})
+
+	t.Run("AtBaseReserveUnfunded", func(t *testing.T) {
+		// Pre-fee balance equals reserve(0): genuinely no liquidity.
+		result := buyOffer(t, func(env *jtx.TestEnv) uint64 { return env.ReserveBase() })
+		jtx.RequireTxClaimed(t, result, "tecUNFUNDED_OFFER")
+	})
+
+	t.Run("SufficientReserve", func(t *testing.T) {
+		result := buyOffer(t, func(env *jtx.TestEnv) uint64 {
+			return env.ReserveBase() + env.ReserveIncrement() + env.BaseFee()
+		})
+		jtx.RequireTxSuccess(t, result)
+	})
+}
+
+// ===========================================================================
 // testFixAutoTrustLine
 // Reference: rippled NFToken_test.cpp testUnaskedForAutoTrustline
 // ===========================================================================
