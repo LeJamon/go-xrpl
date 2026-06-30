@@ -292,15 +292,13 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled tokenOfferCreatePreclaim lines 947-967.
 	if !isSellOffer {
 		if n.Amount.IsNative() {
-			// rippled runs this native funds check in tokenOfferCreatePreclaim, on
-			// the pre-fee ReadView. goXRPL folds it into Apply, where ctx.View has
-			// already had the fee deducted, so evaluate native liquidity against
-			// the pre-fee PriorBalance — exactly as the reserve check below does.
-			// Otherwise a fee that straddles reserve(OwnerCount) flips the result
-			// from tecINSUFFICIENT_RESERVE to tecUNFUNDED_OFFER (ledger 99272734:
-			// PriorBalance 7000008 vs post-fee 6999996 against reserve 7000000).
-			// AccountFunds(native).signum()<=0 is exactly balance<=reserve.
-			// Reference: rippled tokenOfferCreatePreclaim lines 947-967.
+			// rippled runs this native funds check in preclaim against the
+			// pre-fee ReadView; goXRPL folds it into Apply, where the fee is
+			// already deducted, so check the pre-fee PriorBalance (like the
+			// reserve check below). A fee straddling reserve(OwnerCount) would
+			// otherwise flip tecINSUFFICIENT_RESERVE into a spurious
+			// tecUNFUNDED_OFFER. AccountFunds(native).signum()<=0 is exactly
+			// balance<=reserve.
 			if ctx.PriorBalance() <= ctx.AccountReserve(ctx.Account.OwnerCount) {
 				return ter.TecUNFUNDED_OFFER
 			}
