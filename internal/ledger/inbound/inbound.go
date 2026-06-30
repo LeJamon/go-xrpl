@@ -579,13 +579,15 @@ func (l *Ledger) applyKnownNodes(m *shamap.SHAMap, nodes []message.LedgerNode, l
 		case shamap.NodeDuplicate, shamap.NodeReRequest:
 			// Already present, or ahead of its frontier: neither progress nor
 			// a reject. Re-requested by the next missing-node walk.
-		default: // NodeInvalid
+		default: // NodeInvalid, or any unrecognized result — reject conservatively.
 			l.rejectCount++
-			l.lastRejectErr = err.Error()
+			if err != nil {
+				l.lastRejectErr = err.Error()
+			}
 			l.logger.Debug("inbound ledger: "+label+" node rejected",
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
-				"error", err.Error())
+				"error", err)
 			return added
 		}
 	}

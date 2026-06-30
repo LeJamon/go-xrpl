@@ -219,10 +219,10 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	// storm of issue #413.
 	//
 	// replyValid stays true unless any non-root node fails parse or
-	// AddKnownNodeByID: a single bad non-root poisons the WHOLE reply.
-	// We MUST reflect this all-or-nothing reply outcome in per-peer
-	// non-progress accounting so a peer trickling junk alongside one
-	// good node can't keep its counter pinned at zero.
+	// AddKnownNodeByID. A provably-invalid non-root stops harvesting the
+	// rest of the reply (stop-on-first-bad) and flags the whole reply as
+	// non-progress, so a peer trickling junk alongside one good node can't
+	// keep its counter pinned at zero.
 	added := 0
 	replyValid := true
 	for _, node := range ld.Nodes {
@@ -255,8 +255,8 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
-				"error", err.Error())
-			continue
+				"error", err)
+			break
 		}
 		added++
 		// Learn (submit + relay) the tx carried by this acquired leaf.
