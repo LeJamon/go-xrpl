@@ -21,14 +21,11 @@ func (e *Engine) preflight(tx txcore.Transaction) ter.Result {
 	common := tx.GetCommon()
 	rules := e.rules()
 
-	// Structural preflight (preflight0/1 + the per-type Validate and rules-gated
-	// checks) is independent of ledger state, so it is run once and memoised on
-	// the transaction. The open-ledger apply strand preflights a submission in
-	// TxQ.Apply and then again in Engine.Apply under modifyMu; this skip collapses
-	// that to a single structural pass. The rules pointer keys the verdict so a
-	// later ledger (rebuilt rules) recomputes. Signature verification is left
-	// out of the memo and always runs below, so a multi-signed transaction's
-	// view-dependent signer-list check is never cached.
+	// Structural preflight is ledger-state-independent, so its verdict is
+	// memoised on the transaction and a re-preflight under the same rules skips
+	// the repeat (see Common.preflightedRules). Signature verification stays out
+	// of the memo and always runs below, so a multi-signed tx's view-dependent
+	// signer-list check is never cached.
 	if !common.PreflightVerified(rules) {
 		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
 			return result
