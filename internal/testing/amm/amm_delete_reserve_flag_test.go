@@ -65,7 +65,7 @@ func TestAMMTeardownPreservesHolderReserveFlag(t *testing.T) {
 	}
 
 	// The holder is the non-AMM side; its reserve flag must remain set.
-	holderReserve := uint32(state.LsfLowReserve)
+	holderReserve := state.LsfLowReserve
 	if low, _ := lpLine.FinalFields["LowLimit"].(map[string]any); low != nil {
 		if iss, _ := low["issuer"].(string); iss == ammAcc.Address {
 			holderReserve = state.LsfHighReserve
