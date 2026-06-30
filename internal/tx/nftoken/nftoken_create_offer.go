@@ -291,14 +291,29 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// accountHolds().signum() <= 0 otherwise.
 	// Reference: rippled tokenOfferCreatePreclaim lines 947-967.
 	if !isSellOffer {
-		var funds tx.Amount
-		if n.Amount.IsNative() || ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-			funds = tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		if n.Amount.IsNative() {
+			// rippled runs this native funds check in tokenOfferCreatePreclaim, on
+			// the pre-fee ReadView. goXRPL folds it into Apply, where ctx.View has
+			// already had the fee deducted, so evaluate native liquidity against
+			// the pre-fee PriorBalance — exactly as the reserve check below does.
+			// Otherwise a fee that straddles reserve(OwnerCount) flips the result
+			// from tecINSUFFICIENT_RESERVE to tecUNFUNDED_OFFER (ledger 99272734:
+			// PriorBalance 7000008 vs post-fee 6999996 against reserve 7000000).
+			// AccountFunds(native).signum()<=0 is exactly balance<=reserve.
+			// Reference: rippled tokenOfferCreatePreclaim lines 947-967.
+			if ctx.PriorBalance() <= ctx.AccountReserve(ctx.Account.OwnerCount) {
+				return ter.TecUNFUNDED_OFFER
+			}
 		} else {
-			funds = accountHoldsIOU(ctx.View, accountID, n.Amount)
-		}
-		if funds.Signum() <= 0 {
-			return ter.TecUNFUNDED_OFFER
+			var funds tx.Amount
+			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+				funds = tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			} else {
+				funds = accountHoldsIOU(ctx.View, accountID, n.Amount)
+			}
+			if funds.Signum() <= 0 {
+				return ter.TecUNFUNDED_OFFER
+			}
 		}
 	}
 
