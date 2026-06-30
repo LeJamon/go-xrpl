@@ -135,10 +135,8 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	amount := uint64(p.Amount.Drops())
 
 	// Reserve and funding checks run before the destination checks, matching
-	// rippled's preclaim order. rippled reads the PRE-fee balance there
-	// ((*sle)[sfBalance] in preclaim), so use ctx.PriorBalance(): the engine
-	// charges the fee before Apply, leaving ctx.Account.Balance post-fee, and a
-	// fee straddling reserve(OwnerCount+1) would otherwise flip the TER.
+	// rippled's preclaim order, which reads the PRE-fee balance — so use
+	// PriorBalance, else a fee straddling reserve(OwnerCount+1) flips the TER.
 	// Reference: rippled PayChan.cpp preclaim() lines 204-214.
 	priorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
