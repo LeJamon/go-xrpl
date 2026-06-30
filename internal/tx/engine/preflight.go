@@ -19,13 +19,56 @@ import (
 // top-level function reads as a high-level pipeline.
 func (e *Engine) preflight(tx txcore.Transaction) ter.Result {
 	common := tx.GetCommon()
+	rules := e.rules()
 
+	// Structural preflight is ledger-state-independent, so its verdict is
+	// memoised on the transaction and a re-preflight under the same rules skips
+	// the repeat (see Common.preflightedRules). Signature verification stays out
+	// of the memo and always runs below, so a multi-signed tx's view-dependent
+	// signer-list check is never cached.
+	if !common.PreflightVerified(rules) {
+		if result := e.preflightStructure(tx, common); result != ter.TesSUCCESS {
+			return result
+		}
+		common.MarkPreflightVerified(rules)
+	}
+
+	// preflight2 — cryptographic signature verification runs LAST, after the
+	// type-specific checks, mirroring rippled where preflight2()'s checkValidity
+	// is the final step of every tx's preflight(). A transaction that is both
+	// malformed and mis-signed therefore surfaces its type-specific tem* code,
+	// not the signature code.
+	if result := e.verifySignatures(tx); result != ter.TesSUCCESS {
+		return result
+	}
+
+	// Reference: rippled Batch.cpp:303-312.
+	if outer, ok := tx.(BatchOuter); ok {
+		for _, inner := range outer.InnerTransactions() {
+			if inner == nil {
+				return ter.TemINVALID_INNER_BATCH
+			}
+			if r := e.preflightInner(inner); r != ter.TesSUCCESS {
+				return ter.TemINVALID_INNER_BATCH
+			}
+		}
+	}
+
+	return ter.TesSUCCESS
+}
+
+// preflightStructure runs the ledger-state-independent preflight checks
+// (preflight0/1 minus signature verification, plus the per-type Validate and
+// rules-gated checks). It is a pure function of the transaction fields and the
+// active rules, which is what makes its verdict safe to memoise (see
+// Common.PreflightVerified).
+func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	// preflight0: trivial common-field presence + amendment + flag checks.
 	if result := e.preflightCommonFields(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
 
-	// preflight1 — fee, sequence, memos, structural multi-sign + signature checks.
+	// preflight1 — fee, sequence, memos, structural multi-sign checks.
 	if result := e.validateFee(common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -52,27 +95,6 @@ func (e *Engine) preflight(tx txcore.Transaction) ter.Result {
 	if rp, ok := tx.(txcore.RulesPreflighter); ok {
 		if err := rp.PreflightRules(e.rules()); err != nil {
 			return parseValidationError(err)
-		}
-	}
-
-	// preflight2 — cryptographic signature verification runs LAST, after the
-	// type-specific checks, mirroring rippled where preflight2()'s checkValidity
-	// is the final step of every tx's preflight(). A transaction that is both
-	// malformed and mis-signed therefore surfaces its type-specific tem* code,
-	// not the signature code.
-	if result := e.verifySignatures(tx); result != ter.TesSUCCESS {
-		return result
-	}
-
-	// Reference: rippled Batch.cpp:303-312.
-	if outer, ok := tx.(BatchOuter); ok {
-		for _, inner := range outer.InnerTransactions() {
-			if inner == nil {
-				return ter.TemINVALID_INNER_BATCH
-			}
-			if r := e.preflightInner(inner); r != ter.TesSUCCESS {
-				return ter.TemINVALID_INNER_BATCH
-			}
 		}
 	}
 
