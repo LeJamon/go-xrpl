@@ -480,6 +480,14 @@ func runServer(cmd *cobra.Command, args []string) error {
 				}
 				return node.Data, true
 			})
+
+			// Back inbound ledger acquisitions with the persistent node store so a
+			// forked or catching-up node satisfies the shared majority of a
+			// state/tx tree from local storage and only fetches the genuinely-
+			// missing nodes from peers (issue #1158).
+			if router := consensusComponents.Router; router != nil {
+				router.SetAcquisitionFamily(shamap.NewNodeStoreFamily(db))
+			}
 		}
 
 		// LoadFeeTrack ingress + outbound self-load advertisement.

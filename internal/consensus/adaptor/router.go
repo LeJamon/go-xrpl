@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // inboundReplayDeltaTickInterval drives the periodic check for
@@ -152,6 +153,11 @@ type Router struct {
 	// was saturated — the originating peer resends and reduce-relay covers
 	// the gap, so a dropped relay frame is recoverable.
 	droppedTxJobs atomic.Uint64
+
+	// acquisitionFamily backs new inbound acquisitions with the persistent node
+	// store (see SetAcquisitionFamily); nil leaves them unbacked. Set once at
+	// startup, before Run.
+	acquisitionFamily shamap.Family
 }
 
 // txWorkerCount bounds the goroutines draining inbound peer transactions off
@@ -227,6 +233,25 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 // inbox-only behaviour tests rely on.
 func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
 	r.txInbox = txInbox
+}
+
+// SetAcquisitionFamily installs the node-store family that backs new inbound
+// ledger acquisitions, so a forked or catching-up node satisfies the shared
+// majority of a state/tx tree from its local store and only fetches the
+// genuinely-missing nodes from peers (issue #1158). A nil family leaves
+// acquisitions unbacked, preserving the fetch-everything path for storeless
+// deployments. Call before Run.
+func (r *Router) SetAcquisitionFamily(family shamap.Family) {
+	r.acquisitionFamily = family
+}
+
+// acquisitionOpts returns the inbound.Option set applied to every new
+// acquisition — currently just the node-store backing when one is wired.
+func (r *Router) acquisitionOpts() []inbound.Option {
+	if r.acquisitionFamily == nil {
+		return nil
+	}
+	return []inbound.Option{inbound.WithFamily(r.acquisitionFamily)}
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,

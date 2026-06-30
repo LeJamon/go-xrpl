@@ -221,7 +221,7 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 	}
 
 	_, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
-		return inbound.New(hash, seq, peerID, r.logger)
+		return inbound.New(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
 	})
 	if !created {
 		// Already acquiring this hash (consensus or a prior arm).
@@ -342,7 +342,7 @@ func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]
 	}
 
 	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
-		return inbound.NewGeneric(hash, seq, peerID, r.logger)
+		return inbound.NewGeneric(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
 	})
 	if created {
 		r.logger.Info("starting ledger acquisition (generic, ledger_request)",
