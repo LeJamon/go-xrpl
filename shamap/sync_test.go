@@ -537,7 +537,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		t.Fatal("test setup did not produce a depth>=2 node")
 	}
 
-	t.Run("ParentNotInTree", func(t *testing.T) {
+	t.Run("AncestorGapReRequests", func(t *testing.T) {
 		dest := New(TypeTransaction)
 		if err := dest.StartSync(); err != nil {
 			t.Fatalf("StartSync: %v", err)
@@ -545,10 +545,16 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		if err := dest.AddRootNode(rootHash, rootData); err != nil {
 			t.Fatalf("AddRootNode: %v", err)
 		}
+		// The deep node's parent is still a hash-only stub. rippled
+		// re-requests rather than rejecting (descend()→nullptr, iNodeID !=
+		// node → useful()), so this must be NodeReRequest, not an error.
 		nid, _ := UnmarshalBinary(deep.NodeID)
-		_, err = dest.AddKnownNodeByID(nid, deep.Data)
-		if !errors.Is(err, ErrParentNotInTree) {
-			t.Fatalf("want ErrParentNotInTree, got %v", err)
+		res, err := dest.AddKnownNodeByID(nid, deep.Data)
+		if err != nil {
+			t.Fatalf("ancestor gap: want nil error, got %v", err)
+		}
+		if res != NodeReRequest {
+			t.Fatalf("ancestor gap: want NodeReRequest, got %v", res)
 		}
 	})
 
@@ -636,21 +642,21 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Skip("no depth-1 node available")
 		}
 		nid, _ := UnmarshalBinary(d1.NodeID)
-		added, err := dest.AddKnownNodeByID(nid, d1.Data)
+		res, err := dest.AddKnownNodeByID(nid, d1.Data)
 		if err != nil {
 			t.Fatalf("first AddKnownNodeByID: %v", err)
 		}
-		if !added {
-			t.Fatal("first AddKnownNodeByID: want added=true (useful)")
+		if res != NodeUseful {
+			t.Fatalf("first AddKnownNodeByID: want NodeUseful, got %v", res)
 		}
 		// Second call must be a no-op success (rippled SHAMap::addKnownNode
-		// returns SHAMapAddNode::duplicate(); we surface that as false, nil).
-		added, err = dest.AddKnownNodeByID(nid, d1.Data)
+		// returns SHAMapAddNode::duplicate()).
+		res, err = dest.AddKnownNodeByID(nid, d1.Data)
 		if err != nil {
 			t.Fatalf("duplicate AddKnownNodeByID: %v", err)
 		}
-		if added {
-			t.Fatal("duplicate AddKnownNodeByID: want added=false (duplicate)")
+		if res != NodeDuplicate {
+			t.Fatalf("duplicate AddKnownNodeByID: want NodeDuplicate, got %v", res)
 		}
 	})
 }
@@ -704,12 +710,12 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	// leaf. The peer's data here is irrelevant — descent must short-
 	// circuit on the leaf and return nil.
 	deepNID := NodeID{depth: 2, id: k}
-	added, err := dest.AddKnownNodeByID(deepNID, []byte{0xFF})
+	res, err := dest.AddKnownNodeByID(deepNID, []byte{0xFF})
 	if err != nil {
 		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
 	}
-	if added {
-		t.Fatal("leaf-mid-path: want added=false (duplicate)")
+	if res != NodeDuplicate {
+		t.Fatalf("leaf-mid-path: want NodeDuplicate, got %v", res)
 	}
 }
 
@@ -789,16 +795,16 @@ func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
 			if !ok {
 				t.Fatalf("no fetch-pack blob for missing hash %x", missing[i].Hash[:8])
 			}
-			added, err := dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			res, err := dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
 			if err != nil {
 				t.Fatalf("AddKnownNodeFromPrefix depth=%d: %v", missing[i].NodeID.Depth(), err)
 			}
-			if !added {
-				t.Fatalf("fresh attach depth=%d: want added=true", missing[i].NodeID.Depth())
+			if res != NodeUseful {
+				t.Fatalf("fresh attach depth=%d: want NodeUseful, got %v", missing[i].NodeID.Depth(), res)
 			}
-			added, err = dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
-			if err != nil || added {
-				t.Fatalf("duplicate: want (false, nil), got (%v, %v)", added, err)
+			res, err = dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			if err != nil || res != NodeDuplicate {
+				t.Fatalf("duplicate: want (NodeDuplicate, nil), got (%v, %v)", res, err)
 			}
 		}
 	}

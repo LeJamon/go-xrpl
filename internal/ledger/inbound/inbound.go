@@ -484,35 +484,7 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	// drive placement by the peer-supplied NodeID via AddKnownNodeByID
 	// rather than the hash-search AddKnownNodeUnchecked, which silently
 	// drops nodes whose direct parent isn't loaded yet.
-	added := 0
-	for _, node := range nodes {
-		if len(node.NodeData) == 0 {
-			continue
-		}
-		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
-		if err != nil {
-			l.logger.Debug("inbound ledger: malformed state node ID",
-				"node_id_len", len(node.NodeID),
-				"error", err.Error())
-			continue
-		}
-		if parsedID.IsRoot() {
-			continue
-		}
-		fresh, err := l.stateMap.AddKnownNodeByID(parsedID, node.NodeData)
-		if err != nil {
-			l.rejectCount++
-			l.lastRejectErr = err.Error()
-			l.logger.Debug("inbound ledger: state node rejected",
-				"node_id", fmt.Sprintf("%x", node.NodeID),
-				"node_data_len", len(node.NodeData),
-				"error", err.Error())
-			continue
-		}
-		if fresh {
-			added++
-		}
-	}
+	added := l.applyKnownNodes(l.stateMap, nodes, "state")
 
 	if added > 0 {
 		l.markProgressLocked()
@@ -557,35 +529,7 @@ func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
 		return fmt.Errorf("unexpected state %d for GotTransactionNodes", l.state)
 	}
 
-	added := 0
-	for _, node := range nodes {
-		if len(node.NodeData) == 0 {
-			continue
-		}
-		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
-		if err != nil {
-			l.logger.Debug("inbound ledger: malformed tx node ID",
-				"node_id_len", len(node.NodeID),
-				"error", err.Error())
-			continue
-		}
-		if parsedID.IsRoot() {
-			continue
-		}
-		fresh, err := l.txMap.AddKnownNodeByID(parsedID, node.NodeData)
-		if err != nil {
-			l.rejectCount++
-			l.lastRejectErr = err.Error()
-			l.logger.Debug("inbound ledger: tx node rejected",
-				"node_id", fmt.Sprintf("%x", node.NodeID),
-				"node_data_len", len(node.NodeData),
-				"error", err.Error())
-			continue
-		}
-		if fresh {
-			added++
-		}
-	}
+	added := l.applyKnownNodes(l.txMap, nodes, "tx")
 
 	if added > 0 {
 		l.markProgressLocked()
@@ -604,6 +548,50 @@ func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
 	l.recomputeComplete()
 
 	return nil
+}
+
+// applyKnownNodes places peer-supplied tree nodes by NodeID, returning the
+// number freshly attached. A node whose ancestor is still a hash-only stub
+// (NodeReRequest) is dropped without counting as a reject — the next
+// getMissingNodes walk re-requests the correct frontier and it returns on a
+// later reply. The first genuinely invalid node stops harvesting the rest of
+// the reply. Caller holds l.mu.
+func (l *Ledger) applyKnownNodes(m *shamap.SHAMap, nodes []message.LedgerNode, label string) int {
+	added := 0
+	for _, node := range nodes {
+		if len(node.NodeData) == 0 {
+			continue
+		}
+		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		if err != nil {
+			l.logger.Debug("inbound ledger: malformed "+label+" node ID",
+				"node_id_len", len(node.NodeID),
+				"error", err.Error())
+			continue
+		}
+		if parsedID.IsRoot() {
+			continue
+		}
+		res, err := m.AddKnownNodeByID(parsedID, node.NodeData)
+		switch res {
+		case shamap.NodeUseful:
+			added++
+		case shamap.NodeDuplicate, shamap.NodeReRequest:
+			// Already present, or ahead of its frontier: neither progress nor
+			// a reject. Re-requested by the next missing-node walk.
+		default: // NodeInvalid, or any unrecognized result — reject conservatively.
+			l.rejectCount++
+			if err != nil {
+				l.lastRejectErr = err.Error()
+			}
+			l.logger.Debug("inbound ledger: "+label+" node rejected",
+				"node_id", fmt.Sprintf("%x", node.NodeID),
+				"node_data_len", len(node.NodeData),
+				"error", err)
+			return added
+		}
+	}
+	return added
 }
 
 // recomputeComplete promotes the acquisition to StateComplete once both the
@@ -830,7 +818,7 @@ func fillFromLocal(m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) b
 			if !ok {
 				continue
 			}
-			if fresh, err := m.AddKnownNodeFromPrefix(missing[i].NodeID, data); err == nil && fresh {
+			if res, _ := m.AddKnownNodeFromPrefix(missing[i].NodeID, data); res == shamap.NodeUseful {
 				passAdded++
 			}
 		}
