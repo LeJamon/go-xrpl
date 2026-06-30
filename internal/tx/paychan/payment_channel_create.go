@@ -134,20 +134,23 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	amount := uint64(p.Amount.Drops())
 
-	// Reserve and funding checks run before the destination checks, matching
-	// rippled's preclaim order.
-	// Reference: rippled PayChan.cpp preclaim() lines 204-214
+	// rippled runs these reserve/funding checks in preclaim against the pre-fee
+	// ReadView; goXRPL folds them into Apply, where ctx.View has the fee already
+	// deducted, so evaluate against the pre-fee PriorBalance. Otherwise a fee
+	// straddling reserve(OwnerCount+1)+amount flips the TER (the #1147 class).
+	// Reference: rippled PayChan.cpp preclaim() lines 209-213
+	priorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
+	if priorBalance < reserve {
 		ctx.Log.Warn("payment channel create: insufficient reserve",
-			"balance", ctx.Account.Balance,
+			"balance", priorBalance,
 			"reserve", reserve,
 		)
 		return ter.TecINSUFFICIENT_RESERVE
 	}
-	if ctx.Account.Balance-reserve < amount {
+	if priorBalance-reserve < amount {
 		ctx.Log.Warn("payment channel create: unfunded",
-			"balance", ctx.Account.Balance,
+			"balance", priorBalance,
 			"needed", reserve+amount,
 		)
 		return ter.TecUNFUNDED
