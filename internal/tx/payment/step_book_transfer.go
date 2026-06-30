@@ -94,7 +94,7 @@ func (s *BookStep) transferFundsWithFee(sb *PaymentSandbox, from, to [20]byte, g
 // When from or to is the XRP pseudo-account (zero), that side is skipped.
 // The XRPEndpointStep handles the actual source/destination account balance changes.
 // Reference: rippled View.cpp accountSend() lines 1904-1939
-func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int64, txHash [32]byte, ledgerSeq uint32) error {
+func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int64, _ [32]byte, _ uint32) error {
 	var xrpAccount [20]byte
 	amount := tx.NewXRPAmount(drops)
 
@@ -127,8 +127,10 @@ func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int6
 		sb.CreditHook(from, xrpAccount, amount, preCreditBalance)
 
 		fromAccount.Balance -= uint64(drops)
-		fromAccount.PreviousTxnID = txHash
-		fromAccount.PreviousTxnLgrSeq = ledgerSeq
+		// Do NOT stamp PreviousTxnID/PreviousTxnLgrSeq here — the ApplyStateTable
+		// threads them after its no-op (Original == Current) check, which a net-zero
+		// autobridge pass-through would defeat (ghost ModifiedNode). Mirrors the
+		// IOU sibling paths.
 
 		fromAccountData, err := state.SerializeAccountRoot(fromAccount)
 		if err != nil {
@@ -160,8 +162,7 @@ func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int6
 		sb.CreditHook(xrpAccount, to, amount, receiverPreBalance)
 
 		toAccount.Balance += uint64(drops)
-		toAccount.PreviousTxnID = txHash
-		toAccount.PreviousTxnLgrSeq = ledgerSeq
+		// No PreviousTxnID stamp — see the sender branch above.
 
 		toAccountData, err := state.SerializeAccountRoot(toAccount)
 		if err != nil {
