@@ -230,6 +230,19 @@ type Common struct {
 	// under the strand without re-hashing.
 	cachedTxID [32]byte
 	txIDCached bool
+
+	// preflightedRules records the amendment rules under which this
+	// transaction's structural preflight last succeeded. Structural preflight
+	// (everything except the view-dependent signature check) is a pure function
+	// of the transaction fields and the active rules, so when the engine
+	// re-preflights the same parsed transaction under the identical rules — as
+	// the open-ledger apply strand does, preflighting once in TxQ.Apply and
+	// again in Engine.Apply under modifyMu — the second run skips the repeat.
+	// The rules pointer keys the verdict: a later ledger rebuilds rules, so a
+	// pointer mismatch forces a recompute and the verdict never outlives an
+	// amendment change. Same single-goroutine, unsynchronised contract as
+	// cachedTxID.
+	preflightedRules *amendment.Rules
 }
 
 // Validate validates the common fields. preflightCommonFields catches these
@@ -295,6 +308,19 @@ func (c *Common) MarkSignatureVerified() {
 // verified off-strand (see MarkSignatureVerified).
 func (c *Common) SignatureVerified() bool {
 	return c.sigVerified
+}
+
+// PreflightVerified reports whether this transaction's structural preflight
+// already succeeded under the given rules (see preflightedRules). A nil rules
+// never matches, so the cache is a no-op on paths that do not supply rules.
+func (c *Common) PreflightVerified(rules *amendment.Rules) bool {
+	return c.preflightedRules != nil && c.preflightedRules == rules
+}
+
+// MarkPreflightVerified records that the structural preflight succeeded under
+// the given rules so a later in-strand preflight can skip the repeat.
+func (c *Common) MarkPreflightVerified(rules *amendment.Rules) {
+	c.preflightedRules = rules
 }
 
 // SetSequence sets the sequence number

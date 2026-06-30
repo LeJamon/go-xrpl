@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -167,10 +168,15 @@ type Router struct {
 // txQueueDepth is sized generously on purpose, and a frame shed here is
 // recoverable (the originating peer resends and reduce-relay re-delivers it via
 // other peers), so over-buffering costs little.
-const (
-	txWorkerCount = 4
-	txQueueDepth  = 1024
-)
+//
+// Each worker's job — decode, parse, and the ECDSA/EdDSA signature prewarm in
+// SubmitPendingTx — is CPU-bound and runs concurrently with the serialized
+// apply strand, so the pool scales with the available cores (floored at the
+// historical 4) to keep that strand fed; a single fixed worker count throttled
+// the prewarm throughput well below the apply rate on multi-core validators.
+var txWorkerCount = max(4, runtime.GOMAXPROCS(0))
+
+const txQueueDepth = 1024
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. 30s comfortably covers a
