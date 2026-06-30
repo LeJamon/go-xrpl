@@ -25,17 +25,17 @@ var (
 type AddNodeResult int
 
 const (
-	// NodeInvalid: the node is provably wrong for this map — a hash mismatch,
-	// an inner node where only a leaf may live, or a path through a branch
-	// this map does not reference (a node from another tree). The caller
+	// NodeInvalid marks a node that is provably wrong for this map — a hash
+	// mismatch, an inner node where only a leaf may live, or a path through a
+	// branch this map does not reference (a node from another tree). The caller
 	// should stop harvesting the rest of the reply.
 	NodeInvalid AddNodeResult = iota
-	// NodeUseful: a fresh node was attached at its slot.
+	// NodeUseful means a fresh node was attached at its slot.
 	NodeUseful
-	// NodeDuplicate: the slot was already populated, or the path consolidated
-	// into a mid-path leaf — nothing to do.
+	// NodeDuplicate means the slot was already populated, or the path
+	// consolidated into a mid-path leaf — nothing to do.
 	NodeDuplicate
-	// NodeReRequest: the node is well-formed but an ancestor on its path is
+	// NodeReRequest marks a well-formed node whose ancestor on the path is
 	// still a hash-only stub, so it cannot be hooked yet. Not an error: the
 	// next getMissingNodes walk re-requests the correct frontier and the node
 	// returns on a later reply.
