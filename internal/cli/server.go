@@ -417,12 +417,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
 
-		// Back inbound ledger acquisitions with the persistent node store so a
-		// forked or catching-up node satisfies the shared majority of a
-		// state/tx tree from local storage and only fetches the genuinely-
-		// missing nodes from peers (issue #1158). Wired before Start launches
-		// the router loop, so the family is published before any acquisition
-		// can read it.
+		// Back inbound acquisitions with the node store before Start launches the
+		// router loop, so the family is published before any acquisition reads it
+		// (issue #1158).
 		if db != nil {
 			if router := consensusComponents.Router; router != nil {
 				router.SetAcquisitionFamily(shamap.NewNodeStoreFamily(db))

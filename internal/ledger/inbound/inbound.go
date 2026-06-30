@@ -199,9 +199,7 @@ func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, o
 }
 
 // newSyncMap builds an acquisition SHAMap, backed by the node-store family when
-// one is wired so a forked or catching-up node satisfies the shared majority of
-// the tree from its local store instead of re-fetching it from peers. Without a
-// family the map is unbacked and every node must come over the wire.
+// one is wired (see WithFamily) and unbacked otherwise.
 func (l *Ledger) newSyncMap(t shamap.Type) (*shamap.SHAMap, error) {
 	if l.family != nil {
 		return shamap.NewBacked(t, l.family)
