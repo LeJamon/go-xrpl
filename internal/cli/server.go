@@ -417,6 +417,15 @@ func runServer(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
 
+		// Back inbound acquisitions with the node store before Start launches the
+		// router loop, so the family is published before any acquisition reads it
+		// (issue #1158).
+		if db != nil {
+			if router := consensusComponents.Router; router != nil {
+				router.SetAcquisitionFamily(shamap.NewNodeStoreFamily(db))
+			}
+		}
+
 		if err := consensusComponents.Start(); err != nil {
 			return fmt.Errorf("start consensus components: %w", err)
 		}

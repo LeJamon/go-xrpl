@@ -130,6 +130,11 @@ type Ledger struct {
 	mu        sync.Mutex
 	logger    *slog.Logger
 
+	// family backs the acquisition SHAMaps with the persistent node store when
+	// set, so getMissingNodes only reports nodes not already held locally. nil
+	// leaves the maps unbacked. Set once at construction, never mutated after.
+	family shamap.Family
+
 	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
 	// is when OnTimer last evaluated; progress records a fresh node attach
 	// since then; timeouts counts no-progress intervals toward the failure
@@ -152,10 +157,26 @@ type Ledger struct {
 	fetchPackRequested bool
 }
 
+// Option configures an acquisition at construction.
+type Option func(*Ledger)
+
+// WithFamily backs the acquisition's state and transaction SHAMaps with the
+// node-store family, so nodes already present locally (the shared majority of
+// the tree after a fork or during forward catch-up) are satisfied from the
+// store and only the genuinely-missing ones are fetched from peers. A nil
+// family is ignored, leaving the maps unbacked.
+func WithFamily(family shamap.Family) Option {
+	return func(l *Ledger) {
+		if family != nil {
+			l.family = family
+		}
+	}
+}
+
 // New creates a new InboundLedger acquisition for the given ledger hash.
 // The acquisition reason defaults to ReasonConsensus.
-func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger {
-	return &Ledger{
+func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
+	l := &Ledger{
 		hash:      hash,
 		seq:       seq,
 		peers:     []uint64{peerID},
@@ -163,14 +184,27 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger 
 		lastTimer: SystemClock.Now(),
 		logger:    logger,
 	}
+	for _, opt := range opts {
+		opt(l)
+	}
+	return l
 }
 
 // NewGeneric creates an RPC-driven (ReasonGeneric) acquisition: on completion
 // the ledger is persisted for querying but not adopted into the active chain.
-func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger {
-	l := New(hash, seq, peerID, logger)
+func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
+	l := New(hash, seq, peerID, logger, opts...)
 	l.reason = ReasonGeneric
 	return l
+}
+
+// newSyncMap builds an acquisition SHAMap, backed by the node-store family when
+// one is wired (see WithFamily) and unbacked otherwise.
+func (l *Ledger) newSyncMap(t shamap.Type) (*shamap.SHAMap, error) {
+	if l.family != nil {
+		return shamap.NewBacked(t, l.family)
+	}
+	return shamap.New(t), nil
 }
 
 // Reason returns why this acquisition was started.
@@ -409,7 +443,12 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	)
 
 	// Create state SHAMap and add the root node
-	sm := shamap.New(shamap.TypeState)
+	sm, err := l.newSyncMap(shamap.TypeState)
+	if err != nil {
+		l.state = StateFailed
+		l.err = fmt.Errorf("create state map: %w", err)
+		return l.err
+	}
 
 	if err := sm.AddRootNode(h.AccountHash, nodes[1].NodeData); err != nil {
 		l.state = StateFailed
@@ -426,7 +465,12 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	if h.TxHash == ([32]byte{}) {
 		l.haveTx = true
 	} else {
-		tm := shamap.New(shamap.TypeTransaction)
+		tm, terr := l.newSyncMap(shamap.TypeTransaction)
+		if terr != nil {
+			l.state = StateFailed
+			l.err = fmt.Errorf("create tx map: %w", terr)
+			return l.err
+		}
 		if len(nodes) >= 3 && len(nodes[2].NodeData) > 0 {
 			if err := tm.AddRootNode(h.TxHash, nodes[2].NodeData); err != nil {
 				l.state = StateFailed
