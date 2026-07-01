@@ -251,14 +251,15 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		r.txSetAcquireMu.Unlock()
 	}
 
-	// A hash-bound map with no root is not valid and must never complete
-	// (mirrors mHaveRoot + isValid). Until the root arrives, only request it —
-	// do NOT descend non-root nodes, FinishSync, complete, or delete. The fetch
-	// goes to the replying peer (unicast); the timer broadcasts as fallback.
+	// A hash-bound map with no root is not valid and must never complete.
+	// Until the root arrives, only request it — do NOT descend non-root nodes,
+	// FinishSync, complete, or delete. This reply did not deliver the root, so
+	// it made no progress: re-request the root from the replying peer (RTT-
+	// paced), but do NOT refresh lastRequest — that leaves the stall timer free
+	// to escalate the root fetch to a broadcast and, past MaxStallTicks, give up.
 	if !haveRoot {
 		r.txSetAcquireMu.Lock()
 		indirect := state.timedOut
-		state.lastRequest = time.Now()
 		r.txSetAcquireMu.Unlock()
 		if err := r.requestTxSetRoot(txSetID, originPeer, indirect); err != nil {
 			r.logger.Info("tx-set sync: root request failed",
@@ -287,6 +288,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	// progress: a duplicate re-send of fat nodes must not keep the pipeline
 	// firing.
 	added := 0
+	duplicates := 0
 	replyValid := true
 	for _, node := range ld.Nodes {
 		if isShamapRootNodeID(node.NodeID) {
@@ -322,7 +324,10 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			break
 		}
 		if res == shamap.NodeDuplicate {
-			// Slot already populated: nothing added, so not progress.
+			// Slot already populated: nothing added, so not fresh progress —
+			// but the node was valid. Track it so an all-duplicate reply isn't
+			// charged against the peer's non-progress counter below.
+			duplicates++
 			continue
 		}
 		added++
@@ -385,10 +390,14 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			// half-updated struct into the hot path.
 			knobs := r.txSetRetryKnobs
 			if !madeProgress {
-				// No progress: do NOT re-request inline — that would let a
-				// junk/empty-reply peer amplify into a broadcast storm. Just
-				// charge the peer and let the 250ms stall timer drive it.
-				if originPeer != 0 {
+				// No fresh attach: do NOT re-request inline — that would let a
+				// junk/empty-reply peer amplify into a broadcast storm; let the
+				// 250ms stall timer drive it. Charge the peer's non-progress
+				// counter EXCEPT on a valid all-duplicate reply, where the peer
+				// is cooperating but resending nodes we already hold — penalising
+				// it would wrongly exclude a useful peer.
+				validAllDuplicate := replyValid && duplicates > 0 && added == 0 && !rootAccepted
+				if originPeer != 0 && !validAllDuplicate {
 					state.peerNonProgress[originPeer]++
 				}
 				r.txSetAcquireMu.Unlock()
@@ -545,19 +554,25 @@ func (r *Router) fillTxSetFromLocalPool(txMap *shamap.SHAMap, missing []shamap.M
 	return filled
 }
 
-// MarkTxSetStillNeeded is the active re-arm hook fired every time
-// consensus re-asks for a tx-set via Adaptor.RequestTxSet. If an
-// in-flight acquisition for this set still exists, its terminal/stall state is
-// cleared: a done or dormant acquire wakes, the consecutive-no-progress counter
-// resets, and the request-spacing latch is dropped so the next timer tick or
-// data reply resumes from the retained partial map instead of waiting out the
-// TTL. haveRoot is preserved — a revived acquire keeps any root it already had.
-// A no-op if the router has no entry for txSetID.
+// MarkTxSetStillNeeded is the active re-arm hook fired every time consensus
+// re-asks for a tx-set via Adaptor.RequestTxSet. A DORMANT (retry-exhausted but
+// still viable) acquire wakes: the consecutive-no-progress counter resets and
+// the request-spacing latch is dropped so the next timer tick or data reply
+// resumes from the retained partial map instead of waiting out the TTL.
+// haveRoot is preserved — a revived acquire keeps any root it already had. A
+// terminal non-dormant acquire (a set already completed and fed to the engine,
+// or a stuck/inconsistent map) is left latched: reviving the former is a
+// redundant re-feed the engine dedups, and the latter would only re-stick. Only
+// a dormant acquire is revived, mirroring rippled's stillNeed clearing failed_
+// but never complete_. A no-op if the router has no entry for txSetID.
 func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	defer r.txSetAcquireMu.Unlock()
 	state, ok := r.txSetAcquire[txSetID]
 	if !ok {
+		return
+	}
+	if state.done && !state.dormant {
 		return
 	}
 	state.done = false

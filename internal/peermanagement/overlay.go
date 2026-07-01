@@ -1290,15 +1290,16 @@ func (o *Overlay) DroppedTransactions() uint64 {
 
 // forwardLedgerData hands an acquisition reply to the dedicated ledgerData
 // lane. The lane is generously sized, so this sheds only under extreme
-// outstanding-request volume; a shed frame bumps droppedLedgerData (visible)
+// outstanding-request volume; a shed frame warns and bumps droppedLedgerData,
 // and the acquisition's own retry timer re-requests the missing nodes, so it
-// is recoverable.
+// is recoverable. Losing a reply this node explicitly requested is notable
+// (it can stall catch-up), so this warns rather than logs at debug.
 func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
 	select {
 	case o.ledgerData <- msg:
 	default:
 		o.droppedLedgerData.Add(1)
-		slog.Debug("Ledger-data lane full", "t", "Overlay",
+		slog.Warn("Ledger-data lane full", "t", "Overlay",
 			"pending", len(o.ledgerData), "max", cap(o.ledgerData), "peer", msg.PeerID)
 	}
 }
