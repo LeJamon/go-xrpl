@@ -1437,14 +1437,25 @@ func (e *Engine) checkLedger() {
 	}
 }
 
-// getNetworkLedger returns the prevLedger a majority of trusted proposers
-// agree on (else ours). Simplified substitute for getPrevLedger +
-// LedgerTrie.
+// getNetworkLedger returns the network-preferred prevLedger. Trusted
+// validations decide first, like rippled's getPrevLedger — which is PURE
+// vals.getPreferred (RCLConsensus.cpp:301-303) — because only validations
+// break a proposal-count tie between two self-agreeing islands: two goxrpl
+// validators proposing to each other tally 3v3 against three rippled
+// proposals (own vote included, peer LCLs deduped) and never switch back,
+// while the validation trie sees 3 trusted validations against 2 and does.
+// The proposal+peer-LCL majority remains as the fallback for
+// validation-less phases (boot, before any trusted validation lands).
 func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	if e.prevLedger == nil {
 		return consensus.LedgerID{}
 	}
 	ourID := e.prevLedger.ID()
+
+	if id, ok := e.validationPreferredLocked(); ok {
+		return id
+	}
+
 	freshness := e.timing.ProposeFreshness
 	now := e.adaptor.Now()
 
@@ -1521,6 +1532,73 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 		return bestID
 	}
 	return ourID
+}
+
+// validationPreferredLocked derives the network-preferred prevLedger from
+// trusted validations, mirroring rippled getPreferred(curr, minValidSeq)
+// (Validations.h:849-917): the ancestry-trie tip seeded at our own issued
+// floor, else the most-supported trusted tip, then the stay/switch rules —
+// our own immediate child is not a switch, a tip ahead of us wins, a tip at
+// or below our seq wins only on a different chain — gated so the result
+// never rewinds behind the validated index. ok=false when no trusted
+// validation signal exists at all. Caller holds e.mu.
+func (e *Engine) validationPreferredLocked() (consensus.LedgerID, bool) {
+	if e.validationTracker == nil {
+		return consensus.LedgerID{}, false
+	}
+	minSeq := e.validatedSeqLocked()
+	id, seq, ok := e.validationTracker.GetPreferred(e.ourLastValidatedSeq)
+	if !ok {
+		id, seq, ok = e.validationTracker.PreferredFromValidations(minSeq)
+	}
+	if !ok {
+		return consensus.LedgerID{}, false
+	}
+
+	ourID := e.prevLedger.ID()
+	ourSeq := e.prevLedger.Seq()
+	if id == ourID {
+		return ourID, true
+	}
+	if seq == ourSeq+1 {
+		if l, err := e.adaptor.GetLedger(id); err == nil && l != nil && l.ParentID() == ourID {
+			return ourID, true
+		}
+	}
+	if seq < minSeq {
+		return ourID, true
+	}
+	if seq > ourSeq {
+		return id, true
+	}
+	if e.ancestorAtLocked(seq) != id {
+		return id, true
+	}
+	return ourID, true
+}
+
+// ancestorAtLocked resolves our chain's ledger ID at targetSeq by walking
+// locally-held parents from prevLedger; the zero ID when unresolvable —
+// treated as a different chain, like rippled's out-of-skip-list ID{0}
+// (RCLValidations.cpp:78-95). Caller holds e.mu.
+func (e *Engine) ancestorAtLocked(targetSeq uint32) consensus.LedgerID {
+	const maxWalk = 256 // rippled's skip-list reach
+	seq := e.prevLedger.Seq()
+	if targetSeq > seq || seq-targetSeq > maxWalk {
+		return consensus.LedgerID{}
+	}
+	if targetSeq == seq {
+		return e.prevLedger.ID()
+	}
+	cur := e.prevLedger.ParentID()
+	for s := seq - 1; s > targetSeq; s-- {
+		l, err := e.adaptor.GetLedger(cur)
+		if err != nil || l == nil {
+			return consensus.LedgerID{}
+		}
+		cur = l.ParentID()
+	}
+	return cur
 }
 
 // resolveTargetLedger returns the locally-held ledger for id (by-hash
