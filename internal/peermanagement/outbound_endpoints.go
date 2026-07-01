@@ -113,6 +113,15 @@ func (o *Overlay) sendEndpoints() {
 func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 	var out []message.Endpointv2
 	o.discovery.ForEachDiscovered(func(address string, hops uint32) {
+		// Only literal IP:port entries are gossipable: every implementation
+		// parses TMEndpoints with an IP-endpoint parser (rippled
+		// PeerImp.cpp:1213 from_string), so a config-bootstrap HOSTNAME
+		// entry is charged as "malformed endpoints" by every recipient,
+		// eroding our resource balance on each gossip round. Hostnames stay
+		// in Discovery for our own dialing; they just don't go on the wire.
+		if !gossipableEndpoint(address) {
+			return
+		}
 		if hops == 0 {
 			// Our discovered entry has no explicit hop count — assume
 			// a single hop. The wire format treats hops==0 as a
@@ -128,6 +137,16 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 		})
 	})
 	return out
+}
+
+// gossipableEndpoint reports whether address is a literal IP:port pair —
+// the only shape the TMEndpoints wire format admits.
+func gossipableEndpoint(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return false
+	}
+	return net.ParseIP(host) != nil
 }
 
 // localEndpointForGossip returns the (host, port) string we should

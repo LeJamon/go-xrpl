@@ -51,5 +51,22 @@ instrumentation, keep the fatal-path goroutine dump relabeled (my call).
 - [ ] Split into reviewable commits; push to origin/fix/issue-1161-selfheal-finalize
 - [ ] Soak: xrpl-confluence 3r2g, 15k governor, ≥10 min lockstep
 
+## G. Soak-driven round 2 (post-review, all pushed)
+- [x] Island fix v1 (fcade701): validations-first getNetworkLedger
+- [x] Island fix v2 (507f9e67): trie-inconclusive on unplaced majority;
+      direct acquire of behind-closed trusted tips; OnLedger different-chain
+      rewind; + all 4 review findings (monotonic validated, hook gating,
+      unconditional prune, verify-before-wipe, backfill floor)
+- [x] Prewarm acquired tx-set signatures (2dd0b6a8)
+- [x] Soak iter3: self-heal proven end-to-end (island detected → chased →
+      rejoined → full validations → validated 64→92)
+- [ ] Soak iter4 (prewarm): verify stall cadence improves
+
 ## Review
-(fill after implementation)
+Verification per commit: full tests, race (rcl/adaptor/service/inbound/shamap/
+watchdog/sigcache), primary lint 0, in-scope conformance 1260/1260.
+Adversarial diff review (3 lenses + refuters): 1 confirmed bug (validated
+rewind) fixed; 2 refuted-but-real hardenings applied; iter27-trap concern
+resolved by validations-first precedence.
+Remaining known gap: 15k sustained smoothness is paced by build latency on
+single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
