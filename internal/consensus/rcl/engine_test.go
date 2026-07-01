@@ -159,6 +159,12 @@ type mockAdaptor struct {
 	// set) can be asserted directly. nil falls through to GetPendingTxs.
 	proposableOverride [][]byte
 	proposableCalled   int
+
+	// buildLedgerHook, when set, runs at the start of BuildLedger (before the
+	// new ledger is minted). Tests use it to block the off-lock apply and
+	// observe engine behaviour while it runs. Read under a.mu, then called
+	// without the lock so it can't deadlock adaptor calls made concurrently.
+	buildLedgerHook func()
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -265,6 +271,12 @@ func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 }
 
 func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool) (consensus.Ledger, error) {
+	a.mu.RLock()
+	hook := a.buildLedgerHook
+	a.mu.RUnlock()
+	if hook != nil {
+		hook()
+	}
 	newLedger := &mockLedger{
 		id:        consensus.LedgerID{byte(parent.Seq() + 1)},
 		seq:       parent.Seq() + 1,

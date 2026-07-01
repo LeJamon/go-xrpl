@@ -40,6 +40,12 @@ type Engine struct {
 	state           *consensus.RoundState
 	prevLedger      consensus.Ledger
 
+	// buildInProgress is set while acceptLedger applies the LCL off e.mu
+	// (mirrors rippled's jtACCEPT job window). While set, the consensus
+	// goroutine's round-driving (timerEntry, OnLedger) parks so no second
+	// goroutine starts a round before the commit tail runs. Mutated under e.mu.
+	buildInProgress bool
+
 	ourTxSet  consensus.TxSet
 	converged bool
 
@@ -922,6 +928,12 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// Don't move prevLedger / start a round while an off-lock LCL build is in
+	// flight; the commit tail owns round state until it completes.
+	if e.buildInProgress {
+		return nil
+	}
+
 	// If we were on wrong ledger, check if this helps
 	if e.mode == consensus.ModeWrongLedger {
 		l, err := e.adaptor.GetLedger(id)
@@ -1293,6 +1305,13 @@ func (e *Engine) timerEntry() {
 	// observer-mode advancement a genesis bootstrap deadlocks at
 	// OpModeConnected — no round closes, so auto-promote never fires.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeDisconnected {
+		return
+	}
+
+	// A peer-triggered accept may be applying the LCL off e.mu on another
+	// goroutine; don't drive rounds until its commit tail runs (rippled parks
+	// the timer thread while the jtACCEPT job holds no lock).
+	if e.buildInProgress {
 		return
 	}
 
@@ -2753,13 +2772,42 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		}
 	}
 
-	newLedger, err := e.adaptor.BuildLedger(e.prevLedger, txSet, closeTime, e.closeTime.haveConsensus)
+	// prevRoundTime must exclude LCL build time (rippled ConsensusParms.h:
+	// "Does not include the time to build the LCL"); capture the establish
+	// duration before the off-lock apply so the converge-percent divisor and
+	// the abandon clamp track convergence, not the apply.
+	roundTime := e.now().Sub(e.roundStartTime)
+
+	// Apply the LCL off e.mu, mirroring rippled onAccept→addJob(jtACCEPT)
+	// ("no lock is held during this job"). Snapshot every build input and
+	// freeze the round (PhaseAccepted + buildInProgress) under the lock first:
+	// concurrent OnProposal/OnValidation/OnTxSet during the unlocked apply then
+	// buffer for the NEXT round instead of mutating this one, and the consensus
+	// goroutine parks its round-driving until the commit tail runs.
+	prevLedger := e.prevLedger
+	closeTimeCorrect := e.closeTime.haveConsensus
+	e.buildInProgress = true
+	e.setPhase(consensus.PhaseAccepted)
+
+	e.mu.Unlock()
+	newLedger, err := e.adaptor.BuildLedger(prevLedger, txSet, closeTime, closeTimeCorrect)
+	if err == nil {
+		if err = e.adaptor.ValidateLedger(newLedger); err == nil {
+			err = e.adaptor.StoreLedger(newLedger)
+		}
+	}
+	e.mu.Lock()
+	e.buildInProgress = false
+
 	if err != nil {
+		// Build/validate/store failed off-lock; unwind to Establish so the next
+		// heartbeat retries (matches the pre-offload early-return).
+		e.setPhase(consensus.PhaseEstablish)
 		return
 	}
 
-	parentID := e.prevLedger.ID()
-	parentClose := e.prevLedger.CloseTime()
+	parentID := prevLedger.ID()
+	parentClose := prevLedger.CloseTime()
 	newID := newLedger.ID()
 	txSetID := txSet.ID()
 	slog.Info("ledger built",
@@ -2767,25 +2815,17 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"event", "ledger-built",
 		"seq", newLedger.Seq(),
 		"hash", fmt.Sprintf("%x", newID[:8]),
-		"parent_seq", e.prevLedger.Seq(),
+		"parent_seq", prevLedger.Seq(),
 		"parent_hash", fmt.Sprintf("%x", parentID[:8]),
 		"parent_ct_xrpl", parentClose.Unix()-protocol.RippleEpochUnix,
 		"close_time_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
-		"close_time_correct", e.closeTime.haveConsensus,
+		"close_time_correct", closeTimeCorrect,
 		"resolution_s", int(resolution.Seconds()),
 		"tx_set", fmt.Sprintf("%x", txSetID[:8]),
 		"tx_count", txSet.Size(),
 		"result", result.String(),
 		"mode", e.mode.String(),
 	)
-
-	if err := e.adaptor.ValidateLedger(newLedger); err != nil {
-		return
-	}
-
-	if err := e.adaptor.StoreLedger(newLedger); err != nil {
-		return
-	}
 
 	e.eventBus.Publish(&consensus.ConsensusReachedEvent{
 		Round:     e.state.Round,
@@ -2845,10 +2885,6 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 
 	validations := e.proposalTracker.ValidationsFor(newLedger.ID())
 
-	// Capture roundTime before notifying the adaptor — e.prevRoundTime is
-	// still last round's value until updated below.
-	roundTime := e.now().Sub(e.roundStartTime)
-
 	e.adaptor.OnConsensusReached(newLedger, validations, roundTime)
 
 	e.eventBus.Publish(&consensus.LedgerAcceptedEvent{
@@ -2894,7 +2930,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	e.proposalTracker.ResetValidations()
 	e.consensusCount++
 
-	e.setPhase(consensus.PhaseAccepted)
+	// Phase is already PhaseAccepted (set before the off-lock apply).
 
 	// Auto-advance only in Full mode; otherwise the router re-adopts until
 	// caught up and checkAndStartRound takes over.
