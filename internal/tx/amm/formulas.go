@@ -541,13 +541,8 @@ func verifyAndAdjustLPTokenBalance(view tx.LedgerView, ammKey keylet.Keylet, lpT
 		tolerance := state.NewIssuedAmountFromValue(1, -3, "", "")
 		if withinRelativeDistance(lpTokens, amm.LPTokenBalance, tolerance) {
 			amm.LPTokenBalance = lpTokens
-			// Persist the reconciled balance to the AMM SLE, matching rippled's
-			// sb.update(ammSle). Without this write the adjustment is only in
-			// memory: when the last LP withdraws all and the AMM is deleted, the
-			// DeletedNode records the pre-adjustment LPTokenBalance, forking the
-			// ledger by 1 ULP. The partial-withdraw path re-writes the SLE later so
-			// this is only observable on deletion.
-			// Reference: rippled AMMUtils.cpp verifyAndAdjustLPTokenBalance.
+			// Persist so a deletion's DeletedNode records the reconciled
+			// LPTokenBalance, not the stale one (1 ULP ledger fork otherwise).
 			ammBytes, err := serializeAMMData(amm)
 			if err != nil {
 				return ter.TefINTERNAL
