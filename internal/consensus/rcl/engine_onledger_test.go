@@ -9,13 +9,14 @@ import (
 
 // chainLedger builds a mockLedger at seq with id first-byte idb and parent
 // id first-byte pb, so a chain can be wired by matching child.parentID to
-// parent.id.
+// parent.id. A current close time keeps the fixture inside the switch-site
+// canBeCurrent plausibility window.
 func chainLedger(seq uint32, idb, pb byte) *mockLedger {
 	return &mockLedger{
 		id:        consensus.LedgerID{idb},
 		seq:       seq,
 		parentID:  consensus.LedgerID{pb},
-		closeTime: time.Unix(0, 0),
+		closeTime: time.Now(),
 	}
 }
 

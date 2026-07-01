@@ -509,18 +509,20 @@ func TestGetParentLedgerForReplay_RejectsOpenLedger(t *testing.T) {
 	}
 }
 
-// stubLedger is a minimal consensus.Ledger whose CloseTime and ID
-// are fully controllable by tests. CloseTime drives the FULL-promote
-// recency window; ID lets us exercise the peer-LCL-disagrees gate.
+// stubLedger is a minimal consensus.Ledger whose CloseTime, ID, and parent
+// link are fully controllable by tests. CloseTime drives the FULL-promote
+// recency window; ID lets us exercise the peer-LCL-disagrees gate; parentID
+// backs the preferredLCL ancestor resolution.
 type stubLedger struct {
 	id        consensus.LedgerID
 	seq       uint32
+	parentID  consensus.LedgerID
 	closeTime time.Time
 }
 
 func (s stubLedger) ID() consensus.LedgerID       { return s.id }
 func (s stubLedger) Seq() uint32                  { return s.seq }
-func (s stubLedger) ParentID() consensus.LedgerID { return consensus.LedgerID{} }
+func (s stubLedger) ParentID() consensus.LedgerID { return s.parentID }
 func (s stubLedger) CloseTime() time.Time         { return s.closeTime }
 func (s stubLedger) TxSetID() consensus.TxSetID   { return consensus.TxSetID{} }
 func (s stubLedger) Bytes() []byte                { return nil }
@@ -674,9 +676,9 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 	// trusted_ancestor_sticks_with_current mirrors rippled's
 	// "Parent of preferred → stick with ledger" (Validations_test.cpp:840-845
 	// / Validations.h:881-898): when the trie's preferred tip is behind our
-	// just-closed ledger (a same-chain ancestor — typical right after close,
-	// before trusted validations for our seq land), getPreferredLCL returns
-	// our own LCL, so promotion must proceed rather than defer.
+	// just-closed ledger AND on our own chain (our parent — typical right
+	// after close, before trusted validations for our seq land),
+	// getPreferredLCL returns our own LCL, so promotion must proceed.
 	t.Run("trusted_ancestor_sticks_with_current", func(t *testing.T) {
 		a := newTestAdaptor(t)
 		a.SetOperatingMode(consensus.OpModeConnected)
@@ -689,9 +691,29 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 			preferredSeq: 2,
 			preferredOK:  true,
 		})
-		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
+		l := stubLedger{id: ourLCL, seq: 3, parentID: parentLCL, closeTime: a.Now()}
 		a.OnConsensusReached(l, nil, 0)
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
-			"a preferred LCL behind our just-closed ledger is not a switch — promotion must proceed")
+			"a preferred LCL that is our own parent is not a switch — promotion must proceed")
+	})
+
+	// trusted_lower_seq_fork_defers is the rippled counterpart
+	// (Validations.h:892-895): a preferred tip at a LOWER seq on a chain we
+	// cannot place in our ancestry IS a switch — the old seq>=ourSeq gate
+	// wrongly promoted onto a minority fork here.
+	t.Run("trusted_lower_seq_fork_defers", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		ourLCL := consensus.LedgerID{0xAA}
+		forkLCL := consensus.LedgerID{0xBB}
+		a.SetValidationHistorian(&stubHistorian{
+			preferredID:  forkLCL,
+			preferredSeq: 2,
+			preferredOK:  true,
+		})
+		l := stubLedger{id: ourLCL, seq: 3, parentID: consensus.LedgerID{0x99}, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil, 0)
+		assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode(),
+			"a lower-seq preferred tip on a different chain is a switch — promotion must defer")
 	})
 }

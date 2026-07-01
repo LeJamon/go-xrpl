@@ -96,6 +96,9 @@ type mockAdaptor struct {
 	txSets  map[consensus.TxSetID]consensus.TxSet
 	lastLCL consensus.Ledger
 
+	// Peer-reported LCLs served by PeerReportedLedgers.
+	peerLCLs []consensus.LedgerID
+
 	// Pending transactions
 	pendingTxs [][]byte
 
@@ -441,7 +444,9 @@ func (a *mockAdaptor) GetNegativeUNL() []consensus.NodeID {
 }
 
 func (a *mockAdaptor) PeerReportedLedgers() []consensus.LedgerID {
-	return nil
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.peerLCLs
 }
 
 func (a *mockAdaptor) IsFeatureEnabled(name string) bool {

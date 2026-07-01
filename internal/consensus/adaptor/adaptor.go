@@ -243,11 +243,10 @@ type Adaptor struct {
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
-	// validationsEmitted counts validations this node has broadcast. Throwaway
-	// issue-keepup instrumentation: a soak confirms validations resume once the
-	// forward-delta walk closes the gap and the node returns to OpModeFull
-	// (they froze at 0 while stuck jump-adopting).
-	validationsEmitted atomic.Uint64
+	// lastIssuedValidationSeq is the highest ledger seq this node has
+	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
+	// the trie-descent floor for preferredLCL. Zero for a non-validator.
+	lastIssuedValidationSeq atomic.Uint32
 
 	logger *slog.Logger
 }
@@ -462,12 +461,14 @@ func (a *Adaptor) BroadcastProposal(proposal *consensus.Proposal) error {
 }
 
 func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
-	n := a.validationsEmitted.Add(1)
-	if a.logger != nil {
-		a.logger.Info("issue-keepup validation emitted",
-			"total", n,
-			"seq", validation.LedgerSeq,
-		)
+	if validation != nil {
+		for {
+			cur := a.lastIssuedValidationSeq.Load()
+			if validation.LedgerSeq <= cur ||
+				a.lastIssuedValidationSeq.CompareAndSwap(cur, validation.LedgerSeq) {
+				break
+			}
+		}
 	}
 	return a.sender.BroadcastValidation(validation)
 }
@@ -1425,45 +1426,35 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 // the one we just closed (the promotion gate's signal). False when the
 // preferred LCL is our own.
 func (a *Adaptor) networkLedgerDiffers(ledger consensus.Ledger, mode consensus.OperatingMode) bool {
-	ourLCL := ledger.ID()
-	return a.preferredLCL(ourLCL, ledger.Seq(), mode) != ourLCL
+	return a.preferredLCL(ledger, mode) != ledger.ID()
 }
 
-// preferredLCL picks the network-preferred last closed ledger.
-// Trusted validations weighted through the ancestry trie take priority;
-// peer-reported LCL counts are the fallback used only when no trusted
-// validations are available.
-func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode consensus.OperatingMode) consensus.LedgerID {
-	// minSeq: the trie's preferred ledger is only adopted when it is at
-	// least our last fully-validated sequence, never rewinding behind it.
+// preferredLCL picks the network-preferred last closed ledger, mirroring
+// rippled Validations::getPreferredLCL (Validations.h:935-960): the
+// trie-preferred ledger first, the most-supported trusted-validation tip
+// when the trie has none, and the dominant peer-reported LCL as the last
+// fallback. The only sequence gate is the last fully-validated index —
+// never rewinding behind it; a preferred ledger at or below our own seq on
+// a different chain is still a switch (Validations.h:892-895).
+func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.OperatingMode) consensus.LedgerID {
+	ourLCL := ledger.ID()
 	var minSeq uint32
 	if a.ledgerService != nil {
 		minSeq = a.ledgerService.GetValidatedLedgerIndex()
 	}
 
-	// largestIssued is the highest seq this node has validated, seeding the
-	// trie's uncommitted support (GetPreferred floor). 0 for a non-validator;
-	// the just-closed seq is the validator's faithful proxy.
-	var largestIssued uint32
-	if a.IsValidator() {
-		largestIssued = ourSeq
-	}
-
-	// Trusted-validation branch: GetPreferred consults the ancestry trie,
-	// PreferredFromValidations is the no-trie fallback.
 	if h := a.validationHistorian; h != nil {
-		id, seq, ok := h.GetPreferred(largestIssued)
-		if !ok {
-			id, seq, ok = h.PreferredFromValidations(minSeq)
-		}
-		if ok {
-			// A preferred ledger not ahead of us (ours or a same-chain
-			// ancestor) is not a switch; approximated as seq >= ourSeq since
-			// per-seq ancestry isn't available here.
-			if id != ourLCL && seq >= ourSeq && seq >= minSeq {
+		if id, seq, ok := h.GetPreferred(a.lastIssuedValidationSeq.Load()); ok {
+			id, seq = a.resolvePreferredVsCurrent(id, seq, ledger)
+			if seq >= minSeq {
 				return id
 			}
 			return ourLCL
+		}
+		// No-trie fallback over trusted-validation tips (rippled's acquiring_
+		// majority, Validations.h:858-879); already filtered to seq >= minSeq.
+		if id, _, ok := h.PreferredFromValidations(minSeq); ok {
+			return id
 		}
 	}
 
@@ -1485,6 +1476,53 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 		}
 	}
 	return best
+}
+
+// resolvePreferredVsCurrent applies rippled getPreferred's stay/switch rules
+// (Validations.h:881-898) to the trie-preferred tip: our own immediate child
+// on our chain is not a switch (we may be about to build it), a tip ahead of
+// us always wins, and a tip at or below our seq wins only when our chain's
+// ledger at that seq differs (a fork).
+func (a *Adaptor) resolvePreferredVsCurrent(prefID consensus.LedgerID, prefSeq uint32, ledger consensus.Ledger) (consensus.LedgerID, uint32) {
+	ourLCL := ledger.ID()
+	ourSeq := ledger.Seq()
+	if prefSeq == ourSeq+1 {
+		if l, err := a.GetLedger(prefID); err == nil && l != nil && l.ParentID() == ourLCL {
+			return ourLCL, ourSeq
+		}
+	}
+	if prefSeq > ourSeq {
+		return prefID, prefSeq
+	}
+	if a.ancestorOf(ledger, prefSeq) != prefID {
+		return prefID, prefSeq
+	}
+	return ourLCL, ourSeq
+}
+
+// ancestorOf resolves our chain's ledger ID at targetSeq, starting from
+// ledger's own parent link and walking locally-held parents. Returns the
+// zero ID when the ancestry is not locally resolvable — treated as a
+// different chain, like rippled's out-of-skip-list ID{0}
+// (RCLValidations.cpp:78-95).
+func (a *Adaptor) ancestorOf(ledger consensus.Ledger, targetSeq uint32) consensus.LedgerID {
+	const maxWalk = 256 // rippled's skip-list reach
+	seq := ledger.Seq()
+	if targetSeq > seq || seq-targetSeq > maxWalk {
+		return consensus.LedgerID{}
+	}
+	if targetSeq == seq {
+		return ledger.ID()
+	}
+	cur := ledger.ParentID()
+	for s := seq - 1; s > targetSeq; s-- {
+		l, err := a.GetLedger(cur)
+		if err != nil || l == nil {
+			return consensus.LedgerID{}
+		}
+		cur = l.ParentID()
+	}
+	return cur
 }
 
 // OnLedgerFullyValidated fires at trusted-validation quorum. It advances the
