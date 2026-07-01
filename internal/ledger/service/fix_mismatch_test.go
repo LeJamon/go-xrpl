@@ -191,6 +191,81 @@ func TestAdoptLedgerWithState_NoMismatchNoOp(t *testing.T) {
 	assert.Equal(t, hashD, gotD.Hash())
 }
 
+// TestAdoptLedgerWithState_BackfillAtForkBoundaryKeepsCanonicalChain pins the
+// below-tip guard in fixMismatch: a history backfill descending from the
+// jump-adopted tip eventually adopts the ledger just above a stale fork
+// entry. Its parent hash mismatches the fork ledger below it, but the
+// canonical entry ABOVE it chains to it — so only the stale fork ledger may
+// be purged, never the canonical chain above (which the general mismatch
+// path would sweep as "orphans", nuking the freshly adopted tip).
+func TestAdoptLedgerWithState_BackfillAtForkBoundaryKeepsCanonicalChain(t *testing.T) {
+	cfg := DefaultConfig()
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	baseSeq := svc.GetClosedLedgerIndex() + 1
+
+	var hashFork, hashC3, hashC4, hashC5, hashC2 [32]byte
+	hashFork[0] = 0xF0 // stale fork ledger at baseSeq
+	hashC2[0] = 0xC2   // canonical parent of C3 (not in history)
+	hashC3[0] = 0xC3   // the backfilled ledger at baseSeq+1
+	hashC4[0] = 0xC4   // canonical at baseSeq+2, chains to C3
+	hashC5[0] = 0xC5   // canonical closed tip at baseSeq+3
+
+	var zero [32]byte
+	fork := makeStubLedger(t, baseSeq, hashFork, zero)
+	c4 := makeStubLedger(t, baseSeq+2, hashC4, hashC3)
+	c5 := makeStubLedger(t, baseSeq+3, hashC5, hashC4)
+
+	svc.mu.Lock()
+	svc.ledgerHistory[fork.Sequence()] = fork
+	svc.ledgerHistory[c4.Sequence()] = c4
+	svc.ledgerHistory[c5.Sequence()] = c5
+	svc.closedLedger = c5
+	svc.mu.Unlock()
+
+	stateMap := shamap.New(shamap.TypeState)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+
+	// The backfilled C3: parent C2 != fork.Hash (fork boundary below), but
+	// C4.ParentHash == C3.Hash (canonical above).
+	hdrC3 := &header.LedgerHeader{
+		LedgerIndex: baseSeq + 1,
+		Hash:        hashC3,
+		ParentHash:  hashC2,
+		TxHash:      txRoot,
+		AccountHash: stateRoot,
+	}
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdrC3, stateMap, txMap))
+
+	svc.mu.RLock()
+	defer svc.mu.RUnlock()
+
+	gotC3, okC3 := svc.ledgerHistory[baseSeq+1]
+	require.True(t, okC3, "backfilled C3 must be installed")
+	assert.Equal(t, hashC3, gotC3.Hash())
+
+	_, okFork := svc.ledgerHistory[baseSeq]
+	assert.False(t, okFork, "the stale fork ledger below the backfill must be purged")
+
+	gotC4, okC4 := svc.ledgerHistory[baseSeq+2]
+	require.True(t, okC4, "canonical C4 above the backfill must survive")
+	assert.Equal(t, hashC4, gotC4.Hash())
+
+	gotC5, okC5 := svc.ledgerHistory[baseSeq+3]
+	require.True(t, okC5, "canonical closed tip C5 must survive")
+	assert.Equal(t, hashC5, gotC5.Hash())
+
+	require.NotNil(t, svc.closedLedger)
+	assert.Equal(t, hashC5, svc.closedLedger.Hash(),
+		"a below-tip backfill must not move or clear the closed pointer")
+}
+
 // TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError
 // pins the escalation behavior: if fixMismatch invalidates a ledger that
 // was already quorum-validated, it MUST NOT silently reset

@@ -12,7 +12,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
-	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -270,6 +269,32 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 		return
 	}
 
+	// A below-tip backfill that the canonical entry above chains to (a history
+	// walk reaching a stale fork boundary at its bottom): the entries above are
+	// NOT orphans of this adopt — purge only the mismatched fork ledger below.
+	if next, ok := s.ledgerHistory[adoptedSeq+1]; ok && next.ParentHash() == adopted.Hash() {
+		staleHash := prev.Hash()
+		if prev.IsValidated() {
+			s.logger.Error("history backfill contradicts a validated ledger — possible fork",
+				"seq", adoptedSeq-1,
+				"hash", fmt.Sprintf("%x", staleHash),
+			)
+		}
+		for txHash, txSeq := range s.txIndex {
+			if txSeq == adoptedSeq-1 {
+				delete(s.txIndex, txHash)
+				delete(s.txPositionIndex, txHash)
+			}
+		}
+		s.deleteHistoryLocked(adoptedSeq - 1)
+		s.logger.Warn("history backfill replaced a stale fork ledger below it",
+			"seq", adoptedSeq-1,
+			"stale_hash", fmt.Sprintf("%x", staleHash[:8]),
+			"adopted_seq", adoptedSeq,
+		)
+		return
+	}
+
 	// Purge: the mismatched prev-seq, the same-seq alt (caller overwrites it
 	// anyway, but its tx-index must go), and every seq > adoptedSeq (orphans).
 	var toRemove []uint32
@@ -408,22 +433,10 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			pending = append(pending, ptx)
 		}
 
-		// issue-keepup: instrument the closed-ledger build wall-time and the
-		// per-build signature-verify skip/done split so a soak can confirm the
-		// redundant-verify cost is gone. Tagged for easy grep/strip.
-		buildStart := time.Now()
-		skipBefore, verBefore := sigcache.Stats()
 		built, err := s.buildClosedLedgerLocked(pending, closeTime, false)
 		if err != nil {
 			return 0, err
 		}
-		skipAfter, verAfter := sigcache.Stats()
-		s.logger.Info("issue-keepup build",
-			"ms", time.Since(buildStart).Milliseconds(),
-			"tx", len(pending),
-			"sig_skipped", skipAfter-skipBefore,
-			"sig_verified", verAfter-verBefore,
-		)
 		retriableTxs = built
 
 		// pending is now in canonical order for the round-summary log.

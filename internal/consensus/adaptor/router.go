@@ -26,11 +26,6 @@ import (
 // short-circuits in the common case of no pending work).
 const inboundReplayDeltaTickInterval = 100 * time.Millisecond
 
-// catchupDiagInterval throttles the throwaway issue-keepup catch-up diagnostic
-// emitted from maintenanceTick so it fires at roughly the acquisition-timer
-// cadence rather than on every 100ms tick.
-const catchupDiagInterval = 3 * time.Second
-
 // peerLedgerState tracks the latest ledger info reported by a peer.
 type peerLedgerState struct {
 	LedgerSeq  uint32
@@ -195,6 +190,13 @@ type Router struct {
 	catchupMu sync.Mutex
 	catchup   catchupTarget
 
+	// historyMu guards history, the single backward history-backfill target:
+	// the next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk
+	// is serial — each ingested ledger's header names its parent, the next
+	// target — and is driven from the maintenance tick.
+	historyMu sync.Mutex
+	history   catchupTarget
+
 	// seqHashMu guards the seqHash table: the network's hash (and, when known,
 	// parent hash) per ledger sequence, learned from trusted validations and peer
 	// status_change gossip. It supplies the hash of closed+1 (the forward-delta
@@ -204,11 +206,6 @@ type Router struct {
 	seqHashMu  sync.Mutex
 	seqHash    map[uint32]ledgerHashEntry
 	seqHashMax uint32
-
-	// lastCatchupDiag throttles the issue-keepup in-flight catch-up diagnostic
-	// to the acquisition-timer cadence so it doesn't spam the 100ms maintenance
-	// tick. Written only on the Run goroutine. Throwaway instrumentation.
-	lastCatchupDiag time.Time
 }
 
 // catchupTarget is the highest (seq,hash) the router is driving a bounded
@@ -636,25 +633,6 @@ func (r *Router) maintenanceTick() {
 	// replay-delta path, both of which refuse to arm while the hash is in flight.
 	now := time.Now()
 
-	// issue-keepup: surface the in-flight consensus-reason acquisition count and
-	// the current catch-up target so a soak can confirm the former per-gossip
-	// fan-out collapsed to <= maxConcurrentCatchup. Throttled to the acquisition
-	// timer cadence so it doesn't spam the 100ms tick. Throwaway; strip with the
-	// issue-keepup build line in lifecycle.go.
-	if now.Sub(r.lastCatchupDiag) >= catchupDiagInterval {
-		r.lastCatchupDiag = now
-		tSeq, _, _ := r.bestCatchupTarget()
-		var closed uint32
-		if svc := r.adaptor.LedgerService(); svc != nil {
-			closed = svc.GetClosedLedgerIndex()
-		}
-		r.logger.Info("issue-keepup catchup",
-			"in_flight", r.catchupInFlight(),
-			"target_seq", tSeq,
-			"closed", closed,
-		)
-	}
-
 	for _, il := range r.fetchTracker.Active() {
 		switch il.OnTimer(now) {
 		case inbound.TimerFailed:
@@ -663,6 +641,17 @@ func (r *Router) maintenanceTick() {
 			r.escalateAcquisition(il, now)
 		}
 	}
+
+	// Timer-driven catch-up re-arm, rippled's LedgerMaster::doAdvance cadence:
+	// a recorded target still ahead of closed is re-attempted every tick, so a
+	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next
+	// gossip event. No-ops while an acquisition is in flight or the target is
+	// reached; startLedgerAcquisition dedups the in-flight hash.
+	r.armCatchupTowardTarget()
+
+	// Backward history backfill of jump-adopt gaps (rippled fetchForHistory
+	// from doAdvance), off the consensus catch-up slot.
+	r.armHistoryBackfill()
 
 	// Expire stale fetch-pack nodes so the cache doesn't retain a stalled
 	// acquisition's nodes past their usefulness.

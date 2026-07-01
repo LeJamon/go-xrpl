@@ -121,6 +121,11 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 				ourSeq := closed.Sequence()
 				ourHash := closed.Hash()
 				if ourSeq == sc.LedgerSeq && ourHash != peerHash {
+					// Honour the single-acquisition cap like every other
+					// catch-up arming site.
+					if r.catchupInFlight() >= maxConcurrentCatchup {
+						return
+					}
 					r.logger.Warn("ledger hash divergence at same seq, acquiring peer's ledger",
 						"seq", sc.LedgerSeq,
 						"our_hash", fmt.Sprintf("%x", ourHash[:8]),
@@ -291,24 +296,9 @@ func (r *Router) armCatchupTowardTarget() {
 	}
 
 	if seq, hash, peer, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
-		r.logger.Info("issue-keepup catchup arm",
-			"path", "replay-delta",
-			"target_seq", seq,
-			"closed", closed,
-			"gap", tSeq-closed,
-			"hash", fmt.Sprintf("%x", hash[:8]),
-		)
 		r.startLedgerAcquisition(seq, hash, peer)
 		return
 	}
-
-	r.logger.Info("issue-keepup catchup arm",
-		"path", "jump-adopt",
-		"target_seq", tSeq,
-		"closed", closed,
-		"gap", tSeq-closed,
-		"hash", fmt.Sprintf("%x", tHash[:8]),
-	)
 	r.startLedgerAcquisition(tSeq, tHash, tPeer)
 }
 
@@ -499,6 +489,90 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		"peer", peerID,
 	)
 
+	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
+		r.logger.Warn("failed to request ledger base from peer", "error", err)
+		r.fetchTracker.Remove(hash, false)
+	}
+}
+
+// startHistoryBackfill records the next skipped ledger to backfill after a
+// jump-adopt. The walk is serial and backward: each ingested ledger's header
+// names its parent, which becomes the next target; the maintenance tick arms
+// the fetches.
+func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64) {
+	if seq == 0 || hash == ([32]byte{}) {
+		return
+	}
+	r.historyMu.Lock()
+	r.history = catchupTarget{seq: seq, hash: hash, peerID: peerID}
+	r.historyMu.Unlock()
+}
+
+// armHistoryBackfill drives one backward history-backfill acquisition from
+// the maintenance tick (rippled fetchForHistory from doAdvance). Locally-held
+// ledgers advance the walk without a fetch; the walk ends at genesis, the
+// online-delete floor, or once the chain reconnects to held history. At most
+// one ReasonHistory acquisition is in flight, and it never occupies the
+// consensus catch-up slot.
+func (r *Router) armHistoryBackfill() {
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	r.historyMu.Lock()
+	target := r.history
+	r.historyMu.Unlock()
+	if target.seq == 0 {
+		return
+	}
+	for {
+		if target.seq == 0 || target.hash == ([32]byte{}) || r.belowFloor(target.seq) {
+			r.historyMu.Lock()
+			r.history = catchupTarget{}
+			r.historyMu.Unlock()
+			return
+		}
+		held, err := svc.GetLedgerByHash(target.hash)
+		if err != nil || held == nil {
+			break
+		}
+		target = catchupTarget{seq: target.seq - 1, hash: held.ParentHash(), peerID: target.peerID}
+		r.historyMu.Lock()
+		r.history = target
+		r.historyMu.Unlock()
+	}
+	if r.fetchTracker.CountReason(inbound.ReasonHistory) >= 1 || r.isAcquiring(target.hash) {
+		return
+	}
+	peer := target.peerID
+	if p, ok := r.selectAcquisitionPeer(target.seq); ok {
+		peer = p
+	}
+	if peer == 0 {
+		return
+	}
+	r.startHistoryAcquisition(target.seq, target.hash, peer)
+}
+
+// startHistoryAcquisition requests a skipped historical ledger (header +
+// state) over the legacy mtGET_LEDGER protocol as a ReasonHistory
+// acquisition. Replay-delta doesn't apply: the walk is backward, so the
+// parent is never locally available.
+func (r *Router) startHistoryAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	if r.replayer.Has(hash) {
+		return
+	}
+	_, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+		return inbound.NewHistory(hash, seq, peerID, r.logger, r.acquisitionOpts()...)
+	})
+	if !created {
+		return
+	}
+	r.logger.Info("starting history backfill acquisition",
+		"seq", seq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+		"peer", peerID,
+	)
 	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
 		r.logger.Warn("failed to request ledger base from peer", "error", err)
 		r.fetchTracker.Remove(hash, false)
@@ -808,9 +882,7 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 // quorum gate (onFullyValidated → SetValidatedLedger), so a sub-quorum
 // fetch cannot move our validated tip and carries no state-divergence
 // risk; it just makes the ledger locally available so the node can rejoin
-// consensus on the network's chain instead of holding no position. The
-// deliberately-kept peer-LCL trusted-backing gate and the quorum gate are
-// untouched.
+// consensus on the network's chain instead of holding no position.
 func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer uint64) {
 	if v == nil || v.LedgerSeq == 0 {
 		return
@@ -909,6 +981,12 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 		return
 	}
 
+	// Honour the single-acquisition cap; the maintenance-tick re-arm drives
+	// the recorded target once the slot frees.
+	if r.catchupInFlight() >= maxConcurrentCatchup {
+		r.recordCatchupTarget(seq, hash, preferredPeerID)
+		return
+	}
 	r.logger.Info("arming acquisition for stashed validation",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
@@ -925,6 +1003,12 @@ func (r *Router) armParentAcquisition(svc *service.Service, parentSeq uint32, pa
 		return
 	}
 	if parentSeq <= svc.GetClosedLedgerIndex() {
+		return
+	}
+	// Honour the single-acquisition cap; a skipped parent chase is superseded
+	// by the maintenance-tick re-arm toward the recorded tip (which jump-adopts
+	// past the stash at gap > 1).
+	if r.catchupInFlight() >= maxConcurrentCatchup {
 		return
 	}
 	r.logger.Info("arming backward-chain acquisition for stashed held-adoption parent",
@@ -1360,6 +1444,19 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 		return
 	}
 
+	// A history backfill is a store-only ingest below the closed tip: persist
+	// and index the skipped ledger, then advance the serial backward walk to
+	// its parent. It never touches operating mode or the consensus engine.
+	if il.Reason() == inbound.ReasonHistory {
+		if err = svc.AdoptLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
+			r.logger.Warn("inbound ledger: history backfill ingest failed",
+				"error", err, "seq", h.LedgerIndex)
+			return
+		}
+		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID)
+		return
+	}
+
 	// The acquisition fetches the header, state map, and transaction map; txMap
 	// is nil only when the ledger has no transactions (empty tx tree), in which
 	// case the service installs the genesis-shaped empty tx map.
@@ -1373,13 +1470,12 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 	// fill the gap, so stashing the tip and chasing parents never converges.
 	// Adopt the acquired tip directly instead, jumping the working ledger
 	// forward so consensus rejoins on the trusted-validation-preferred branch;
-	// intermediate history backfills off the critical path. This mirrors
-	// rippled setFullLedger/checkAccept, which advances the current ledger to an
-	// acquired tip without waiting on the ledgers between. The published
-	// validated pointer still only advances at quorum (drainPendingLedger-
-	// Validation). Gap ≤ 1 (single-ledger catch-up, whose parent is present) and
-	// generic RPC acquisitions keep the held-adoption seam so out-of-order
-	// arrivals cascade in order.
+	// the skipped ledgers backfill off the critical path via the ReasonHistory
+	// walk armed below. This mirrors rippled setFullLedger/checkAccept plus
+	// fetchForHistory. The published validated pointer still only advances at
+	// quorum (drainPendingLedgerValidation). Gap ≤ 1 (single-ledger catch-up,
+	// whose parent is present) and generic RPC acquisitions keep the
+	// held-adoption seam so out-of-order arrivals cascade in order.
 	var res service.SubmitHeldAdoptionResult
 	if il.Reason() == inbound.ReasonConsensus && h.LedgerIndex > svc.GetClosedLedgerIndex()+1 {
 		if err = svc.AdoptLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
@@ -1387,6 +1483,7 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 				"error", err, "seq", h.LedgerIndex)
 			return
 		}
+		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID)
 	} else if res, err = svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return

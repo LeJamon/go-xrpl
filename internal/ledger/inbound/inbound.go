@@ -72,6 +72,9 @@ const (
 	ReasonConsensus Reason = iota
 	// ReasonGeneric is an RPC-driven acquisition (rippled Reason::GENERIC).
 	ReasonGeneric
+	// ReasonHistory is a background backfill of a ledger a jump-adopt skipped
+	// (rippled Reason::HISTORY): store-only ingest, off the catch-up path.
+	ReasonHistory
 )
 
 // State tracks the acquisition progress.
@@ -205,6 +208,15 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
 	l := New(hash, seq, peerID, logger, opts...)
 	l.reason = ReasonGeneric
+	return l
+}
+
+// NewHistory creates a background history-backfill (ReasonHistory)
+// acquisition: on completion the ledger is store-ingested below the closed
+// tip, never advancing consensus state.
+func NewHistory(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
+	l := New(hash, seq, peerID, logger, opts...)
+	l.reason = ReasonHistory
 	return l
 }
 
@@ -665,10 +677,21 @@ func (l *Ledger) recomputeComplete() {
 	}
 }
 
-// missingNodeBatch caps NodeIDs per TMGetLedger request. Sits between
-// rippled's blind-request cap (reqNodes=12) and reply cap
-// (reqNodesReply=128, InboundLedger.cpp).
+// missingNodeBatch caps NodeIDs per TMGetLedger request on the inspection
+// queries. Sits between rippled's blind-request cap (reqNodes=12) and reply
+// cap (reqNodesReply=128, InboundLedger.cpp).
 const missingNodeBatch = 16
+
+// Request-path widths, matching rippled InboundLedger.cpp: collect up to
+// missingNodesFind before the recentNodes de-dup, then cap the request at
+// reqNodesReply on a reply and reqNodes on a timeout fan-out. The wide
+// pre-dedup collect keeps per-reply frontier coverage at ~128 nodes/RTT on a
+// large state tree instead of a shifting 16-node subset.
+const (
+	missingNodesFind = 256
+	reqNodesReply    = 128
+	reqNodes         = 12
+)
 
 // NeedsMissingNodeIDs returns up to missingNodeBatch wire-encoded
 // path-based NodeIDs of missing SHAMap inner nodes, ordered by depth.
@@ -745,10 +768,11 @@ func (l *Ledger) CollectMissingRequest(isReply bool) (state, txn [][]byte) {
 
 // filterMissingLocked applies the recentNodes de-dup to m's missing nodes and
 // returns the wire NodeIDs to request, recording them in recentNodes. Keyed by
-// content hash, matching rippled filterNodes (which de-dups on the node hash).
-// Caller holds mu.
+// content hash, matching rippled filterNodes (which de-dups on the node hash):
+// collect wide (missingNodesFind) BEFORE the de-dup, cap the request AFTER —
+// reqNodesReply on a reply, reqNodes on a timeout. Caller holds mu.
 func (l *Ledger) filterMissingLocked(m *shamap.SHAMap, isReply bool) [][]byte {
-	missing := m.GetMissingNodes(missingNodeBatch, nil)
+	missing := m.GetMissingNodes(missingNodesFind, nil)
 	if len(missing) == 0 {
 		return nil
 	}
@@ -766,6 +790,13 @@ func (l *Ledger) filterMissingLocked(m *shamap.SHAMap, isReply bool) [][]byte {
 			return nil
 		}
 		use = missing
+	}
+	limit := reqNodes
+	if isReply {
+		limit = reqNodesReply
+	}
+	if len(use) > limit {
+		use = use[:limit]
 	}
 	nodeIDs := make([][]byte, 0, len(use))
 	for i := range use {
