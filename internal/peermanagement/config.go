@@ -21,6 +21,14 @@ const (
 	DefaultMessageBufferSize = 256
 	DefaultSendBufferSize    = 64
 
+	// DefaultLedgerDataBufferSize sizes the dedicated acquisition-reply
+	// lane (mtLEDGER_DATA and the replay-delta / proof-path responses). It
+	// is generous on purpose: the lane is drained preferentially so a reply
+	// this node explicitly requested is never shed behind a serve/propose
+	// flood on the shared messages channel. Overflow still sheds, but bumps
+	// droppedLedgerData so any residual loss is visible.
+	DefaultLedgerDataBufferSize = 1024
+
 	// DefaultMaxTransactions is the per-type in-flight ceiling
 	// consulted at TMTransaction ingress before dispatching to the
 	// router. Matches rippled's [max_transactions] default.

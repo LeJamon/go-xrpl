@@ -33,7 +33,11 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	case message.TypeStatusChange:
 		r.handleStatusChange(msg)
 	case message.TypeGetLedger:
-		r.handleGetLedger(msg)
+		// Offload the serve to the bounded worker pool so building a large
+		// reply (notably the 15k-tx tx-set in serveTxSet) can't stall
+		// proposal / validation / acquisition-reply handling on this
+		// goroutine. Inline when the pool isn't running (synchronous tests).
+		r.submitServeJob(msg)
 	case message.TypeLedgerData:
 		r.handleLedgerData(msg)
 	case message.TypeGetObjects:

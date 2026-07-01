@@ -331,11 +331,13 @@ func NewFromConfig(
 	// proposing, so wrongLedger needs to demote opMode.
 	engine.Subscribe(modeManager)
 
-	// Consensus/acquisition frames arrive on overlay.Messages();
-	// transactions arrive on the separate overlay.TxMessages() lane so a
-	// tx flood can't starve them.
+	// Consensus frames arrive on overlay.Messages(); transactions arrive on
+	// the separate overlay.TxMessages() lane and acquisition replies on
+	// overlay.LedgerDataMessages(), so neither a tx flood nor a serve flood
+	// can starve a reply this node explicitly requested.
 	router := NewRouter(engine, adaptor, overlay.Messages())
 	router.SetTxInbox(overlay.TxMessages())
+	router.SetAcqInbox(overlay.LedgerDataMessages())
 	router.SetManifestCache(manifestCache, overlay)
 	router.SetMinimumOnlineFloor(floor)
 
