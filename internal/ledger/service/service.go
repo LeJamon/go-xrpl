@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -692,6 +693,45 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 		pool.PushBack(ov.Current().Sequence(), ptx)
 	}
 	return res, nil
+}
+
+// PrewarmSignatures verifies the outer signatures of raw tx blobs in
+// parallel and caches the verdicts, so a consensus build over an acquired tx
+// set hits the sig-cache instead of paying cold signature checks in-strand
+// under the apply mutex. The per-relayed-tx prewarm in SubmitOpenLedgerTx
+// (#1105) covers only txs that arrived individually; wholesale-acquired
+// consensus sets go through here. Safe to call concurrently; unparseable
+// blobs are skipped (the in-strand preflight rejects them authoritatively).
+func (s *Service) PrewarmSignatures(blobs [][]byte) {
+	if len(blobs) == 0 {
+		return
+	}
+	s.mu.RLock()
+	cfg, cfgErr := s.applyConfigLocked()
+	s.mu.RUnlock()
+	if cfgErr != nil || cfg.SkipSignatureVerification {
+		return
+	}
+
+	workers := min(runtime.GOMAXPROCS(0), len(blobs))
+	work := make(chan []byte, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for blob := range work {
+				if ptx, err := openledger.ParsePendingTx(blob); err == nil {
+					txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+				}
+			}
+		}()
+	}
+	for _, blob := range blobs {
+		work <- blob
+	}
+	close(work)
+	wg.Wait()
 }
 
 // OpenLedgerTxs returns the raw tx blobs in the persistent open view (nil
