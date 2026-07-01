@@ -23,10 +23,10 @@ const (
 
 	// DefaultLedgerDataBufferSize sizes the dedicated acquisition-reply
 	// lane (mtLEDGER_DATA and the replay-delta / proof-path responses). It
-	// is generous on purpose: the lane is drained preferentially so a reply
-	// this node explicitly requested is never shed behind a serve/propose
-	// flood on the shared messages channel. Overflow still sheds, but bumps
-	// droppedLedgerData so any residual loss is visible.
+	// is generous on purpose: its own lane keeps a reply this node explicitly
+	// requested from being shed behind a serve/propose flood on the shared
+	// messages channel. Overflow still sheds, but bumps droppedLedgerData so
+	// any residual loss is visible.
 	DefaultLedgerDataBufferSize = 1024
 
 	// DefaultMaxTransactions is the per-type in-flight ceiling

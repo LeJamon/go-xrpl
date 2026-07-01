@@ -45,17 +45,16 @@ type txSetAcquireState struct {
 	dormant bool
 
 	// haveRoot latches once the real root node for this tx-set hash has been
-	// installed (mirrors rippled TransactionAcquire::mHaveRoot). A fresh
-	// shamap.New carries a non-nil but EMPTY root, which would let an empty
-	// tree "complete" with zero leaves; until haveRoot is set the acquire only
-	// requests the root and can never complete.
+	// installed. A fresh shamap.New carries a non-nil but EMPTY root, which
+	// would let an empty tree "complete" with zero leaves; until haveRoot is
+	// set the acquire only requests the root and can never complete.
 	haveRoot bool
 
 	// done latches a terminal acquire: completed (set built and fed to the
 	// engine) or given-up (dormant past MaxStallTicks). A data reply for a
 	// done acquire is dropped so a straggler can neither recreate a fresh empty
 	// map nor fan out re-requests; MarkTxSetStillNeeded clears it to revive a
-	// genuinely-needed set. Mirrors rippled's complete_/failed_ latches.
+	// genuinely-needed set.
 	done bool
 }
 
@@ -488,10 +487,10 @@ func (r *Router) markTxSetDone(txSetID consensus.TxSetID) {
 }
 
 // requestTxSetRoot (re)fetches the SHAMap root (the 33-byte zero node ID) of a
-// tx-set. It unicasts to the replying peer when known (mirrors rippled
-// trigger(peer) with !mHaveRoot), falling back to a broadcast when the origin
-// is unknown. Both paths skip Adaptor.RequestTxSet so onTxSetRequested
-// (MarkTxSetStillNeeded) does not reset the acquire's stall bookkeeping.
+// tx-set. It unicasts to the replying peer when known, falling back to a
+// broadcast when the origin is unknown. Both paths skip Adaptor.RequestTxSet so
+// onTxSetRequested (MarkTxSetStillNeeded) does not reset the acquire's stall
+// bookkeeping.
 func (r *Router) requestTxSetRoot(txSetID consensus.TxSetID, originPeer uint64, indirect bool) error {
 	rootID := [][]byte{make([]byte, shamap.NodeIDSize)}
 	if originPeer != 0 {
@@ -553,8 +552,7 @@ func (r *Router) fillTxSetFromLocalPool(txMap *shamap.SHAMap, missing []shamap.M
 // resets, and the request-spacing latch is dropped so the next timer tick or
 // data reply resumes from the retained partial map instead of waiting out the
 // TTL. haveRoot is preserved — a revived acquire keeps any root it already had.
-// A no-op if the router has no entry for txSetID. Mirrors rippled's stillNeed
-// reset path.
+// A no-op if the router has no entry for txSetID.
 func (r *Router) MarkTxSetStillNeeded(txSetID consensus.TxSetID) {
 	r.txSetAcquireMu.Lock()
 	defer r.txSetAcquireMu.Unlock()
@@ -595,6 +593,11 @@ func (r *Router) sweepStaleTxSetAcquireLocked() {
 // inbound path keeps lastRequest fresh while making progress, the MinInterval
 // gate keeps this timer out of an actively-progressing acquire and only fires
 // once responses stop arriving.
+//
+// A stalled tick re-requests by broadcast (filtered by the non-progress
+// exclusion set) rather than adding one targeted peer at a time: under the
+// high-throughput stalls this drives, fanning out to find any server fast
+// matters more than minimising duplicate requests.
 //
 // Runs on the Run() message-loop goroutine (same as handleTxSetData), so
 // reading state.txMap here never races the inbound path.

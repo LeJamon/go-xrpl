@@ -36,12 +36,13 @@ import (
 //
 // Aliasing. shamap() (package-internal) exposes the live backing map.
 // Add and Remove mutate it in place — there is no copy-on-write. The
-// only production caller (router.go serveTxSet) takes the pointer and
-// walks it synchronously, so the aliasing is dormant. A snapshot on
-// every round-trip would avoid it but requires O(1) SHAMap COW, which
-// the unbacked path here does not yet have (Snapshot does a deep
-// clone). The accessor stays unexported so the aliasing concern cannot
-// leak out of this package.
+// production caller (router.go serveTxSet, now driven by concurrent serve-pool
+// workers) only reads the pointer, and it walks a cached set that is never
+// mutated in place while served — SHAMap reads are themselves lock-protected —
+// so the aliasing stays dormant. A snapshot on every round-trip would avoid it
+// but requires O(1) SHAMap COW, which the unbacked path here does not yet have
+// (Snapshot does a deep clone). The accessor stays unexported so the aliasing
+// concern cannot leak out of this package.
 //
 // Concurrency. The backing *shamap.SHAMap is internally lock-protected,
 // but TxSetImpl maintains a shadow `count` field for O(1) Size(); the

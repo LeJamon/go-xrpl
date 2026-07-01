@@ -121,12 +121,12 @@ type Overlay struct {
 	txMessages chan *InboundMessage
 
 	// ledgerData carries acquisition replies (mtLEDGER_DATA and the
-	// replay-delta / proof-path responses) on their own lane, drained
-	// preferentially by the router so a serve/propose/validation flood on
-	// the shared messages channel can't shed a reply THIS node explicitly
-	// requested and wedge an inbound-ledger acquisition. Generously sized
-	// (DefaultLedgerDataBufferSize); on overflow the frame is still shed,
-	// but droppedLedgerData counts it so residual loss stays visible.
+	// replay-delta / proof-path responses) on their own lane so a
+	// serve/propose/validation flood on the shared messages channel can't
+	// shed a reply THIS node explicitly requested and wedge an inbound-ledger
+	// acquisition. Generously sized (DefaultLedgerDataBufferSize); on overflow
+	// the frame is still shed, but droppedLedgerData counts it so residual
+	// loss stays visible.
 	ledgerData chan *InboundMessage
 
 	// serveJobs carries heavy inbound serve work (fetch-pack, generic
@@ -215,8 +215,8 @@ type Overlay struct {
 	droppedTransactions atomic.Uint64
 
 	// droppedLedgerData counts acquisition replies shed because the
-	// ledgerData lane was full — visible evidence of residual loss on the
-	// preferentially-drained lane under extreme outstanding-request volume.
+	// ledgerData lane was full — evidence of residual loss on the dedicated
+	// lane under extreme outstanding-request volume.
 	droppedLedgerData atomic.Uint64
 
 	// Transaction reduce-relay rolling-average metrics surfaced by the
@@ -1233,7 +1233,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Acquisition replies ride a dedicated, preferentially-drained lane so a
+	// Acquisition replies ride a dedicated lane so a
 	// serve/propose/validation flood on the shared messages channel can't
 	// shed a reply this node explicitly requested and wedge catch-up. The
 	// replay-delta / proof-path responses already passed their feature gate
@@ -1289,10 +1289,10 @@ func (o *Overlay) DroppedTransactions() uint64 {
 }
 
 // forwardLedgerData hands an acquisition reply to the dedicated ledgerData
-// lane. The lane is generously sized and drained preferentially, so this
-// sheds only under extreme outstanding-request volume; a shed frame bumps
-// droppedLedgerData (visible) and the acquisition's own retry timer
-// re-requests the missing nodes, so it is recoverable.
+// lane. The lane is generously sized, so this sheds only under extreme
+// outstanding-request volume; a shed frame bumps droppedLedgerData (visible)
+// and the acquisition's own retry timer re-requests the missing nodes, so it
+// is recoverable.
 func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
 	select {
 	case o.ledgerData <- msg:
@@ -2012,9 +2012,9 @@ func (o *Overlay) TxMessages() <-chan *InboundMessage {
 }
 
 // LedgerDataMessages returns the dedicated acquisition-reply lane
-// (mtLEDGER_DATA and the replay-delta / proof-path responses). The router
-// drains it preferentially so a reply this node requested is never shed
-// behind a serve/propose flood on the shared Messages channel.
+// (mtLEDGER_DATA and the replay-delta / proof-path responses). Its own lane
+// keeps a reply this node requested from being shed behind a serve/propose
+// flood on the shared Messages channel.
 func (o *Overlay) LedgerDataMessages() <-chan *InboundMessage {
 	return o.ledgerData
 }

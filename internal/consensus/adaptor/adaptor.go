@@ -66,9 +66,9 @@ type NetworkSender interface {
 	// RequestTxSetMissingNodesFromPeer is the unicast variant of
 	// RequestTxSetMissingNodes: the request is sent only to the replying peer.
 	// The inbound acquire pipeline uses it so a progressing reply re-requests
-	// from the peer that just served (mirrors rippled trigger(peer)); the
-	// broadcast variant stays the timer's stalled-acquire fallback. nodeIDs may
-	// carry the 33-byte zero root ID to (re)fetch the root.
+	// from the peer that just served; the broadcast variant stays the timer's
+	// stalled-acquire fallback. nodeIDs may carry the 33-byte zero root ID to
+	// (re)fetch the root.
 	RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error

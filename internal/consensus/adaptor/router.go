@@ -46,12 +46,12 @@ type Router struct {
 	// never selected. Wired via SetTxInbox before Run.
 	txInbox <-chan *peermanagement.InboundMessage
 	// acqInbox is the overlay's dedicated acquisition-reply lane
-	// (mtLEDGER_DATA and the replay-delta / proof-path responses). Run
-	// drains it PREFERENTIALLY, ahead of inbox/txInbox, so a reply this node
-	// explicitly requested (e.g. liBASE) is consumed before serve / propose
-	// / validation traffic and an inbound-ledger acquisition can't wedge in
-	// StateWantBase. nil when unset — a nil channel is never selected. Wired
-	// via SetAcqInbox before Run.
+	// (mtLEDGER_DATA and the replay-delta / proof-path responses). Its own
+	// buffered lane keeps a flood on inbox from shedding a reply this node
+	// explicitly requested; Run drains it as a co-equal select case — not
+	// absolute priority, which would let a mtLEDGER_DATA flood starve
+	// proposal/validation. nil when unset — a nil channel is never selected.
+	// Wired via SetAcqInbox before Run.
 	acqInbox <-chan *peermanagement.InboundMessage
 	logger   *slog.Logger
 
@@ -269,12 +269,9 @@ func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
 	r.txInbox = txInbox
 }
 
-// SetAcqInbox installs the overlay's dedicated acquisition-reply lane. Run
-// drains it preferentially, so a reply this node requested (liBASE and the
-// replay-delta / proof-path responses) is consumed ahead of serve / propose
-// / validation traffic and an inbound-ledger acquisition can't wedge waiting
-// for a base it never receives. Safe to call before Run; leaving it unset
-// keeps acquisition replies flowing through the shared inbox as before.
+// SetAcqInbox installs the overlay's dedicated acquisition-reply lane (see the
+// acqInbox field). Safe to call before Run; leaving it unset keeps acquisition
+// replies flowing through the shared inbox as before.
 func (r *Router) SetAcqInbox(acqInbox <-chan *peermanagement.InboundMessage) {
 	r.acqInbox = acqInbox
 }

@@ -76,9 +76,11 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 
 	// Load-shed ledger-BODY requests under load. The liTS_CANDIDATE branch
-	// above is intentionally exempt, because consensus liveness depends on
-	// tx-set acquisition always being served — so this gate runs only for
-	// liBASE / liAS_NODE / liTX_NODE.
+	// above is exempt from this isLoadedLocal gate — a tx-set serve that
+	// reaches the handler is answered — so this gate runs only for
+	// liBASE / liAS_NODE / liTX_NODE. (Under extreme load the bounded serve
+	// pool can still shed any get_ledger, tx-set included, before it reaches
+	// here; the requesting peer retries elsewhere.)
 	loadedLocal := false
 	if ft := svc.FeeTrack(); ft != nil {
 		loadedLocal = ft.IsLoadedLocal()

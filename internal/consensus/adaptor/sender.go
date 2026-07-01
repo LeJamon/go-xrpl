@@ -146,12 +146,9 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 	return s.overlay.BroadcastExceptSet(skip, frame)
 }
 
-// RequestTxSetMissingNodesFromPeer is the unicast counterpart of
-// RequestTxSetMissingNodes: the request goes only to the single replying peer.
-// The inbound acquire pipeline uses it so a progressing reply re-requests from
-// the peer that just served (mirrors rippled trigger(peer)); the broadcast
-// variant stays the timer's stalled-acquire fallback. nodeIDs may carry the
-// 33-byte zero root ID to (re)fetch the root. indirect sets query_type=qtINDIRECT.
+// RequestTxSetMissingNodesFromPeer unicasts the missing-nodes request to the
+// single replying peer (see the NetworkSender interface doc). indirect sets
+// query_type=qtINDIRECT.
 func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
 	if len(nodeIDs) == 0 {
 		return fmt.Errorf("RequestTxSetMissingNodesFromPeer: nodeIDs must be non-empty")
