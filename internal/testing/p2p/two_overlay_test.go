@@ -427,7 +427,9 @@ func TestTwoOverlay_ReplayDelta_RoundTrip(t *testing.T) {
 	require.NoError(t, sender.RequestReplayDelta(uint64(peerAOnB), hash),
 		"B must be able to send a replay-delta request to A")
 
-	// The response is delivered to B via its Messages() channel.
+	// The response rides B's dedicated acquisition-reply lane
+	// (LedgerDataMessages), where the overlay routes replay-delta /
+	// proof-path responses and mtLEDGER_DATA.
 	var resp *message.ReplayDeltaResponse
 	timer := time.NewTimer(3 * time.Second)
 	defer timer.Stop()
@@ -435,7 +437,7 @@ func TestTwoOverlay_ReplayDelta_RoundTrip(t *testing.T) {
 Loop:
 	for {
 		select {
-		case msg := <-b.Messages():
+		case msg := <-b.LedgerDataMessages():
 			if message.MessageType(msg.Type) != message.TypeReplayDeltaResponse {
 				continue
 			}
@@ -611,14 +613,15 @@ func TestTwoOverlay_ProofPath_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, b.Send(peerAOnB, frame))
 
-	// Read B.Messages() until the proof-path response lands.
+	// Read B's acquisition-reply lane (LedgerDataMessages) until the
+	// proof-path response lands.
 	var resp *message.ProofPathResponse
 	timer := time.NewTimer(3 * time.Second)
 	defer timer.Stop()
 Loop:
 	for {
 		select {
-		case msg := <-b.Messages():
+		case msg := <-b.LedgerDataMessages():
 			if message.MessageType(msg.Type) != message.TypeProofPathResponse {
 				continue
 			}
