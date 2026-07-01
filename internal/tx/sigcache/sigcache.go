@@ -17,7 +17,6 @@ package sigcache
 
 import (
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -112,45 +111,21 @@ func (c *Cache) maybeRotateLocked() {
 // global is the process-wide cache, analogous to rippled's app-wide HashRouter.
 var global = NewCache(defaultMaxEntries, defaultTTL, time.Now)
 
-// Instrumentation counters (issue-keepup). skipped counts signature
-// verifications avoided via a cache hit; verified counts genuine verifications
-// recorded. Snapshotted around a build to confirm the redundant-verify savings.
-var (
-	skipped  atomic.Uint64
-	verified atomic.Uint64
-)
-
 // Verified reports whether the transaction id has a cached verified-good
-// signature verdict; a hit lets the caller skip re-verification. A hit also
-// bumps the skipped counter for the issue-keepup instrumentation.
+// signature verdict; a hit lets the caller skip re-verification.
 func Verified(id [32]byte) bool {
-	if global.Has(id) {
-		skipped.Add(1)
-		return true
-	}
-	return false
+	return global.Has(id)
 }
 
 // MarkVerified records that the transaction id's signature was verified good.
 // Callers MUST only invoke this after a successful cryptographic verification
 // of the exact blob that hashes to id — this upholds the positive-cache
-// security invariant. It also bumps the verified counter (issue-keepup).
+// security invariant.
 func MarkVerified(id [32]byte) {
-	verified.Add(1)
 	global.Add(id)
 }
 
-// Reset clears the process-wide cache and instrumentation counters. Intended
-// for test isolation.
+// Reset clears the process-wide cache. Intended for test isolation.
 func Reset() {
 	global.Reset()
-	skipped.Store(0)
-	verified.Store(0)
-}
-
-// Stats returns the cumulative counts of skipped (cache-hit) and genuine
-// (verified) signature checks. Used by the issue-keepup instrumentation to log
-// per-build savings.
-func Stats() (skippedCount, verifiedCount uint64) {
-	return skipped.Load(), verified.Load()
 }

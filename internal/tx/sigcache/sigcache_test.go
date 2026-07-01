@@ -76,13 +76,10 @@ func TestCache_Reset(t *testing.T) {
 	}
 }
 
-// TestGlobal_StatsAndReset exercises the process-wide accessors used by the
-// engine and the issue-keepup instrumentation.
-func TestGlobal_StatsAndReset(t *testing.T) {
+// TestGlobal_VerifiedAndReset exercises the process-wide accessors used by
+// the engine.
+func TestGlobal_VerifiedAndReset(t *testing.T) {
 	Reset()
-	if skip, ver := Stats(); skip != 0 || ver != 0 {
-		t.Fatalf("Reset must zero the counters; got skip=%d ver=%d", skip, ver)
-	}
 	if Verified(id(1)) {
 		t.Fatal("miss on a fresh global cache")
 	}
@@ -90,11 +87,8 @@ func TestGlobal_StatsAndReset(t *testing.T) {
 	if !Verified(id(1)) {
 		t.Fatal("MarkVerified must be observable via Verified")
 	}
-	skip, ver := Stats()
-	// Two Verified() calls above (one miss + one hit) → one skipped increment;
-	// one MarkVerified → one verified increment.
-	if skip != 1 || ver != 1 {
-		t.Fatalf("unexpected stats: skip=%d ver=%d (want 1,1)", skip, ver)
-	}
 	Reset()
+	if Verified(id(1)) {
+		t.Fatal("Reset must clear the global cache")
+	}
 }
