@@ -21,6 +21,8 @@ package watchdog
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -97,6 +99,13 @@ type Watchdog struct {
 	// tests can assert it fires without parsing a real dump.
 	stack func() string
 
+	// stackSink receives the FULL goroutine dump verbatim, bypassing the
+	// structured logger whose per-attribute encoding truncates a large dump
+	// (the slog "stacks" field is capped well below a real 100+-goroutine
+	// dump). Defaults to os.Stderr so a container captures the complete dump;
+	// tests point it at a buffer. issue-keepup diagnostic — throwaway.
+	stackSink io.Writer
+
 	// warnedStack guards the once-per-episode goroutine dump. Only the Run
 	// goroutine touches it, so it needs no lock.
 	warnedStack bool
@@ -128,6 +137,7 @@ func New(cfg Config, logger *slog.Logger) *Watchdog {
 		now:        time.Now,
 		sync:       syncLogDescriptors,
 		stack:      allGoroutineStacks,
+		stackSink:  os.Stderr,
 		heartbeats: make(map[string]time.Time),
 	}
 	// exit terminates the process so an orchestrator can restart the wedged node
@@ -219,7 +229,11 @@ func (w *Watchdog) check(tick time.Duration) {
 				"loop", loop, "stalled_s", secs)
 			if !w.warnedStack {
 				w.warnedStack = true
-				w.logger.Warn("goroutine dump", "stacks", w.stack())
+				dump := w.stack()
+				// The full dump goes to the sink (untruncated); the logger keeps
+				// a marker so structured-log consumers still see the event.
+				w.dumpToSink("first-warn", loop, secs, dump)
+				w.logger.Warn("goroutine dump", "stacks", dump)
 			}
 		} else {
 			// slog has no Fatal level; the level=fatal attr is the fatal marker,
@@ -230,11 +244,28 @@ func (w *Watchdog) check(tick time.Duration) {
 	}
 
 	if silence >= w.cfg.Abort {
+		secs := int64(silence / time.Second)
+		// Definitive stall evidence: capture a FRESH full dump of every
+		// goroutine right before aborting, so the terminal wedge (not the
+		// 10s-in first-warn snapshot) is on record. Straight to the sink,
+		// which the logger's attribute cap would otherwise truncate.
+		w.dumpToSink("FATAL-STALL", loop, secs, w.stack())
 		w.logger.Error("fatal server stall detected — aborting",
-			"loop", loop, "stalled_s", int64(silence/time.Second))
+			"loop", loop, "stalled_s", secs)
 		w.sync()
 		w.exit()
 	}
+}
+
+// dumpToSink writes the full goroutine dump verbatim to stackSink, framed by a
+// greppable banner so the next soak can locate it. issue-keepup — throwaway.
+func (w *Watchdog) dumpToSink(phase, loop string, secs int64, dump string) {
+	if w.stackSink == nil {
+		return
+	}
+	fmt.Fprintf(w.stackSink,
+		"\n=== issue-keepup %s goroutine dump (loop=%s stalled_s=%d) ===\n%s\n=== end issue-keepup dump ===\n",
+		phase, loop, secs, dump)
 }
 
 // syncLogDescriptors best-effort flushes the node's logs so the final abort
@@ -250,9 +281,16 @@ func syncLogDescriptors() {
 }
 
 // allGoroutineStacks returns a dump of every goroutine's stack — the Go
-// equivalent of rippled dumping its JobQueue at the first stall warning.
+// equivalent of rippled dumping its JobQueue at the first stall warning. The
+// buffer grows until the whole dump fits: runtime.Stack silently truncates to
+// the buffer length, and a wedged node under load can hold far more goroutines
+// than a fixed 1 MiB would capture (the overlay per-peer and worker tail is
+// exactly what a stall post-mortem needs).
 func allGoroutineStacks() string {
-	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	return string(buf[:n])
+	for size := 1 << 20; ; size *= 2 {
+		buf := make([]byte, size)
+		if n := runtime.Stack(buf, true); n < size {
+			return string(buf[:n])
+		}
+	}
 }

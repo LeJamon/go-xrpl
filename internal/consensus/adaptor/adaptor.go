@@ -243,6 +243,12 @@ type Adaptor struct {
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
+	// validationsEmitted counts validations this node has broadcast. Throwaway
+	// issue-keepup instrumentation: a soak confirms validations resume once the
+	// forward-delta walk closes the gap and the node returns to OpModeFull
+	// (they froze at 0 while stuck jump-adopting).
+	validationsEmitted atomic.Uint64
+
 	logger *slog.Logger
 }
 
@@ -456,6 +462,13 @@ func (a *Adaptor) BroadcastProposal(proposal *consensus.Proposal) error {
 }
 
 func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
+	n := a.validationsEmitted.Add(1)
+	if a.logger != nil {
+		a.logger.Info("issue-keepup validation emitted",
+			"total", n,
+			"seq", validation.LedgerSeq,
+		)
+	}
 	return a.sender.BroadcastValidation(validation)
 }
 

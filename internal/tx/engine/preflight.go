@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -346,8 +347,22 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	if tx.GetCommon().SignatureVerified() {
 		return ter.TesSUCCESS
 	}
+	// tx-ID-keyed verified-good cache (rippled SF_SIGGOOD analog): the object
+	// SignatureVerified flag is cold after the consensus build re-parses the
+	// agreed tx set into fresh transactions, but the tx ID survives that
+	// re-parse. A hit means this exact signed blob was already verified good at
+	// ingress or on first tx-set acquisition, so the redundant per-block ECDSA/
+	// EdDSA verify is skipped. A miss (unknown/forged tx) still runs the full
+	// verify below — the cache is positive-only, so no unverified tx slips through.
+	txID, idErr := txcore.ComputeTransactionHash(tx)
+	if idErr == nil && sigcache.Verified(txID) {
+		return ter.TesSUCCESS
+	}
 	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
+	}
+	if idErr == nil {
+		sigcache.MarkVerified(txID)
 	}
 	return ter.TesSUCCESS
 }
@@ -386,6 +401,12 @@ func PrewarmSignature(txn txcore.Transaction, rules *amendment.Rules) {
 		(common.GetFlags()&txcore.TfFullyCanonicalSig) != 0
 	if sign.VerifySignature(txn, mustBeFullyCanonical) == nil {
 		common.MarkSignatureVerified()
+		// Publish the verdict to the tx-ID cache too, so the consensus build
+		// path (which re-parses the blob into a fresh object with a cold flag)
+		// skips the redundant verify. Only reached on a successful verify.
+		if txID, err := txcore.ComputeTransactionHash(txn); err == nil {
+			sigcache.MarkVerified(txID)
+		}
 	}
 }
 

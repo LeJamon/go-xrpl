@@ -26,6 +26,11 @@ import (
 // short-circuits in the common case of no pending work).
 const inboundReplayDeltaTickInterval = 100 * time.Millisecond
 
+// catchupDiagInterval throttles the throwaway issue-keepup catch-up diagnostic
+// emitted from maintenanceTick so it fires at roughly the acquisition-timer
+// cadence rather than on every 100ms tick.
+const catchupDiagInterval = 3 * time.Second
+
 // peerLedgerState tracks the latest ledger info reported by a peer.
 type peerLedgerState struct {
 	LedgerSeq  uint32
@@ -180,6 +185,49 @@ type Router struct {
 	// store (see SetAcquisitionFamily); nil leaves them unbacked. Set once at
 	// startup, before Run.
 	acquisitionFamily shamap.Family
+
+	// catchupMu guards catchup, the single consensus catch-up target. The
+	// gossip-driven arming sites (handleStatusChange, maybeAcquireFromValidation,
+	// checkBehind) all funnel through ensureCatchupAcquisition, which records the
+	// highest trusted (seq,hash) seen here and arms at most maxConcurrentCatchup
+	// acquisitions toward it — mirroring rippled's LedgerMaster::doAdvance driving
+	// one needed target rather than one InboundLedger per gossiped event.
+	catchupMu sync.Mutex
+	catchup   catchupTarget
+
+	// seqHashMu guards the seqHash table: the network's hash (and, when known,
+	// parent hash) per ledger sequence, learned from trusted validations and peer
+	// status_change gossip. It supplies the hash of closed+1 (the forward-delta
+	// catch-up target) and the parent linkage that proves closed+1 descends from
+	// our closed ledger. Bounded to seqHashRetain sequences; seqHashMax tracks the
+	// highest recorded seq so pruning keeps a trailing window.
+	seqHashMu  sync.Mutex
+	seqHash    map[uint32]ledgerHashEntry
+	seqHashMax uint32
+
+	// lastCatchupDiag throttles the issue-keepup in-flight catch-up diagnostic
+	// to the acquisition-timer cadence so it doesn't spam the 100ms maintenance
+	// tick. Written only on the Run goroutine. Throwaway instrumentation.
+	lastCatchupDiag time.Time
+}
+
+// catchupTarget is the highest (seq,hash) the router is driving a bounded
+// consensus catch-up toward, plus the peer that last advertised it.
+type catchupTarget struct {
+	seq    uint32
+	hash   [32]byte
+	peerID uint64
+}
+
+// ledgerHashEntry is the network's view of one ledger sequence: its hash and,
+// when a status_change revealed it, the hash of its parent. Trusted validations
+// populate hash only (they carry no parent link); peer status_change gossip
+// populates both. haveParent distinguishes a real zero parent hash from "not yet
+// learned".
+type ledgerHashEntry struct {
+	hash       [32]byte
+	parentHash [32]byte
+	haveParent bool
 }
 
 // txWorkerCount bounds the goroutines draining inbound peer transactions off
@@ -245,6 +293,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs: defaultTxSetRetryKnobs(),
+		seqHash:         make(map[uint32]ledgerHashEntry),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
@@ -586,6 +635,26 @@ func (r *Router) maintenanceTick() {
 	// forever. Reaping here also unblocks startLedgerAcquisitionLegacy and the
 	// replay-delta path, both of which refuse to arm while the hash is in flight.
 	now := time.Now()
+
+	// issue-keepup: surface the in-flight consensus-reason acquisition count and
+	// the current catch-up target so a soak can confirm the former per-gossip
+	// fan-out collapsed to <= maxConcurrentCatchup. Throttled to the acquisition
+	// timer cadence so it doesn't spam the 100ms tick. Throwaway; strip with the
+	// issue-keepup build line in lifecycle.go.
+	if now.Sub(r.lastCatchupDiag) >= catchupDiagInterval {
+		r.lastCatchupDiag = now
+		tSeq, _, _ := r.bestCatchupTarget()
+		var closed uint32
+		if svc := r.adaptor.LedgerService(); svc != nil {
+			closed = svc.GetClosedLedgerIndex()
+		}
+		r.logger.Info("issue-keepup catchup",
+			"in_flight", r.catchupInFlight(),
+			"target_seq", tSeq,
+			"closed", closed,
+		)
+	}
+
 	for _, il := range r.fetchTracker.Active() {
 		switch il.OnTimer(now) {
 		case inbound.TimerFailed:

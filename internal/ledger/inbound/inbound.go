@@ -146,6 +146,15 @@ type Ledger struct {
 	timeouts  int
 	byHash    bool
 
+	// recentNodes de-dups reply-driven node re-requests within a single timer
+	// interval, keyed by missing-node content hash. Without it every peer reply
+	// re-requests the same outstanding nodes, spinning the acquisition at RTT
+	// rate; with it a node already asked for this interval is dropped from the
+	// reply path (the timeout fan-out bypasses the filter). Cleared each OnTimer
+	// due-fire so re-requests are paced at ~once per interval per node. Mirrors
+	// rippled InboundLedger::mRecentNodes/filterNodes. Guarded by mu.
+	recentNodes map[[32]byte]struct{}
+
 	// Rejection diagnostics, surfaced on the no-progress tick so a stuck
 	// acquisition names which node it cannot place and why (the signal the
 	// swallowed Debug logs hid). Guarded by mu.
@@ -177,12 +186,13 @@ func WithFamily(family shamap.Family) Option {
 // The acquisition reason defaults to ReasonConsensus.
 func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
 	l := &Ledger{
-		hash:      hash,
-		seq:       seq,
-		peers:     []uint64{peerID},
-		state:     StateWantBase,
-		lastTimer: SystemClock.Now(),
-		logger:    logger,
+		hash:        hash,
+		seq:         seq,
+		peers:       []uint64{peerID},
+		state:       StateWantBase,
+		lastTimer:   SystemClock.Now(),
+		logger:      logger,
+		recentNodes: make(map[[32]byte]struct{}),
 	}
 	for _, opt := range opts {
 		opt(l)
@@ -278,6 +288,12 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 		return TimerNone
 	}
 	l.lastTimer = now
+
+	// Clear the per-interval re-request de-dup set so this tick's requests
+	// (timeout fan-out and the replies it draws) start fresh, pacing node
+	// re-requests at ~once per interval. Mirrors rippled onTimer's
+	// mRecentNodes.clear() (InboundLedger.cpp:368).
+	clear(l.recentNodes)
 
 	if l.progress {
 		// rippled onTimer(true): progress this interval — reset and keep going
@@ -690,6 +706,71 @@ func missingNodeIDs(m *shamap.SHAMap) [][]byte {
 	nodeIDs := make([][]byte, 0, len(missing))
 	for i := range missing {
 		nodeIDs = append(nodeIDs, missing[i].NodeID.Bytes())
+	}
+	return nodeIDs
+}
+
+// CollectMissingRequest returns the wire-encoded NodeIDs of outstanding state-
+// and transaction-tree nodes to request, de-duplicated against the nodes
+// already asked for this timer interval (recentNodes, cleared each OnTimer
+// due-fire). It is the request-path counterpart to the pure NeedsMissing*
+// inspection queries, and is the choke point for the re-request throttle.
+//
+// isReply distinguishes the two trigger paths, mirroring rippled
+// InboundLedger::filterNodes(reason):
+//   - reply (isReply=true): a node already requested this interval is dropped,
+//     and a tree whose whole missing set is duplicates returns nil so the reply
+//     path sends nothing — this is what tames the per-reply spin.
+//   - timeout (isReply=false): the all-duplicates short-circuit is bypassed so
+//     the no-progress fan-out still queries every peer; freshly-seen nodes are
+//     still preferred when any exist.
+//
+// In both cases the returned nodes are recorded in recentNodes so subsequent
+// replies in the same interval de-dup against them.
+func (l *Ledger) CollectMissingRequest(isReply bool) (state, txn [][]byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state != StateWantState {
+		return nil, nil
+	}
+	if l.stateMap != nil && !l.haveState {
+		state = l.filterMissingLocked(l.stateMap, isReply)
+	}
+	if l.txMap != nil && !l.haveTx {
+		txn = l.filterMissingLocked(l.txMap, isReply)
+	}
+	return state, txn
+}
+
+// filterMissingLocked applies the recentNodes de-dup to m's missing nodes and
+// returns the wire NodeIDs to request, recording them in recentNodes. Keyed by
+// content hash, matching rippled filterNodes (which de-dups on the node hash).
+// Caller holds mu.
+func (l *Ledger) filterMissingLocked(m *shamap.SHAMap, isReply bool) [][]byte {
+	missing := m.GetMissingNodes(missingNodeBatch, nil)
+	if len(missing) == 0 {
+		return nil
+	}
+	fresh := make([]shamap.MissingNode, 0, len(missing))
+	for i := range missing {
+		if _, dup := l.recentNodes[missing[i].Hash]; !dup {
+			fresh = append(fresh, missing[i])
+		}
+	}
+	use := fresh
+	if len(fresh) == 0 {
+		// Every outstanding node was already requested this interval. On a reply
+		// send nothing (stops the spin); on a timeout re-query everyone.
+		if isReply {
+			return nil
+		}
+		use = missing
+	}
+	nodeIDs := make([][]byte, 0, len(use))
+	for i := range use {
+		nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
+		l.recentNodes[use[i].Hash] = struct{}{}
 	}
 	return nodeIDs
 }

@@ -2325,11 +2325,11 @@ const (
 
 // checkConvergence drives the accept gate (rippled's
 // phaseEstablish→haveConsensus→checkConsensus flow): maintain the local
-// "converged" observability flag, compute consensusState, apply the
-// Expired retry gate (before the close-time gate, as rippled folds it
-// into haveConsensus), then the haveCloseTimeConsensus gate to every
-// non-No outcome, and dispatch Yes→accept(Success), MovedOn→accept(MovedOn),
-// Expired→leaveConsensus+accept(Abandoned), No→retry next heartbeat.
+// "converged" observability flag, compute consensusState, then dispatch.
+// The Expired hard-timeout terminates the round BEFORE the close-time gate
+// (expireRound) so a close-time-stuck round can't livelock; the
+// haveCloseTimeConsensus gate applies only to the normal Yes→accept(Success)
+// and MovedOn→accept(MovedOn) paths. No→retry next heartbeat.
 func (e *Engine) checkConvergence() {
 	if e.phase != consensus.PhaseEstablish {
 		return
@@ -2360,8 +2360,14 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
-	// Expired retry gate runs before the close-time gate (rippled folds it
-	// into haveConsensus): no accept while inside the per-avalanche minimum dwell.
+	// Expired hard-timeout terminates the round BEFORE the close-time gate,
+	// mirroring rippled: leaveConsensus fires inside haveConsensus
+	// (Consensus.h:1784) ahead of phaseEstablish's !haveCloseTimeConsensus_
+	// return (Consensus.h:1406). A close-time-stuck round must still end or it
+	// livelocks — our per-close heartbeat fatal-aborts a live-but-not-closing
+	// node that rippled's loop-liveness LoadManager would tolerate. Still honour
+	// the per-avalanche minimum dwell first (rippled Consensus.h:1765): don't
+	// expire while we haven't given each avalanche level a chance.
 	if state == consensusStateExpired {
 		minimumCounter := len(e.parms.AvalancheCutoffs) * e.parms.MinRounds
 		if e.establishCounter < minimumCounter {
@@ -2375,10 +2381,13 @@ func (e *Engine) checkConvergence() {
 			)
 			return
 		}
+		e.expireRound(roundTime)
+		return
 	}
 
-	// Close-time consensus required before any non-No accept. Re-try once here
-	// in case the caller (OnProposal/OnTxSet) skipped phaseEstablish.
+	// Close-time consensus gates only the normal (Yes/MovedOn) accept path.
+	// Re-try once here in case the caller (OnProposal/OnTxSet) skipped
+	// phaseEstablish.
 	if !e.closeTime.haveConsensus {
 		e.updateCloseTimePosition()
 		if !e.closeTime.haveConsensus {
@@ -2404,28 +2413,60 @@ func (e *Engine) checkConvergence() {
 			"round_time_ms", roundTime.Milliseconds(),
 		)
 		e.acceptLedger(consensus.ResultMovedOn)
-	case consensusStateExpired:
-		slog.Warn("consensus taken too long, abandoning round",
-			"t", "consensus",
-			"event", "expired",
-			"round", e.state.Round,
-			"round_time", roundTime,
-			"prev_round_time", e.prevRoundTime,
-			"max_consensus", e.timing.LedgerMaxConsensus,
-			"abandon_consensus", e.timing.LedgerAbandonConsensus,
-		)
-		e.eventBus.Publish(&consensus.TimerFiredEvent{
-			Timer:     consensus.TimerRoundTimeout,
-			Round:     e.state.Round,
-			Timestamp: e.adaptor.Now(),
-		})
-		// leaveConsensus analog: no on-wire bowOut flag yet, so drop to
-		// Observing — the next round won't count us as a proposer.
-		if e.mode == consensus.ModeProposing {
-			e.setMode(consensus.ModeObserving)
-		}
-		e.acceptLedger(consensus.ResultAbandoned)
 	}
+}
+
+// expireRound terminates a round that blew past the hard consensus deadline
+// (consensusStateExpired, past the per-avalanche minimum dwell). It runs before
+// checkConvergence's close-time gate so a close-time-stuck round still ends.
+//
+// rippled bows a proposer out here via leaveConsensus (Consensus.h:1784) but,
+// with its LoadManager tolerating a live-but-not-closing node, leaves the round
+// un-accepted until checkLedger resyncs it. Our per-close heartbeat fatal-aborts
+// such a node, and under a persistent close-time split no validated tip advances
+// for checkLedger to chase, so we also accept the majority position (a ledger
+// closes, the heartbeat ticks) and, for a switched-ledger round that
+// checkStuckWrongLedger can't rescue, drop to a degraded resync so the node
+// catches the validated tip instead of churning minority ledgers. Caller holds
+// e.mu; phase==Establish.
+func (e *Engine) expireRound(roundTime time.Duration) {
+	slog.Warn("consensus taken too long, abandoning round",
+		"t", "consensus",
+		"event", "expired",
+		"round", e.state.Round,
+		"round_time", roundTime,
+		"prev_round_time", e.prevRoundTime,
+		"max_consensus", e.timing.LedgerMaxConsensus,
+		"abandon_consensus", e.timing.LedgerAbandonConsensus,
+	)
+	e.eventBus.Publish(&consensus.TimerFiredEvent{
+		Timer:     consensus.TimerRoundTimeout,
+		Round:     e.state.Round,
+		Timestamp: e.adaptor.Now(),
+	})
+
+	startMode := e.mode
+	action := "accept-majority"
+	switch startMode {
+	case consensus.ModeProposing:
+		// leaveConsensus analog (rippled Consensus.h:1805): a proposer bows out
+		// so the next round won't count us as a proposer.
+		e.setMode(consensus.ModeObserving)
+		action = "bowout"
+	case consensus.ModeSwitchedLedger:
+		// A ledger-switch round can't self-recover — checkStuckWrongLedger only
+		// rescues ModeWrongLedger — so resync toward the validated tip.
+		e.dropToDegradedResync("round-expired-switched")
+	}
+
+	slog.Warn("issue-keepup round-expired",
+		"t", "consensus",
+		"mode", startMode.String(),
+		"seq", e.state.Round.Seq,
+		"action", action,
+	)
+
+	e.acceptLedger(consensus.ResultAbandoned)
 }
 
 // checkConsensusState mirrors rippled's checkConsensus, returning

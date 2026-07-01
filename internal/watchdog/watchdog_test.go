@@ -3,6 +3,7 @@ package watchdog
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -46,6 +47,9 @@ func newTestWatchdog(t *testing.T) (*Watchdog, *fakeClock, *bytes.Buffer, *atomi
 	w.exit = func() { exits.Add(1) }
 	w.sync = func() {}
 	w.stack = func() string { stacks.Add(1); return "STACKDUMP" }
+	// Default the full-dump sink to discard so tests don't spam stderr; tests
+	// that assert on the dump override it with a buffer.
+	w.stackSink = io.Discard
 	return w, clk, &logBuf, &exits, &stacks
 }
 
@@ -98,9 +102,12 @@ func TestWatchdog_NoLoopsNeverTrips(t *testing.T) {
 }
 
 // A silent loop escalates warn → fatal → abort at the right thresholds, dumping
-// goroutine stacks exactly once on the first warning.
+// goroutine stacks on the first warning and again — freshly — right before the
+// abort, so the terminal wedge is captured in full to the sink.
 func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	w, clk, logBuf, exits, stacks := newTestWatchdog(t)
+	var sink bytes.Buffer
+	w.stackSink = &sink
 	w.Register("ledger") // registered, then never pinged again.
 
 	var firstWarnAt, fatalAt, abortAt int
@@ -133,11 +140,19 @@ func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	if abortAt != 600 {
 		t.Errorf("abort at %ds, want 600s", abortAt)
 	}
-	if got := stacks.Load(); got != 1 {
-		t.Errorf("goroutine dump fired %d times, want exactly 1", got)
+	// One dump at the first warning, one fresh dump before the abort.
+	if got := stacks.Load(); got != 2 {
+		t.Errorf("goroutine dump fired %d times, want exactly 2 (first-warn + abort)", got)
 	}
 	if !bytes.Contains(logBuf.Bytes(), []byte("STACKDUMP")) {
 		t.Errorf("stack dump not logged")
+	}
+	// The definitive abort dump reaches the sink verbatim, under its banner.
+	if !bytes.Contains(sink.Bytes(), []byte("FATAL-STALL goroutine dump")) {
+		t.Errorf("fatal-stall dump not written to sink")
+	}
+	if !bytes.Contains(sink.Bytes(), []byte("STACKDUMP")) {
+		t.Errorf("sink missing the goroutine dump body")
 	}
 }
 

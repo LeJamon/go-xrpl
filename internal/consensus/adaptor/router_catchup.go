@@ -40,8 +40,16 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 			copy(peerHash[:], sc.LedgerHash)
 		}
 		var parentHash [32]byte
-		if len(sc.LedgerHashPrevious) == 32 {
+		haveParent := len(sc.LedgerHashPrevious) == 32
+		if haveParent {
 			copy(parentHash[:], sc.LedgerHashPrevious)
+		}
+
+		// Record the (seq, hash, parentHash) link so the forward-delta catch-up
+		// knows the hash of closed+1 and its parent linkage. status_change is the
+		// only gossip source that carries the parent hash (validations don't).
+		if len(sc.LedgerHash) == 32 {
+			r.recordSeqHash(sc.LedgerSeq, peerHash, parentHash, haveParent)
 		}
 
 		r.peersMu.Lock()
@@ -58,14 +66,16 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 
 		// During initial sync, fetch the full ledger from the peer.
 		// Don't adopt with synthetic headers — wait for real state data.
+		// Routed through the bounded funnel so a fresh node also drives a
+		// single target toward the tip instead of fanning out per status.
 		if r.adaptor.NeedsInitialSync() && sc.LedgerSeq > 1 {
-			r.startLedgerAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+			r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 			return
 		}
 
-		// When in Full mode and significantly behind (gap > 2), acquire the
-		// latest ledger from the peer but stay in Full mode so we keep
-		// participating in consensus.
+		// When in Full mode and significantly behind (gap > 2), catch up toward
+		// the network tip but stay in Full mode so we keep participating in
+		// consensus.
 		if r.adaptor.GetOperatingMode() == consensus.OpModeFull && sc.LedgerSeq > 1 {
 			svc := r.adaptor.LedgerService()
 			if svc != nil {
@@ -76,20 +86,20 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 						"peer_seq", sc.LedgerSeq,
 						"gap", sc.LedgerSeq-ourSeq,
 					)
-					r.startLedgerAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+					r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 					return
 				}
 			}
 		}
 
-		// While not in Full mode, keep acquiring from peers until
-		// we're within 1 ledger of the network.
+		// While not in Full mode, keep catching up until we're within 1 ledger
+		// of the network.
 		if r.adaptor.GetOperatingMode() != consensus.OpModeFull && sc.LedgerSeq > 1 {
 			svc := r.adaptor.LedgerService()
 			if svc != nil {
 				ourSeq := svc.GetClosedLedgerIndex()
 				if sc.LedgerSeq > ourSeq+1 {
-					r.startLedgerAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
+					r.ensureCatchupAcquisition(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 					return
 				}
 			}
@@ -125,6 +135,261 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 
 		r.checkBehind(sc.LedgerSeq, peerHash, uint64(msg.PeerID))
 	}
+}
+
+// maxConcurrentCatchup bounds how many consensus-reason ledger acquisitions the
+// gossip-driven catch-up may run at once. rippled's LedgerMaster::doAdvance
+// drives a SINGLE needed target (the trusted-validated / preferred ledger)
+// rather than arming one InboundLedger per gossiped status/validation; we mirror
+// that with a hard cap. Kept as a named const so it can rise to 2 without
+// touching the arming logic — ensureCatchupAcquisition and the retarget-on-
+// complete path both compare against it and retarget (rather than add) once hit.
+const maxConcurrentCatchup = 1
+
+// maxForwardDeltaGap bounds how far behind the network tip the router walks
+// forward one ledger at a time (replay-delta against the locally-held parent)
+// before it prefers a single full-state jump-adopt. Within this gap a
+// same-branch node closes the distance cheaply by applying each next tx set to
+// its closed ledger — O(txs) per hop, which outruns the network's close cadence
+// — so a serial forward walk converges. Beyond it a cold or far-behind start
+// jumps straight to the validated tip rather than grinding a long serial walk.
+// This mirrors rippled reserving InboundLedger full-state acquisition for the
+// cold/forked case while LedgerMaster::doAdvance advances the forward chain in
+// steady state.
+const maxForwardDeltaGap = 128
+
+// seqHashRetain bounds the seqHash table to a trailing window of ledger
+// sequences so a long-running node never grows it unbounded. A drift of a few
+// ledgers (the soak case) sits comfortably inside it.
+const seqHashRetain = 256
+
+// recordSeqHash records the network's hash — and, when a status_change revealed
+// it, the parent hash — for a ledger sequence, learned from a trusted validation
+// or peer gossip. It backs the forward-delta catch-up decision: the hash to
+// acquire for closed+1 and the parent linkage that proves it descends from our
+// closed ledger. The table is pruned to the most recent seqHashRetain sequences
+// on insert. A later, fuller entry (parent hash from a status_change) upgrades an
+// earlier hash-only entry rather than clobbering it.
+func (r *Router) recordSeqHash(seq uint32, hash, parentHash [32]byte, haveParent bool) {
+	if seq == 0 || hash == ([32]byte{}) {
+		return
+	}
+	r.seqHashMu.Lock()
+	defer r.seqHashMu.Unlock()
+
+	e := r.seqHash[seq]
+	e.hash = hash
+	if haveParent {
+		e.parentHash = parentHash
+		e.haveParent = true
+	}
+	r.seqHash[seq] = e
+
+	// The parent linkage also names seq-1's own hash. Seed it (without a
+	// parent) when we don't already hold a fuller entry, so a same-branch check
+	// against our closed seq can succeed even if no direct validation for it
+	// arrived.
+	if haveParent && seq > 1 {
+		if pe, ok := r.seqHash[seq-1]; !ok || pe.hash == ([32]byte{}) {
+			pe.hash = parentHash
+			r.seqHash[seq-1] = pe
+		}
+	}
+
+	if seq > r.seqHashMax {
+		r.seqHashMax = seq
+	}
+	if len(r.seqHash) > seqHashRetain {
+		r.pruneSeqHashLocked()
+	}
+}
+
+// pruneSeqHashLocked drops entries older than the trailing seqHashRetain window.
+// Caller holds seqHashMu.
+func (r *Router) pruneSeqHashLocked() {
+	if r.seqHashMax <= seqHashRetain {
+		return
+	}
+	floor := r.seqHashMax - seqHashRetain
+	for s := range r.seqHash {
+		if s < floor {
+			delete(r.seqHash, s)
+		}
+	}
+}
+
+// lookupSeqHash returns the recorded network view for a ledger sequence.
+func (r *Router) lookupSeqHash(seq uint32) (ledgerHashEntry, bool) {
+	r.seqHashMu.Lock()
+	defer r.seqHashMu.Unlock()
+	e, ok := r.seqHash[seq]
+	return e, ok
+}
+
+// catchupInFlight reports how many consensus-reason ledger acquisitions are
+// active, across both the legacy header+state fetchTracker and the replay-delta
+// replayer. Generic (RPC-driven) acquisitions carry ReasonGeneric and are
+// excluded so an arbitrary historical fetch never consumes a catch-up slot.
+// This is the gate the catch-up funnel checks against maxConcurrentCatchup.
+func (r *Router) catchupInFlight() int {
+	return r.fetchTracker.CountReason(inbound.ReasonConsensus) + r.replayer.Count()
+}
+
+// recordCatchupTarget updates the single consensus catch-up target to (seq,
+// hash, peerID) when seq is strictly higher than the target currently held.
+// Older or equal tips are ignored so the router always drives toward the
+// highest trusted tip it has seen — the go-xrpl analogue of rippled tracking a
+// single preferred/needed ledger.
+func (r *Router) recordCatchupTarget(seq uint32, hash [32]byte, peerID uint64) {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	if seq > r.catchup.seq {
+		r.catchup = catchupTarget{seq: seq, hash: hash, peerID: peerID}
+	}
+}
+
+// bestCatchupTarget returns the current highest recorded catch-up target.
+func (r *Router) bestCatchupTarget() (seq uint32, hash [32]byte, peerID uint64) {
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	return r.catchup.seq, r.catchup.hash, r.catchup.peerID
+}
+
+// armCatchupTowardTarget arms exactly one catch-up acquisition, but only while
+// fewer than maxConcurrentCatchup consensus acquisitions are in flight and the
+// recorded tip is still ahead of our closed ledger. It chooses between two
+// strategies, mirroring rippled's LedgerMaster::doAdvance (forward chain walk)
+// vs InboundLedger full-state acquisition (cold/forked start):
+//
+//   - Forward-delta step: when closed+1 is a known clean child of our closed
+//     ledger and the tip is within maxForwardDeltaGap, acquire closed+1. Its
+//     parent (our closed) is local, so startLedgerAcquisition selects the
+//     bandwidth-cheap replay-delta path; the completion re-arms toward the next
+//     closed+1, a serial forward walk that converges.
+//   - Jump-adopt: otherwise (cold/far/forked) acquire the far validated tip
+//     directly; its parent chain is absent, so the legacy full-state path plus
+//     completeInboundLedger's gap>1 branch jumps the working ledger forward.
+//
+// Shared by ensureCatchupAcquisition (after recording a fresh tip) and the
+// retarget-on-complete paths. startLedgerAcquisition's own dedup makes a
+// redundant call a no-op.
+func (r *Router) armCatchupTowardTarget() {
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	if r.catchupInFlight() >= maxConcurrentCatchup {
+		return
+	}
+	tSeq, tHash, tPeer := r.bestCatchupTarget()
+	if tSeq == 0 {
+		return
+	}
+	closed := svc.GetClosedLedgerIndex()
+	if tSeq <= closed {
+		return
+	}
+
+	if seq, hash, peer, ok := r.forwardDeltaStep(svc, closed, tSeq); ok {
+		r.logger.Info("issue-keepup catchup arm",
+			"path", "replay-delta",
+			"target_seq", seq,
+			"closed", closed,
+			"gap", tSeq-closed,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+		)
+		r.startLedgerAcquisition(seq, hash, peer)
+		return
+	}
+
+	r.logger.Info("issue-keepup catchup arm",
+		"path", "jump-adopt",
+		"target_seq", tSeq,
+		"closed", closed,
+		"gap", tSeq-closed,
+		"hash", fmt.Sprintf("%x", tHash[:8]),
+	)
+	r.startLedgerAcquisition(tSeq, tHash, tPeer)
+}
+
+// forwardDeltaStep decides whether the next catch-up hop should be a forward
+// one-ledger step against our locally-held closed ledger, returning the
+// (seq, hash, peer) to acquire when so. It requires all of:
+//
+//   - a modest gap to the tip (tipSeq-closed <= maxForwardDeltaGap);
+//   - a known network hash for closed+1 (the target to acquire); and
+//   - proof that closed+1 descends from our closed ledger (same branch) —
+//     closed+1's recorded parentHash equals our closed hash, or, when only a
+//     validation (hash, no parent) populated closed+1, the recorded hash for
+//     our own closed seq equals our closed hash. Those are equivalent parent
+//     linkages: the parent of closed+1 IS the ledger at our closed seq.
+//
+// A missing target, divergent linkage (fork), gap beyond the bound, or absent
+// linkage info all return ok=false, deferring to the jump-adopt fallback. This
+// keeps steady-state same-branch drift on the cheap forward path while cold and
+// forked starts resync via full-state acquisition.
+func (r *Router) forwardDeltaStep(svc *service.Service, closed, tipSeq uint32) (seq uint32, hash [32]byte, peer uint64, ok bool) {
+	if tipSeq-closed > maxForwardDeltaGap {
+		return 0, [32]byte{}, 0, false
+	}
+	next := closed + 1
+	entry, known := r.lookupSeqHash(next)
+	if !known || entry.hash == ([32]byte{}) {
+		return 0, [32]byte{}, 0, false
+	}
+	closedLedger := svc.GetClosedLedger()
+	if closedLedger == nil {
+		return 0, [32]byte{}, 0, false
+	}
+	closedHash := closedLedger.Hash()
+
+	sameBranch := false
+	if entry.haveParent {
+		sameBranch = entry.parentHash == closedHash
+	} else if cEntry, okC := r.lookupSeqHash(closed); okC && cEntry.hash != ([32]byte{}) {
+		sameBranch = cEntry.hash == closedHash
+	}
+	if !sameBranch {
+		return 0, [32]byte{}, 0, false
+	}
+	return next, entry.hash, r.forwardStepPeer(next), true
+}
+
+// forwardStepPeer picks a peer to serve a forward-delta step: one reporting at
+// or beyond the target seq, else the peer that advertised the current best tip.
+// startLedgerAcquisition still falls back to the legacy header+state path (also
+// a forward, gap-1 held adoption against our present parent) if that peer can't
+// replay.
+func (r *Router) forwardStepPeer(seq uint32) uint64 {
+	if p, ok := r.selectAcquisitionPeer(seq); ok {
+		return p
+	}
+	_, _, peer := r.bestCatchupTarget()
+	return peer
+}
+
+// ensureCatchupAcquisition is the single funnel for gossip-driven consensus
+// catch-up. It records (seq,hash,peerID) as the best target when strictly ahead
+// of our closed ledger, then arms one acquisition toward the best target — but
+// only while under the maxConcurrentCatchup cap. Once at the cap it just
+// retargets (records the newer tip) and returns, so a stream of ever-higher
+// gossiped tips no longer fans out into one acquisition per event. On
+// completion, completeInboundLedger re-arms toward the latest recorded target,
+// forming the bounded retarget loop that replaces the fan-out.
+//
+// Callers do their own eligibility gating first (e.g. the validated-tip gate in
+// maybeAcquireFromValidation, the operating-mode gap checks in
+// handleStatusChange). This helper only bounds CONCURRENCY, never eligibility.
+func (r *Router) ensureCatchupAcquisition(seq uint32, hash [32]byte, peerID uint64) {
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	if seq == 0 || seq <= svc.GetClosedLedgerIndex() {
+		return
+	}
+	r.recordCatchupTarget(seq, hash, peerID)
+	r.armCatchupTowardTarget()
 }
 
 // startLedgerAcquisition picks the best available ledger-acquisition
@@ -521,6 +786,12 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 	}
 	if res.Stashed {
 		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+	} else {
+		// The forward-delta step advanced our closed ledger. Continue the
+		// serial forward walk: re-arm toward the new closed+1 (or jump-adopt if
+		// still far). Skipped on a stash, where closed didn't move and the
+		// parent chase above drives progress instead.
+		r.armCatchupTowardTarget()
 	}
 	return nil
 }
@@ -548,6 +819,12 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	if !r.adaptor.IsTrusted(v.NodeID) {
 		return
 	}
+	// Record the network's hash for this seq regardless of the acquire gate
+	// below: the forward-delta decision needs the hash for closed+1 AND — to
+	// confirm the same branch — for our own closed seq, which can sit at or
+	// below the validated tip. Validations carry no parent hash.
+	r.recordSeqHash(v.LedgerSeq, [32]byte(v.LedgerID), [32]byte{}, false)
+
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return
@@ -564,19 +841,11 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
 		return
 	}
-	// startLedgerAcquisition dedupes via isAcquiring, but checking here keeps
-	// the hot path quiet when many validations name the same hash.
-	if r.isAcquiring(hash) {
-		return
-	}
-	r.logger.Info("acquiring ledger from trusted validation",
-		"t", "consensus",
-		"event", "validation-acquire",
-		"seq", v.LedgerSeq,
-		"hash", fmt.Sprintf("%x", hash[:8]),
-		"peer", originPeer,
-	)
-	r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
+	// Record this trusted tip and arm one bounded acquisition toward the best
+	// target. Many validations naming the same (or ever-higher) tip no longer
+	// fan out into an acquisition each: the funnel retargets under the cap and
+	// the completion path re-arms toward the latest tip.
+	r.ensureCatchupAcquisition(v.LedgerSeq, hash, originPeer)
 }
 
 // armValidationStashAcquisition arms inbound acquisition for a (seq, hash)
@@ -713,20 +982,18 @@ func (r *Router) checkBehind(peerSeq uint32, peerHash [32]byte, peerID uint64) {
 		return
 	}
 
-	r.logger.Info("behind network, acquiring peer tip",
+	r.logger.Info("behind network, driving catch-up toward peer tip",
 		"our_seq", ourSeq,
 		"peer_seq", peerSeq,
 		"gap", peerSeq-ourSeq,
 		"peer", peerID,
 	)
 
-	// Arm a real acquisition instead of broadcasting a bare
-	// mtGET_LEDGER. RequestLedgerByHashAndSeq would broadcast the
-	// request but never arm the InboundLedger state machine, so any
-	// response would arrive with no active consumer and be dropped.
-	// startLedgerAcquisition picks replay-delta or legacy per the
-	// routing policy and both paths install their own state machines.
-	r.startLedgerAcquisition(peerSeq, peerHash, peerID)
+	// Funnel through the bounded catch-up: record the tip and arm at most one
+	// acquisition toward the best target. Both acquisition paths (replay-delta
+	// or legacy) install their own state machines, so responses have a live
+	// consumer; a bare mtGET_LEDGER broadcast would arrive with none and drop.
+	r.ensureCatchupAcquisition(peerSeq, peerHash, peerID)
 }
 
 // ourLCLMatchesPeers checks if our closed ledger hash matches what the
@@ -931,8 +1198,13 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 // mirroring rippled's InboundLedger::trigger timeouts_ != 0 gate.
 func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
 	indirect := il.Timeouts() > 0
-	stateIDs := il.NeedsMissingNodeIDs()
-	txIDs := il.NeedsMissingTxNodeIDs()
+	// target != 0 is the reply path (re-request to the peer that answered);
+	// target == 0 is the no-progress timeout fan-out. The reply path is
+	// throttled against nodes already requested this timer interval so a peer
+	// reply cannot re-request the same outstanding nodes at RTT rate; the
+	// timeout path bypasses that throttle so the fan-out still reaches everyone.
+	isReply := target != 0
+	stateIDs, txIDs := il.CollectMissingRequest(isReply)
 	if len(stateIDs) == 0 && len(txIDs) == 0 {
 		return
 	}
@@ -1151,7 +1423,16 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 			r.logger.Debug("engine rejected adopted ledger", "error", err, "seq", h.LedgerIndex)
 		}
 	}
+	// Forward walk / retarget loop: this consensus acquisition (which the
+	// fetchTracker.Remove above already cleared from the in-flight set) advanced
+	// our closed ledger, either a gap-1 forward step or a jump-adopt. Re-arm the
+	// next single acquisition — the next forward closed+1 when same-branch, else
+	// a jump toward the highest trusted tip. Skipped on a stash: closed didn't
+	// move, so the parent chase is what makes progress and re-arming would only
+	// re-request the just-stashed hash.
 	if res.Stashed {
 		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+	} else {
+		r.armCatchupTowardTarget()
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
+	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -407,10 +408,22 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			pending = append(pending, ptx)
 		}
 
+		// issue-keepup: instrument the closed-ledger build wall-time and the
+		// per-build signature-verify skip/done split so a soak can confirm the
+		// redundant-verify cost is gone. Tagged for easy grep/strip.
+		buildStart := time.Now()
+		skipBefore, verBefore := sigcache.Stats()
 		built, err := s.buildClosedLedgerLocked(pending, closeTime, false)
 		if err != nil {
 			return 0, err
 		}
+		skipAfter, verAfter := sigcache.Stats()
+		s.logger.Info("issue-keepup build",
+			"ms", time.Since(buildStart).Milliseconds(),
+			"tx", len(pending),
+			"sig_skipped", skipAfter-skipBefore,
+			"sig_verified", verAfter-verBefore,
+		)
 		retriableTxs = built
 
 		// pending is now in canonical order for the round-summary log.

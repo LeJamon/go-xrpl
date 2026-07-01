@@ -132,6 +132,25 @@ func (t *Tracker) Remove(hash [32]byte, complete bool) {
 	delete(t.active, hash)
 }
 
+// CountReason returns how many in-flight acquisitions carry the given reason.
+// The router uses it to bound concurrent consensus-driven catch-up
+// acquisitions (ReasonConsensus) so a stream of gossiped tips can't fan out
+// into one acquisition per event.
+func (t *Tracker) CountReason(reason Reason) int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	n := 0
+	for _, l := range t.active {
+		if l.Reason() == reason {
+			n++
+		}
+	}
+	return n
+}
+
 // Active returns every in-flight acquisition currently tracked. The router
 // iterates these to attempt local completion from the fetch-pack cache
 // (Ledger.CheckLocal), mirroring rippled's InboundLedgers::gotFetchPack which
