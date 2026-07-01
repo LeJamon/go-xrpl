@@ -16,6 +16,10 @@ var (
 	ErrUnexpectedNode    = errors.New("unexpected node received")
 	ErrEmptyBranchOnPath = errors.New("path descends into an empty branch")
 	ErrParentNotInTree   = errors.New("parent node not yet loaded for path")
+	// ErrNodeNotInStore marks a backed-map descend whose child is genuinely
+	// absent from the family store, distinguishing a true miss from a
+	// transient fetch failure (I/O error, cancellation).
+	ErrNodeNotInStore = errors.New("node not found in store")
 )
 
 // AddNodeResult classifies the outcome of placing a peer-supplied node by
@@ -177,7 +181,9 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 			continue
 		}
 		if child == nil {
-			if loaded := loadFromStore(sm, sm.root, branch); loaded != nil {
+			// Lenient request path: a transient fetch failure reports the
+			// branch missing (self-corrects via the wire).
+			if loaded, _ := loadFromStore(sm, sm.root, branch); loaded != nil {
 				child = loaded
 			}
 		}
@@ -217,13 +223,14 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	for _, s := range subtrees {
 		go func() {
 			defer wg.Done()
-			walkSubtreeForMissing(
+			_, _ = walkSubtreeForMissing(
 				sm,
 				s.node,
 				s.nodeID,
 				s.nodeHash,
 				1,
 				filter,
+				false,
 				reportLocked,
 			)
 		}()
@@ -253,29 +260,43 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 // getMissingNodesUnsafe collects up to maxNodes missing-node references
 // using the same lazy-loading subtree walk as WalkMap and WalkMapParallel,
 // so all sync entry points agree about whether a backed map is complete.
-// Caller must hold at least the read lock.
+// Lenient on transient store errors (the request path). Caller must hold at
+// least the read lock.
 func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []MissingNode {
+	missing, _ := sm.missingNodesLocked(maxNodes, filter, false)
+	return missing
+}
+
+// missingNodesLocked is the shared walk behind the lenient request path and
+// the strict completeness checks (FinishSync, IsComplete). strict=true
+// aborts on a transient store error instead of reporting phantom missing
+// nodes. Caller must hold at least the read lock.
+func (sm *SHAMap) missingNodesLocked(maxNodes int, filter SyncFilter, strict bool) ([]MissingNode, error) {
 	if filter == nil {
 		filter = &DefaultSyncFilter{}
 	}
 	if sm.root == nil {
-		return nil
+		return nil, nil
 	}
 
 	var missing []MissingNode
-	walkSubtreeForMissing(
+	_, err := walkSubtreeForMissing(
 		sm,
 		sm.root,
 		NewRootNodeID(),
 		sm.root.Hash(),
 		0,
 		filter,
+		strict,
 		func(m MissingNode) bool {
 			missing = append(missing, m)
 			return maxNodes > 0 && len(missing) >= maxNodes
 		},
 	)
-	return missing
+	if err != nil {
+		return nil, err
+	}
+	return missing, nil
 }
 
 // AddKnownNode adds a node received from an external source.
@@ -581,8 +602,13 @@ func (sm *SHAMap) FinishSync() error {
 		return ErrSyncNotInProgress
 	}
 
-	// Verify the tree is complete
-	missingNodes := sm.getMissingNodesUnsafe(1, nil)
+	// Verify the tree is complete. Strict walk: a transient store error is
+	// surfaced as itself, never as a phantom missing node the caller would
+	// re-request over the wire.
+	missingNodes, err := sm.missingNodesLocked(1, nil, true)
+	if err != nil {
+		return fmt.Errorf("sync completeness walk: %w", err)
+	}
 	if len(missingNodes) > 0 {
 		return fmt.Errorf("sync incomplete: still have %d missing nodes", len(missingNodes))
 	}
@@ -612,8 +638,10 @@ func (sm *SHAMap) IsComplete() bool {
 		return true
 	}
 
-	missing := sm.getMissingNodesUnsafe(1, nil)
-	return len(missing) == 0
+	// Strict walk: a transient store error means completeness is unknown —
+	// conservatively incomplete.
+	missing, err := sm.missingNodesLocked(1, nil, true)
+	return err == nil && len(missing) == 0
 }
 
 // SyncProgress returns the estimated sync progress as a fraction.

@@ -197,7 +197,7 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 		return nil, fmt.Errorf("failed to fetch child node %x: %w", hash[:8], err)
 	}
 	if data == nil {
-		return nil, fmt.Errorf("child node %x not found in store", hash[:8])
+		return nil, fmt.Errorf("child node %x: %w", hash[:8], ErrNodeNotInStore)
 	}
 
 	// Fresh deserialised copy — not shared across SHAMap instances.

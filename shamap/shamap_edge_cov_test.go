@@ -721,18 +721,22 @@ func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
 	}
 
 	count := 0
-	stop := walkSubtreeForMissing(
+	stop, err := walkSubtreeForMissing(
 		dest,
 		dest.root,
 		NewRootNodeID(),
 		dest.root.Hash(),
 		0,
 		&DefaultSyncFilter{},
+		false,
 		func(MissingNode) bool {
 			count++
 			return true // stop immediately after first
 		},
 	)
+	if err != nil {
+		t.Fatalf("walkSubtreeForMissing: %v", err)
+	}
 	if !stop {
 		t.Error("walkSubtreeForMissing: expected stop=true when report returns true")
 	}

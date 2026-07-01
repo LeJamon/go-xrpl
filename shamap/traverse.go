@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -247,6 +248,13 @@ func (sm *SHAMap) boundBelow(node Node, ascending bool) (LeafNode, error) {
 // checks. It walks the subtree rooted at start and invokes report for
 // every non-empty branch whose child node is neither in memory nor
 // recoverable from sm's family.
+//
+// A transient family fetch failure is handled per mode: the lenient
+// request path (strict=false) reports the branch missing — rippled's
+// getMissingNodes collapse, self-correcting via the wire — while the
+// strict completeness path aborts with the error so FinishSync/IsComplete
+// never fabricate a missing node or conclude complete over a skipped
+// subtree.
 func walkSubtreeForMissing(
 	sm *SHAMap,
 	start *innerNode,
@@ -254,8 +262,9 @@ func walkSubtreeForMissing(
 	startHash [32]byte,
 	startDepth int,
 	filter SyncFilter,
+	strict bool,
 	report func(MissingNode) bool,
-) bool {
+) (bool, error) {
 	type workItem struct {
 		node     *innerNode
 		nodeID   NodeID
@@ -291,7 +300,11 @@ func walkSubtreeForMissing(
 			}
 
 			if child == nil {
-				if loaded := loadFromStore(sm, item.node, branch); loaded != nil {
+				loaded, lerr := loadFromStore(sm, item.node, branch)
+				if lerr != nil && strict {
+					return false, lerr
+				}
+				if loaded != nil {
 					child = loaded
 				}
 			}
@@ -307,7 +320,7 @@ func walkSubtreeForMissing(
 					Branch:     branch,
 					NodeID:     childNodeID,
 				}) {
-					return true
+					return true, nil
 				}
 				continue
 			}
@@ -324,19 +337,24 @@ func walkSubtreeForMissing(
 			})
 		}
 	}
-	return false
+	return false, nil
 }
 
-// loadFromStore lazy-fetches a hash-only branch from the backing store
-// and installs it on the parent via SetChildIfNil. Returns nil for
-// unbacked maps, missing-from-store, or any fetch error.
-func loadFromStore(sm *SHAMap, parent *innerNode, branch int) Node {
+// loadFromStore lazy-fetches a hash-only branch from the backing store and
+// installs it on the parent via SetChildIfNil. Returns (nil, nil) for
+// unbacked maps and true store misses; a non-nil error marks a TRANSIENT
+// fetch failure — the node may well exist, so callers deciding completeness
+// must not treat it as missing.
+func loadFromStore(sm *SHAMap, parent *innerNode, branch int) (Node, error) {
 	if sm == nil || !sm.backed || sm.family == nil {
-		return nil
+		return nil, nil
 	}
 	loaded, err := sm.descend(parent, branch)
 	if err != nil {
-		return nil
+		if errors.Is(err, ErrNodeNotInStore) {
+			return nil, nil
+		}
+		return nil, err
 	}
-	return loaded
+	return loaded, nil
 }
