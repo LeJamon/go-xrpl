@@ -45,7 +45,15 @@ type Router struct {
 	// handleMessage directly leave it nil, and a nil channel is simply
 	// never selected. Wired via SetTxInbox before Run.
 	txInbox <-chan *peermanagement.InboundMessage
-	logger  *slog.Logger
+	// acqInbox is the overlay's dedicated acquisition-reply lane
+	// (mtLEDGER_DATA and the replay-delta / proof-path responses). Its own
+	// buffered lane keeps a flood on inbox from shedding a reply this node
+	// explicitly requested; Run drains it as a co-equal select case — not
+	// absolute priority, which would let a mtLEDGER_DATA flood starve
+	// proposal/validation. nil when unset — a nil channel is never selected.
+	// Wired via SetAcqInbox before Run.
+	acqInbox <-chan *peermanagement.InboundMessage
+	logger   *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
 	peersMu    sync.RWMutex
@@ -154,6 +162,20 @@ type Router struct {
 	// the gap, so a dropped relay frame is recoverable.
 	droppedTxJobs atomic.Uint64
 
+	// serveJobs is the bounded queue draining inbound mtGET_LEDGER serve work
+	// (handleGetLedger / serveTxSet, which builds the largest map — the
+	// 15k-tx tx-set — inline) off the Run message loop onto a small worker
+	// pool. Created and drained by startServeWorkers from Run; nil until
+	// then, in which case submitServeJob runs handleGetLedger inline (tests
+	// that drive handleMessage synchronously). Only written on the Run
+	// goroutine.
+	serveJobs chan *peermanagement.InboundMessage
+
+	// droppedServeJobs counts inbound get_ledger requests shed because the
+	// serve pool was saturated — the requesting peer retries elsewhere, so a
+	// dropped request is recoverable load-shedding.
+	droppedServeJobs atomic.Uint64
+
 	// acquisitionFamily backs new inbound acquisitions with the persistent node
 	// store (see SetAcquisitionFamily); nil leaves them unbacked. Set once at
 	// startup, before Run.
@@ -183,6 +205,18 @@ type Router struct {
 var txWorkerCount = max(4, runtime.GOMAXPROCS(0))
 
 const txQueueDepth = 1024
+
+// serveWorkerCount bounds the goroutines answering inbound mtGET_LEDGER
+// requests off the Run loop, and serveQueueDepth bounds the pending backlog
+// before submitServeJob sheds. Serving a request — especially building the
+// 15k-tx tx-set reply in serveTxSet — is CPU/IO-heavy and, run inline on Run,
+// stalls proposal / validation / acquisition-reply handling. The pool is
+// sized at half the cores (floored at 2): serving is a background courtesy to
+// peers, so it should not claim every core away from the apply strand and the
+// tx-prewarm pool. A shed request is recoverable (the peer retries elsewhere).
+var serveWorkerCount = max(2, runtime.GOMAXPROCS(0)/2)
+
+const serveQueueDepth = 256
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. 30s comfortably covers a
@@ -233,6 +267,13 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 // inbox-only behaviour tests rely on.
 func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
 	r.txInbox = txInbox
+}
+
+// SetAcqInbox installs the overlay's dedicated acquisition-reply lane (see the
+// acqInbox field). Safe to call before Run; leaving it unset keeps acquisition
+// replies flowing through the shared inbox as before.
+func (r *Router) SetAcqInbox(acqInbox <-chan *peermanagement.InboundMessage) {
+	r.acqInbox = acqInbox
 }
 
 // SetAcquisitionFamily installs the node-store family that backs new inbound
@@ -338,6 +379,7 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 // acquisitions and fall back to the legacy mtGET_LEDGER path.
 func (r *Router) Run(ctx context.Context) {
 	r.startTxWorkers(ctx)
+	r.startServeWorkers(ctx)
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
 	for {
@@ -347,6 +389,19 @@ func (r *Router) Run(ctx context.Context) {
 		case msg, ok := <-r.inbox:
 			if !ok {
 				return
+			}
+			r.handleMessage(msg)
+		case msg, ok := <-r.acqInbox:
+			// Dedicated acquisition-reply lane (liBASE and the replay-delta /
+			// proof-path responses). Its own buffered lane keeps a flood on
+			// inbox from shedding it; drained as a CO-EQUAL select case so it
+			// neither starves nor is starved by consensus/tx traffic. An
+			// absolute-priority drain here would let a mtLEDGER_DATA flood
+			// starve proposal/validation handling and wedge consensus. nil
+			// when unwired/closed — a nil channel is never selected.
+			if !ok {
+				r.acqInbox = nil
+				continue
 			}
 			r.handleMessage(msg)
 		case msg, ok := <-r.txInbox:
@@ -409,6 +464,52 @@ func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
 // because the worker pool was saturated.
 func (r *Router) DroppedTxJobs() uint64 {
 	return r.droppedTxJobs.Load()
+}
+
+// startServeWorkers builds the bounded get_ledger serve queue and launches
+// its drainers. Called once at the top of Run, before the message loop, so
+// the first dispatched request sees a live pool. Workers exit on ctx.Done.
+func (r *Router) startServeWorkers(ctx context.Context) {
+	r.serveJobs = make(chan *peermanagement.InboundMessage, serveQueueDepth)
+	jobs := r.serveJobs
+	for range serveWorkerCount {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg := <-jobs:
+					r.handleGetLedger(msg)
+				}
+			}
+		}()
+	}
+}
+
+// submitServeJob hands an inbound get_ledger request to the serve pool, off
+// the Run message loop. When the pool isn't running (tests that drive
+// handleMessage synchronously without Run), it runs the handler inline to
+// preserve the synchronous contract. On a saturated queue it sheds the
+// request and bumps droppedServeJobs — the requesting peer retries elsewhere,
+// so a dropped serve is recoverable load-shedding.
+func (r *Router) submitServeJob(msg *peermanagement.InboundMessage) {
+	if r.serveJobs == nil {
+		r.handleGetLedger(msg)
+		return
+	}
+	select {
+	case r.serveJobs <- msg:
+	default:
+		r.droppedServeJobs.Add(1)
+		r.logger.Debug("inbound get_ledger dropped: serve pool saturated",
+			"t", "consensus", "event", "serve-shed", "peer", msg.PeerID)
+	}
+}
+
+// DroppedServeJobs returns the cumulative count of inbound get_ledger
+// requests shed because the serve pool was saturated.
+func (r *Router) DroppedServeJobs() uint64 {
+	return r.droppedServeJobs.Load()
 }
 
 // maintenanceTick runs out-of-band housekeeping: detect replay-delta

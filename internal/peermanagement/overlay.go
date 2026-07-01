@@ -120,6 +120,15 @@ type Overlay struct {
 	messages   chan *InboundMessage
 	txMessages chan *InboundMessage
 
+	// ledgerData carries acquisition replies (mtLEDGER_DATA and the
+	// replay-delta / proof-path responses) on their own lane so a
+	// serve/propose/validation flood on the shared messages channel can't
+	// shed a reply THIS node explicitly requested and wedge an inbound-ledger
+	// acquisition. Generously sized (DefaultLedgerDataBufferSize); on overflow
+	// the frame is still shed, but droppedLedgerData counts it so residual
+	// loss stays visible.
+	ledgerData chan *InboundMessage
+
 	// serveJobs carries heavy inbound serve work (fetch-pack, generic
 	// get-objects, tx back-fill) off the event-loop goroutine onto a
 	// bounded worker pool, so a single expensive serve can't stall ping
@@ -204,6 +213,11 @@ type Overlay struct {
 	// covering both wire frames and inner frames fanned out from a
 	// TMTransactions batch. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
+
+	// droppedLedgerData counts acquisition replies shed because the
+	// ledgerData lane was full — evidence of residual loss on the dedicated
+	// lane under extreme outstanding-request volume.
+	droppedLedgerData atomic.Uint64
 
 	// Transaction reduce-relay rolling-average metrics surfaced by the
 	// tx_reduce_relay RPC. Inbound tx-relay-related messages are
@@ -757,6 +771,7 @@ func New(opts ...Option) (*Overlay, error) {
 		events:          events,
 		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
 		txMessages:      make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
+		ledgerData:      make(chan *InboundMessage, DefaultLedgerDataBufferSize),
 		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
 		stopCh:          make(chan struct{}),
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
@@ -1218,6 +1233,21 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
+	// Acquisition replies ride a dedicated lane so a
+	// serve/propose/validation flood on the shared messages channel can't
+	// shed a reply this node explicitly requested and wedge catch-up. The
+	// replay-delta / proof-path responses already passed their feature gate
+	// above.
+	switch msgType {
+	case message.TypeLedgerData, message.TypeReplayDeltaResponse, message.TypeProofPathResponse:
+		o.forwardLedgerData(&InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		})
+		return
+	}
+
 	// Forward consensus/acquisition frames. On back-pressure (channel
 	// full), increment a visible counter rather than silently dropping —
 	// the warn log alone is easy to miss at production log levels.
@@ -1256,6 +1286,28 @@ func (o *Overlay) forwardTransaction(msg *InboundMessage) {
 // server_info as jq_trans_overflow.
 func (o *Overlay) DroppedTransactions() uint64 {
 	return o.droppedTransactions.Load()
+}
+
+// forwardLedgerData hands an acquisition reply to the dedicated ledgerData
+// lane. The lane is generously sized, so this sheds only under extreme
+// outstanding-request volume; a shed frame warns and bumps droppedLedgerData,
+// and the acquisition's own retry timer re-requests the missing nodes, so it
+// is recoverable. Losing a reply this node explicitly requested is notable
+// (it can stall catch-up), so this warns rather than logs at debug.
+func (o *Overlay) forwardLedgerData(msg *InboundMessage) {
+	select {
+	case o.ledgerData <- msg:
+	default:
+		o.droppedLedgerData.Add(1)
+		slog.Warn("Ledger-data lane full", "t", "Overlay",
+			"pending", len(o.ledgerData), "max", cap(o.ledgerData), "peer", msg.PeerID)
+	}
+}
+
+// DroppedLedgerData returns the cumulative count of acquisition replies
+// shed because the dedicated ledgerData lane was full.
+func (o *Overlay) DroppedLedgerData() uint64 {
+	return o.droppedLedgerData.Load()
 }
 
 // DroppedMessages returns the cumulative count of inbound messages the
@@ -1958,6 +2010,14 @@ func (o *Overlay) Messages() <-chan *InboundMessage {
 // consensus/acquisition traffic (issue #1103).
 func (o *Overlay) TxMessages() <-chan *InboundMessage {
 	return o.txMessages
+}
+
+// LedgerDataMessages returns the dedicated acquisition-reply lane
+// (mtLEDGER_DATA and the replay-delta / proof-path responses). Its own lane
+// keeps a reply this node requested from being shed behind a serve/propose
+// flood on the shared Messages channel.
+func (o *Overlay) LedgerDataMessages() <-chan *InboundMessage {
+	return o.ledgerData
 }
 
 // Identity returns the node's identity.

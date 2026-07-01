@@ -78,6 +78,10 @@ func (f *snd_fakeOverlay) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs
 	return nil
 }
 
+func (f *snd_fakeOverlay) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
+	return nil
+}
+
 func (f *snd_fakeOverlay) RequestLedger(id consensus.LedgerID) error {
 	return nil
 }

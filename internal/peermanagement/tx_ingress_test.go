@@ -11,14 +11,15 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// newLaneTestOverlay builds a bare Overlay with just the two inbound
-// lanes wired, sized for ingress-routing tests. The zero-value cfg
-// leaves reduce-relay metrics off so onMessageReceived takes the plain
-// forward path.
-func newLaneTestOverlay(consensusCap, txCap int) *Overlay {
+// newLaneTestOverlay builds a bare Overlay with the three inbound lanes
+// wired, sized for ingress-routing tests. The zero-value cfg leaves
+// reduce-relay metrics off so onMessageReceived takes the plain forward
+// path.
+func newLaneTestOverlay(consensusCap, txCap, ledgerDataCap int) *Overlay {
 	return &Overlay{
 		messages:   make(chan *InboundMessage, consensusCap),
 		txMessages: make(chan *InboundMessage, txCap),
+		ledgerData: make(chan *InboundMessage, ledgerDataCap),
 	}
 }
 
@@ -30,7 +31,7 @@ func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
 	const txCap = 4
 	const flooded = 64
 
-	o := newLaneTestOverlay(32, txCap)
+	o := newLaneTestOverlay(32, txCap, 8)
 
 	for range flooded {
 		o.onMessageReceived(Event{
@@ -56,14 +57,12 @@ func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
 
 // TestOverlay_TxFlood_DoesNotStarveConsensusLane is the core #1103
 // regression: a transaction flood that saturates the tx lane must not
-// cause consensus/acquisition frames (mtLEDGER_DATA/mtPROPOSE/mtVALIDATION)
-// to be dropped. Before the lane split these shared a single 256-slot
-// channel with the 250-frame tx ceiling, leaving ~6 slots for everything
-// else; a tx flood filled it and the next ledger-data reply was dropped,
-// which got the node resource-disconnected by its rippled peer.
+// cause consensus frames (mtPROPOSE/mtVALIDATION) or acquisition replies
+// (mtLEDGER_DATA) to be dropped. Each rides its own lane, so a saturated
+// tx lane leaves both untouched.
 func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
-	// Tiny tx lane, easily saturated; consensus lane has its own room.
-	o := newLaneTestOverlay(8, 2)
+	// Tiny tx lane, easily saturated; the other lanes have their own room.
+	o := newLaneTestOverlay(8, 2, 8)
 
 	// Saturate the tx lane well past capacity.
 	for range 1000 {
@@ -78,9 +77,8 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 	require.Greater(t, o.DroppedTransactions(), uint64(0),
 		"flood must have shed transactions")
 
-	// Now a consensus/acquisition frame must still get through.
+	// Proposals and validations still reach the consensus lane.
 	for _, mt := range []message.MessageType{
-		message.TypeLedgerData,
 		message.TypeProposeLedger,
 		message.TypeValidation,
 	} {
@@ -91,20 +89,61 @@ func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
 			Payload:     []byte{0x00},
 		})
 	}
+	// Acquisition replies still reach their dedicated lane.
+	o.onMessageReceived(Event{
+		Type:        EventMessageReceived,
+		PeerID:      PeerID(1),
+		MessageType: uint16(message.TypeLedgerData),
+		Payload:     []byte{0x00},
+	})
 
-	assert.Equal(t, 3, len(o.messages),
-		"consensus/acquisition frames must reach the consensus lane despite the tx flood")
+	assert.Equal(t, 2, len(o.messages),
+		"proposals/validations must reach the consensus lane despite the tx flood")
+	assert.Equal(t, 1, len(o.ledgerData),
+		"acquisition replies must reach the dedicated lane despite the tx flood")
 	assert.Equal(t, uint64(0), o.DroppedMessages(),
 		"no consensus frame may be dropped while only the tx lane is saturated")
+	assert.Equal(t, uint64(0), o.DroppedLedgerData(),
+		"no acquisition reply may be dropped while only the tx lane is saturated")
 }
 
 // TestOverlay_NonTxUsesConsensusLane confirms the counters stay
-// class-specific: a non-tx frame that overflows the consensus lane bumps
-// droppedMessages and never touches droppedTransactions, so the
-// jq_trans_overflow signal isn't polluted by unrelated traffic. The tx
-// lane stays empty.
+// class-specific: a consensus frame (mtPROPOSE) that overflows the
+// consensus lane bumps droppedMessages and never touches
+// droppedTransactions or droppedLedgerData, so the jq_trans_overflow signal
+// isn't polluted by unrelated traffic. The tx and acquisition lanes stay
+// empty.
 func TestOverlay_NonTxUsesConsensusLane(t *testing.T) {
-	o := newLaneTestOverlay(1, 8)
+	o := newLaneTestOverlay(1, 8, 8)
+
+	for range 4 {
+		o.onMessageReceived(Event{
+			Type:        EventMessageReceived,
+			PeerID:      PeerID(1),
+			MessageType: uint16(message.TypeProposeLedger),
+			Payload:     []byte{0x00},
+		})
+	}
+
+	assert.Greater(t, o.DroppedMessages(), uint64(0),
+		"DroppedMessages must record consensus-lane overflow")
+	assert.Equal(t, uint64(0), o.DroppedTransactions(),
+		"DroppedTransactions must not move when only consensus frames overflow")
+	assert.Equal(t, uint64(0), o.DroppedLedgerData(),
+		"DroppedLedgerData must not move when only consensus frames overflow")
+	assert.Equal(t, 0, len(o.txMessages),
+		"consensus traffic must never reach the tx lane")
+	assert.Equal(t, 0, len(o.ledgerData),
+		"consensus traffic must never reach the acquisition lane")
+}
+
+// TestOverlay_AcquisitionRepliesUseDedicatedLane pins the fix: mtLEDGER_DATA
+// (a reply this node explicitly requested) rides its own lane, never the
+// shared consensus lane, and overflow there bumps only droppedLedgerData. A
+// serve/propose flood on the consensus lane therefore can't shed a requested
+// acquisition reply and wedge catch-up.
+func TestOverlay_AcquisitionRepliesUseDedicatedLane(t *testing.T) {
+	o := newLaneTestOverlay(8, 8, 1)
 
 	for range 4 {
 		o.onMessageReceived(Event{
@@ -115,12 +154,18 @@ func TestOverlay_NonTxUsesConsensusLane(t *testing.T) {
 		})
 	}
 
-	assert.Greater(t, o.DroppedMessages(), uint64(0),
-		"DroppedMessages must record consensus-lane overflow")
+	assert.Equal(t, 1, len(o.ledgerData),
+		"acquisition replies must ride the dedicated lane up to its capacity")
+	assert.Greater(t, o.DroppedLedgerData(), uint64(0),
+		"DroppedLedgerData must record dedicated-lane overflow")
+	assert.Equal(t, uint64(0), o.DroppedMessages(),
+		"acquisition-lane overflow must not touch the consensus-lane counter")
 	assert.Equal(t, uint64(0), o.DroppedTransactions(),
-		"DroppedTransactions must not move when only non-tx frames overflow")
+		"acquisition-lane overflow must not touch the tx-lane counter")
+	assert.Equal(t, 0, len(o.messages),
+		"acquisition replies must never reach the consensus lane")
 	assert.Equal(t, 0, len(o.txMessages),
-		"non-tx traffic must never reach the tx lane")
+		"acquisition replies must never reach the tx lane")
 }
 
 // TestOverlay_TxLane_BoundedGoroutines is the bounded-backpressure soak:
@@ -133,7 +178,7 @@ func TestOverlay_TxLane_BoundedGoroutines(t *testing.T) {
 	const flooded = 10_000
 	const writers = 16
 
-	o := newLaneTestOverlay(8, txCap)
+	o := newLaneTestOverlay(8, txCap, 8)
 
 	runtime.GC()
 	baseline := runtime.NumGoroutine()

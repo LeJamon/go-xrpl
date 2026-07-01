@@ -146,6 +146,27 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 	return s.overlay.BroadcastExceptSet(skip, frame)
 }
 
+// RequestTxSetMissingNodesFromPeer unicasts the missing-nodes request to the
+// single replying peer (see the NetworkSender interface doc). indirect sets
+// query_type=qtINDIRECT.
+func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
+	if len(nodeIDs) == 0 {
+		return fmt.Errorf("RequestTxSetMissingNodesFromPeer: nodeIDs must be non-empty")
+	}
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTsCandidate,
+		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    nodeIDs,
+		QueryType:  indirectQueryType(indirect),
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode txset missing-nodes (unicast) request: %w", err)
+	}
+	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
 func (s *OverlaySender) BroadcastStatusChange(sc *message.StatusChange) error {
 	frame, err := encodeFrame(message.TypeStatusChange, sc)
 	if err != nil {
