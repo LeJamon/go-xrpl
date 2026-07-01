@@ -8,7 +8,9 @@ import (
 // XRP is the all-zero 160-bit currency, which the state amount parser may render
 // as the empty string, the literal "XRP", or a 3-byte run of NUL bytes (the
 // standard-code path reading an all-zero currency); it may also arrive as a
-// 40-char hex string of zeros or with "XRP" at bytes 12-14.
+// 40-char hex string of all zeros. Besides the all-zero (native) currency, only
+// the exact 3-char ISO "XRP" bad-currency (bytes 12-14 "XRP", every other byte
+// zero) counts as XRP — a non-zero prefix (e.g. "Wellgistics XRP") is a valid IOU.
 func isXRPCurrency(curr string) bool {
 	if len(curr) == 0 || curr == "XRP" {
 		return true
@@ -34,9 +36,25 @@ func isXRPCurrency(curr string) bool {
 		if allZero {
 			return true
 		}
-		// Check "XRP" at bytes 12-14
+		// The 3-char ISO "XRP" code — bytes 12-14 "XRP" with EVERY OTHER byte zero —
+		// is a forbidden bad-currency, treated as XRP here. But a non-standard
+		// currency whose bytes 12-14 merely spell "XRP" with a non-zero prefix (e.g.
+		// "Wellgistics XRP", 57656C6C67697374696373205852500000000000) is a VALID
+		// IOU. Requiring the rest to be zero keeps NoXRPTrustLines aligned with
+		// rippled's isXRP (currency == beast::zero) for real trust lines; the old
+		// unconditional bytes-12-14 check wrongly flagged such IOUs
+		// (tecINVARIANT_FAILED vs mainnet tesSUCCESS, ledger 99342512).
 		if b[12] == 'X' && b[13] == 'R' && b[14] == 'P' {
-			return true
+			restZero := true
+			for i := 0; i < 20; i++ {
+				if (i < 12 || i > 14) && b[i] != 0 {
+					restZero = false
+					break
+				}
+			}
+			if restZero {
+				return true
+			}
 		}
 	}
 	return false
