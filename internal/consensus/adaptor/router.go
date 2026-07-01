@@ -193,9 +193,13 @@ type Router struct {
 	// historyMu guards history, the single backward history-backfill target:
 	// the next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk
 	// is serial — each ingested ledger's header names its parent, the next
-	// target — and is driven from the maintenance tick.
-	historyMu sync.Mutex
-	history   catchupTarget
+	// target — and is driven from the maintenance tick. historyFloor bounds
+	// the walk to the jump gap (the pre-jump closed seq): below it our history
+	// is already contiguous, so descending further would re-fetch persisted
+	// ledgers evicted from the in-memory window.
+	historyMu    sync.Mutex
+	history      catchupTarget
+	historyFloor uint32
 
 	// seqHashMu guards the seqHash table: the network's hash (and, when known,
 	// parent hash) per ledger sequence, learned from trusted validations and peer

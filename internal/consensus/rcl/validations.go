@@ -560,14 +560,40 @@ func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.L
 
 // GetPreferred returns the network-preferred ledger ID and sequence
 // as decided by the ancestry trie. ok is false when the trie is not
-// wired or empty. largestIssued is the highest sequence this node has
-// already validated; it seeds uncommitted support from earlier seqs.
+// wired or empty, OR when the trie is blind to the majority: a trusted
+// validation whose ledger can't be locally resolved never enters the
+// trie (updateTrieLocked drops it), so on a consensus island the
+// majority branch is invisible while the trie confidently prefers our
+// own. rippled avoids this by acquiring the ledger from inside
+// Validations (acquireAsync) and re-inserting; until goXRPL's
+// acquisition lands, a trie missing more fresh trusted tips than it
+// holds is inconclusive and callers must fall back to the raw
+// trusted-tip majority. largestIssued is the highest sequence this
+// node has already validated; it seeds uncommitted support from
+// earlier seqs.
 func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	if vt.trie == nil {
 		return consensus.LedgerID{}, 0, false
 	}
+
+	placed, unplaced := 0, 0
+	for nodeID, v := range vt.byNode {
+		if !vt.trusted[nodeID] {
+			continue
+		}
+		tip, hasTip := vt.trieTips[nodeID]
+		if hasTip && tip.Seq() >= v.LedgerSeq {
+			placed++
+		} else {
+			unplaced++
+		}
+	}
+	if unplaced > placed {
+		return consensus.LedgerID{}, 0, false
+	}
+
 	var (
 		tip ledgertrie.SpanTip
 		ok  bool

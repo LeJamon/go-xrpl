@@ -976,36 +976,40 @@ func (s *Service) adoptLedgerWithStateLocked(
 	}
 
 	// Fire hooks so `ledger`/`transactions` subscribers see peer-adopted ledgers
-	// (else the streams silently skip every catch-up ledger).
-	ledgerInfo := &LedgerInfo{
-		Sequence:   h.LedgerIndex,
-		Hash:       h.Hash,
-		ParentHash: adopted.ParentHash(),
-		CloseTime:  adopted.CloseTime(),
-		TotalDrops: adopted.TotalDrops(),
-		Validated:  adopted.IsValidated(),
-		Closed:     adopted.IsClosed(),
-	}
-	validatedLedgers := s.getValidatedLedgersRange()
-	// Use the adopted header's close time (network-agreed), not a local one.
-	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, adopted.CloseTime(), validatedLedgers)
-
-	// eventCallback fires on *validated*, not *closed*; peer-adopt advances
-	// closedLedger only. Stash by hash for the next SetValidatedLedger to drain.
-	// Exception: if the drain above promoted inline, no SetValidatedLedger will
-	// arrive — fire inline instead of orphaning the event (and avoid a
-	// double-fire on a late-duplicate SetValidatedLedger).
-	if s.eventCallback != nil {
-		event := &LedgerAcceptedEvent{
-			LedgerInfo:         ledgerInfo,
-			TransactionResults: txResults,
+	// (else the streams silently skip every catch-up ledger). Forward adoption
+	// only: a below-tip history backfill must not emit backward-running stream
+	// events (rippled's fetchForHistory ingest is silent).
+	if advanced {
+		ledgerInfo := &LedgerInfo{
+			Sequence:   h.LedgerIndex,
+			Hash:       h.Hash,
+			ParentHash: adopted.ParentHash(),
+			CloseTime:  adopted.CloseTime(),
+			TotalDrops: adopted.TotalDrops(),
+			Validated:  adopted.IsValidated(),
+			Closed:     adopted.IsClosed(),
 		}
-		if promotedByDrain {
-			// Goroutine: subscriber callbacks must not re-enter s.mu (held).
-			callback := s.eventCallback
-			go callback(event)
-		} else {
-			s.stashPendingValidationLocked(h.Hash, event)
+		validatedLedgers := s.getValidatedLedgersRange()
+		// Use the adopted header's close time (network-agreed), not a local one.
+		s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, adopted.CloseTime(), validatedLedgers)
+
+		// eventCallback fires on *validated*, not *closed*; peer-adopt advances
+		// closedLedger only. Stash by hash for the next SetValidatedLedger to
+		// drain. Exception: if the drain above promoted inline, no
+		// SetValidatedLedger will arrive — fire inline instead of orphaning the
+		// event (and avoid a double-fire on a late-duplicate SetValidatedLedger).
+		if s.eventCallback != nil {
+			event := &LedgerAcceptedEvent{
+				LedgerInfo:         ledgerInfo,
+				TransactionResults: txResults,
+			}
+			if promotedByDrain {
+				// Goroutine: subscriber callbacks must not re-enter s.mu (held).
+				callback := s.eventCallback
+				go callback(event)
+			} else {
+				s.stashPendingValidationLocked(h.Hash, event)
+			}
 		}
 	}
 

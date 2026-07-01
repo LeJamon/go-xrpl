@@ -947,8 +947,12 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	if e.mode == consensus.ModeWrongLedger {
 		l, err := e.adaptor.GetLedger(id)
 		if err == nil && l != nil {
-			// Never regress: out-of-order acquisitions must not move prevLedger back.
-			if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() {
+			// Never regress on out-of-order acquisition arrivals — EXCEPT for
+			// the hash checkLedger explicitly pinned: the network-preferred
+			// ledger may sit at a lower seq on a different chain than a
+			// self-built run-ahead (Validations.h:892-895), and rippled's
+			// switchLastClosedLedger takes that rewind.
+			if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() && id != e.wrongLedgerID {
 				return nil
 			}
 			// Advance prevLedger to the FURTHEST locally-available closed
@@ -1616,6 +1620,29 @@ func (e *Engine) resolveTargetLedger(id consensus.LedgerID) consensus.Ledger {
 // handleWrongLedger switches to the network's preferred ledger. target is
 // an already-resolved ledger (nil to resolve here).
 func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consensus.Ledger) {
+	// Resolve and verify BEFORE mutating any round state, so a refused
+	// switch leaves the in-progress round untouched (rippled verifies with
+	// canBeCurrent/isCompatible before switching, NetworkOPs.cpp:1948-1962).
+	// An unresolvable target is verified later, at adoption (OnLedger).
+	newLedger := target
+	if newLedger == nil {
+		newLedger = e.resolveTargetLedger(netLedgerID)
+	}
+	if newLedger != nil && !e.canSwitchToLedgerLocked(newLedger) {
+		// Off the validated chain or implausibly timed/sequenced — refuse the
+		// switch and stay on our ledger.
+		if e.lastRefusedSwitch != netLedgerID {
+			e.lastRefusedSwitch = netLedgerID
+			slog.Info("Refusing switch to incompatible network ledger",
+				"t", "consensus",
+				"event", "switch-refused",
+				"seq", newLedger.Seq(),
+				"hash", fmt.Sprintf("%x", netLedgerID[:8]),
+			)
+		}
+		return
+	}
+
 	// Stop proposing.
 	if e.mode == consensus.ModeProposing {
 		e.setMode(consensus.ModeObserving)
@@ -1645,25 +1672,6 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		}
 	}
 
-	// Adopt the correct ledger (checkLedger may have resolved it already).
-	newLedger := target
-	if newLedger == nil {
-		newLedger = e.resolveTargetLedger(netLedgerID)
-	}
-	if newLedger != nil && !e.canSwitchToLedgerLocked(newLedger) {
-		// Off the validated chain or implausibly timed/sequenced — refuse the
-		// switch and stay on our ledger (rippled NetworkOPs.cpp:1953-1962).
-		if e.lastRefusedSwitch != netLedgerID {
-			e.lastRefusedSwitch = netLedgerID
-			slog.Info("Refusing switch to incompatible network ledger",
-				"t", "consensus",
-				"event", "switch-refused",
-				"seq", newLedger.Seq(),
-				"hash", fmt.Sprintf("%x", netLedgerID[:8]),
-			)
-		}
-		return
-	}
 	if newLedger != nil {
 		// Found — restart with recovering=true so we enter switchedLedger for
 		// one round (suppress our proposal/validation to avoid poisoning
@@ -2119,11 +2127,28 @@ func (e *Engine) phaseEstablish() {
 	e.establishCounter++
 	e.peerUnchangedCounter++
 
+	// Prune stale peer proposals every tick regardless of our own mode
+	// (rippled updateOurPositions prunes unconditionally, Consensus.h:
+	// 1509-1528): a bowed-out observer waiting at the close-time gate must
+	// not have its tally diluted forever by a silent peer's stale vote.
+	e.pruneStaleProposalsLocked()
+
 	if e.mode == consensus.ModeProposing && e.state.OurPosition != nil {
 		e.updatePosition()
 	}
 	e.updateCloseTimePosition()
 	e.checkConvergence()
+}
+
+// pruneStaleProposalsLocked drops peer proposals older than the freshness
+// window and revokes their dispute votes. Caller must hold e.mu.
+func (e *Engine) pruneStaleProposalsLocked() {
+	cutoff := e.adaptor.Now().Add(-e.timing.ProposeFreshness)
+	for _, nodeID := range e.proposalTracker.PruneStale(cutoff) {
+		if e.disputeTracker != nil {
+			e.disputeTracker.UnVote(nodeID)
+		}
+	}
 }
 
 // shouldPause returns true when the establish phase should suspend for one
@@ -2674,15 +2699,6 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 func (e *Engine) updatePosition() {
 	if e.state == nil {
 		return
-	}
-
-	// Prune stale peer proposals; a peer that stops proposing loses its
-	// dispute votes so it can't coast.
-	cutoff := e.adaptor.Now().Add(-e.timing.ProposeFreshness)
-	for _, nodeID := range e.proposalTracker.PruneStale(cutoff) {
-		if e.disputeTracker != nil {
-			e.disputeTracker.UnVote(nodeID)
-		}
 	}
 
 	if e.disputeTracker == nil || e.ourTxSet == nil {

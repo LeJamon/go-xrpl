@@ -165,6 +165,13 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 	}
 
 	_ = adopted.SetValidated()
+	// The validated tip is monotonic (rippled LedgerMaster::setFullLedger,
+	// LedgerMaster.cpp:948): a below-tip match — a history backfill of a
+	// skipped, already-validated seq — marks the ledger validated but must
+	// not rewind the pointer.
+	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
+		return false
+	}
 	s.validatedLedger = adopted
 	s.evictOldHistoryLocked(seq)
 	return true

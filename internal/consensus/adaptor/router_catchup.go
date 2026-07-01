@@ -496,24 +496,33 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 }
 
 // startHistoryBackfill records the next skipped ledger to backfill after a
-// jump-adopt. The walk is serial and backward: each ingested ledger's header
-// names its parent, which becomes the next target; the maintenance tick arms
-// the fetches.
-func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64) {
-	if seq == 0 || hash == ([32]byte{}) {
+// jump-adopt, bounded below by floor (the pre-jump closed seq — history at
+// and below it is already contiguous). The walk is serial and backward: each
+// ingested ledger's header names its parent, which becomes the next target;
+// the maintenance tick arms the fetches.
+func (r *Router) startHistoryBackfill(seq uint32, hash [32]byte, peerID uint64, floor uint32) {
+	if seq == 0 || seq <= floor || hash == ([32]byte{}) {
 		return
 	}
 	r.historyMu.Lock()
 	r.history = catchupTarget{seq: seq, hash: hash, peerID: peerID}
+	r.historyFloor = floor
 	r.historyMu.Unlock()
+}
+
+// currentHistoryFloor returns the active backfill walk's lower bound.
+func (r *Router) currentHistoryFloor() uint32 {
+	r.historyMu.Lock()
+	defer r.historyMu.Unlock()
+	return r.historyFloor
 }
 
 // armHistoryBackfill drives one backward history-backfill acquisition from
 // the maintenance tick (rippled fetchForHistory from doAdvance). Locally-held
-// ledgers advance the walk without a fetch; the walk ends at genesis, the
-// online-delete floor, or once the chain reconnects to held history. At most
-// one ReasonHistory acquisition is in flight, and it never occupies the
-// consensus catch-up slot.
+// ledgers advance the walk without a fetch; the walk ends at the recorded
+// gap floor, the online-delete floor, or genesis. At most one ReasonHistory
+// acquisition is in flight, and it never occupies the consensus catch-up
+// slot.
 func (r *Router) armHistoryBackfill() {
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
@@ -521,14 +530,16 @@ func (r *Router) armHistoryBackfill() {
 	}
 	r.historyMu.Lock()
 	target := r.history
+	floor := r.historyFloor
 	r.historyMu.Unlock()
 	if target.seq == 0 {
 		return
 	}
 	for {
-		if target.seq == 0 || target.hash == ([32]byte{}) || r.belowFloor(target.seq) {
+		if target.seq == 0 || target.seq <= floor || target.hash == ([32]byte{}) || r.belowFloor(target.seq) {
 			r.historyMu.Lock()
 			r.history = catchupTarget{}
+			r.historyFloor = 0
 			r.historyMu.Unlock()
 			return
 		}
@@ -911,6 +922,19 @@ func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer 
 	hash := [32]byte(v.LedgerID)
 	// Already have it (built or adopted) — nothing to fetch.
 	if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+		return
+	}
+	// A trusted tip AT OR BELOW our closed tip on a chain we don't hold is a
+	// consensus-island signature: we ran ahead on our own branch while the
+	// majority validated another. The forward funnel below never fetches
+	// behind closed, so acquire it directly (rippled acquires the ledger of
+	// every unresolvable trusted validation, RCLValidationsAdaptor::acquire)
+	// — without it the validation trie can never place the majority branch.
+	if v.LedgerSeq <= svc.GetClosedLedgerIndex() {
+		if r.catchupInFlight() >= maxConcurrentCatchup {
+			return
+		}
+		r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
 		return
 	}
 	// Record this trusted tip and arm one bounded acquisition toward the best
@@ -1453,7 +1477,7 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 				"error", err, "seq", h.LedgerIndex)
 			return
 		}
-		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID)
+		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, r.currentHistoryFloor())
 		return
 	}
 
@@ -1477,13 +1501,13 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 	// whose parent is present) and generic RPC acquisitions keep the
 	// held-adoption seam so out-of-order arrivals cascade in order.
 	var res service.SubmitHeldAdoptionResult
-	if il.Reason() == inbound.ReasonConsensus && h.LedgerIndex > svc.GetClosedLedgerIndex()+1 {
+	if preJumpClosed := svc.GetClosedLedgerIndex(); il.Reason() == inbound.ReasonConsensus && h.LedgerIndex > preJumpClosed+1 {
 		if err = svc.AdoptLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
 			r.logger.Warn("inbound ledger: catch-up jump adopt failed",
 				"error", err, "seq", h.LedgerIndex)
 			return
 		}
-		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID)
+		r.startHistoryBackfill(h.LedgerIndex-1, h.ParentHash, peerID, preJumpClosed)
 	} else if res, err = svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
