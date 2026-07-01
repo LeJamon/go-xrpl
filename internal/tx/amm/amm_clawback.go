@@ -189,7 +189,7 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		if lpTokenBalance.IsZero() {
 			return ter.TecAMM_BALANCE
 		}
-		if result := verifyAndAdjustLPTokenBalance(ctx.View, lpTokenBalance, amm, holderID); result != ter.TesSUCCESS {
+		if result := verifyAndAdjustLPTokenBalance(ctx.View, ammKey, lpTokenBalance, amm, holderID); result != ter.TesSUCCESS {
 			return result
 		}
 	}

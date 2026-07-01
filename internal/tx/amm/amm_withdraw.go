@@ -330,7 +330,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	// might not match the LP's trustline balance.
 	// Reference: rippled AMMWithdraw.cpp:311-317
 	if ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1) {
-		if result := verifyAndAdjustLPTokenBalance(ctx.View, lpTokensHeld, amm, accountID); result != ter.TesSUCCESS {
+		if result := verifyAndAdjustLPTokenBalance(ctx.View, ammKey, lpTokensHeld, amm, accountID); result != ter.TesSUCCESS {
 			return result
 		}
 		// Refresh lptBalance since verifyAndAdjustLPTokenBalance may have modified amm.LPTokenBalance
