@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -222,10 +221,6 @@ type Service struct {
 	// lastConsensusRoundTime is the most recent consensus round duration, fed to
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
-
-	// stallPing fires once per ledger close so the stall watchdog sees progress.
-	// Atomic pointer so it can be installed without s.mu; nil disables it.
-	stallPing atomic.Pointer[func()]
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -508,9 +503,6 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 // ledger. timeLeap clamps the metrics window when consensus exceeded the
 // slow-consensus threshold instead of advancing it. Caller must hold s.mu.
 func (s *Service) processClosedLedgerLocked() {
-	if ping := s.stallPing.Load(); ping != nil {
-		(*ping)()
-	}
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
 	}
@@ -518,18 +510,6 @@ func (s *Service) processClosedLedgerLocked() {
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
 	s.tickLoadFeeLocked()
-}
-
-// SetStallPing installs the out-of-band stall watchdog's heartbeat callback,
-// fired once per ledger close from processClosedLedgerLocked. Safe to call
-// after construction; nil disables it. The callback must be cheap and
-// non-blocking — it runs while s.mu is held.
-func (s *Service) SetStallPing(ping func()) {
-	if ping == nil {
-		s.stallPing.Store(nil)
-		return
-	}
-	s.stallPing.Store(&ping)
 }
 
 // slowConsensusThreshold: past this round time the TxQ treats consensus as slow

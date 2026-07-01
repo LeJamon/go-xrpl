@@ -101,9 +101,9 @@ func TestWatchdog_NoLoopsNeverTrips(t *testing.T) {
 	}
 }
 
-// A silent loop escalates warn → fatal → abort at the right thresholds, dumping
-// goroutine stacks on the first warning and again — freshly — right before the
-// abort, so the terminal wedge is captured in full to the sink.
+// A silent loop escalates warn → fatal → abort at the right thresholds,
+// dumping goroutine stacks exactly once — right before the abort — so the
+// terminal wedge is captured in full to the sink.
 func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	w, clk, logBuf, exits, stacks := newTestWatchdog(t)
 	var sink bytes.Buffer
@@ -140,15 +140,13 @@ func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	if abortAt != 600 {
 		t.Errorf("abort at %ds, want 600s", abortAt)
 	}
-	// One dump at the first warning, one fresh dump before the abort.
-	if got := stacks.Load(); got != 2 {
-		t.Errorf("goroutine dump fired %d times, want exactly 2 (first-warn + abort)", got)
-	}
-	if !bytes.Contains(logBuf.Bytes(), []byte("STACKDUMP")) {
-		t.Errorf("stack dump not logged")
+	// Exactly one dump, captured fresh right before the abort. The 10s warn
+	// path must NOT stop the world on a merely-slow node.
+	if got := stacks.Load(); got != 1 {
+		t.Errorf("goroutine dump fired %d times, want exactly 1 (abort only)", got)
 	}
 	// The definitive abort dump reaches the sink verbatim, under its banner.
-	if !bytes.Contains(sink.Bytes(), []byte("FATAL-STALL goroutine dump")) {
+	if !bytes.Contains(sink.Bytes(), []byte("fatal-stall goroutine dump")) {
 		t.Errorf("fatal-stall dump not written to sink")
 	}
 	if !bytes.Contains(sink.Bytes(), []byte("STACKDUMP")) {
@@ -213,33 +211,19 @@ func TestWatchdog_ReportsOnWarnIntervalBoundaries(t *testing.T) {
 	}
 }
 
-// A stall that recovers below warn re-arms the first-warn stack dump for a
-// later episode.
-func TestWatchdog_StackDumpReArmsAfterRecovery(t *testing.T) {
+// A warn-level stall never dumps stacks: runtime.Stack(all) stops the world,
+// so the dump is reserved for the abort path.
+func TestWatchdog_WarnDoesNotDumpStacks(t *testing.T) {
 	w, clk, _, _, stacks := newTestWatchdog(t)
-	ping := w.Register("ledger")
+	w.Register("ledger")
 
-	// Episode 1: stall to the first warning.
-	for sec := 1; sec <= 10; sec++ {
+	// Stall well past warn and fatal, but short of abort.
+	for sec := 1; sec <= 599; sec++ {
 		clk.advance(time.Second)
 		w.check(time.Second)
 	}
-	if stacks.Load() != 1 {
-		t.Fatalf("episode 1 dumps = %d, want 1", stacks.Load())
-	}
-
-	// Recover.
-	ping()
-	clk.advance(time.Second)
-	w.check(time.Second)
-
-	// Episode 2: stall again to the first warning.
-	for sec := 1; sec <= 10; sec++ {
-		clk.advance(time.Second)
-		w.check(time.Second)
-	}
-	if stacks.Load() != 2 {
-		t.Fatalf("episode 2 dumps = %d, want 2 (re-arm failed)", stacks.Load())
+	if stacks.Load() != 0 {
+		t.Fatalf("pre-abort stall dumped stacks %d times, want 0", stacks.Load())
 	}
 }
 
