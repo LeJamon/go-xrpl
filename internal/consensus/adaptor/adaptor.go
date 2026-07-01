@@ -63,6 +63,13 @@ type NetworkSender interface {
 	// query_type=qtINDIRECT; set it once the acquisition has timed out at
 	// least once (see RequestStateNodes).
 	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error
+	// RequestTxSetMissingNodesFromPeer is the unicast variant of
+	// RequestTxSetMissingNodes: the request is sent only to the replying peer.
+	// The inbound acquire pipeline uses it so a progressing reply re-requests
+	// from the peer that just served (mirrors rippled trigger(peer)); the
+	// broadcast variant stays the timer's stalled-acquire fallback. nodeIDs may
+	// carry the 33-byte zero root ID to (re)fetch the root.
+	RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
@@ -125,6 +132,9 @@ func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { retu
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
 func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte, map[uint64]bool, bool) error {
+	return nil
+}
+func (n *noopSender) RequestTxSetMissingNodesFromPeer(consensus.TxSetID, [][]byte, uint64, bool) error {
 	return nil
 }
 func (n *noopSender) RequestLedger(consensus.LedgerID) error                         { return nil }
@@ -489,6 +499,10 @@ func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
 
 func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
 	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded, indirect)
+}
+
+func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
+	return a.sender.RequestTxSetMissingNodesFromPeer(id, nodeIDs, peerID, indirect)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {

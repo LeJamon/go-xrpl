@@ -61,29 +61,35 @@ func TestTxSetAcquire_TimerRespectsMinInterval(t *testing.T) {
 	})
 }
 
-// Once the attempt cap is reached with no progress, the timer drops the
-// acquire instead of spinning forever (mirrors the inbound max-attempts path
-// and rippled's MAX_TIMEOUTS).
-func TestTxSetAcquire_TimerDropsAtMaxAttempts(t *testing.T) {
+// Once MaxStallTicks consecutive no-progress ticks elapse, the timer stops
+// re-requesting and marks the acquire dormant — but KEEPS its partial map,
+// unlike the pre-pipelining model which deleted it. The retained map lets a
+// consensus re-ask resume from where it left off; the TTL sweep reclaims a
+// truly-abandoned entry (rippled's TransactionAcquire keeps mMap across
+// retries and fails only after MAX_TIMEOUTS).
+func TestTxSetAcquire_TimerGoesDormantAtMaxStallTicks(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	ld, txSetID := rootOnlyTxSetLedgerData(t, 8)
 
 	withRetryKnobs(router, 0, 3, 3, func() {
 		router.handleTxSetData(ld, 4)
-		// Drive ticks well past the cap; the acquire must be dropped and
-		// re-requests must stop.
+		// Drive ticks well past the stall cap; the acquire must go dormant
+		// (retained, not deleted) and re-requests must stop.
 		for range 10 {
 			router.maintenanceTick()
 		}
 		router.txSetAcquireMu.Lock()
-		_, stillTracked := router.txSetAcquire[txSetID]
+		state, stillTracked := router.txSetAcquire[txSetID]
+		dormant := stillTracked && state.dormant
 		router.txSetAcquireMu.Unlock()
-		require.False(t, stillTracked, "acquire must be dropped after exceeding MaxAttempts")
+		require.True(t, stillTracked,
+			"acquire must be RETAINED (partial map kept) after going dormant, not deleted")
+		require.True(t, dormant, "acquire must be dormant after MaxStallTicks stall ticks")
 
-		// No further re-requests once dropped.
+		// No further re-requests once dormant.
 		n := rs.calledN()
 		router.maintenanceTick()
-		require.Equal(t, n, rs.calledN(), "no re-requests after the acquire is dropped")
+		require.Equal(t, n, rs.calledN(), "no re-requests after the acquire goes dormant")
 	})
 }
 
@@ -113,35 +119,57 @@ func TestTxSetAcquire_TimerStaysOutWhileInboundFresh(t *testing.T) {
 	})
 }
 
-// A timer drop is revivable, not terminal: after the timer drops an acquire at
-// the attempt cap, a fresh inbound TMLedgerData for the same tx-set must
-// re-create the acquire and resume requesting — mirroring rippled's stillNeed
-// reset path (TransactionAcquire.cpp:256-264). Without this, consensus
-// oscillating back to a dropped set would wait out the 60s TTL.
-func TestTxSetAcquire_TimerDropIsRevivableByInbound(t *testing.T) {
+// A given-up acquire is terminal to stragglers but revivable by consensus:
+// after the timer drives it dormant (and latches it done), a straggler
+// TMLedgerData for the same tx-set is DROPPED — it must not revive the acquire
+// nor trigger a re-request (that recreate/re-request churn is what wedged the
+// network). Only a consensus re-ask (MarkTxSetStillNeeded) clears the latch,
+// after which the RETAINED partial map resumes — mirroring rippled's failed_
+// latch that only stillNeed() clears.
+func TestTxSetAcquire_GivenUpAcquireDropsStragglerRevivableByStillNeed(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	ld, txSetID := rootOnlyTxSetLedgerData(t, 8)
 
 	withRetryKnobs(router, 0, 3, 3, func() {
-		// Create the acquire, then drive ticks past the cap to drop it.
+		// Create the acquire, then drive ticks past the stall cap to dormancy.
 		router.handleTxSetData(ld, 4)
 		for range 10 {
 			router.maintenanceTick()
 		}
 		router.txSetAcquireMu.Lock()
-		_, tracked := router.txSetAcquire[txSetID]
+		state, tracked := router.txSetAcquire[txSetID]
+		dormant := tracked && state.dormant
+		done := tracked && state.done
 		router.txSetAcquireMu.Unlock()
-		require.False(t, tracked, "acquire must be dropped by the timer after exceeding MaxAttempts")
+		require.True(t, tracked, "given-up acquire keeps its partial map (not deleted)")
+		require.True(t, dormant, "acquire must be dormant after exceeding MaxStallTicks")
+		require.True(t, done, "a given-up acquire is latched terminal so stragglers are dropped")
 
 		n := rs.calledN()
 
-		// A fresh inbound reply re-creates the acquire and broadcasts again.
+		// A straggler reply for the given-up set must be dropped: no revive, no
+		// re-request.
 		router.handleTxSetData(ld, 5)
-		require.Greater(t, rs.calledN(), n,
-			"a fresh inbound reply after a timer drop must re-create the acquire and resume requesting")
+		require.Equal(t, n, rs.calledN(),
+			"a straggler for a given-up acquire must be dropped, not re-request")
 		router.txSetAcquireMu.Lock()
-		_, tracked = router.txSetAcquire[txSetID]
+		state, tracked = router.txSetAcquire[txSetID]
+		stillDormant := tracked && state.dormant
 		router.txSetAcquireMu.Unlock()
-		require.True(t, tracked, "the acquire is tracked again after the reviving inbound reply")
+		require.True(t, tracked, "the acquire remains tracked after the dropped straggler")
+		require.True(t, stillDormant, "a straggler must not revive a given-up acquire")
+
+		// Consensus re-asks (stillNeed): the acquire wakes and the next timer
+		// tick resumes requesting from the retained partial map.
+		router.MarkTxSetStillNeeded(txSetID)
+		router.maintenanceTick()
+		require.Greater(t, rs.calledN(), n,
+			"after a stillNeed re-ask the acquire resumes from its retained map")
+		router.txSetAcquireMu.Lock()
+		state, tracked = router.txSetAcquire[txSetID]
+		revivedDormant := tracked && state.dormant
+		router.txSetAcquireMu.Unlock()
+		require.True(t, tracked, "the acquire remains tracked after revival")
+		require.False(t, revivedDormant, "stillNeed must clear the dormant latch")
 	})
 }

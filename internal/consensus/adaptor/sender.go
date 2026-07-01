@@ -146,6 +146,30 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 	return s.overlay.BroadcastExceptSet(skip, frame)
 }
 
+// RequestTxSetMissingNodesFromPeer is the unicast counterpart of
+// RequestTxSetMissingNodes: the request goes only to the single replying peer.
+// The inbound acquire pipeline uses it so a progressing reply re-requests from
+// the peer that just served (mirrors rippled trigger(peer)); the broadcast
+// variant stays the timer's stalled-acquire fallback. nodeIDs may carry the
+// 33-byte zero root ID to (re)fetch the root. indirect sets query_type=qtINDIRECT.
+func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
+	if len(nodeIDs) == 0 {
+		return fmt.Errorf("RequestTxSetMissingNodesFromPeer: nodeIDs must be non-empty")
+	}
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTsCandidate,
+		LedgerHash: id[:],
+		QueryDepth: 3,
+		NodeIDs:    nodeIDs,
+		QueryType:  indirectQueryType(indirect),
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode txset missing-nodes (unicast) request: %w", err)
+	}
+	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
 func (s *OverlaySender) BroadcastStatusChange(sc *message.StatusChange) error {
 	frame, err := encodeFrame(message.TypeStatusChange, sc)
 	if err != nil {

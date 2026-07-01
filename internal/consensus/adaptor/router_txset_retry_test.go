@@ -13,10 +13,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// retryRecordingSender captures the per-call peer-exclusion set passed
-// to RequestTxSetMissingNodes so tests can pin issue #420's throttle,
-// max-attempts, and de-prioritization behavior. Other NetworkSender
-// methods inherit from noopSender.
+// retryRecordingSender captures every tx-set missing-nodes request — the
+// broadcast RequestTxSetMissingNodes (timer path) AND the unicast
+// RequestTxSetMissingNodesFromPeer (inbound pipeline) — into a single ordered
+// slice so tests can pin throttle, give-up, de-prioritization, and the
+// unicast-inline / broadcast-timer split. peerID is 0 for a broadcast and the
+// target peer for a unicast; excluded is populated only on broadcasts. Other
+// NetworkSender methods inherit from noopSender.
 type retryRecordingSender struct {
 	noopSender
 	mu        sync.Mutex
@@ -29,6 +32,7 @@ type retryRecordedCall struct {
 	nodeIDs  [][]byte
 	excluded map[uint64]bool
 	indirect bool
+	peerID   uint64
 }
 
 func (s *retryRecordingSender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
@@ -45,6 +49,22 @@ func (s *retryRecordingSender) RequestTxSetMissingNodes(id consensus.TxSetID, no
 		nodeIDs:  copyIDs,
 		excluded: copyExcluded,
 		indirect: indirect,
+	})
+	return s.returnErr
+}
+
+func (s *retryRecordingSender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs [][]byte, peerID uint64, indirect bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copyIDs := make([][]byte, len(nodeIDs))
+	for i, n := range nodeIDs {
+		copyIDs[i] = append([]byte(nil), n...)
+	}
+	s.calls = append(s.calls, retryRecordedCall{
+		txSetID:  id,
+		nodeIDs:  copyIDs,
+		indirect: indirect,
+		peerID:   peerID,
 	})
 	return s.returnErr
 }
@@ -123,80 +143,83 @@ func emptyTxSetLedgerData(txSetID consensus.TxSetID) *message.LedgerData {
 	}
 }
 
-// withRetryKnobs overrides this router's issue-#420 retry knobs for
+// withRetryKnobs overrides this router's tx-set acquire retry knobs for
 // the duration of fn so tests run instantly instead of waiting for the
-// production 250 ms throttle window. Restores prior values on return.
-func withRetryKnobs(router *Router, minInterval time.Duration, maxAttempts, peerThreshold int, fn func()) {
+// production 250 ms cadence window. Restores prior values on return.
+func withRetryKnobs(router *Router, minInterval time.Duration, maxStallTicks, peerThreshold int, fn func()) {
 	prev := router.txSetRetryKnobs
 	router.SetTxSetRetryKnobsForTest(txSetRetryKnobs{
 		MinInterval:              minInterval,
-		MaxAttempts:              maxAttempts,
+		MaxStallTicks:            maxStallTicks,
 		PeerNonProgressThreshold: peerThreshold,
 	})
 	defer router.SetTxSetRetryKnobsForTest(prev)
 	fn()
 }
 
-// TestTxSetRetry_ThrottleSkipsRapidRetries pins the rate limiter
-// (issue #420 item 2a). A peer that replies twice in quick succession
-// must not produce two broadcasts — the second falls inside the
-// minimum-interval window and is dropped. Without the throttle, every
-// non-progressing TMLedgerData spawns an immediate re-broadcast,
-// driving the 100+ retries/sec storm captured in the issue.
-func TestTxSetRetry_ThrottleSkipsRapidRetries(t *testing.T) {
+// TestTxSetRetry_NoProgressReplyDefersToTimer pins the pipelining-model
+// anti-storm guard. A PROGRESSING reply re-requests immediately (RTT is
+// the rate limiter), but a NON-progress reply must NOT re-request inline —
+// otherwise a junk/empty-reply peer amplifies into a broadcast storm. The
+// 250ms stall timer, not the inbound path, drives re-requests once a peer
+// goes quiet.
+func TestTxSetRetry_NoProgressReplyDefersToTimer(t *testing.T) {
 	router, rs := newRetryRouter(t)
-	withRetryKnobs(router, time.Hour, 100, 100, func() {
-		ld, _ := rootOnlyTxSetLedgerData(t, 4)
+	withRetryKnobs(router, 0, 1_000_000, 1_000_000, func() {
+		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
 
+		// A progressing (root) reply pipelines exactly one request.
 		router.handleTxSetData(ld, 1)
 		require.Equal(t, 1, rs.calledN(),
-			"first reply must trigger exactly one missing-nodes broadcast")
+			"a progressing reply must pipeline exactly one missing-nodes request")
 
-		router.handleTxSetData(ld, 1)
+		// An empty reply makes no progress → must NOT re-request inline.
+		router.handleTxSetData(emptyTxSetLedgerData(txSetID), 1)
 		assert.Equal(t, 1, rs.calledN(),
-			"second reply inside the throttle window must NOT trigger another broadcast — "+
-				"issue #420: without this, every non-progressing reply re-broadcasts immediately")
+			"a non-progress reply must defer to the stall timer, not re-request inline")
 	})
 }
 
-// TestTxSetRetry_MaxAttemptsCapDropsAcquire pins the give-up condition
-// (issue #420 item 2b). After MaxAttempts broadcasts the acquisition
-// is dropped: the cap-hit reply does NOT broadcast and the entry is
-// deleted. A later reply for the same tx-set ID re-arms a fresh
-// acquire — mirrors rippled's stillNeed reset path
-// (TransactionAcquire.cpp:256-264) so consensus oscillating back to
-// the same set isn't silenced for the full TTL window.
-func TestTxSetRetry_MaxAttemptsCapDropsAcquire(t *testing.T) {
+// TestTxSetRetry_InboundProgressNeverGivesUp pins that the inbound path
+// has NO give-up cap: give-up now lives solely on the stall timer, keyed
+// on consecutive no-progress ticks. Many progressing replies in a row each
+// pipeline a fresh request and never delete the acquire nor accrue stall
+// ticks — the pre-pipelining inbound MaxAttempts delete-on-cap is gone.
+func TestTxSetRetry_InboundProgressNeverGivesUp(t *testing.T) {
 	router, rs := newRetryRouter(t)
-	const maxAttempts = 3
-	withRetryKnobs(router, 0, maxAttempts, 1_000_000, func() {
-		ld, _ := rootOnlyTxSetLedgerData(t, 4)
+	// MaxStallTicks deliberately small: if the inbound path fed stall
+	// telemetry it would trip and delete the acquire.
+	withRetryKnobs(router, 0, 3, 1_000_000, func() {
+		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
 
-		for i := range maxAttempts {
+		const replies = 25
+		for i := range replies {
 			router.handleTxSetData(ld, uint64(i+1))
 		}
-		require.Equal(t, maxAttempts, rs.calledN(),
-			"each of the first maxAttempts replies must broadcast")
+		require.Equal(t, replies, rs.calledN(),
+			"every progressing inbound reply must pipeline a request — no inbound give-up cap")
 
-		// Reply at the cap: hits the delete-on-cap branch — no broadcast.
-		router.handleTxSetData(ld, 99)
-		require.Equal(t, maxAttempts, rs.calledN(),
-			"reply that hits the cap must NOT broadcast (delete-on-cap)")
-
-		// Subsequent reply re-creates state and broadcasts a fresh attempt.
-		router.handleTxSetData(ld, 100)
-		assert.Equal(t, maxAttempts+1, rs.calledN(),
-			"after the entry was dropped, the next reply must start a fresh acquire "+
-				"and broadcast again — matches rippled's stillNeed re-arm path")
+		router.txSetAcquireMu.Lock()
+		state, tracked := router.txSetAcquire[txSetID]
+		stall, dormant := 0, false
+		if tracked {
+			stall, dormant = state.stallTicks, state.dormant
+		}
+		router.txSetAcquireMu.Unlock()
+		require.True(t, tracked, "a progressing acquire is never deleted by the inbound path")
+		assert.Equal(t, 0, stall, "progressing replies keep stallTicks pinned at 0")
+		assert.False(t, dormant, "a progressing acquire never goes dormant")
 	})
 }
 
 // TestTxSetRetry_DeprioritizesNonProgressingPeer pins per-peer
-// exclusion (issue #420 item 2c). A peer that returns
-// PeerNonProgressThreshold non-progressing replies in a row is
-// dropped from the next missing-nodes broadcast via the excluded
-// map. Non-progress matches rippled's takeNodes invalid() branch:
-// a reply that adds neither root nor non-root nodes.
+// exclusion. A peer that returns PeerNonProgressThreshold
+// non-progressing replies in a row is dropped from the next
+// missing-nodes broadcast via the excluded map. Under the pipelining
+// model, non-progress replies no longer re-request inline (they defer
+// to the timer), so the exclusion surfaces on the timer's re-request.
+// Non-progress matches rippled's takeNodes invalid() branch: a reply
+// that adds neither root nor non-root nodes.
 func TestTxSetRetry_DeprioritizesNonProgressingPeer(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	const threshold = 2
@@ -205,24 +228,23 @@ func TestTxSetRetry_DeprioritizesNonProgressingPeer(t *testing.T) {
 		noProgressLD := emptyTxSetLedgerData(txSetID)
 		const badPeer = uint64(7)
 
-		// Setup: root-only reply creates state. Root-add counts as
-		// progress (TransactionAcquire.cpp:194-226 useful() branch),
-		// so the per-peer counter stays at 0.
+		// Root-only reply creates state and pipelines one request (root add
+		// counts as progress, so the per-peer counter stays at 0).
 		router.handleTxSetData(ld, badPeer)
 		require.Equal(t, 1, rs.calledN())
 		assert.Empty(t, rs.lastCall().excluded,
 			"first broadcast must carry no exclusions")
 
-		// Non-progress reply 1 — counter[badPeer] = 1 (< threshold).
+		// Two non-progress replies bump counter[badPeer] to threshold.
+		// Neither re-requests inline (deferred to the timer).
 		router.handleTxSetData(noProgressLD, badPeer)
-		require.Equal(t, 2, rs.calledN())
-		assert.Empty(t, rs.lastCall().excluded,
-			"counter below threshold must not yet exclude the peer")
+		router.handleTxSetData(noProgressLD, badPeer)
+		require.Equal(t, 1, rs.calledN(),
+			"non-progress replies must not re-request inline")
 
-		// Non-progress reply 2 — counter[badPeer] = 2 (== threshold) →
-		// the broadcast for this retry must exclude badPeer.
-		router.handleTxSetData(noProgressLD, badPeer)
-		require.Equal(t, 3, rs.calledN())
+		// The stall timer now re-requests and must route around badPeer.
+		router.retryStalledTxSetAcquires()
+		require.Equal(t, 2, rs.calledN(), "timer re-requests once the peer goes quiet")
 		require.NotNil(t, rs.lastCall().excluded)
 		assert.Truef(t, rs.lastCall().excluded[badPeer],
 			"peer %d should be excluded once non-progress count reaches threshold (%d)",
@@ -233,7 +255,8 @@ func TestTxSetRetry_DeprioritizesNonProgressingPeer(t *testing.T) {
 // TestTxSetRetry_ProgressResetsNonProgressCounter pins that a peer
 // reply that DOES extend the SHAMap resets that peer's non-progress
 // counter, so a transient stretch of empty replies doesn't permanently
-// banish a recovered peer.
+// banish a recovered peer. The exclusion decision is observed on the
+// timer's re-request (the inbound non-progress path no longer broadcasts).
 func TestTxSetRetry_ProgressResetsNonProgressCounter(t *testing.T) {
 	router, rs := newRetryRouter(t)
 	const threshold = 2
@@ -242,25 +265,27 @@ func TestTxSetRetry_ProgressResetsNonProgressCounter(t *testing.T) {
 		noProgressLD := emptyTxSetLedgerData(txSetID)
 		const peer = uint64(11)
 
-		// Setup: root reply creates state (counts as progress).
+		// Root reply creates state (progress).
 		router.handleTxSetData(ld, peer)
 		require.Equal(t, 1, rs.calledN())
 
 		// Non-progress reply — counter[peer] = 1.
 		router.handleTxSetData(noProgressLD, peer)
-		require.Equal(t, 2, rs.calledN())
 
 		// Progress reply: same root (ErrRootAlreadySet still counts as
-		// rootAccepted=true per takeNodes useful() semantics) — resets
-		// counter[peer] to 0.
+		// rootAccepted=true) — resets counter[peer] to 0 and pipelines
+		// another request.
 		router.handleTxSetData(ld, peer)
-		require.Equal(t, 3, rs.calledN())
+		require.Equal(t, 2, rs.calledN())
 
-		// One further non-progress reply — counter[peer] = 1 again,
-		// still < threshold=2, peer must NOT be excluded.
+		// One further non-progress reply — counter[peer] = 1 again (< threshold).
 		router.handleTxSetData(noProgressLD, peer)
-		last := rs.lastCall()
-		assert.Falsef(t, last.excluded[peer],
+
+		// The timer re-requests; peer must NOT be excluded (1 < 2), proving
+		// the intervening progress reply reset the counter.
+		router.retryStalledTxSetAcquires()
+		require.Equal(t, 3, rs.calledN())
+		assert.Falsef(t, rs.lastCall().excluded[peer],
 			"progress reset the non-progress counter; one further empty reply "+
 				"should not be enough to exclude the peer")
 	})
@@ -299,61 +324,70 @@ func TestTxSetRetry_BadNonRootInvalidatesWholeReply(t *testing.T) {
 		}
 		const badPeer = uint64(42)
 
-		// Reply 1: root accepted but junk non-root → replyValid=false →
-		// counter[badPeer] = 1 (< threshold).
+		// Reply 1: root accepted but junk non-root → replyValid=false → the
+		// whole reply is non-progress. State is created (root added) but no
+		// inline re-request; counter[badPeer] = 1.
 		router.handleTxSetData(rootPlusJunkLD, badPeer)
-		require.Equal(t, 1, rs.calledN())
-		assert.Empty(t, rs.lastCall().excluded,
-			"first such reply must broadcast without exclusions yet")
+		require.Equal(t, 0, rs.calledN(),
+			"a junk-non-root reply is non-progress → no inline re-request")
 
-		// Reply 2: same shape → counter[badPeer] = 2 (== threshold) →
-		// the next broadcast must exclude badPeer. Pre-M1 the rootAccepted
-		// branch alone would have reset the counter to 0 on each reply,
-		// so this peer would never have been excluded.
+		// Reply 2: same shape → counter[badPeer] = 2 (== threshold).
 		router.handleTxSetData(rootPlusJunkLD, badPeer)
-		require.Equal(t, 2, rs.calledN())
+		require.Equal(t, 0, rs.calledN())
+
+		// The stall timer now re-requests and must exclude badPeer: the junk
+		// non-root invalidated the whole reply, so the root-add alone did NOT
+		// keep the counter pinned at zero.
+		router.retryStalledTxSetAcquires()
+		require.Equal(t, 1, rs.calledN())
 		require.NotNil(t, rs.lastCall().excluded,
-			"second bad-non-root reply must trigger per-peer exclusion")
+			"timer re-request after two bad-non-root replies must exclude the peer")
 		assert.Truef(t, rs.lastCall().excluded[badPeer],
-			"peer %d should be excluded — junk non-root must invalidate the whole reply "+
-				"per rippled's takeNodes useful() (TransactionAcquire.cpp:217-220), "+
+			"peer %d should be excluded — junk non-root must invalidate the whole reply, "+
 				"NOT count as progress just because the root was accepted",
 			badPeer)
 	})
 }
 
-// TestTxSetRetry_StillNeededReArmsAtCap pins the stillNeed re-arm
-// path (M3 from PR #454 review). Once an in-flight acquisition hits
-// MaxAttempts, the next inbound reply would normally drop into the
-// delete-on-cap branch. If consensus actively re-asks via
-// Adaptor.RequestTxSet (rippled's stillNeed trigger,
-// InboundTransactions.cpp:107-114 → TransactionAcquire.cpp:256-264)
-// BEFORE that drop happens, attempts must be reset so the acquisition
-// keeps broadcasting instead of waiting on the 60s TTL sweep.
-func TestTxSetRetry_StillNeededReArmsAtCap(t *testing.T) {
+// TestTxSetRetry_StillNeededReArmsDormantAcquire pins the stillNeed
+// re-arm at the new give-up boundary. Once the stall timer drives an
+// acquire dormant (MaxStallTicks consecutive no-progress ticks), it stops
+// re-requesting but KEEPS its partial map. A consensus re-ask
+// (Adaptor.RequestTxSet → MarkTxSetStillNeeded) must clear the dormant
+// latch so the very next timer tick resumes requesting instead of waiting
+// out the 60s TTL — mirrors rippled's stillNeed reset.
+func TestTxSetRetry_StillNeededReArmsDormantAcquire(t *testing.T) {
 	router, rs := newRetryRouter(t)
-	const maxAttempts = 2
-	withRetryKnobs(router, 0, maxAttempts, 1_000_000, func() {
+	const maxStall = 2
+	withRetryKnobs(router, 0, maxStall, 1_000_000, func() {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
 
-		// Drive attempts up to the cap.
-		for i := range maxAttempts {
-			router.handleTxSetData(ld, uint64(i+1))
+		// Progress reply creates the acquire and pipelines one request.
+		router.handleTxSetData(ld, 1)
+		require.Equal(t, 1, rs.calledN())
+
+		// Drive consecutive no-progress timer ticks to dormancy.
+		for range maxStall {
+			router.retryStalledTxSetAcquires()
 		}
-		require.Equal(t, maxAttempts, rs.calledN(),
-			"each of the first maxAttempts replies must broadcast")
+		router.txSetAcquireMu.Lock()
+		state, tracked := router.txSetAcquire[txSetID]
+		dormant := tracked && state.dormant
+		router.txSetAcquireMu.Unlock()
+		require.True(t, tracked, "dormant acquire keeps its partial map (not deleted)")
+		require.True(t, dormant, "acquire must be dormant after MaxStallTicks stall ticks")
 
-		// stillNeed: consensus re-asks for the same set. With the wiring
-		// in place, this resets attempts and lastRequest on the entry.
+		nAtDormant := rs.calledN()
+		// While dormant a further timer tick must not re-request.
+		router.retryStalledTxSetAcquires()
+		require.Equal(t, nAtDormant, rs.calledN(), "dormant acquire must not re-request")
+
+		// stillNeed re-arm via consensus re-ask, then a timer tick resumes.
 		require.NoError(t, router.adaptor.RequestTxSet(txSetID))
-
-		// Next reply: pre-M3 this would have hit the cap and deleted the
-		// entry (no broadcast). With M3, attempts is back at 0 so the
-		// broadcast fires.
-		router.handleTxSetData(ld, 99)
-		assert.Equal(t, maxAttempts+1, rs.calledN(),
-			"after stillNeed re-arm, the next reply must broadcast instead "+
-				"of being silenced by the max-attempts cap")
+		router.retryStalledTxSetAcquires()
+		assert.Greater(t, rs.calledN(), nAtDormant,
+			"after stillNeed re-arm the next timer tick must resume requesting "+
+				"instead of being silenced until the TTL sweep")
 	})
 }
 
