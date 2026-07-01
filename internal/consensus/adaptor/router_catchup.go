@@ -1092,15 +1092,30 @@ func (r *Router) completeInboundLedger(il *inbound.Ledger) {
 	// is nil only when the ledger has no transactions (empty tx tree), in which
 	// case the service installs the genesis-shaped empty tx map.
 	//
-	// Route through SubmitHeldAdoption so out-of-order catchup arrivals
-	// either fast-path (parent already present) or stash for cascade when the
-	// awaited parent lands. Legacy mtGET_LEDGER is sequential at the wire level
-	// today, but nothing in the protocol forbids interleaving — the held-queue
-	// is the correct seam regardless.
 	// context.TODO: same as adoptVerifiedLedger — reached from a peer-message
 	// handler stack with no plumbed context. See note there.
-	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap)
-	if err != nil {
+	//
+	// A consensus acquisition that completes two or more ledgers ahead of our
+	// working ledger is a catch-up jump: its parent chain is absent, and on a
+	// busy network fresh ledgers close faster than a backward parent chase can
+	// fill the gap, so stashing the tip and chasing parents never converges.
+	// Adopt the acquired tip directly instead, jumping the working ledger
+	// forward so consensus rejoins on the trusted-validation-preferred branch;
+	// intermediate history backfills off the critical path. This mirrors
+	// rippled setFullLedger/checkAccept, which advances the current ledger to an
+	// acquired tip without waiting on the ledgers between. The published
+	// validated pointer still only advances at quorum (drainPendingLedger-
+	// Validation). Gap ≤ 1 (single-ledger catch-up, whose parent is present) and
+	// generic RPC acquisitions keep the held-adoption seam so out-of-order
+	// arrivals cascade in order.
+	var res service.SubmitHeldAdoptionResult
+	if il.Reason() == inbound.ReasonConsensus && h.LedgerIndex > svc.GetClosedLedgerIndex()+1 {
+		if err = svc.AdoptLedgerWithState(context.TODO(), h, stateMap, txMap); err != nil {
+			r.logger.Warn("inbound ledger: catch-up jump adopt failed",
+				"error", err, "seq", h.LedgerIndex)
+			return
+		}
+	} else if res, err = svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap); err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return
 	}
