@@ -195,6 +195,32 @@ func (o *OfferCreate) takerCross(
 		}
 	}
 
+	// A flow over-delivery aborts the engine with tefEXCEPTION and discards its
+	// sandbox (the over-deliver guard returns no state; FlowCross only applies the
+	// sandbox on tesSUCCESS). During offer crossing this is NOT a transaction
+	// failure: rippled's flowCross swallows every non-tesSUCCESS flow result,
+	// leaving the offer unchanged (afterCross = takerAmount) and returning
+	// tesSUCCESS, so the discarded crossing simply yields nothing. Mirror that —
+	// erase the groomed offers, drop the crossing, and fall through uncrossed
+	// (crossed=false) so applyGuts reaches the ImmediateOrCancel / FillOrKill kill
+	// (tecKILLED) or, for a plain offer, places the original amounts. Surfacing the
+	// engine's tefEXCEPTION as the transaction result instead would wrongly discard
+	// the whole tx (no fee, not in ledger) rather than commit an in-ledger tecKILLED.
+	// Reference: rippled CreateOffer.cpp:428-430 (isTesSuccess gate -> offer
+	// unchanged), Flow.cpp:42-45 (sandbox applied only on tesSUCCESS).
+	if result == ter.TefEXCEPTION {
+		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
+		return crossOutcome{
+			terminated:  false,
+			result:      ter.TesSUCCESS,
+			applyMain:   true,
+			saTakerPays: saTakerPays,
+			saTakerGets: saTakerGets,
+			uRate:       uRate,
+			crossed:     false,
+		}
+	}
+
 	if result != ter.TesSUCCESS {
 		// Error during crossing - apply cancel sandbox
 		return crossOutcome{terminated: true, result: result, applyMain: false}
