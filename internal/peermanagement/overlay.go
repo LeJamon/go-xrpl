@@ -269,6 +269,15 @@ type Overlay struct {
 	listenerMu sync.RWMutex
 	listener   net.Listener
 
+	// listenerReady is closed once Run has finished its listener-bind
+	// phase — after startListener publishes o.listener, or immediately
+	// when no listener is configured. Callers that need to wait for the
+	// bind (integration tests wiring two overlays on an ephemeral port)
+	// block on ListenerReady() instead of polling ListenAddr() against a
+	// wall clock, which is racy under load.
+	listenerReady     chan struct{}
+	listenerReadyOnce sync.Once
+
 	// Lifecycle
 	// lifecycleMu guards ctx/cancel against the Run-write vs Stop-read
 	// race: Run is typically launched in its own goroutine and lazily
@@ -679,6 +688,23 @@ func (o *Overlay) ListenAddr() string {
 	return l.Addr().String()
 }
 
+// ListenerReady returns a channel that is closed once Run has finished
+// binding the listener (or determined none is configured). Waiting on it
+// is the race-free way to know ListenAddr() will report the resolved
+// ephemeral port — callers block on the event instead of polling.
+func (o *Overlay) ListenerReady() <-chan struct{} {
+	return o.listenerReady
+}
+
+// signalListenerReady closes listenerReady exactly once. Guarded against
+// overlays constructed directly (outside New), whose channel is nil.
+func (o *Overlay) signalListenerReady() {
+	if o.listenerReady == nil {
+		return
+	}
+	o.listenerReadyOnce.Do(func() { close(o.listenerReady) })
+}
+
 // messageBufferSize returns the inbound-message channel capacity,
 // falling back to DefaultMessageBufferSize when the configured value
 // is non-positive. A non-positive size would create an unbuffered
@@ -774,6 +800,7 @@ func New(opts ...Option) (*Overlay, error) {
 		ledgerData:      make(chan *InboundMessage, DefaultLedgerDataBufferSize),
 		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
 		stopCh:          make(chan struct{}),
+		listenerReady:   make(chan struct{}),
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
 		clockForIndex:   time.Now,
 		inboundSem:      make(chan struct{}, inboundCap),
@@ -853,6 +880,9 @@ func (o *Overlay) Run(ctx context.Context) error {
 			return fmt.Errorf("listener error: %w", err)
 		}
 	}
+	// Unblock ListenerReady() waiters once the bind decision is made,
+	// whether a listener was started or none was configured.
+	o.signalListenerReady()
 
 	// Start resource manager (per-endpoint consumer table). The
 	// periodic-activity goroutine ages out inactive entries; the
