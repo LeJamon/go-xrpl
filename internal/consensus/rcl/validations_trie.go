@@ -115,8 +115,9 @@ func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, validatio
 
 // checkAcquiredLocked replays parked validations whose ledger has become
 // locally resolvable into the trie (rippled checkAcquired). Polled from
-// updateTrieLocked on every trusted validation and from GetPreferred.
-// Caller must hold vt.mu (write).
+// updateTrieLocked on every trusted validation and from every trie read
+// (GetPreferred, ProposersFinished, GetTrustedSupport) — rippled's
+// updateTrie / withTrie cadence. Caller must hold vt.mu (write).
 func (vt *ValidationTracker) checkAcquiredLocked() {
 	for key, nodes := range vt.acquiring {
 		lgr, ok := vt.ancestry.LedgerByID(key.id)

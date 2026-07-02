@@ -110,9 +110,11 @@ func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
 	}
 }
 
-// checkAcquired also polls on the Add path, mirroring rippled's
-// updateTrie: an unrelated resolvable validation replays parked entries.
-func TestValidationTracker_AddPollReplaysParked(t *testing.T) {
+// Trie reads poll checkAcquired like rippled's withTrie (Validations.h:
+// 483-491): a parked validation whose ledger has been acquired is
+// replayed by the read itself — no intervening Add or GetPreferred
+// (rippled testAcquireValidatedLedger, Validations_test.cpp:958-961).
+func TestValidationTracker_ReadPollReplaysParked(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 	now := time.Now()
 	vt.SetNow(func() time.Time { return now })
@@ -125,22 +127,45 @@ func TestValidationTracker_AddPollReplaysParked(t *testing.T) {
 	provider.add(abc)
 
 	n1 := consensus.NodeID{1}
-	n2 := consensus.NodeID{2}
-	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.SetTrusted([]consensus.NodeID{n1})
+	vt.SetLedgerAncestryProvider(provider)
+
+	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
+	// Advance to abcd, not held: parks, tip stays abc.
+	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
+
+	prev := &mockLedger{id: abc.ID(), seq: abc.Seq()}
+	if got := vt.ProposersFinished(prev); got != 0 {
+		t.Fatalf("ProposersFinished while parked: got %d, want 0", got)
+	}
+
+	provider.add(abcd)
+	if got := vt.ProposersFinished(prev); got != 1 {
+		t.Fatalf("ProposersFinished must replay parked validations: got %d, want 1", got)
+	}
+}
+
+// GetTrustedSupport's read also polls: an acquired-but-unreplayed parked
+// validation counts toward branch support with no intervening call.
+func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	abcd := b.Build("abcd")
+
+	provider := newMapAncestryProvider()
+
+	n1 := consensus.NodeID{1}
+	vt.SetTrusted([]consensus.NodeID{n1})
 	vt.SetLedgerAncestryProvider(provider)
 
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
+
 	provider.add(abcd)
-
-	// Resolvable but not replayed yet — GetTrustedSupport reads the trie
-	// without polling, so n1's tip is still absent.
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
-		t.Fatalf("branch support before replay: got %d, want 0", got)
-	}
-
-	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 	if got := vt.GetTrustedSupport(abcd.ID()); got != 1 {
-		t.Fatalf("branch support after Add-path replay: got %d, want 1", got)
+		t.Fatalf("GetTrustedSupport must replay parked validations: got %d, want 1", got)
 	}
 }
 

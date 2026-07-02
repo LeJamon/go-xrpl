@@ -509,12 +509,12 @@ func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 
 // GetTrustedSupport returns the count of trusted-and-not-negUNL
 // validators committing to this ledger or any descendant — the
-// negUNL-excluded analogue of the trie's branchSupport, used by the
-// engine's quorum and peer-LCL gates. The trie itself now includes
-// negUNL validators (for GetPreferred steering), so the exclusion is
-// applied here in branchSupportExcludingNegUNLLocked rather than at
-// trie membership. Falls back to the flat trusted count when the trie
-// or ancestry is unavailable.
+// negUNL-excluded analogue of the trie's branchSupport. The trie itself
+// includes negUNL validators (for GetPreferred steering), so the
+// exclusion is applied here in branchSupportExcludingNegUNLLocked
+// rather than at trie membership. Polls checkAcquired before reading,
+// rippled's withTrie cadence. Falls back to the flat trusted count when
+// the trie or ancestry is unavailable.
 func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
 	// Snapshot pointers, drop the lock for ancestry resolution, then
 	// re-acquire for the cheap trie query.
@@ -532,8 +532,8 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 		return vt.GetTrustedValidationCount(ledgerID)
 	}
 
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
 	// Trie may have been swapped while we resolved ancestry.
 	if vt.trie != trie {
 		ledgerVals, exists := vt.validations[ledgerID]
@@ -542,6 +542,7 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 		}
 		return vt.countTrustedExcludingNegUNLLocked(ledgerVals)
 	}
+	vt.checkAcquiredLocked()
 	return vt.branchSupportExcludingNegUNLLocked(lgr)
 }
 
@@ -661,10 +662,7 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 // getNodesAfter used by checkConsensus to return MovedOn. Like
 // getNodesAfter it reads the trie, so negUNL validators ARE counted here
 // (they steer just like any trusted validator); negUNL only adjusts the
-// quorum threshold, not this "have the peers moved on" signal. Unlike
-// rippled's withTrie, this read doesn't poll checkAcquired: parked
-// validations whose ledger was just acquired appear on the next
-// Add/GetPreferred poll, one sub-round later at most.
+// quorum threshold, not this "have the peers moved on" signal.
 func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
@@ -678,14 +676,15 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	vt.mu.RUnlock()
 	if trie != nil && ancestry != nil {
 		if lgr, ok := ancestry.LedgerByID(prev.ID()); ok {
-			vt.mu.RLock()
+			vt.mu.Lock()
 			current := vt.trie == trie
 			var branch, tip uint32
 			if current {
+				vt.checkAcquiredLocked()
 				branch = trie.BranchSupport(lgr)
 				tip = trie.TipSupport(lgr)
 			}
-			vt.mu.RUnlock()
+			vt.mu.Unlock()
 			if current {
 				if branch <= tip {
 					return 0
