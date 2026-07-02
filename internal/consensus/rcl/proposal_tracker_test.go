@@ -286,11 +286,15 @@ func TestProposalTracker_Replay(t *testing.T) {
 	pt.BufferRecent(&consensus.Proposal{NodeID: nodeA, Position: 1, PreviousLedger: target, CloseTime: ct})
 	pt.BufferRecent(&consensus.Proposal{NodeID: nodeB, Position: 0, PreviousLedger: other, CloseTime: ct})
 
-	closeTimes, trustedReplayed := pt.Replay(target, alwaysTrusted)
+	closeTimes, trustedReplayed, relay := pt.Replay(target, alwaysTrusted)
 
 	// nodeA contributes two proposals (Position 0 and 1) for the target.
 	if trustedReplayed != 2 {
 		t.Errorf("trustedReplayed = %d, want 2", trustedReplayed)
+	}
+	// Both stored positions are returned so the caller can re-share them.
+	if len(relay) != 2 {
+		t.Errorf("relay = %d proposals, want 2", len(relay))
 	}
 	// Only the Position==0 proposal yields a close-time vote.
 	if len(closeTimes) != 1 || !closeTimes[0].Equal(ct) {
@@ -302,6 +306,25 @@ func TestProposalTracker_Replay(t *testing.T) {
 	}
 	if _, ok := pt.proposals[nodeB]; ok {
 		t.Error("nodeB (different prev ledger) should not have been replayed")
+	}
+}
+
+// TestProposalTracker_ReplayReshareOnlyStored verifies Replay returns only the
+// proposals whose position it actually (re-)stored: a stale buffered position
+// that loses to an existing higher one is not re-shared, mirroring rippled
+// sharing only when peerProposalInternal accepts the position.
+func TestProposalTracker_ReplayReshareOnlyStored(t *testing.T) {
+	pt := NewProposalTracker()
+	target := consensus.LedgerID{9}
+	node := consensus.NodeID{1}
+
+	// Current position already ahead of the buffered one.
+	pt.Store(&consensus.Proposal{NodeID: node, Position: 5, PreviousLedger: target})
+	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 2, PreviousLedger: target})
+
+	_, _, relay := pt.Replay(target, alwaysTrusted)
+	if len(relay) != 0 {
+		t.Errorf("stale replay re-shared %d proposals, want 0", len(relay))
 	}
 }
 

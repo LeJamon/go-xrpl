@@ -922,6 +922,61 @@ func TestEngine_OnProposal_Untrusted(t *testing.T) {
 	}
 }
 
+// TestEngine_StartRound_ResharesReplayedProposals pins issue #1188: after a
+// ledger switch / round start, buffered peer proposals for the new prevLedger
+// are re-shared to peers (rippled playbackProposals + adaptor_.share), not just
+// stored. Without the re-share, a peer that missed a proposal would not be
+// re-fed it on the recovery path.
+func TestEngine_StartRound_ResharesReplayedProposals(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0x11}, seq: 100}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+	peer := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{peer})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Buffer a peer proposal between rounds (accepted phase): OnProposal only
+	// buffers it, it does not relay yet.
+	proposal := &consensus.Proposal{
+		Round:          consensus.RoundID{Seq: 101, ParentHash: prev.ID()},
+		NodeID:         peer,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: prev.ID(),
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(proposal, 0); err != nil {
+		t.Fatalf("OnProposal (buffer): %v", err)
+	}
+	adaptor.mu.RLock()
+	preRelay := len(adaptor.proposalsRelayed)
+	adaptor.mu.RUnlock()
+	if preRelay != 0 {
+		t.Fatalf("between-round proposal must be buffered not relayed; got %d relays", preRelay)
+	}
+
+	// Enter the round whose prevLedger matches the buffered proposal.
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+	round := consensus.RoundID{Seq: 101, ParentHash: prev.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.proposalsRelayed) != 1 {
+		t.Fatalf("replayed proposal not re-shared: got %d relays, want 1", len(adaptor.proposalsRelayed))
+	}
+	if adaptor.proposalsRelayed[0].NodeID != peer {
+		t.Errorf("re-shared wrong proposal: NodeID = %x, want %x", adaptor.proposalsRelayed[0].NodeID, peer)
+	}
+}
+
 func TestEngine_OnValidation(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.setTrusted([]consensus.NodeID{{2}})
