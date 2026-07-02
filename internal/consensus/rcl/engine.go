@@ -108,6 +108,8 @@ type Engine struct {
 	prevRoundTime  time.Duration
 	roundStartTime time.Time
 
+	firstRound bool
+
 	// lastConvergePercent retains convergePercent() from the last
 	// phaseEstablish tick (reset at round start) so consensus_info reports a
 	// meaningful value between rounds. The live convergePercent() still
@@ -330,6 +332,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		parms:           consensus.DefaultConsensusParms(),
 		now:             config.Clock,
 		manualTick:      config.ManualTick,
+		firstRound:      true,
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -496,6 +499,14 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // the new round's tx-set isn't coherent yet and a stale emission would
 // poison convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
+	// First round after boot has no prior round to measure; seed prevRoundTime
+	// to the idle interval so round-1 convergePercent uses the 15s divisor, not
+	// the 5s floor (else avalanche state escalates ~3x faster than rippled).
+	if e.firstRound {
+		e.prevRoundTime = e.timing.LedgerIdleInterval
+		e.firstRound = false
+	}
+
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
 
