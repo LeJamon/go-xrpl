@@ -554,9 +554,15 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Replay buffered proposals for this round's prevLedger.
 	if e.prevLedger != nil {
-		closeTimes, replayed := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
+		closeTimes, replayed, relay := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
 		for _, ct := range closeTimes {
 			e.state.CloseTimes.Peers[ct]++
+		}
+
+		// Re-share replayed positions so peers that missed a proposal on this
+		// prevLedger get re-fed it from us during the recovery window.
+		for _, p := range relay {
+			e.adaptor.RelayProposal(p, 0)
 		}
 
 		// Peer pressure: if a majority of prior proposers already closed,
@@ -1664,11 +1670,15 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
-		closeTimes, _ := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
+		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
 		if e.state != nil {
 			for _, ct := range closeTimes {
 				e.state.CloseTimes.Peers[ct]++
 			}
+		}
+
+		for _, p := range relay {
+			e.adaptor.RelayProposal(p, 0)
 		}
 	}
 
