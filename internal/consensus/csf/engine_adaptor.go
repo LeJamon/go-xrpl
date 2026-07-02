@@ -485,6 +485,8 @@ func (p *EnginePeer) GetTx(id consensus.TxID) ([]byte, error) {
 
 func (p *EnginePeer) IsValidator() bool { return true }
 
+func (p *EnginePeer) IsAmendmentBlocked() bool { return false }
+
 func (p *EnginePeer) GetValidatorKey() (consensus.NodeID, error) { return p.nodeID, nil }
 
 func (p *EnginePeer) SignProposal(prop *consensus.Proposal) error {
