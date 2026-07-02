@@ -61,15 +61,16 @@ func (pt *ProposalTracker) All() map[consensus.NodeID]*consensus.Proposal {
 	return pt.proposals
 }
 
-// Store records a proposal as its node's position when newer (higher
-// ProposeSeq), reporting whether it updated the stored position.
+// Store records a proposal as its node's position and reports whether it did.
+// A proposal that does not advance the node's ProposeSeq — a re-send or a
+// same-seq equivocation — is dropped.
 func (pt *ProposalTracker) Store(p *consensus.Proposal) bool {
 	existing, exists := pt.proposals[p.NodeID]
-	if !exists || p.Position > existing.Position {
-		pt.proposals[p.NodeID] = p
-		return true
+	if exists && p.Position <= existing.Position {
+		return false
 	}
-	return false
+	pt.proposals[p.NodeID] = p
+	return true
 }
 
 func (pt *ProposalTracker) CountTrusted(trusted func(consensus.NodeID) bool) int {
@@ -163,26 +164,28 @@ func (pt *ProposalTracker) LatestFresh(trusted func(consensus.NodeID) bool, now 
 }
 
 // Replay upserts buffered proposals for prevID into current-round positions
-// (monotonic) and returns the close-time votes to record — one per Position==0
-// trusted proposal — the count of trusted proposals replayed, and the proposals
-// whose position was (re-)stored, so the caller can re-share them to peers that
-// missed them on this ledger.
+// (monotonic) and returns the close-time votes to record — one per stored
+// Position==0 trusted proposal — the count of trusted proposals replayed, and
+// the proposals whose position was (re-)stored, so the caller can re-share them
+// to peers that missed them on this ledger. Buffered duplicates at a
+// non-increasing ProposeSeq are dropped: not counted, not relayed.
 func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []time.Time, trustedReplayed int, relay []*consensus.Proposal) {
 	for nodeID, positions := range pt.recentProposals {
 		for _, p := range positions {
 			if p.PreviousLedger != prevID {
 				continue
 			}
-			isTrusted := trusted(nodeID)
-			if pt.Store(p) {
-				relay = append(relay, p)
+			if !pt.Store(p) {
+				continue
 			}
-			if p.Position == 0 && isTrusted {
+			relay = append(relay, p)
+			if !trusted(nodeID) {
+				continue
+			}
+			if p.Position == 0 {
 				closeTimes = append(closeTimes, p.CloseTime)
 			}
-			if isTrusted {
-				trustedReplayed++
-			}
+			trustedReplayed++
 		}
 	}
 	return closeTimes, trustedReplayed, relay
