@@ -1524,8 +1524,9 @@ func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.Operating
 			}
 			return ourLCL
 		}
-		// No-trie fallback over trusted-validation tips (rippled's acquiring_
-		// majority, Validations.h:858-879); already filtered to seq >= minSeq.
+		// No-trie fallback over trusted-validation tips (the acquiring_
+		// majority is handled inside GetPreferred); already filtered to
+		// seq >= minSeq.
 		if id, _, ok := h.PreferredFromValidations(minSeq); ok {
 			return id
 		}
