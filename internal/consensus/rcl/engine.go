@@ -37,8 +37,12 @@ type Engine struct {
 	// GetLastCloseInfo reads (same RPC-hot-path rationale as modeAtomic).
 	// Written from acceptLedger under e.mu via storeLastCloseLocked.
 	lastCloseAtomic atomic.Pointer[lastCloseInfo]
-	state           *consensus.RoundState
-	prevLedger      consensus.Ledger
+	// bowedOut is the per-round voluntary bow-out: the configured validator
+	// list expired, so this round neither proposes nor validates. Snapshotted
+	// at round start (under e.mu); atomic for the lock-free IsValidating path.
+	bowedOut   atomic.Bool
+	state      *consensus.RoundState
+	prevLedger consensus.Ledger
 
 	// buildInProgress is set while acceptLedger applies the LCL off e.mu
 	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
@@ -499,12 +503,30 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
 
+	// Voluntary bow-out: an expired validator list means our trust view is
+	// stale, so this round neither proposes nor validates (rippled
+	// preStartRound). Independent of sync state — a syncing validator must
+	// not emit partials on stale trust either. Skipped in standalone.
+	bowedOut := e.adaptor.IsValidator() && !e.adaptor.IsStandalone() &&
+		e.adaptor.IsUNLBlocked()
+	if bowedOut {
+		slog.Error("Voluntarily bowing out of consensus process because of an expired validator list",
+			"t", "consensus",
+			"event", "unl-expired-bow-out",
+			"seq", round.Seq,
+		)
+	}
+	e.bowedOut.Store(bowedOut)
+
+	validating := e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull && !bowedOut
+
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
 	switch {
-	case recovering && e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull:
+	case recovering && validating:
 		e.setMode(consensus.ModeSwitchedLedger)
-	case proposing && e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull:
+	case proposing && validating:
 		e.setMode(consensus.ModeProposing)
 	default:
 		e.setMode(consensus.ModeObserving)
@@ -1032,11 +1054,13 @@ func (e *Engine) IsProposing() bool {
 }
 
 // IsValidating reports whether the node is issuing validations this round:
-// a configured validator AND synced to OpModeFull. Lock-free reads, safe on
-// the server_info hot path under ledger.service.s.mu.
+// a configured validator, synced to OpModeFull, and not bowed out over an
+// expired validator list. Lock-free reads, safe on the server_info hot path
+// under ledger.service.s.mu.
 func (e *Engine) IsValidating() bool {
 	return e.adaptor.IsValidator() &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+		!e.bowedOut.Load()
 }
 func (e *Engine) Timing() consensus.Timing {
 	return e.timing
@@ -3060,7 +3084,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// wrongLedger (the old behaviour) caused permanent quorum stalls (#451).
 	// ResultFail is a go-xrpl sentinel mapping to the MovedOn suppress class.
 	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
-	isValidator := e.adaptor.IsValidator()
+	// bowedOut folds the round's UNL-expiry bow-out into the validating
+	// half of the gate (rippled's validating_ carries it the same way).
+	isValidator := e.adaptor.IsValidator() && !e.bowedOut.Load()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	// isCompatible suppresses emission when the build is on a side chain (not
 	// just ahead of validated on the same chain). Replaces the coarse

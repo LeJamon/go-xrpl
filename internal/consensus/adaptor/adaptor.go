@@ -243,6 +243,12 @@ type Adaptor struct {
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
+	// unlBlocked reports the validator-list aggregator's UNL lock-down flag.
+	// Wired at startup when publisher lists are configured; nil (no
+	// publishers) means never blocked. Written once before the engine
+	// starts, then only read.
+	unlBlocked func() bool
+
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
 	// the trie-descent floor for preferredLCL. Zero for a non-validator.
@@ -1280,6 +1286,21 @@ func (a *Adaptor) IsStandalone() bool {
 		return false
 	}
 	return a.ledgerService.IsStandalone()
+}
+
+// SetUNLBlockedFunc wires the validator-list aggregator's lock-down flag
+// into the consensus bow-out gate. Must be called before the engine starts.
+func (a *Adaptor) SetUNLBlockedFunc(fn func() bool) {
+	a.unlBlocked = fn
+}
+
+// IsUNLBlocked reports the validator-list UNL lock-down. Always false when
+// no publisher lists are configured.
+func (a *Adaptor) IsUNLBlocked() bool {
+	if a.unlBlocked == nil {
+		return false
+	}
+	return a.unlBlocked()
 }
 
 func (a *Adaptor) Now() time.Time {
