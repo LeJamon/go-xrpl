@@ -826,3 +826,20 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 		onStale(v)
 	}
 }
+
+// Flush discards all accumulated validation state — the latest
+// validation per node, the per-ledger maps, the fully-validated firing
+// set, and the trie — while preserving configuration (trusted set,
+// negUNL, quorum, freshness, clock, callbacks, ancestry, and sequence
+// floor). Called on orderly shutdown and to reset for a clean
+// restart-in-process. It does not fire onStale: the state is dropped,
+// not archived.
+func (vt *ValidationTracker) Flush() {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+
+	vt.validations = make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation)
+	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
+	vt.fired = make(map[consensus.LedgerID]struct{})
+	vt.rebuildTrieLocked()
+}

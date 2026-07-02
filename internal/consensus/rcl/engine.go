@@ -472,6 +472,12 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
+	// Flush has no archive interaction, so its ordering relative to the
+	// archive close below is irrelevant.
+	if e.validationTracker != nil {
+		e.validationTracker.Flush()
+	}
+
 	if arc := e.loadArchive(); arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
