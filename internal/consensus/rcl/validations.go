@@ -297,8 +297,8 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     accepts, validations for seqs many rounds back are noise that
 //     can never retroactively become quorum; keeping them in memory
 //     wastes work on every checkFullValidation pass.
-//   - Per-node newer-seq-only rule: a node's latest validation
-//     supersedes any earlier one.
+//   - Per-node newer-seq-only rule: a node's tip is superseded only by
+//     a strictly higher seq; a same-or-lower seq is rejected.
 //
 // onFullyValidated is fired OUTSIDE vt.mu so the callback may call
 // back into the tracker (e.g. ExpireOld) or take other locks that
@@ -370,11 +370,13 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// happens at the wire seam, not here).
 	resolvedID := validation.NodeID
 
-	// Check if this is a newer validation from this node
+	// Supersede a node's tip only with a strictly higher seq; a
+	// same-or-lower-seq re-sign is rejected so a stale or sideways
+	// ledger can't skew ProposersFinished / PreferredFromValidations.
 	existing, hasExisting := vt.byNode[resolvedID]
 	if hasExisting {
 		if validation.LedgerSeq <= existing.LedgerSeq {
-			return false // Not newer, ignore
+			return false
 		}
 	}
 
@@ -452,7 +454,9 @@ func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.Ledger
 	return ledgerID, 0, false
 }
 
-// GetTrustedValidations returns trusted validations for a ledger.
+// GetTrustedValidations returns trusted validations for a ledger. No
+// seq argument is needed: entries are keyed by ledger hash, which
+// uniquely determines the seq, so all entries under a ledgerID share it.
 func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
