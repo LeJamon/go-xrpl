@@ -38,6 +38,17 @@ func (w *LedgerWrapper) CloseTime() time.Time {
 	return w.ledger.CloseTime()
 }
 
+// CloseAgree reports whether this ledger's close time was reached by
+// consensus (false when it was defaulted to parentClose+1s).
+func (w *LedgerWrapper) CloseAgree() bool {
+	h := w.ledger.Header()
+	return h.GetCloseAgree()
+}
+
+func (w *LedgerWrapper) ParentCloseTime() time.Time {
+	return w.ledger.ParentCloseTime()
+}
+
 func (w *LedgerWrapper) TxSetID() consensus.TxSetID {
 	return w.txSetID
 }
