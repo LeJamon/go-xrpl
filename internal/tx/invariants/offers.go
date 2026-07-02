@@ -127,12 +127,10 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 		}
 		return nil
 	}
-	// IOU escrow — must be strictly positive and must not use the sentinel "bad"
-	// currency code ("XRP" as an IOU currency). The canonical codec renders the
-	// forbidden standard-form "XRP" slot as full hex, so the currency may arrive
-	// either as the literal "XRP" or as hex with "XRP" at bytes 12-14;
-	// isXRPCurrency detects both. Mirrors rippled InvariantCheck.cpp:286-292 /
-	// Issue.h badCurrency().
+	// IOU escrow — must be strictly positive and must not use badCurrency
+	// (rippled InvariantCheck.cpp:286-292). A zero-currency IOU is an illegal
+	// encoding rippled rejects at deserialization (STAmount.cpp:183-184), so it
+	// is flagged too.
 	if esc.IOUAmount != nil {
 		if esc.IOUAmount.Signum() <= 0 {
 			return &InvariantViolation{
@@ -140,7 +138,7 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 				Message: "Escrow IOU amount is not positive",
 			}
 		}
-		if isXRPCurrency(esc.IOUAmount.Currency) {
+		if isBadCurrency(esc.IOUAmount.Currency) || isNativeXRPCurrency(esc.IOUAmount.Currency) {
 			return &InvariantViolation{
 				Name:    "NoZeroEscrow",
 				Message: "Escrow IOU amount uses the bad (XRP) currency code",
