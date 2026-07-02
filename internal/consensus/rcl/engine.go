@@ -108,9 +108,6 @@ type Engine struct {
 	prevRoundTime  time.Duration
 	roundStartTime time.Time
 
-	// firstRound seeds prevRoundTime to the idle interval on the first round
-	// after boot, so round 1's convergePercent divisor and close gates divide
-	// by the idle interval instead of zero (rippled firstRound_).
 	firstRound bool
 
 	// lastConvergePercent retains convergePercent() from the last
@@ -502,10 +499,9 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // the new round's tx-set isn't coherent yet and a stale emission would
 // poison convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
-	// On the first round after boot there is no prior round to measure, so
-	// seed prevRoundTime to the idle interval — otherwise convergePercent
-	// would divide by the 5s floor and the openTime/2 close gate by zero,
-	// escalating avalanche state ~3x faster than rippled in round 1.
+	// First round after boot has no prior round to measure; seed prevRoundTime
+	// to the idle interval so round-1 convergePercent uses the 15s divisor, not
+	// the 5s floor (else avalanche state escalates ~3x faster than rippled).
 	if e.firstRound {
 		e.prevRoundTime = e.timing.LedgerIdleInterval
 		e.firstRound = false
