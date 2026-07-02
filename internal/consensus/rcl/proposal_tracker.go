@@ -165,9 +165,11 @@ func (pt *ProposalTracker) LatestFresh(trusted func(consensus.NodeID) bool, now 
 
 // Replay upserts buffered proposals for prevID into current-round positions
 // (monotonic) and returns the close-time votes to record — one per stored
-// Position==0 trusted proposal — plus the count of trusted proposals replayed.
-// Buffered duplicates at a non-increasing ProposeSeq are dropped, not counted.
-func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []time.Time, trustedReplayed int) {
+// Position==0 trusted proposal — the count of trusted proposals replayed, and
+// the proposals whose position was (re-)stored, so the caller can re-share them
+// to peers that missed them on this ledger. Buffered duplicates at a
+// non-increasing ProposeSeq are dropped: not counted, not relayed.
+func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consensus.NodeID) bool) (closeTimes []time.Time, trustedReplayed int, relay []*consensus.Proposal) {
 	for nodeID, positions := range pt.recentProposals {
 		for _, p := range positions {
 			if p.PreviousLedger != prevID {
@@ -176,6 +178,7 @@ func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 			if !pt.Store(p) {
 				continue
 			}
+			relay = append(relay, p)
 			if !trusted(nodeID) {
 				continue
 			}
@@ -185,7 +188,7 @@ func (pt *ProposalTracker) Replay(prevID consensus.LedgerID, trusted func(consen
 			trustedReplayed++
 		}
 	}
-	return closeTimes, trustedReplayed
+	return closeTimes, trustedReplayed, relay
 }
 
 func (pt *ProposalTracker) SetValidation(v *consensus.Validation) {
