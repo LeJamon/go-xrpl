@@ -112,8 +112,8 @@ type ValidationTracker struct {
 	// resolvable yet, keyed by (seq, id) → waiting validators — rippled's
 	// acquiring_ map. Entries drain via checkAcquiredLocked once the
 	// ledger is acquired, and expire with the validations that reference
-	// them (supersede, ExpireOld, trust rotation). nil when the trie is
-	// disabled.
+	// them (supersede, ExpireOld, FlushStale, trust rotation). nil when
+	// the trie is disabled.
 	acquiring map[acquiringKey]map[consensus.NodeID]struct{}
 }
 
@@ -661,7 +661,10 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 // getNodesAfter used by checkConsensus to return MovedOn. Like
 // getNodesAfter it reads the trie, so negUNL validators ARE counted here
 // (they steer just like any trusted validator); negUNL only adjusts the
-// quorum threshold, not this "have the peers moved on" signal.
+// quorum threshold, not this "have the peers moved on" signal. Unlike
+// rippled's withTrie, this read doesn't poll checkAcquired: parked
+// validations whose ledger was just acquired appear on the next
+// Add/GetPreferred poll, one sub-round later at most.
 func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
@@ -791,6 +794,7 @@ func (vt *ValidationTracker) FlushStale() {
 			continue
 		}
 		delete(vt.byNode, nodeID)
+		vt.unparkLocked(acquiringKey{seq: v.LedgerSeq, id: v.LedgerID}, nodeID)
 		if prev, ok := vt.trieTips[nodeID]; ok {
 			safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) })
 			delete(vt.trieTips, nodeID)

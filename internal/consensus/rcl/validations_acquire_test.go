@@ -247,6 +247,80 @@ func TestValidationTracker_ExpireOldUnparks(t *testing.T) {
 	}
 }
 
+// FlushStale drops parked entries with the flushed validation, mirroring
+// rippled's stale sweep (removeTrie erases acquiring_, Validations.h:
+// 363-372): a validator that goes silent while parked must stop feeding
+// the acquiring fallback, and must not be resurrected into the trie as a
+// phantom tip once its ledger is finally acquired.
+func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	abcd := b.Build("abcd")
+
+	provider := newMapAncestryProvider()
+
+	n1 := consensus.NodeID{1}
+	vt.SetTrusted([]consensus.NodeID{n1})
+	vt.SetLedgerAncestryProvider(provider)
+
+	if !vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now)) {
+		t.Fatal("Add(n1->abcd) should succeed")
+	}
+
+	now = now.Add(validationCurrentEarly + time.Second)
+	vt.FlushStale()
+
+	if _, _, ok := vt.GetPreferred(0); ok {
+		t.Fatal("flushed-stale parked validation must not feed the acquiring fallback")
+	}
+
+	// The parked ledger is acquired after the flush: the dead node's
+	// validation must not replay.
+	provider.add(abcd)
+	if _, _, ok := vt.GetPreferred(0); ok {
+		t.Fatal("flushed-stale parked validation must not replay into the trie")
+	}
+	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
+		t.Fatalf("phantom trie tip after flush+acquire: support %d, want 0", got)
+	}
+}
+
+// A validation parked while trusted must not replay once the node is
+// de-trusted, even after its ledger is acquired (rippled
+// Validations_test.cpp:1098-1124, "Trusted but not acquired ->
+// untrusted").
+func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	abcd := b.Build("abcd")
+
+	provider := newMapAncestryProvider()
+
+	n1 := consensus.NodeID{1}
+	vt.SetTrusted([]consensus.NodeID{n1})
+	vt.SetLedgerAncestryProvider(provider)
+
+	if !vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now)) {
+		t.Fatal("Add(n1->abcd) should succeed")
+	}
+
+	vt.SetTrusted([]consensus.NodeID{})
+	provider.add(abcd)
+
+	if _, _, ok := vt.GetPreferred(0); ok {
+		t.Fatal("de-trusted parked validation must not replay after acquisition")
+	}
+	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
+		t.Fatalf("de-trusted parked validation counted as support: got %d, want 0", got)
+	}
+}
+
 // Trust rotation rebuilds the parked set from byNode: a de-trusted
 // node's parked entry drops, and re-trusting re-parks its latest
 // validation.
