@@ -687,6 +687,47 @@ func TestEngine_StartRound_Observing(t *testing.T) {
 	}
 }
 
+// TestEngine_FirstRoundSeedsPrevRoundTime pins rippled's firstRound_ seeding
+// (Consensus.h:658-664): the first round after boot has no prior round to
+// measure, so prevRoundTime is seeded to the idle interval. Without the seed,
+// round-1 convergePercent divides by the 5s floor instead of 15s, escalating
+// avalanche state ~3x faster than a rippled node in the same round.
+func TestEngine_FirstRoundSeedsPrevRoundTime(t *testing.T) {
+	adaptor := newMockAdaptor()
+	config := DefaultConfig()
+
+	now := time.Unix(1000, 0)
+	config.Clock = func() time.Time { return now }
+
+	engine := NewEngine(adaptor, config)
+
+	if !engine.firstRound {
+		t.Fatal("fresh engine should have firstRound=true")
+	}
+	if engine.prevRoundTime != 0 {
+		t.Fatalf("fresh engine prevRoundTime = %v, want 0", engine.prevRoundTime)
+	}
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	if engine.firstRound {
+		t.Error("firstRound should be cleared after the first round")
+	}
+	if got, want := engine.prevRoundTime, config.Timing.LedgerIdleInterval; got != want {
+		t.Errorf("prevRoundTime after first round = %v, want idle interval %v", got, want)
+	}
+
+	// convergePercent must divide by the seeded idle interval (15s), not the
+	// 5s avMinConsensusTime floor: 3s elapsed → 20%, not 60%.
+	now = now.Add(3 * time.Second)
+	if got := engine.convergePercent(); got != 20 {
+		t.Errorf("round-1 convergePercent = %d, want 20 (15s divisor, not the 5s floor)", got)
+	}
+}
+
 // TestEngine_StartRound_DrivesOnUNLChange pins the wiring that
 // mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
 // pairing: at the head of every consensus round, the engine computes the
@@ -919,6 +960,61 @@ func TestEngine_OnProposal_Untrusted(t *testing.T) {
 
 	if relayed != 0 {
 		t.Errorf("Expected 0 proposals to be relayed, got %d", relayed)
+	}
+}
+
+// TestEngine_StartRound_ResharesReplayedProposals pins issue #1188: after a
+// ledger switch / round start, buffered peer proposals for the new prevLedger
+// are re-shared to peers (rippled playbackProposals + adaptor_.share), not just
+// stored. Without the re-share, a peer that missed a proposal would not be
+// re-fed it on the recovery path.
+func TestEngine_StartRound_ResharesReplayedProposals(t *testing.T) {
+	prev := &mockLedger{id: consensus.LedgerID{0x11}, seq: 100}
+	adaptor := newMockAdaptor()
+	adaptor.lastLCL = prev
+	adaptor.ledgers[prev.ID()] = prev
+	peer := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{peer})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Buffer a peer proposal between rounds (accepted phase): OnProposal only
+	// buffers it, it does not relay yet.
+	proposal := &consensus.Proposal{
+		Round:          consensus.RoundID{Seq: 101, ParentHash: prev.ID()},
+		NodeID:         peer,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: prev.ID(),
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(proposal, 0); err != nil {
+		t.Fatalf("OnProposal (buffer): %v", err)
+	}
+	adaptor.mu.RLock()
+	preRelay := len(adaptor.proposalsRelayed)
+	adaptor.mu.RUnlock()
+	if preRelay != 0 {
+		t.Fatalf("between-round proposal must be buffered not relayed; got %d relays", preRelay)
+	}
+
+	// Enter the round whose prevLedger matches the buffered proposal.
+	engine.mu.Lock()
+	engine.prevLedger = prev
+	engine.mu.Unlock()
+	round := consensus.RoundID{Seq: 101, ParentHash: prev.ID()}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	adaptor.mu.RLock()
+	defer adaptor.mu.RUnlock()
+	if len(adaptor.proposalsRelayed) != 1 {
+		t.Fatalf("replayed proposal not re-shared: got %d relays, want 1", len(adaptor.proposalsRelayed))
+	}
+	if adaptor.proposalsRelayed[0].NodeID != peer {
+		t.Errorf("re-shared wrong proposal: NodeID = %x, want %x", adaptor.proposalsRelayed[0].NodeID, peer)
 	}
 }
 

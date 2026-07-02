@@ -108,6 +108,8 @@ type Engine struct {
 	prevRoundTime  time.Duration
 	roundStartTime time.Time
 
+	firstRound bool
+
 	// lastConvergePercent retains convergePercent() from the last
 	// phaseEstablish tick (reset at round start) so consensus_info reports a
 	// meaningful value between rounds. The live convergePercent() still
@@ -330,6 +332,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		parms:           consensus.DefaultConsensusParms(),
 		now:             config.Clock,
 		manualTick:      config.ManualTick,
+		firstRound:      true,
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -469,6 +472,12 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
+	// Flush has no archive interaction, so its ordering relative to the
+	// archive close below is irrelevant.
+	if e.validationTracker != nil {
+		e.validationTracker.Flush()
+	}
+
 	if arc := e.loadArchive(); arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -496,6 +505,14 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // the new round's tx-set isn't coherent yet and a stale emission would
 // poison convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
+	// First round after boot has no prior round to measure; seed prevRoundTime
+	// to the idle interval so round-1 convergePercent uses the 15s divisor, not
+	// the 5s floor (else avalanche state escalates ~3x faster than rippled).
+	if e.firstRound {
+		e.prevRoundTime = e.timing.LedgerIdleInterval
+		e.firstRound = false
+	}
+
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
 
@@ -554,9 +571,15 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Replay buffered proposals for this round's prevLedger.
 	if e.prevLedger != nil {
-		closeTimes, replayed := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
+		closeTimes, replayed, relay := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
 		for _, ct := range closeTimes {
 			e.state.CloseTimes.Peers[ct]++
+		}
+
+		// Re-share replayed positions so peers that missed a proposal on this
+		// prevLedger get re-fed it from us during the recovery window.
+		for _, p := range relay {
+			e.adaptor.RelayProposal(p, 0)
 		}
 
 		// Peer pressure: if a majority of prior proposers already closed,
@@ -668,7 +691,12 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		return nil
 	}
 
-	e.proposalTracker.Store(proposal)
+	// Drop non-increasing positions before counting close-time votes,
+	// relaying, or updating disputes — otherwise a re-sent or equivocating
+	// proposal at an already-seen ProposeSeq votes again.
+	if !e.proposalTracker.Store(proposal) {
+		return nil
+	}
 
 	// Record close time only from initial (Position == 0) proposals.
 	if proposal.Position == 0 {
@@ -1664,11 +1692,15 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
-		closeTimes, _ := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
+		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
 		if e.state != nil {
 			for _, ct := range closeTimes {
 				e.state.CloseTimes.Peers[ct]++
 			}
+		}
+
+		for _, p := range relay {
+			e.adaptor.RelayProposal(p, 0)
 		}
 	}
 

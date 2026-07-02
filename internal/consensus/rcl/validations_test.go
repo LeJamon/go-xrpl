@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
 func TestValidationTracker_Add(t *testing.T) {
@@ -576,5 +577,65 @@ func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("onStale callback deadlocked or never fired")
+	}
+}
+
+// TestValidationTracker_Flush mirrors rippled's Validations::flush()
+// (Validations.h:1103-1110, called on orderly shutdown at
+// Application.cpp:1612): all accumulated validation state is discarded
+// while configuration survives, so the tracker is reusable in-process.
+func TestValidationTracker_Flush(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	abc := b.Build("abc")
+	provider := newMapAncestryProvider()
+	provider.add(abc)
+
+	n1 := consensus.NodeID{1}
+	n2 := consensus.NodeID{2}
+	vt.SetTrusted([]consensus.NodeID{n1, n2})
+	vt.SetLedgerAncestryProvider(provider)
+
+	vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now))
+	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
+
+	// Sanity: state accumulated and the wired trie steers GetPreferred.
+	if got := vt.GetValidationCount(abc.ID()); got != 2 {
+		t.Fatalf("pre-flush: want 2 validations, got %d", got)
+	}
+	if vt.GetLatestValidation(n1) == nil {
+		t.Fatal("pre-flush: n1 latest validation missing")
+	}
+	if _, _, ok := vt.GetPreferred(0); !ok {
+		t.Fatal("pre-flush: GetPreferred should resolve with trie wired")
+	}
+
+	vt.Flush()
+
+	// Every accumulated index is cleared, including the trie.
+	if got := vt.GetValidationCount(abc.ID()); got != 0 {
+		t.Errorf("post-flush: want 0 validations, got %d", got)
+	}
+	if vt.GetLatestValidation(n1) != nil {
+		t.Error("post-flush: byNode not cleared")
+	}
+	if got := vt.GetTrustedSupport(abc.ID()); got != 0 {
+		t.Errorf("post-flush: want 0 trusted support, got %d", got)
+	}
+	if _, _, ok := vt.GetPreferred(0); ok {
+		t.Error("post-flush: trie not reset — GetPreferred still resolves")
+	}
+
+	// Configuration (trusted set, quorum, ancestry) survives: a fresh
+	// validation is accepted and re-steers GetPreferred.
+	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
+		t.Fatal("post-flush: Add should accept a fresh validation")
+	}
+	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
+	if _, _, ok := vt.GetPreferred(0); !ok {
+		t.Error("post-flush: GetPreferred should resolve again after re-adding")
 	}
 }
