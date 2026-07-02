@@ -687,6 +687,47 @@ func TestEngine_StartRound_Observing(t *testing.T) {
 	}
 }
 
+// TestEngine_FirstRoundSeedsPrevRoundTime pins rippled's firstRound_ seeding
+// (Consensus.h:658-664): the first round after boot has no prior round to
+// measure, so prevRoundTime is seeded to the idle interval. Without the seed,
+// round-1 convergePercent divides by the 5s floor instead of 15s, escalating
+// avalanche state ~3x faster than a rippled node in the same round.
+func TestEngine_FirstRoundSeedsPrevRoundTime(t *testing.T) {
+	adaptor := newMockAdaptor()
+	config := DefaultConfig()
+
+	now := time.Unix(1000, 0)
+	config.Clock = func() time.Time { return now }
+
+	engine := NewEngine(adaptor, config)
+
+	if !engine.firstRound {
+		t.Fatal("fresh engine should have firstRound=true")
+	}
+	if engine.prevRoundTime != 0 {
+		t.Fatalf("fresh engine prevRoundTime = %v, want 0", engine.prevRoundTime)
+	}
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, false); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	if engine.firstRound {
+		t.Error("firstRound should be cleared after the first round")
+	}
+	if got, want := engine.prevRoundTime, config.Timing.LedgerIdleInterval; got != want {
+		t.Errorf("prevRoundTime after first round = %v, want idle interval %v", got, want)
+	}
+
+	// convergePercent must divide by the seeded idle interval (15s), not the
+	// 5s avMinConsensusTime floor: 3s elapsed → 20%, not 60%.
+	now = now.Add(3 * time.Second)
+	if got := engine.convergePercent(); got != 20 {
+		t.Errorf("round-1 convergePercent = %d, want 20 (15s divisor, not the 5s floor)", got)
+	}
+}
+
 // TestEngine_StartRound_DrivesOnUNLChange pins the wiring that
 // mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
 // pairing: at the head of every consensus round, the engine computes the
