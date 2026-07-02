@@ -55,32 +55,3 @@ func AdjustOwnerCount(view LedgerView, accountID [20]byte, delta int) error {
 
 	return view.Update(accountKey, updated)
 }
-
-// AdjustOwnerCountWithTx adjusts an account's OwnerCount by delta and updates
-// PreviousTxnID and PreviousTxnLgrSeq fields on the account.
-// Saturates to math.MaxUint32 on overflow and clamps to 0 on underflow.
-// Returns an error if the account cannot be read or serialized.
-// If the account does not exist, returns nil.
-func AdjustOwnerCountWithTx(view LedgerView, accountID [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) error {
-	accountKey := keylet.Account(accountID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return nil // Account doesn't exist (may have been deleted)
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return fmt.Errorf("failed to parse account root: %w", err)
-	}
-
-	account.OwnerCount = confineOwnerCount(account.OwnerCount, delta)
-	account.PreviousTxnID = txHash
-	account.PreviousTxnLgrSeq = ledgerSeq
-
-	updated, err := state.SerializeAccountRoot(account)
-	if err != nil {
-		return fmt.Errorf("failed to serialize account root: %w", err)
-	}
-
-	return view.Update(accountKey, updated)
-}

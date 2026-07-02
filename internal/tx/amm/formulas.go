@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // getAccountTradingFee returns the trading fee for an account interacting with
@@ -529,7 +530,7 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 // verifyAndAdjustLPTokenBalance adjusts the AMM SLE's LPTokenBalance when
 // the last LP's trust line balance differs from it due to rounding.
 // Reference: rippled AMMUtils.cpp verifyAndAdjustLPTokenBalance (lines 468-494)
-func verifyAndAdjustLPTokenBalance(view tx.LedgerView, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
+func verifyAndAdjustLPTokenBalance(view tx.LedgerView, ammKey keylet.Keylet, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
 	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
 	onlyLP, res := isOnlyLiquidityProvider(view, lptCurrency, amm.Account, lpAccountID)
 	if res != ter.TesSUCCESS {
@@ -540,6 +541,15 @@ func verifyAndAdjustLPTokenBalance(view tx.LedgerView, lpTokens tx.Amount, amm *
 		tolerance := state.NewIssuedAmountFromValue(1, -3, "", "")
 		if withinRelativeDistance(lpTokens, amm.LPTokenBalance, tolerance) {
 			amm.LPTokenBalance = lpTokens
+			// Persist so a deletion's DeletedNode records the reconciled
+			// LPTokenBalance, not the stale one (1 ULP ledger fork otherwise).
+			ammBytes, err := serializeAMMData(amm)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if err := view.Update(ammKey, ammBytes); err != nil {
+				return ter.TefINTERNAL
+			}
 		} else {
 			return ter.TecAMM_INVALID_TOKENS
 		}

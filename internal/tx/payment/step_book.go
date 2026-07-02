@@ -602,8 +602,7 @@ func (s *BookStep) removeConsumedTipIfUnfunded(sb *PaymentSandbox) {
 	if err != nil {
 		return
 	}
-	txHash, ledgerSeq := sb.GetTransactionContext()
-	_ = s.deleteOffer(sb, offer, owner, txHash, ledgerSeq)
+	_ = s.deleteOffer(sb, offer, owner)
 }
 
 // prevStepDebtDir returns the previous step's debt direction for the given

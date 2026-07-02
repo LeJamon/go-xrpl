@@ -32,7 +32,10 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 				Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
 			}
 		}
-		if isXRPCurrency(rs.LowLimit.Currency) || isXRPCurrency(rs.HighLimit.Currency) {
+		// rippled fires only on issue() == xrpIssue() — the all-zero currency; a
+		// badCurrency limit does not trip this invariant (it is rejected at
+		// TrustSet preflight with temBAD_CURRENCY and never reaches a ledger).
+		if isNativeXRPCurrency(rs.LowLimit.Currency) || isNativeXRPCurrency(rs.HighLimit.Currency) {
 			return &InvariantViolation{
 				Name:    "NoXRPTrustLines",
 				Message: "RippleState entry uses XRP as currency (trust lines must use IOU currencies)",

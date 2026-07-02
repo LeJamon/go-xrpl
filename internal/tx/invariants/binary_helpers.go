@@ -4,42 +4,45 @@ import (
 	"fmt"
 )
 
-// isXRPCurrency returns true if the given currency string represents XRP.
-// XRP is the all-zero 160-bit currency, which the state amount parser may render
-// as the empty string, the literal "XRP", or a 3-byte run of NUL bytes (the
-// standard-code path reading an all-zero currency); it may also arrive as a
-// 40-char hex string of zeros or with "XRP" at bytes 12-14.
-func isXRPCurrency(curr string) bool {
+// badCurrencyBytes is rippled's badCurrency() (UintTypes.cpp:132-137): the
+// forbidden 3-char ISO "XRP" code — bytes 12-14 "XRP", every other byte zero.
+var badCurrencyBytes = [20]byte{12: 'X', 13: 'R', 14: 'P'}
+
+// isNativeXRPCurrency returns true if the currency string renders the all-zero
+// 160-bit (native XRP) currency: the empty string (a missing or native-form
+// field), the literal "XRP", a run of NUL bytes, or all-zero hex. A currency
+// whose bytes merely contain "XRP" beside non-zero bytes (e.g. "Wellgistics
+// XRP") is a valid IOU, as is badCurrency.
+func isNativeXRPCurrency(curr string) bool {
 	if len(curr) == 0 || curr == "XRP" {
 		return true
 	}
-	// All-NUL bytes (e.g. the 3-byte standard-code form of the zero currency).
 	if isAllZeroBytes(curr) {
 		return true
 	}
-	// Hex-encoded currency: 40 hex chars = 20 bytes
 	if len(curr) == 40 {
 		b, err := hexDecode20(curr)
 		if err != nil {
 			return false
 		}
-		// All zeros = XRP
-		allZero := true
-		for _, bb := range b {
-			if bb != 0 {
-				allZero = false
-				break
-			}
-		}
-		if allZero {
-			return true
-		}
-		// Check "XRP" at bytes 12-14
-		if b[12] == 'X' && b[13] == 'R' && b[14] == 'P' {
-			return true
-		}
+		return b == [20]byte{}
 	}
 	return false
+}
+
+// isBadCurrency returns true iff the currency string is the hex rendering of
+// badCurrencyBytes — the only form the canonical codec produces for it
+// (to_string refuses the ISO "XRP" representation, so it never arrives as a
+// 3-char string).
+func isBadCurrency(curr string) bool {
+	if len(curr) != 40 {
+		return false
+	}
+	b, err := hexDecode20(curr)
+	if err != nil {
+		return false
+	}
+	return b == badCurrencyBytes
 }
 
 // isAllZeroBytes reports whether s is non-empty and every byte is NUL.

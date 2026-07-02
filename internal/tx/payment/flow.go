@@ -613,8 +613,6 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 		return
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
-
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ownerID)
 	state.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
@@ -627,13 +625,13 @@ func offerDeleteInSandbox(sb *PaymentSandbox, offerKey [32]byte) {
 	sb.Erase(offerKL)
 
 	// Decrement owner count
-	adjustOwnerCountInSandbox(sb, ownerID, -1, txHash, ledgerSeq)
+	adjustOwnerCountInSandbox(sb, ownerID, -1)
 }
 
 // adjustOwnerCountInSandbox modifies an account's OwnerCount by delta in a PaymentSandbox.
 // Records the change via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
 // This is a standalone version used by offerDeleteInSandbox.
-func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) {
+func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int) {
 	// Read current owner count and record via hook before modifying.
 	accountKey := keylet.Account(account)
 	data, err := sb.Read(accountKey)
@@ -644,7 +642,7 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 			sb.AdjustOwnerCount(account, curOC, uint32(newOC))
 		}
 	}
-	_ = tx.AdjustOwnerCountWithTx(sb, account, delta, txHash, ledgerSeq)
+	_ = tx.AdjustOwnerCount(sb, account, delta)
 }
 
 // RippleCalculateResult bundles the outputs of a RippleCalculate run.
