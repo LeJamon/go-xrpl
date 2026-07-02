@@ -248,6 +248,11 @@ type Adaptor struct {
 	// the trie-descent floor for preferredLCL. Zero for a non-validator.
 	lastIssuedValidationSeq atomic.Uint32
 
+	// maxDisallowedSeq is the highest ledger seq persisted before this
+	// process started; the engine never proposes or validates at or below
+	// it (anti-double-sign across restarts). Immutable after New.
+	maxDisallowedSeq uint32
+
 	// reqLedgerLast rate-limits per-hash broadcast TMGetLedger retries from
 	// the engine's checkLedger heartbeat (see RequestLedger).
 	reqLedgerMu   sync.Mutex
@@ -397,6 +402,17 @@ func New(cfg Config) *Adaptor {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
+	// A restarting validator may already have signed validations up to the
+	// persisted tip, so record it as the floor below which this node must
+	// never validate again. Non-validators never emit, so skip the read.
+	var maxDisallowedSeq uint32
+	if cfg.Identity != nil && cfg.LedgerService != nil {
+		maxDisallowedSeq = cfg.LedgerService.MaxPersistedLedgerSeq(context.Background())
+		if maxDisallowedSeq > 0 {
+			logger.Info("max persisted ledger floor for validations", "seq", maxDisallowedSeq)
+		}
+	}
+
 	// NegativeUNL voter: constructed only with both a local identity and UNL
 	// master keys (needed for the local-participation check and the emitted
 	// UNLModify tx). nil otherwise — GenerateNegativeUNLPseudoTx returns no votes.
@@ -423,6 +439,7 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
 		announcedSets:     make(map[consensus.TxSetID]struct{}),
+		maxDisallowedSeq:  maxDisallowedSeq,
 		cookie:            cookie,
 		feeVote:           feeVote,
 		amendmentStances:  amendmentStances,
@@ -694,6 +711,12 @@ func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
 		return consensus.LedgerID{}
 	}
 	return consensus.LedgerID(vl.Hash())
+}
+
+// GetMaxDisallowedLedgerSeq returns the boot-time anti-double-sign floor: the
+// highest ledger seq persisted before this process started, 0 when none.
+func (a *Adaptor) GetMaxDisallowedLedgerSeq() uint32 {
+	return a.maxDisallowedSeq
 }
 
 func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool) (consensus.Ledger, error) {

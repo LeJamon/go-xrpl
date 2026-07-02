@@ -391,6 +391,12 @@ func (p *EnginePeer) GetValidatedLedgerHash() consensus.LedgerID {
 	return p.validated
 }
 
+// GetMaxDisallowedLedgerSeq: simulated peers have no persisted pre-boot
+// history, so the restart validation floor is always 0.
+func (p *EnginePeer) GetMaxDisallowedLedgerSeq() uint32 {
+	return 0
+}
+
 func (p *EnginePeer) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool) (consensus.Ledger, error) {
 	l := buildSimLedger(parent.ID(), parent.Seq()+1, txSet.ID(), closeTime)
 	p.mu.Lock()

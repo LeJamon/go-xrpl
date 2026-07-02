@@ -9,6 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -716,4 +718,50 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode(),
 			"a lower-seq preferred tip on a different chain is a switch — promotion must defer")
 	})
+}
+
+// TestNew_SeedsRestartValidationFloor pins the boot-time seeding of the
+// anti-double-sign floor (rippled setMaxDisallowedLedger,
+// Application.cpp:2170): a validator whose relational DB already holds
+// ledgers must record the max persisted seq at construction so the
+// engine never re-signs a pre-restart sequence. Non-validators skip the
+// read (rippled gates on validatorKeys_.keys).
+func TestNew_SeedsRestartValidationFloor(t *testing.T) {
+	ctx := context.Background()
+
+	rm, err := sqlitedb.NewRepositoryManager(t.TempDir())
+	require.NoError(t, err)
+	require.NoError(t, rm.Open(ctx))
+	t.Cleanup(func() { _ = rm.Close(ctx) })
+
+	// Persist ledgers up to seq 742 as a prior run would have.
+	for _, seq := range []relationaldb.LedgerIndex{740, 742, 741} {
+		info := &relationaldb.LedgerInfo{Sequence: seq}
+		info.Hash[0] = byte(seq)
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info, true))
+	}
+
+	cfg := service.DefaultConfig()
+	cfg.Standalone = true
+	cfg.GenesisConfig = genesis.DefaultConfig()
+	cfg.RelationalDB = rm
+	svc, err := service.New(cfg)
+	require.NoError(t, err)
+
+	require.Equal(t, uint32(742), svc.MaxPersistedLedgerSeq(ctx))
+
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+
+	a := New(Config{
+		LedgerService: svc,
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+	})
+	assert.Equal(t, uint32(742), a.GetMaxDisallowedLedgerSeq(),
+		"validator must seed the restart floor from the persisted tip")
+
+	observer := New(Config{LedgerService: svc})
+	assert.Equal(t, uint32(0), observer.GetMaxDisallowedLedgerSeq(),
+		"non-validators never emit, so the floor stays 0")
 }

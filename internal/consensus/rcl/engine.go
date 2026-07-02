@@ -501,7 +501,22 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
+	// belowFloor holds a restarted validator in observing until the network
+	// passes the pre-restart persisted tip, so it can't re-sign a sequence it
+	// may already have validated (round.Seq is prevLedger.Seq()+1, making
+	// this rippled preStartRound's prevLgr.seq() >= maxDisallowedLedger).
+	belowFloor := round.Seq <= e.adaptor.GetMaxDisallowedLedgerSeq()
 	switch {
+	case belowFloor:
+		if proposing && e.adaptor.IsValidator() {
+			slog.Info("Observing: round at or below restart validation floor",
+				"t", "consensus",
+				"event", "restart-floor-observe",
+				"round_seq", round.Seq,
+				"floor", e.adaptor.GetMaxDisallowedLedgerSeq(),
+			)
+		}
+		e.setMode(consensus.ModeObserving)
 	case recovering && e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull:
 		e.setMode(consensus.ModeSwitchedLedger)
 	case proposing && e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull:
@@ -3083,6 +3098,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"compatible", compatible,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
+		"max_disallowed_seq", e.adaptor.GetMaxDisallowedLedgerSeq(),
 		"mode", e.mode.String(),
 		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate, compatible),
 	)
@@ -3319,12 +3335,16 @@ func (e *Engine) determineCloseTime() time.Time {
 }
 
 // peekCanValidateSeqLocked is the non-mutating SeqEnforcer predicate.
-// Caller holds e.mu read.
+// The restart floor never idle-expires: the pre-restart persisted tip stays
+// disallowed for the process lifetime. Caller holds e.mu read.
 func (e *Engine) peekCanValidateSeqLocked(seq uint32) bool {
 	floor := e.ourLastValidatedSeq
 	if !e.ourLastValidatedTime.IsZero() &&
 		e.adaptor.Now().Sub(e.ourLastValidatedTime) > validationSetExpires {
 		floor = 0
+	}
+	if d := e.adaptor.GetMaxDisallowedLedgerSeq(); floor < d {
+		floor = d
 	}
 	return seq > floor
 }
@@ -3338,7 +3358,7 @@ func (e *Engine) tryAdvanceValidatedSeqLocked(seq uint32) bool {
 		now.Sub(e.ourLastValidatedTime) > validationSetExpires {
 		e.ourLastValidatedSeq = 0
 	}
-	if seq <= e.ourLastValidatedSeq {
+	if seq <= e.ourLastValidatedSeq || seq <= e.adaptor.GetMaxDisallowedLedgerSeq() {
 		return false
 	}
 	e.ourLastValidatedSeq = seq

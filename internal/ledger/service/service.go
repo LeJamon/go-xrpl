@@ -911,6 +911,23 @@ func (s *Service) GetClosedLedgerIndex() uint32 {
 	return s.closedLedger.Sequence()
 }
 
+// MaxPersistedLedgerSeq returns the highest ledger sequence in the relational
+// DB, or 0 when none is stored or no relational DB is configured.
+func (s *Service) MaxPersistedLedgerSeq(ctx context.Context) uint32 {
+	if s.relationalDB == nil || s.relationalDB.Ledger() == nil {
+		return 0
+	}
+	seq, err := s.relationalDB.Ledger().GetMaxLedgerSeq(ctx)
+	if err != nil {
+		s.logger.Warn("failed to read max persisted ledger seq", "err", err)
+		return 0
+	}
+	if seq == nil {
+		return 0
+	}
+	return uint32(*seq)
+}
+
 // ledgerHistoryRangeLocked returns the inclusive [min, max] span of in-memory
 // history, or ok=false when empty. Caller holds s.mu. NB: the span assumes
 // contiguity — purges/backward-fills can leave gaps, so callers reporting durable
