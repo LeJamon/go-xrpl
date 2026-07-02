@@ -11,8 +11,7 @@ import (
 // A trusted validation for an unresolvable ledger parks instead of
 // dropping: the node's previous tip keeps steering the trie, and once
 // the ledger is acquired the next GetPreferred poll replays the parked
-// validations and the trie flips — no new validation needed. The old
-// unplaced>placed guard would have returned ok=false while parked.
+// validations and the trie flips — no new validation needed.
 func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 	now := time.Now()
@@ -65,8 +64,7 @@ func TestValidationTracker_UnresolvableValidationParksThenReplays(t *testing.T) 
 }
 
 // The consensus-island shape: the trie decides even when the majority is
-// parked (guard removed), and flips to the majority branch once its
-// ledger is acquired.
+// parked, and flips to the majority branch once its ledger is acquired.
 func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
 	vt := NewValidationTracker(3, 5*time.Minute)
 	now := time.Now()
@@ -91,8 +89,8 @@ func TestValidationTracker_TrieDecidesWithMajorityParked(t *testing.T) {
 		vt.Add(makeTrustedValidation(n, abde.ID(), abde.Seq(), now))
 	}
 
-	// 3 trusted validations are parked vs 2 placed — the old guard
-	// returned ok=false here; the trie must decide with what it holds.
+	// 3 trusted validations parked vs 2 placed: the trie must decide
+	// with what it holds.
 	id, _, ok := vt.GetPreferred(0)
 	if !ok {
 		t.Fatal("GetPreferred must not go inconclusive while the majority is parked")
