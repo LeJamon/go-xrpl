@@ -421,34 +421,31 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, ErrNoOpenLedger
 	}
 
+	// ALWAYS rebuild the closed ledger fresh from the parent with exactly the
+	// agreed set — including the EMPTY set (rippled buildLCL). Closing the
+	// ingress open ledger directly leaked its node-local tx map into the
+	// header: an empty consensus round then carried a non-zero, per-node
+	// tx_root (a zero-transaction ledger must have tx_root=0), forking every
+	// validator that had different pending traffic.
 	var canonicalTxHashes []string
-	var retriableTxs []openledger.PendingTx
-	if len(txBlobs) > 0 {
-		pending := make([]pendingTx, 0, len(txBlobs))
-		for _, blob := range txBlobs {
-			ptx, err := parsePendingTx(blob)
-			if err != nil {
-				continue
-			}
-			pending = append(pending, ptx)
-		}
-
-		built, err := s.buildClosedLedgerLocked(pending, closeTime, false)
+	pending := make([]pendingTx, 0, len(txBlobs))
+	for _, blob := range txBlobs {
+		ptx, err := parsePendingTx(blob)
 		if err != nil {
-			return 0, err
+			continue
 		}
-		retriableTxs = built
+		pending = append(pending, ptx)
+	}
 
-		// pending is now in canonical order for the round-summary log.
-		canonicalTxHashes = make([]string, 0, len(pending))
-		for _, ptx := range pending {
-			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
-		}
-	} else {
-		// empty consensus tx set still needs the flag-ledger NegativeUNL transition
-		if err := s.applyFlagLedgerNegativeUNL(s.openLedger); err != nil {
-			return 0, err
-		}
+	retriableTxs, err := s.buildClosedLedgerLocked(pending, closeTime, false)
+	if err != nil {
+		return 0, err
+	}
+
+	// pending is now in canonical order for the round-summary log.
+	canonicalTxHashes = make([]string, 0, len(pending))
+	for _, ptx := range pending {
+		canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
 	}
 
 	s.pendingTxs = nil

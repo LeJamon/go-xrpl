@@ -406,6 +406,17 @@ func (r *Router) startLedgerAcquisition(seq uint32, hash [32]byte, peerID uint64
 		return
 	}
 
+	// Already held locally (built or just adopted): never re-download.
+	// Without this latch a consensus retrigger re-fetched the same
+	// just-adopted ledger up to ~180x in one wrongLedger window, flooding
+	// every peer at ~100 TMGetLedger/s — enough sustained to cross
+	// rippled's resource drop threshold on a public network.
+	if svc := r.adaptor.LedgerService(); svc != nil {
+		if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+			return
+		}
+	}
+
 	parent := r.adaptor.GetParentLedgerForReplay(seq)
 	if parent != nil && r.adaptor.PeerSupportsReplay(peerID) {
 		if err := r.startReplayDeltaAcquisition(seq, hash, peerID, parent); err == nil {

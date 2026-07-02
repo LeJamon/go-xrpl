@@ -248,6 +248,16 @@ type Adaptor struct {
 	// the trie-descent floor for preferredLCL. Zero for a non-validator.
 	lastIssuedValidationSeq atomic.Uint32
 
+	// reqLedgerLast rate-limits per-hash broadcast TMGetLedger retries from
+	// the engine's checkLedger heartbeat (see RequestLedger).
+	reqLedgerMu   sync.Mutex
+	reqLedgerLast map[consensus.LedgerID]time.Time
+
+	// announcedSets de-duplicates tsHAVE announcements per set hash (see
+	// BuildTxSet).
+	announcedSetsMu sync.Mutex
+	announcedSets   map[consensus.TxSetID]struct{}
+
 	logger *slog.Logger
 }
 
@@ -411,6 +421,8 @@ func New(cfg Config) *Adaptor {
 		negUNLVoter:       negUNLVoter,
 		txSetCache:        NewTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
+		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
+		announcedSets:     make(map[consensus.TxSetID]struct{}),
 		cookie:            cookie,
 		feeVote:           feeVote,
 		amendmentStances:  amendmentStances,
@@ -520,6 +532,21 @@ func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
+	// checkLedger retries every heartbeat while pinned on a missing ledger,
+	// but each call is a BROADCAST TMGetLedger costing a resource charge at
+	// every peer. rippled paces acquisition retries on the InboundLedger
+	// timer (~3s); rate-limit per hash to match.
+	now := time.Now()
+	a.reqLedgerMu.Lock()
+	if last, ok := a.reqLedgerLast[id]; ok && now.Sub(last) < 3*time.Second {
+		a.reqLedgerMu.Unlock()
+		return nil
+	}
+	if len(a.reqLedgerLast) > 64 {
+		clear(a.reqLedgerLast)
+	}
+	a.reqLedgerLast[id] = now
+	a.reqLedgerMu.Unlock()
 	return a.sender.RequestLedger(id)
 }
 
@@ -809,8 +836,24 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		return nil, err
 	}
 	a.txSetCache.Put(ts)
-	if a.onTxSetBuilt != nil {
-		a.onTxSetBuilt(ts.ID())
+	// Announce each set hash at most once (and never the empty set): the
+	// engine rebuilds sets on every acquired-set compare and position
+	// update, and peers charge "useless data" for every duplicate tsHAVE —
+	// rippled never re-announces a hash a peer has already seen.
+	id := ts.ID()
+	if a.onTxSetBuilt != nil && id != (consensus.TxSetID{}) {
+		a.announcedSetsMu.Lock()
+		_, dup := a.announcedSets[id]
+		if !dup {
+			if len(a.announcedSets) > 512 {
+				clear(a.announcedSets)
+			}
+			a.announcedSets[id] = struct{}{}
+		}
+		a.announcedSetsMu.Unlock()
+		if !dup {
+			a.onTxSetBuilt(id)
+		}
 	}
 	return ts, nil
 }

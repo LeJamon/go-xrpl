@@ -102,18 +102,29 @@ func TestAdg_GetPendingTxs(t *testing.T) {
 func TestAdg_SetOnTxSetBuilt(t *testing.T) {
 	a := newTestAdaptor(t)
 
-	var called bool
+	var calls int
 	var calledID consensus.TxSetID
 	a.SetOnTxSetBuilt(func(id consensus.TxSetID) {
-		called = true
+		calls++
 		calledID = id
 	})
 
-	ts, err := a.BuildTxSet(nil)
+	// The empty set (all-zero ID) is never announced — it recurs every
+	// empty round and peers charge duplicate tsHAVE as useless data.
+	_, err := a.BuildTxSet(nil)
 	require.NoError(t, err)
+	assert.Zero(t, calls, "empty set must not be announced")
 
-	assert.True(t, called, "callback must fire after BuildTxSet")
+	blob := []byte{0x12, 0x00, 0x34, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09}
+	ts, err := a.BuildTxSet([][]byte{blob})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "callback must fire for a fresh non-empty set")
 	assert.Equal(t, ts.ID(), calledID)
+
+	// Rebuilding the same set must not re-announce it.
+	_, err = a.BuildTxSet([][]byte{blob})
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "same set hash must be announced at most once")
 
 	a.SetOnTxSetBuilt(nil)
 	_, err = a.BuildTxSet(nil)
