@@ -1677,7 +1677,6 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 			}
 		}
 
-		// Re-share replayed positions to peers on the switched-to ledger.
 		for _, p := range relay {
 			e.adaptor.RelayProposal(p, 0)
 		}
