@@ -1014,12 +1014,22 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 // every call to account for negative-UNL changes:
 // max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
-	// Lock a.mu for the trustedValidators read; GetNegativeUNL takes its own
-	// lock, so call it after release to avoid nesting.
+	// GetNegativeUNL takes its own lock, so resolve it before locking a.mu.
+	negUNL := a.GetNegativeUNL()
+
 	a.mu.Lock()
 	trusted := len(a.trustedValidators)
+	// Count only negUNL entries that are actually in our trusted UNL: a
+	// disabled validator we don't trust must not lower our quorum (rippled
+	// ValidatorList::updateTrusted intersects the negUNL with the trusted
+	// keys, ValidatorList.cpp:2064-2070).
+	disabled := 0
+	for _, id := range negUNL {
+		if _, ok := a.trustedSet[id]; ok {
+			disabled++
+		}
+	}
 	a.mu.Unlock()
-	disabled := len(a.GetNegativeUNL())
 	return computeQuorum(trusted, disabled)
 }
 
@@ -1285,9 +1295,20 @@ func (a *Adaptor) CloseOffset() time.Duration {
 }
 
 func (a *Adaptor) CloseTimeResolution() time.Duration {
+	// The round's rounding basis is the resolution of the ledger BEING BUILT
+	// — the parent's resolution stepped one rung on the ladder (rippled
+	// Consensus.h:724-727 getNextLedgerTimeResolution). Using the parent's
+	// raw value rounds close-time votes differently from rippled at every
+	// ladder boundary: a different agreed close time is a different ledger
+	// hash — a fork.
 	l := a.ledgerService.GetClosedLedger()
 	if l != nil {
-		res := l.Header().CloseTimeResolution
+		hdr := l.Header()
+		res := consensus.GetNextLedgerTimeResolution(
+			hdr.CloseTimeResolution,
+			hdr.GetCloseAgree(),
+			hdr.LedgerIndex+1,
+		)
 		if res >= 2 && res <= 120 {
 			return time.Duration(res) * time.Second
 		}

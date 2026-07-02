@@ -1331,6 +1331,13 @@ func (e *Engine) timerEntry() {
 		return
 	}
 
+	// Sweep validations that aged past the isCurrent window off the steering
+	// indexes each tick (rippled doSweep → current()); a silent validator
+	// must not keep steering preferred-ledger selection through a stall.
+	if e.validationTracker != nil {
+		e.validationTracker.FlushStale()
+	}
+
 	// Runs every tick regardless of phase: a WrongLedger pin taken at
 	// PhaseAccepted advances no rounds, so the checkLedger path below never runs.
 	e.checkStuckWrongLedger()
@@ -1931,9 +1938,16 @@ func (e *Engine) traceCloseMiss(openTime time.Duration, proposersClosed, propose
 // closeOnTimers decides to close on elapsed-time thresholds alone, after
 // peer pressure is ruled out.
 func (e *Engine) closeOnTimers(openTime, timeSincePrevClose time.Duration) bool {
-	// No transactions: only close at the idle interval.
+	// No transactions: only close at the idle interval. rippled uses
+	// max(ledgerIDLE_INTERVAL, 2*closeResolution) (Consensus.h:1212-1234) so a
+	// coarse close-time resolution doesn't let an empty ledger close before a
+	// full resolution step has elapsed.
 	if len(e.adaptor.GetPendingTxs()) == 0 {
-		return timeSincePrevClose >= e.timing.LedgerIdleInterval
+		idle := e.timing.LedgerIdleInterval
+		if twoRes := 2 * e.adaptor.CloseTimeResolution(); twoRes > idle {
+			idle = twoRes
+		}
+		return timeSincePrevClose >= idle
 	}
 
 	// Preserve minimum ledger open time.
@@ -2126,6 +2140,16 @@ func (e *Engine) phaseEstablish() {
 
 	e.establishCounter++
 	e.peerUnchangedCounter++
+
+	// Give everyone a chance to take an initial position: rippled
+	// phaseEstablish returns before updateOurPositions until roundTime
+	// reaches ledgerMIN_CONSENSUS (Consensus.h:1393-1400). Updating our
+	// position or tallying close-time votes earlier diverges from the peer
+	// majority's timing. Counters above still advance each tick, as in
+	// rippled.
+	if roundTime < e.timing.LedgerMinConsensus {
+		return
+	}
 
 	// Prune stale peer proposals every tick regardless of our own mode
 	// (rippled updateOurPositions prunes unconditionally, Consensus.h:
@@ -2595,14 +2619,17 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 	reachedMax := e.timing.LedgerMaxConsensus > 0 && roundTime > e.timing.LedgerMaxConsensus
 	proposing := e.mode == consensus.ModeProposing
 
-	// countSelf=false: countAgreement already added our +1 when proposing, so
-	// passing it again would double-count. stalled needs haveCloseTimeConsensus
-	// and a non-empty dispute set all individually stalled.
+	// agree/currentProposers are PEER-only counts (rippled currPeerPositions_);
+	// self joins only inside the Yes check via countSelf=proposing
+	// (Consensus.cpp:153-158). Folding self into the shared counts skewed the
+	// 3/4-proposers pause and the MovedOn denominator by one. stalled needs
+	// haveCloseTimeConsensus and a non-empty dispute set all individually
+	// stalled.
 	stalled := false
 	if e.closeTime.haveConsensus && e.disputeTracker != nil {
 		stalled = e.disputeTracker.AllStalled(e.parms, proposing, e.peerUnchangedCounter)
 	}
-	if checkConsensusReached(agree, currentProposers, false, e.thresholds.MinConsensusPct, reachedMax, stalled) {
+	if checkConsensusReached(agree, currentProposers, proposing, e.thresholds.MinConsensusPct, reachedMax, stalled) {
 		return consensusStateYes
 	}
 
@@ -2640,9 +2667,10 @@ func checkConsensusReached(agreeing, total int, countSelf bool, minPct int, reac
 	return (agreeing*100)/total >= minPct
 }
 
-// countAgreement returns peer proposers whose position matches ours
-// (agree) vs differs (disagree); when proposing we count ourselves as
-// agreeing (the positions map excludes self). Caller must hold e.mu.
+// countAgreement returns PEER proposers whose position matches ours
+// (agree) vs differs (disagree) — self excluded, like rippled's
+// currPeerPositions_ tally (Consensus.h:1689-1707); the Yes check adds
+// self via countSelf. Caller must hold e.mu.
 func (e *Engine) countAgreement() (agree, disagree int) {
 	var ourTxSet consensus.TxSetID
 	haveOurs := false
@@ -2686,9 +2714,6 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		} else {
 			disagree++
 		}
-	}
-	if e.mode == consensus.ModeProposing {
-		agree++
 	}
 	return agree, disagree
 }

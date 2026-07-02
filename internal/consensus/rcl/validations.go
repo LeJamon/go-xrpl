@@ -760,6 +760,30 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 	return vt.byNode[nodeID]
 }
 
+// FlushStale drops non-current validations from the steering indexes
+// (byNode + trie tips), mirroring rippled's current() sweep inside withTrie
+// (Validations.h:509-533): a crashed or silent validator must stop steering
+// preferred-ledger selection once its last validation ages past the
+// isCurrent window. Driven from the engine heartbeat (rippled's doSweep
+// timer) because ExpireOld only runs on full-validation PROGRESS — during a
+// stall, precisely when stale steering matters, it never fires. Per-ledger
+// history (vt.validations) still ages via ExpireOld.
+func (vt *ValidationTracker) FlushStale() {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	now := vt.now()
+	for nodeID, v := range vt.byNode {
+		if isCurrent(now, v.SignTime, v.SeenTime) {
+			continue
+		}
+		delete(vt.byNode, nodeID)
+		if prev, ok := vt.trieTips[nodeID]; ok {
+			safeTrieCall("Remove", func() { vt.trie.Remove(prev, 1) })
+			delete(vt.trieTips, nodeID)
+		}
+	}
+}
+
 // ExpireOld drops validations below minSeq from every index and fires
 // onStale outside the mutex. Trie tips for dropped validators are also
 // removed so phantom branchSupport doesn't linger on stale ancestors.

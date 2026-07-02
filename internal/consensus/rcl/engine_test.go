@@ -2615,6 +2615,37 @@ func TestCheckConsensusState(t *testing.T) {
 			t.Fatalf("got %v, want consensusStateNo (default fallthrough)", got)
 		}
 	})
+
+	// The Yes check must add self exactly once (countSelf), so a proposing
+	// node with 3 agreeing peers out of 4 peer proposers reaches 4/5=80%.
+	// The counts passed here are PEER-only (rippled currPeerPositions_); the
+	// old code folded self into countAgreement AND relied on the peer count,
+	// double- or single-counting inconsistently.
+	t.Run("proposing self-inclusion: 3 of 4 peers agree → Yes at 80%", func(t *testing.T) {
+		e := newEngine()
+		e.setMode(consensus.ModeProposing)
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		// (3+self)/(4+self) = 4/5 = 80% ≥ 80 → Yes.
+		got := e.checkConsensusState(roundTime, 3, 4)
+		if got != consensusStateYes {
+			t.Fatalf("got %v, want Yes (4/5=80%% with self)", got)
+		}
+	})
+
+	// The 3/4-proposers straggler pause uses the PEER count, not peer+self.
+	// prevProposers=8 → threshold 6; 5 peers present must pause. Under the
+	// old self-fold the current count became 6 and the pause was skipped.
+	t.Run("proposing self-exclusion: 5 peers vs prev 8 still pauses", func(t *testing.T) {
+		e := newEngine()
+		e.setMode(consensus.ModeProposing)
+		e.prevProposers = 8
+		e.prevRoundTime = 5 * time.Second
+		roundTime := e.timing.LedgerMinConsensus + 100*time.Millisecond
+		got := e.checkConsensusState(roundTime, 5, 5)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want No (5 < 8*3/4=6 straggler pause, self excluded)", got)
+		}
+	})
 }
 
 // TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue
