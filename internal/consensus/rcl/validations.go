@@ -370,10 +370,9 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// happens at the wire seam, not here).
 	resolvedID := validation.NodeID
 
-	// Supersede a node's tip only with a strictly higher seq. go-xrpl
-	// has no SeqEnforcer; a same-or-lower-seq re-sign is rejected so a
-	// stale or sideways ledger can't skew ProposersFinished /
-	// PreferredFromValidations.
+	// Supersede a node's tip only with a strictly higher seq; a
+	// same-or-lower-seq re-sign is rejected so a stale or sideways
+	// ledger can't skew ProposersFinished / PreferredFromValidations.
 	existing, hasExisting := vt.byNode[resolvedID]
 	if hasExisting {
 		if validation.LedgerSeq <= existing.LedgerSeq {
@@ -455,12 +454,9 @@ func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.Ledger
 	return ledgerID, 0, false
 }
 
-// GetTrustedValidations returns trusted validations for a ledger.
-//
-// Unlike rippled's getTrustedForLedger(ledgerID, seq), which also
-// filters v.seq() == seq, no seq argument is needed here: this map is
-// keyed by ledger hash, and a ledger hash uniquely determines its seq,
-// so every entry under a given ledgerID already shares that seq.
+// GetTrustedValidations returns trusted validations for a ledger. No
+// seq argument is needed: entries are keyed by ledger hash, which
+// uniquely determines the seq, so all entries under a ledgerID share it.
 func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
