@@ -1283,8 +1283,6 @@ func (a *Adaptor) IsStandalone() bool {
 }
 
 // IsAmendmentBlocked reports whether an unsupported amendment has activated.
-// A blocked node must not propose or validate ledgers it can no longer build
-// correctly.
 func (a *Adaptor) IsAmendmentBlocked() bool {
 	if a.ledgerService == nil {
 		return false
