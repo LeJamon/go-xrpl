@@ -77,6 +77,70 @@ func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 	return nil
 }
 
+// persistJob is one unit of persistence work: a ledger to persist, or a
+// barrier (nil ledger + done) that flushes the FIFO queue for callers that
+// need persistence to be observable (tests, shutdown paths).
+type persistJob struct {
+	l    *ledger.Ledger
+	done chan struct{}
+}
+
+// enqueuePersist hands a closed/adopted ledger to the persistence worker.
+// Persistence walks the ENTIRE state map (O(total state), seconds at 15k
+// tx/ledger) — running it inline held s.mu and the calling goroutine (the
+// router dispatch loop on adoption, the consensus accept path on close) for
+// the whole walk, freezing consensus ticks, RPC, and inbound dispatch: the
+// seq-75 whole-process stall. rippled runs the equivalent
+// pendSaveValidated on its job queue. Best-effort like every persist path:
+// a full queue drops with a loud log and the chain advances (the ledger
+// remains servable from the in-memory history window).
+func (s *Service) enqueuePersist(l *ledger.Ledger) {
+	if l == nil {
+		return
+	}
+	if s.persistCh == nil {
+		// Not started: persist inline.
+		if err := s.persistLedger(context.Background(), l); err != nil {
+			s.logger.Error("failed to persist ledger inline", "seq", l.Sequence(), "err", err)
+		}
+		return
+	}
+	select {
+	case s.persistCh <- persistJob{l: l}:
+	default:
+		s.logger.Error("persist queue full — dropping ledger persist; chain advance continues",
+			"seq", l.Sequence(), "depth", cap(s.persistCh))
+	}
+}
+
+// FlushPersists blocks until every ledger enqueued before the call has been
+// persisted. No-op when the worker isn't running.
+func (s *Service) FlushPersists() {
+	if s.persistCh == nil {
+		return
+	}
+	done := make(chan struct{})
+	s.persistCh <- persistJob{done: done}
+	<-done
+}
+
+// runPersistWorker drains the persist queue in FIFO order, keeping
+// nodestore/relational writes ordered by enqueue. Runs for the process
+// lifetime.
+func (s *Service) runPersistWorker() {
+	for job := range s.persistCh {
+		if job.l != nil {
+			if err := s.persistLedger(context.Background(), job.l); err != nil {
+				s.logger.Error("failed to persist ledger; chain advance continues",
+					"seq", job.l.Sequence(), "err", err)
+			}
+		}
+		if job.done != nil {
+			close(job.done)
+		}
+	}
+}
+
 // persistToNodeStore writes ledger state to the nodestore.
 //
 // Mirrors rippled's NodeStore::Database::store and ::sync, which

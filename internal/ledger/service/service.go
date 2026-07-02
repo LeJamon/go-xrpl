@@ -223,6 +223,10 @@ type Service struct {
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
 
+	// persistCh feeds the single persistence worker (see enqueuePersist);
+	// nil until Start.
+	persistCh chan persistJob
+
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
 	// per-tx ingress off an O(amendments) parse + Rules allocation per submit.
@@ -365,6 +369,11 @@ func (s *Service) AmendmentFirstUnsupportedExpected() (uint32, bool) {
 func (s *Service) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.persistCh == nil {
+		s.persistCh = make(chan persistJob, 32)
+		go s.runPersistWorker()
+	}
 
 	genesisResult, err := genesis.Create(s.config.GenesisConfig)
 	if err != nil {

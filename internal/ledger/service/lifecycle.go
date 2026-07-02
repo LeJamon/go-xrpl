@@ -464,10 +464,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	// Persist best-effort: a persistence failure must not be fatal (would
 	// diverge from rippled and risk forks on transient DB issues).
-	if err := s.persistLedger(ctx, s.openLedger); err != nil {
-		s.logger.Error("failed to persist consensus-closed ledger; chain advance continues",
-			"seq", s.openLedger.Sequence(), "err", err)
-	}
+	s.enqueuePersist(s.openLedger)
 
 	closedSeq := s.openLedger.Sequence()
 	closedLedgerHash := s.openLedger.Hash()
@@ -948,11 +945,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 
 	// Persist the adopted ledger so tx/account_tx/transaction_entry RPCs can
 	// answer against it.
-	if err := s.persistLedger(ctx, adopted); err != nil {
-		// Degrade gracefully; the next close retries. Log loudly — a failure
-		// breaks tx RPCs silently.
-		s.logger.Error("Failed to persist adopted ledger", "seq", h.LedgerIndex, "err", err)
-	}
+	s.enqueuePersist(adopted)
 
 	// Populate the tx-index and capture per-tx event records (side effect +
 	// return) so hooks and stream subscribers see every adopted tx.

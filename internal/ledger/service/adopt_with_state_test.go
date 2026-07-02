@@ -221,6 +221,8 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	}
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	// Persistence runs on the async worker; barrier before asserting.
+	svc.FlushPersists()
 
 	// Both adopted transactions must now be retrievable from the DB.
 	for _, wantID := range [][32]byte{id1, id2} {
