@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -223,9 +223,9 @@ type Service struct {
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
 
-	// stallPing fires once per ledger close so the stall watchdog sees progress.
-	// Atomic pointer so it can be installed without s.mu; nil disables it.
-	stallPing atomic.Pointer[func()]
+	// persistCh feeds the single persistence worker (see enqueuePersist);
+	// nil until Start.
+	persistCh chan persistJob
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -370,6 +370,11 @@ func (s *Service) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.persistCh == nil {
+		s.persistCh = make(chan persistJob, 32)
+		go s.runPersistWorker()
+	}
+
 	genesisResult, err := genesis.Create(s.config.GenesisConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create genesis ledger: %w", err)
@@ -508,9 +513,6 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 // ledger. timeLeap clamps the metrics window when consensus exceeded the
 // slow-consensus threshold instead of advancing it. Caller must hold s.mu.
 func (s *Service) processClosedLedgerLocked() {
-	if ping := s.stallPing.Load(); ping != nil {
-		(*ping)()
-	}
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
 	}
@@ -518,18 +520,6 @@ func (s *Service) processClosedLedgerLocked() {
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
 	s.tickLoadFeeLocked()
-}
-
-// SetStallPing installs the out-of-band stall watchdog's heartbeat callback,
-// fired once per ledger close from processClosedLedgerLocked. Safe to call
-// after construction; nil disables it. The callback must be cheap and
-// non-blocking — it runs while s.mu is held.
-func (s *Service) SetStallPing(ping func()) {
-	if ping == nil {
-		s.stallPing.Store(nil)
-		return
-	}
-	s.stallPing.Store(&ping)
 }
 
 // slowConsensusThreshold: past this round time the TxQ treats consensus as slow
@@ -712,6 +702,45 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 		pool.PushBack(ov.Current().Sequence(), ptx)
 	}
 	return res, nil
+}
+
+// PrewarmSignatures verifies the outer signatures of raw tx blobs in parallel
+// and caches the verdicts, so a consensus build over an acquired tx set hits the
+// sig-cache instead of paying cold checks in-strand under the apply mutex. The
+// per-relayed-tx prewarm in SubmitOpenLedgerTx (#1105) covers only individually-
+// arrived txs; wholesale-acquired consensus sets go through here. Safe to call
+// concurrently; unparseable blobs are skipped (the in-strand preflight rejects
+// them authoritatively).
+func (s *Service) PrewarmSignatures(blobs [][]byte) {
+	if len(blobs) == 0 {
+		return
+	}
+	s.mu.RLock()
+	cfg, cfgErr := s.applyConfigLocked()
+	s.mu.RUnlock()
+	if cfgErr != nil || cfg.SkipSignatureVerification {
+		return
+	}
+
+	workers := min(runtime.GOMAXPROCS(0), len(blobs))
+	work := make(chan []byte, workers)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for blob := range work {
+				if ptx, err := openledger.ParsePendingTx(blob); err == nil {
+					txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+				}
+			}
+		}()
+	}
+	for _, blob := range blobs {
+		work <- blob
+	}
+	close(work)
+	wg.Wait()
 }
 
 // OpenLedgerTxs returns the raw tx blobs in the persistent open view (nil

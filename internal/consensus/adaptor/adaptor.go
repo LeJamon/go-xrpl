@@ -243,6 +243,21 @@ type Adaptor struct {
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
+	// lastIssuedValidationSeq is the highest ledger seq this node has
+	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
+	// the trie-descent floor for preferredLCL. Zero for a non-validator.
+	lastIssuedValidationSeq atomic.Uint32
+
+	// reqLedgerLast rate-limits per-hash broadcast TMGetLedger retries from
+	// the engine's checkLedger heartbeat (see RequestLedger).
+	reqLedgerMu   sync.Mutex
+	reqLedgerLast map[consensus.LedgerID]time.Time
+
+	// announcedSets de-duplicates tsHAVE announcements per set hash (see
+	// BuildTxSet).
+	announcedSetsMu sync.Mutex
+	announcedSets   map[consensus.TxSetID]struct{}
+
 	logger *slog.Logger
 }
 
@@ -406,6 +421,8 @@ func New(cfg Config) *Adaptor {
 		negUNLVoter:       negUNLVoter,
 		txSetCache:        NewTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
+		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
+		announcedSets:     make(map[consensus.TxSetID]struct{}),
 		cookie:            cookie,
 		feeVote:           feeVote,
 		amendmentStances:  amendmentStances,
@@ -456,6 +473,15 @@ func (a *Adaptor) BroadcastProposal(proposal *consensus.Proposal) error {
 }
 
 func (a *Adaptor) BroadcastValidation(validation *consensus.Validation) error {
+	if validation != nil {
+		for {
+			cur := a.lastIssuedValidationSeq.Load()
+			if validation.LedgerSeq <= cur ||
+				a.lastIssuedValidationSeq.CompareAndSwap(cur, validation.LedgerSeq) {
+				break
+			}
+		}
+	}
 	return a.sender.BroadcastValidation(validation)
 }
 
@@ -506,6 +532,20 @@ func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
+	// Each call is a BROADCAST TMGetLedger charged at every peer, and checkLedger
+	// retries every heartbeat; rippled paces retries on the InboundLedger timer
+	// (~3s), so rate-limit per hash to match.
+	now := time.Now()
+	a.reqLedgerMu.Lock()
+	if last, ok := a.reqLedgerLast[id]; ok && now.Sub(last) < 3*time.Second {
+		a.reqLedgerMu.Unlock()
+		return nil
+	}
+	if len(a.reqLedgerLast) > 64 {
+		clear(a.reqLedgerLast)
+	}
+	a.reqLedgerLast[id] = now
+	a.reqLedgerMu.Unlock()
 	return a.sender.RequestLedger(id)
 }
 
@@ -795,8 +835,23 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		return nil, err
 	}
 	a.txSetCache.Put(ts)
-	if a.onTxSetBuilt != nil {
-		a.onTxSetBuilt(ts.ID())
+	// Announce each set hash at most once (and never the empty set): the engine
+	// rebuilds sets frequently and peers charge "useless data" for every
+	// duplicate tsHAVE — rippled never re-announces a hash a peer has seen.
+	id := ts.ID()
+	if a.onTxSetBuilt != nil && id != (consensus.TxSetID{}) {
+		a.announcedSetsMu.Lock()
+		_, dup := a.announcedSets[id]
+		if !dup {
+			if len(a.announcedSets) > 512 {
+				clear(a.announcedSets)
+			}
+			a.announcedSets[id] = struct{}{}
+		}
+		a.announcedSetsMu.Unlock()
+		if !dup {
+			a.onTxSetBuilt(id)
+		}
 	}
 	return ts, nil
 }
@@ -957,12 +1012,22 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 // every call to account for negative-UNL changes:
 // max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
-	// Lock a.mu for the trustedValidators read; GetNegativeUNL takes its own
-	// lock, so call it after release to avoid nesting.
+	// GetNegativeUNL takes its own lock, so resolve it before locking a.mu.
+	negUNL := a.GetNegativeUNL()
+
 	a.mu.Lock()
 	trusted := len(a.trustedValidators)
+	// Count only negUNL entries that are actually in our trusted UNL: a
+	// disabled validator we don't trust must not lower our quorum (rippled
+	// ValidatorList::updateTrusted intersects the negUNL with the trusted
+	// keys, ValidatorList.cpp:2064-2070).
+	disabled := 0
+	for _, id := range negUNL {
+		if _, ok := a.trustedSet[id]; ok {
+			disabled++
+		}
+	}
 	a.mu.Unlock()
-	disabled := len(a.GetNegativeUNL())
 	return computeQuorum(trusted, disabled)
 }
 
@@ -1228,10 +1293,32 @@ func (a *Adaptor) CloseOffset() time.Duration {
 }
 
 func (a *Adaptor) CloseTimeResolution() time.Duration {
+	// Round on the resolution of the ledger BEING BUILT — the parent's stepped
+	// one rung on the ladder (rippled Consensus.h:724-727
+	// getNextLedgerTimeResolution). The parent's raw value would round close-time
+	// votes differently at ladder boundaries: a different agreed close time is a
+	// different ledger hash — a fork.
 	l := a.ledgerService.GetClosedLedger()
 	if l != nil {
-		res := l.Header().CloseTimeResolution
+		hdr := l.Header()
+		res := consensus.GetNextLedgerTimeResolution(
+			hdr.CloseTimeResolution,
+			hdr.GetCloseAgree(),
+			hdr.LedgerIndex+1,
+		)
 		if res >= 2 && res <= 120 {
+			return time.Duration(res) * time.Second
+		}
+	}
+	return 30 * time.Second // protocol default
+}
+
+// PrevCloseTimeResolution returns the closed ledger's raw stored resolution,
+// the basis for the empty-ledger idle interval (rippled Consensus.h:1212-1214
+// uses previousLedger_.closeTimeResolution(), not the next-ledger value).
+func (a *Adaptor) PrevCloseTimeResolution() time.Duration {
+	if l := a.ledgerService.GetClosedLedger(); l != nil {
+		if res := l.Header().CloseTimeResolution; res >= 2 && res <= 120 {
 			return time.Duration(res) * time.Second
 		}
 	}
@@ -1412,45 +1499,35 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 // the one we just closed (the promotion gate's signal). False when the
 // preferred LCL is our own.
 func (a *Adaptor) networkLedgerDiffers(ledger consensus.Ledger, mode consensus.OperatingMode) bool {
-	ourLCL := ledger.ID()
-	return a.preferredLCL(ourLCL, ledger.Seq(), mode) != ourLCL
+	return a.preferredLCL(ledger, mode) != ledger.ID()
 }
 
-// preferredLCL picks the network-preferred last closed ledger.
-// Trusted validations weighted through the ancestry trie take priority;
-// peer-reported LCL counts are the fallback used only when no trusted
-// validations are available.
-func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode consensus.OperatingMode) consensus.LedgerID {
-	// minSeq: the trie's preferred ledger is only adopted when it is at
-	// least our last fully-validated sequence, never rewinding behind it.
+// preferredLCL picks the network-preferred last closed ledger, mirroring
+// rippled Validations::getPreferredLCL (Validations.h:935-960): the
+// trie-preferred ledger first, the most-supported trusted-validation tip
+// when the trie has none, and the dominant peer-reported LCL as the last
+// fallback. The only sequence gate is the last fully-validated index —
+// never rewinding behind it; a preferred ledger at or below our own seq on
+// a different chain is still a switch (Validations.h:892-895).
+func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.OperatingMode) consensus.LedgerID {
+	ourLCL := ledger.ID()
 	var minSeq uint32
 	if a.ledgerService != nil {
 		minSeq = a.ledgerService.GetValidatedLedgerIndex()
 	}
 
-	// largestIssued is the highest seq this node has validated, seeding the
-	// trie's uncommitted support (GetPreferred floor). 0 for a non-validator;
-	// the just-closed seq is the validator's faithful proxy.
-	var largestIssued uint32
-	if a.IsValidator() {
-		largestIssued = ourSeq
-	}
-
-	// Trusted-validation branch: GetPreferred consults the ancestry trie,
-	// PreferredFromValidations is the no-trie fallback.
 	if h := a.validationHistorian; h != nil {
-		id, seq, ok := h.GetPreferred(largestIssued)
-		if !ok {
-			id, seq, ok = h.PreferredFromValidations(minSeq)
-		}
-		if ok {
-			// A preferred ledger not ahead of us (ours or a same-chain
-			// ancestor) is not a switch; approximated as seq >= ourSeq since
-			// per-seq ancestry isn't available here.
-			if id != ourLCL && seq >= ourSeq && seq >= minSeq {
+		if id, seq, ok := h.GetPreferred(a.lastIssuedValidationSeq.Load()); ok {
+			id, seq = a.resolvePreferredVsCurrent(id, seq, ledger)
+			if seq >= minSeq {
 				return id
 			}
 			return ourLCL
+		}
+		// No-trie fallback over trusted-validation tips (rippled's acquiring_
+		// majority, Validations.h:858-879); already filtered to seq >= minSeq.
+		if id, _, ok := h.PreferredFromValidations(minSeq); ok {
+			return id
 		}
 	}
 
@@ -1472,6 +1549,53 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 		}
 	}
 	return best
+}
+
+// resolvePreferredVsCurrent applies rippled getPreferred's stay/switch rules
+// (Validations.h:881-898) to the trie-preferred tip: our own immediate child
+// on our chain is not a switch (we may be about to build it), a tip ahead of
+// us always wins, and a tip at or below our seq wins only when our chain's
+// ledger at that seq differs (a fork).
+func (a *Adaptor) resolvePreferredVsCurrent(prefID consensus.LedgerID, prefSeq uint32, ledger consensus.Ledger) (consensus.LedgerID, uint32) {
+	ourLCL := ledger.ID()
+	ourSeq := ledger.Seq()
+	if prefSeq == ourSeq+1 {
+		if l, err := a.GetLedger(prefID); err == nil && l != nil && l.ParentID() == ourLCL {
+			return ourLCL, ourSeq
+		}
+	}
+	if prefSeq > ourSeq {
+		return prefID, prefSeq
+	}
+	if a.ancestorOf(ledger, prefSeq) != prefID {
+		return prefID, prefSeq
+	}
+	return ourLCL, ourSeq
+}
+
+// ancestorOf resolves our chain's ledger ID at targetSeq, starting from
+// ledger's own parent link and walking locally-held parents. Returns the
+// zero ID when the ancestry is not locally resolvable — treated as a
+// different chain, like rippled's out-of-skip-list ID{0}
+// (RCLValidations.cpp:78-95).
+func (a *Adaptor) ancestorOf(ledger consensus.Ledger, targetSeq uint32) consensus.LedgerID {
+	const maxWalk = 256 // rippled's skip-list reach
+	seq := ledger.Seq()
+	if targetSeq > seq || seq-targetSeq > maxWalk {
+		return consensus.LedgerID{}
+	}
+	if targetSeq == seq {
+		return ledger.ID()
+	}
+	cur := ledger.ParentID()
+	for s := seq - 1; s > targetSeq; s-- {
+		l, err := a.GetLedger(cur)
+		if err != nil || l == nil {
+			return consensus.LedgerID{}
+		}
+		cur = l.ParentID()
+	}
+	return cur
 }
 
 // OnLedgerFullyValidated fires at trusted-validation quorum. It advances the

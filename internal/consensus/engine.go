@@ -240,6 +240,12 @@ type TimeSource interface {
 
 	CloseTimeResolution() time.Duration
 
+	// PrevCloseTimeResolution returns the last closed ledger's own stored
+	// close-time resolution. The empty-ledger idle interval keys off this raw
+	// value, not the next-ledger rounding basis CloseTimeResolution returns —
+	// the two differ by one ladder rung at resolution boundaries.
+	PrevCloseTimeResolution() time.Duration
+
 	// AdjustCloseTime adjusts the clock offset toward the network average.
 	AdjustCloseTime(rawCloseTimes CloseTimes)
 }

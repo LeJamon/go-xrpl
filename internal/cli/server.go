@@ -994,7 +994,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 			globalConfig.Watchdog.AbortSecondsResolved(),
 		)
 		wd := watchdog.New(wdCfg, nil)
-		ledgerService.SetStallPing(wd.Register("ledger"))
+		// Monitor only the tick-driven consensus loop: rippled's LoadManager
+		// watches loop liveness, never ledger-close progress, so a catching-up
+		// node self-heals via checkLedger rather than aborting.
 		if consensusComponents != nil {
 			if sp, ok := consensusComponents.Engine.(stallPinger); ok {
 				sp.SetStallPing(wd.Register("consensus"))

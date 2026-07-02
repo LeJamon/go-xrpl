@@ -96,6 +96,9 @@ type mockAdaptor struct {
 	txSets  map[consensus.TxSetID]consensus.TxSet
 	lastLCL consensus.Ledger
 
+	// Peer-reported LCLs served by PeerReportedLedgers.
+	peerLCLs []consensus.LedgerID
+
 	// Pending transactions
 	pendingTxs [][]byte
 
@@ -159,6 +162,12 @@ type mockAdaptor struct {
 	// set) can be asserted directly. nil falls through to GetPendingTxs.
 	proposableOverride [][]byte
 	proposableCalled   int
+
+	// buildLedgerHook, when set, runs at the start of BuildLedger (before the
+	// new ledger is minted). Tests use it to block the off-lock apply and
+	// observe engine behaviour while it runs. Read under a.mu, then called
+	// without the lock so it can't deadlock adaptor calls made concurrently.
+	buildLedgerHook func()
 }
 
 func newMockAdaptor() *mockAdaptor {
@@ -265,6 +274,12 @@ func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 }
 
 func (a *mockAdaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool) (consensus.Ledger, error) {
+	a.mu.RLock()
+	hook := a.buildLedgerHook
+	a.mu.RUnlock()
+	if hook != nil {
+		hook()
+	}
 	newLedger := &mockLedger{
 		id:        consensus.LedgerID{byte(parent.Seq() + 1)},
 		seq:       parent.Seq() + 1,
@@ -429,7 +444,9 @@ func (a *mockAdaptor) GetNegativeUNL() []consensus.NodeID {
 }
 
 func (a *mockAdaptor) PeerReportedLedgers() []consensus.LedgerID {
-	return nil
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.peerLCLs
 }
 
 func (a *mockAdaptor) IsFeatureEnabled(name string) bool {
@@ -547,6 +564,10 @@ func (a *mockAdaptor) Now() time.Time {
 }
 
 func (a *mockAdaptor) CloseTimeResolution() time.Duration {
+	return time.Second
+}
+
+func (a *mockAdaptor) PrevCloseTimeResolution() time.Duration {
 	return time.Second
 }
 
@@ -2596,6 +2617,37 @@ func TestCheckConsensusState(t *testing.T) {
 		got := e.checkConsensusState(roundTime, 1, 10)
 		if got != consensusStateNo {
 			t.Fatalf("got %v, want consensusStateNo (default fallthrough)", got)
+		}
+	})
+
+	// The Yes check must add self exactly once (countSelf), so a proposing
+	// node with 3 agreeing peers out of 4 peer proposers reaches 4/5=80%.
+	// The counts passed here are PEER-only (rippled currPeerPositions_); the
+	// old code folded self into countAgreement AND relied on the peer count,
+	// double- or single-counting inconsistently.
+	t.Run("proposing self-inclusion: 3 of 4 peers agree → Yes at 80%", func(t *testing.T) {
+		e := newEngine()
+		e.setMode(consensus.ModeProposing)
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		// (3+self)/(4+self) = 4/5 = 80% ≥ 80 → Yes.
+		got := e.checkConsensusState(roundTime, 3, 4)
+		if got != consensusStateYes {
+			t.Fatalf("got %v, want Yes (4/5=80%% with self)", got)
+		}
+	})
+
+	// The 3/4-proposers straggler pause uses the PEER count, not peer+self.
+	// prevProposers=8 → threshold 6; 5 peers present must pause. Under the
+	// old self-fold the current count became 6 and the pause was skipped.
+	t.Run("proposing self-exclusion: 5 peers vs prev 8 still pauses", func(t *testing.T) {
+		e := newEngine()
+		e.setMode(consensus.ModeProposing)
+		e.prevProposers = 8
+		e.prevRoundTime = 5 * time.Second
+		roundTime := e.timing.LedgerMinConsensus + 100*time.Millisecond
+		got := e.checkConsensusState(roundTime, 5, 5)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want No (5 < 8*3/4=6 straggler pause, self excluded)", got)
 		}
 	})
 }

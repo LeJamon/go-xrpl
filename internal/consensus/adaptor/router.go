@@ -180,6 +180,49 @@ type Router struct {
 	// store (see SetAcquisitionFamily); nil leaves them unbacked. Set once at
 	// startup, before Run.
 	acquisitionFamily shamap.Family
+
+	// catchupMu guards catchup, the single consensus catch-up target: the highest
+	// trusted (seq,hash) seen, toward which at most maxConcurrentCatchup
+	// acquisitions are armed — rippled's LedgerMaster::doAdvance drives one needed
+	// target, not one InboundLedger per gossiped event.
+	catchupMu sync.Mutex
+	catchup   catchupTarget
+
+	// historyMu guards history, the single backward history-backfill target: the
+	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
+	// serial (each header names its parent) and tick-driven. historyFloor bounds
+	// it to the jump gap; below it history is already contiguous, so descending
+	// further would re-fetch persisted ledgers evicted from the in-memory window.
+	historyMu    sync.Mutex
+	history      catchupTarget
+	historyFloor uint32
+
+	// seqHashMu guards the seqHash table: the network's hash (and, when known,
+	// parent hash) per ledger sequence, from trusted validations and peer
+	// status_change gossip. Supplies the hash of closed+1 (the forward-delta
+	// catch-up target) and the parent linkage proving closed+1 descends from our
+	// closed ledger. Bounded to seqHashRetain; seqHashMax keeps a trailing window.
+	seqHashMu  sync.Mutex
+	seqHash    map[uint32]ledgerHashEntry
+	seqHashMax uint32
+}
+
+// catchupTarget is the highest (seq,hash) the router is driving a bounded
+// consensus catch-up toward, plus the peer that last advertised it.
+type catchupTarget struct {
+	seq    uint32
+	hash   [32]byte
+	peerID uint64
+}
+
+// ledgerHashEntry is the network's view of one ledger sequence: its hash and,
+// when a status_change revealed it, its parent's hash. Trusted validations carry
+// no parent link (hash only); status_change gossip populates both. haveParent
+// distinguishes a real zero parent hash from "not yet learned".
+type ledgerHashEntry struct {
+	hash       [32]byte
+	parentHash [32]byte
+	haveParent bool
 }
 
 // txWorkerCount bounds the goroutines draining inbound peer transactions off
@@ -245,6 +288,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs: defaultTxSetRetryKnobs(),
+		seqHash:         make(map[uint32]ledgerHashEntry),
 	}
 	// Wire the stash → acquisition hook so quorum decisions on unknown
 	// ledgers don't sit silently in pendingLedgerValidations.
@@ -586,6 +630,7 @@ func (r *Router) maintenanceTick() {
 	// forever. Reaping here also unblocks startLedgerAcquisitionLegacy and the
 	// replay-delta path, both of which refuse to arm while the hash is in flight.
 	now := time.Now()
+
 	for _, il := range r.fetchTracker.Active() {
 		switch il.OnTimer(now) {
 		case inbound.TimerFailed:
@@ -594,6 +639,16 @@ func (r *Router) maintenanceTick() {
 			r.escalateAcquisition(il, now)
 		}
 	}
+
+	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
+	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next
+	// gossip event. No-ops while an acquisition is in flight or the target is
+	// reached; startLedgerAcquisition dedups the in-flight hash.
+	r.armCatchupTowardTarget()
+
+	// Backward history backfill of jump-adopt gaps (rippled fetchForHistory
+	// from doAdvance), off the consensus catch-up slot.
+	r.armHistoryBackfill()
 
 	// Expire stale fetch-pack nodes so the cache doesn't retain a stalled
 	// acquisition's nodes past their usefulness.

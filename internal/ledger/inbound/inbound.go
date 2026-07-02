@@ -72,6 +72,9 @@ const (
 	ReasonConsensus Reason = iota
 	// ReasonGeneric is an RPC-driven acquisition (rippled Reason::GENERIC).
 	ReasonGeneric
+	// ReasonHistory is a background backfill of a ledger a jump-adopt skipped
+	// (rippled Reason::HISTORY): store-only ingest, off the catch-up path.
+	ReasonHistory
 )
 
 // State tracks the acquisition progress.
@@ -146,6 +149,12 @@ type Ledger struct {
 	timeouts  int
 	byHash    bool
 
+	// recentNodes de-dups reply-driven node re-requests within a timer interval
+	// (keyed by content hash) so peer replies can't re-request the same nodes at
+	// RTT rate; the timeout fan-out bypasses it, OnTimer clears it. Mirrors
+	// rippled InboundLedger::mRecentNodes/filterNodes. Guarded by mu.
+	recentNodes map[[32]byte]struct{}
+
 	// Rejection diagnostics, surfaced on the no-progress tick so a stuck
 	// acquisition names which node it cannot place and why (the signal the
 	// swallowed Debug logs hid). Guarded by mu.
@@ -177,12 +186,13 @@ func WithFamily(family shamap.Family) Option {
 // The acquisition reason defaults to ReasonConsensus.
 func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
 	l := &Ledger{
-		hash:      hash,
-		seq:       seq,
-		peers:     []uint64{peerID},
-		state:     StateWantBase,
-		lastTimer: SystemClock.Now(),
-		logger:    logger,
+		hash:        hash,
+		seq:         seq,
+		peers:       []uint64{peerID},
+		state:       StateWantBase,
+		lastTimer:   SystemClock.Now(),
+		logger:      logger,
+		recentNodes: make(map[[32]byte]struct{}),
 	}
 	for _, opt := range opts {
 		opt(l)
@@ -195,6 +205,15 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...
 func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
 	l := New(hash, seq, peerID, logger, opts...)
 	l.reason = ReasonGeneric
+	return l
+}
+
+// NewHistory creates a background history-backfill (ReasonHistory) acquisition:
+// on completion the ledger is store-ingested below the closed tip, never
+// advancing consensus state.
+func NewHistory(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
+	l := New(hash, seq, peerID, logger, opts...)
+	l.reason = ReasonHistory
 	return l
 }
 
@@ -278,6 +297,10 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 		return TimerNone
 	}
 	l.lastTimer = now
+
+	// Reset the per-interval de-dup set, pacing re-requests at ~once/interval.
+	// Mirrors rippled onTimer's mRecentNodes.clear() (InboundLedger.cpp:368).
+	clear(l.recentNodes)
 
 	if l.progress {
 		// rippled onTimer(true): progress this interval — reset and keep going
@@ -649,10 +672,20 @@ func (l *Ledger) recomputeComplete() {
 	}
 }
 
-// missingNodeBatch caps NodeIDs per TMGetLedger request. Sits between
-// rippled's blind-request cap (reqNodes=12) and reply cap
-// (reqNodesReply=128, InboundLedger.cpp).
+// missingNodeBatch caps NodeIDs per TMGetLedger request on the inspection
+// queries. Sits between rippled's blind-request cap (reqNodes=12) and reply
+// cap (reqNodesReply=128, InboundLedger.cpp).
 const missingNodeBatch = 16
+
+// Request-path widths, matching rippled InboundLedger.cpp: collect up to
+// missingNodesFind before the recentNodes de-dup, then cap the request at
+// reqNodesReply on a reply and reqNodes on a timeout fan-out. The wide
+// pre-dedup collect keeps per-reply frontier coverage at ~128 nodes/RTT.
+const (
+	missingNodesFind = 256
+	reqNodesReply    = 128
+	reqNodes         = 12
+)
 
 // NeedsMissingNodeIDs returns up to missingNodeBatch wire-encoded
 // path-based NodeIDs of missing SHAMap inner nodes, ordered by depth.
@@ -690,6 +723,70 @@ func missingNodeIDs(m *shamap.SHAMap) [][]byte {
 	nodeIDs := make([][]byte, 0, len(missing))
 	for i := range missing {
 		nodeIDs = append(nodeIDs, missing[i].NodeID.Bytes())
+	}
+	return nodeIDs
+}
+
+// CollectMissingRequest returns the wire-encoded NodeIDs of outstanding state-
+// and transaction-tree nodes to request, de-duplicated against the nodes already
+// asked for this timer interval. It is the request-path counterpart to the pure
+// NeedsMissing* inspection queries and the choke point for the re-request
+// throttle. isReply distinguishes the two trigger paths (rippled
+// InboundLedger::filterNodes(reason)): a reply drops already-requested nodes and
+// returns nil when the whole missing set is duplicates (taming the per-reply
+// spin); a timeout bypasses that short-circuit so the fan-out still queries every
+// peer.
+func (l *Ledger) CollectMissingRequest(isReply bool) (state, txn [][]byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state != StateWantState {
+		return nil, nil
+	}
+	if l.stateMap != nil && !l.haveState {
+		state = l.filterMissingLocked(l.stateMap, isReply)
+	}
+	if l.txMap != nil && !l.haveTx {
+		txn = l.filterMissingLocked(l.txMap, isReply)
+	}
+	return state, txn
+}
+
+// filterMissingLocked de-dups m's missing nodes against recentNodes (keyed by
+// content hash, matching rippled filterNodes) and returns the wire NodeIDs to
+// request: collect wide (missingNodesFind) before the de-dup, cap after —
+// reqNodesReply on a reply, reqNodes on a timeout. Caller holds mu.
+func (l *Ledger) filterMissingLocked(m *shamap.SHAMap, isReply bool) [][]byte {
+	missing := m.GetMissingNodes(missingNodesFind, nil)
+	if len(missing) == 0 {
+		return nil
+	}
+	fresh := make([]shamap.MissingNode, 0, len(missing))
+	for i := range missing {
+		if _, dup := l.recentNodes[missing[i].Hash]; !dup {
+			fresh = append(fresh, missing[i])
+		}
+	}
+	use := fresh
+	if len(fresh) == 0 {
+		// Every outstanding node was already requested this interval. On a reply
+		// send nothing (stops the spin); on a timeout re-query everyone.
+		if isReply {
+			return nil
+		}
+		use = missing
+	}
+	limit := reqNodes
+	if isReply {
+		limit = reqNodesReply
+	}
+	if len(use) > limit {
+		use = use[:limit]
+	}
+	nodeIDs := make([][]byte, 0, len(use))
+	for i := range use {
+		nodeIDs = append(nodeIDs, use[i].NodeID.Bytes())
+		l.recentNodes[use[i].Hash] = struct{}{}
 	}
 	return nodeIDs
 }

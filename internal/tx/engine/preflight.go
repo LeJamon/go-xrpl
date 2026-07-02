@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -346,8 +347,19 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	if tx.GetCommon().SignatureVerified() {
 		return ter.TesSUCCESS
 	}
+	// tx-ID-keyed verified-good cache (rippled SF_SIGGOOD analog): the object
+	// SignatureVerified flag is cold after the consensus build re-parses the
+	// agreed tx set, but the tx ID survives, so a hit skips the redundant
+	// re-verify. Positive-only — a miss still runs the full verify below.
+	txID, idErr := txcore.ComputeTransactionHash(tx)
+	if idErr == nil && sigcache.Verified(txID) {
+		return ter.TesSUCCESS
+	}
 	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
+	}
+	if idErr == nil {
+		sigcache.MarkVerified(txID)
 	}
 	return ter.TesSUCCESS
 }
@@ -386,6 +398,11 @@ func PrewarmSignature(txn txcore.Transaction, rules *amendment.Rules) {
 		(common.GetFlags()&txcore.TfFullyCanonicalSig) != 0
 	if sign.VerifySignature(txn, mustBeFullyCanonical) == nil {
 		common.MarkSignatureVerified()
+		// Publish to the tx-ID cache so the consensus build path (fresh object,
+		// cold flag) skips the redundant verify.
+		if txID, err := txcore.ComputeTransactionHash(txn); err == nil {
+			sigcache.MarkVerified(txID)
+		}
 	}
 }
 

@@ -536,6 +536,32 @@ func TestSendEndpoints_NoSelfNoDiscovered_DoesNotEmit(t *testing.T) {
 	o.sendEndpoints()
 }
 
+// Only literal IP:port entries are gossipable; hostname entries fail the
+// recipient's IP-endpoint parse (rippled PeerImp.cpp:1213) and must be dropped.
+func TestCollectDiscoveredEndpoints_SkipsHostnames(t *testing.T) {
+	o := &Overlay{
+		cfg:       Config{},
+		peers:     make(map[PeerID]*Peer),
+		events:    make(chan Event, 8),
+		discovery: NewDiscovery(&Config{}, make(chan Event, 1)),
+	}
+	o.discovery.AddPeer("rippled-0:51235", 1, PeerID(1))
+	o.discovery.AddPeer("10.0.0.7:51235", 1, PeerID(1))
+	o.discovery.AddPeer("[2001:db8::1]:51235", 2, PeerID(1))
+
+	eps := o.collectDiscoveredEndpoints()
+	for _, e := range eps {
+		assert.NotEqual(t, "rippled-0:51235", e.Endpoint,
+			"hostname entries must not be gossiped")
+	}
+	got := make(map[string]bool, len(eps))
+	for _, e := range eps {
+		got[e.Endpoint] = true
+	}
+	assert.True(t, got["10.0.0.7:51235"], "IPv4 literal must be gossiped")
+	assert.True(t, got["[2001:db8::1]:51235"], "IPv6 literal must be gossiped")
+}
+
 // newEndpointsTestOverlay builds a minimal Overlay with a single
 // converged peer wired into Discovery, ready to receive a TMEndpoints
 // frame via onMessageReceived.

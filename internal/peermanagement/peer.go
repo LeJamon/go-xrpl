@@ -133,6 +133,10 @@ type Peer struct {
 	// PeerImp.cpp:705-708 "Large send queue".
 	largeSendQ atomic.Uint32
 
+	// lastPingProbe paces outbound ping probes to rippled's 60s
+	// peerTimerInterval; only the pingLoop goroutine touches it.
+	lastPingProbe time.Time
+
 	// sendDrops counts frames dropped because the bounded send queue was
 	// full. go-xrpl drops the frame and returns ErrSendBufferFull rather
 	// than queueing unboundedly like rippled; this per-peer counter is
@@ -963,6 +967,13 @@ func (p *Peer) runPingTick(now time.Time) error {
 		)
 		return ErrLargeSendQueue
 	}
+	// Probe at rippled's 60s peerTimerInterval cadence; the finer 15s tick
+	// serves only the stale-ping and send-queue checks above. Peers charge
+	// every ping, so probing faster inflates our resource cost at each peer.
+	if !p.lastPingProbe.IsZero() && now.Sub(p.lastPingProbe) < pingTimeout {
+		return nil
+	}
+	p.lastPingProbe = now
 	seq := uint32(now.UnixMilli())
 	ping := &message.Ping{
 		PType: message.PingTypePing,
