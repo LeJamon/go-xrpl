@@ -122,6 +122,12 @@ type Engine struct {
 	// peer pressure.
 	prevProposers int
 
+	// prevCloseTime is our own observed close time carried across rounds
+	// (rippled's prevCloseTime_ / rawCloseTimes_.self). shouldCloseLedger
+	// measures idle time from it, instead of the previous ledger's stored
+	// close time, when that close can't be trusted — see lastCloseBaseline.
+	prevCloseTime time.Time
+
 	// wrongLedgerID is the ledger we're acquiring in ModeWrongLedger;
 	// prevents spamming handleWrongLedger.
 	wrongLedgerID consensus.LedgerID
@@ -498,6 +504,18 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
+
+	// Carry our own observed close time across rounds (rippled prevCloseTime_).
+	// The first round seeds from the seed ledger; afterwards we take the self
+	// close time of the round that just ended, read from e.state before it is
+	// replaced below (this runs for every round-start path).
+	if e.state == nil {
+		if e.prevLedger != nil {
+			e.prevCloseTime = e.prevLedger.CloseTime()
+		}
+	} else {
+		e.prevCloseTime = e.state.CloseTimes.Self
+	}
 
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
@@ -1865,7 +1883,7 @@ func (e *Engine) shouldCloseLedger() bool {
 		return false
 	}
 	openTime := e.now().Sub(e.state.StartTime)
-	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
+	timeSincePrevClose := e.adaptor.Now().Sub(e.lastCloseBaseline())
 
 	if e.closeTimesOutOfBounds(timeSincePrevClose) {
 		return true
@@ -1886,6 +1904,43 @@ func (e *Engine) shouldCloseLedger() bool {
 	e.traceCloseMiss(openTime, proposersClosed, proposersValidated)
 
 	return e.closeOnTimers(openTime, timeSincePrevClose)
+}
+
+// closeAgreementReporter is optionally implemented by a prevLedger that can
+// report whether its close time was reached by consensus. Ledgers that don't
+// (simulation/test ledgers) are treated as having agreed — the normal case.
+type closeAgreementReporter interface {
+	CloseAgree() bool
+	ParentCloseTime() time.Time
+}
+
+// lastCloseBaseline returns the reference close time the idle/close timers
+// measure from. When the previous close was reached by consensus it's the
+// previous ledger's stored close time; otherwise it's our own observed close
+// carried across rounds (prevCloseTime) — matching rippled's
+// previousCloseCorrect branch in phaseOpen.
+func (e *Engine) lastCloseBaseline() time.Time {
+	if e.previousCloseCorrect() {
+		return e.prevLedger.CloseTime()
+	}
+	return e.prevCloseTime
+}
+
+// previousCloseCorrect reports whether the previous ledger's stored close
+// time can be trusted: we're not on the wrong ledger, its close time was
+// agreed, and it isn't the defaulted parentClose+1s.
+func (e *Engine) previousCloseCorrect() bool {
+	if e.mode == consensus.ModeWrongLedger {
+		return false
+	}
+	rep, ok := e.prevLedger.(closeAgreementReporter)
+	if !ok {
+		return true
+	}
+	if !rep.CloseAgree() {
+		return false
+	}
+	return !e.prevLedger.CloseTime().Equal(rep.ParentCloseTime().Add(time.Second))
 }
 
 // closeTimesOutOfBounds reports close times so unreasonable we should
