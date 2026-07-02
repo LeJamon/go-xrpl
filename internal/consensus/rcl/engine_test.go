@@ -83,8 +83,9 @@ type mockAdaptor struct {
 	mu sync.RWMutex
 
 	// Mode
-	opMode    consensus.OperatingMode
-	validator bool
+	opMode           consensus.OperatingMode
+	validator        bool
+	amendmentBlocked bool
 
 	// Validator info
 	nodeID  consensus.NodeID
@@ -413,6 +414,12 @@ func (a *mockAdaptor) GetValidatorKey() (consensus.NodeID, error) {
 
 func (a *mockAdaptor) IsValidator() bool {
 	return a.validator
+}
+
+func (a *mockAdaptor) IsAmendmentBlocked() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.amendmentBlocked
 }
 
 func (a *mockAdaptor) IsTrusted(nodeID consensus.NodeID) bool {
