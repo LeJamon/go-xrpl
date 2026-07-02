@@ -402,9 +402,7 @@ func New(cfg Config) *Adaptor {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
-	// A restarting validator may already have signed validations up to the
-	// persisted tip, so record it as the floor below which this node must
-	// never validate again. Non-validators never emit, so skip the read.
+	// Non-validators never emit, so skip the floor read (see maxDisallowedSeq).
 	var maxDisallowedSeq uint32
 	if cfg.Identity != nil && cfg.LedgerService != nil {
 		maxDisallowedSeq = cfg.LedgerService.MaxPersistedLedgerSeq(context.Background())
@@ -713,8 +711,6 @@ func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
 	return consensus.LedgerID(vl.Hash())
 }
 
-// GetMaxDisallowedLedgerSeq returns the boot-time anti-double-sign floor: the
-// highest ledger seq persisted before this process started, 0 when none.
 func (a *Adaptor) GetMaxDisallowedLedgerSeq() uint32 {
 	return a.maxDisallowedSeq
 }

@@ -137,8 +137,7 @@ type mockAdaptor struct {
 	// sfValidatedHash gate path.
 	validatedLedgerHashOverride consensus.LedgerID
 
-	// Boot-time restart validation floor served by
-	// GetMaxDisallowedLedgerSeq. Zero by default (no persisted history).
+	// Restart validation floor; zero = no persisted history.
 	maxDisallowedSeq uint32
 
 	// Amendment vote stance for the R5.3 test. Empty means no vote.
