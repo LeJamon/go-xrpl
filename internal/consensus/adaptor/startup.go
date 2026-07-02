@@ -369,8 +369,6 @@ func NewFromConfig(
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
 		router.SetValidatorListAggregator(vlAgg)
-		// Expired publisher lists make the engine voluntarily bow out
-		// of proposing/validating (rippled preStartRound parity).
 		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after

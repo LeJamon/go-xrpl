@@ -156,8 +156,6 @@ type mockAdaptor struct {
 	// OR-branch at RCLConsensus.cpp:352.
 	standalone bool
 
-	// unlBlocked toggles IsUNLBlocked() for the expired-validator-list
-	// bow-out tests.
 	unlBlocked bool
 
 	// proposableOverride lets a test pin a specific filtered set

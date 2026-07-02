@@ -506,7 +506,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Voluntary bow-out: an expired validator list means our trust view is
 	// stale, so this round neither proposes nor validates (rippled
 	// preStartRound). Independent of sync state — a syncing validator must
-	// not emit partials on stale trust either. Skipped in standalone.
+	// not emit partials on stale trust either.
 	bowedOut := e.adaptor.IsValidator() && !e.adaptor.IsStandalone() &&
 		e.adaptor.IsUNLBlocked()
 	if bowedOut {
@@ -3084,8 +3084,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// wrongLedger (the old behaviour) caused permanent quorum stalls (#451).
 	// ResultFail is a go-xrpl sentinel mapping to the MovedOn suppress class.
 	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
-	// bowedOut folds the round's UNL-expiry bow-out into the validating
-	// half of the gate (rippled's validating_ carries it the same way).
+	// rippled's validating_ carries the bow-out into this gate the same way.
 	isValidator := e.adaptor.IsValidator() && !e.bowedOut.Load()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	// isCompatible suppresses emission when the build is on a side chain (not
