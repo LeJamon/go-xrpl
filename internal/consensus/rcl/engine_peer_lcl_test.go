@@ -104,7 +104,8 @@ func TestEngine_CheckLedger_ValidationMajorityBreaksConsensusIsland(t *testing.T
 		{NodeID: partner, LedgerID: own122.id, LedgerSeq: 122, Full: true, SignTime: now, SeenTime: now},
 	}
 	rippledNodes := []consensus.NodeID{{0x61}, {0x62}, {0x63}}
-	trustedSet := []consensus.NodeID{partner}
+	trustedSet := make([]consensus.NodeID, 0, 1+len(rippledNodes))
+	trustedSet = append(trustedSet, partner)
 	for _, n := range rippledNodes {
 		adaptor.trusted[n] = true
 		trustedSet = append(trustedSet, n)
