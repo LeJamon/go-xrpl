@@ -191,6 +191,77 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 	}
 }
 
+// TestValidationTracker_SameSeqResignSupersede pins the signTime
+// tie-break for a same-seq re-sign, matching rippled's current_
+// replacement (Validations.h:690 — replace only when the new sign time
+// is strictly later). go-xrpl has no SeqEnforcer, so the by-node tip
+// still rejects a regressing seq and refuses to promote a same-seq
+// validation for a conflicting ledger.
+func TestValidationTracker_SameSeqResignSupersede(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+
+	base := time.Unix(1_600_000_000, 0).UTC()
+	vt.SetNow(func() time.Time { return base })
+
+	node := consensus.NodeID{7}
+	ledgerX := consensus.LedgerID{0xAA}
+	ledgerY := consensus.LedgerID{0xBB}
+
+	// Initial validation for ledgerX at seq 100.
+	if !vt.Add(&consensus.Validation{
+		LedgerID:  ledgerX,
+		LedgerSeq: 100,
+		NodeID:    node,
+		SignTime:  base,
+		Full:      true,
+	}) {
+		t.Fatal("initial validation should be added")
+	}
+
+	// Same seq, same ledger, later sign time: supersedes.
+	later := base.Add(2 * time.Second)
+	if !vt.Add(&consensus.Validation{
+		LedgerID:  ledgerX,
+		LedgerSeq: 100,
+		NodeID:    node,
+		SignTime:  later,
+		Full:      true,
+	}) {
+		t.Error("same-seq re-sign with a later sign time should supersede")
+	}
+	if got := vt.GetLatestValidation(node); got == nil || !got.SignTime.Equal(later) {
+		t.Errorf("tip should reflect the later re-sign, got %+v", got)
+	}
+
+	// Same seq, same ledger, equal/earlier sign time: rejected, tip kept.
+	if vt.Add(&consensus.Validation{
+		LedgerID:  ledgerX,
+		LedgerSeq: 100,
+		NodeID:    node,
+		SignTime:  base,
+		Full:      true,
+	}) {
+		t.Error("same-seq re-sign with an earlier sign time should be rejected")
+	}
+	if got := vt.GetLatestValidation(node); got == nil || !got.SignTime.Equal(later) {
+		t.Errorf("tip should be unchanged after a stale re-sign, got %+v", got)
+	}
+
+	// Same seq, different ledger, even later sign time: equivocation, dropped.
+	if vt.Add(&consensus.Validation{
+		LedgerID:  ledgerY,
+		LedgerSeq: 100,
+		NodeID:    node,
+		SignTime:  base.Add(4 * time.Second),
+		Full:      true,
+	}) {
+		t.Error("same-seq validation for a conflicting ledger should not be promoted")
+	}
+	if got := vt.GetLatestValidation(node); got == nil || got.LedgerID != ledgerX {
+		t.Errorf("tip should still be ledgerX after equivocation, got %+v", got)
+	}
+}
+
 // TestValidationTracker_NegativeUNL_ExcludedFromQuorum pins the negUNL
 // filter's quorum behavior. A validator on the negative-UNL is trusted
 // for message acceptance (its Full validation is stored) but EXCLUDED

@@ -289,8 +289,10 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     accepts, validations for seqs many rounds back are noise that
 //     can never retroactively become quorum; keeping them in memory
 //     wastes work on every checkFullValidation pass.
-//   - Per-node newer-seq-only rule: a node's latest validation
-//     supersedes any earlier one.
+//   - Per-node supersede rule: a node's tracked tip is replaced only
+//     by a strictly newer validation — a higher seq, or a same-seq
+//     re-sign of the same ledger with a later sign time (rippled's
+//     signTime tie-break). Regressing-seq re-signs are rejected.
 //
 // onFullyValidated is fired OUTSIDE vt.mu so the callback may call
 // back into the tracker (e.g. ExpireOld) or take other locks that
@@ -362,11 +364,22 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// happens at the wire seam, not here).
 	resolvedID := validation.NodeID
 
-	// Check if this is a newer validation from this node
+	// Supersede a node's tip only with a strictly newer validation.
+	// A regressing seq is rejected here: go-xrpl has no SeqEnforcer to
+	// catch it downstream, and pulling byNode back to a stale ledger
+	// would skew ProposersFinished / PreferredFromValidations. For a
+	// same-seq re-sign of the same ledger, the later sign time wins,
+	// matching rippled's current_ signTime supersede; a same-seq
+	// validation for a different ledger is an equivocation we drop.
 	existing, hasExisting := vt.byNode[resolvedID]
 	if hasExisting {
-		if validation.LedgerSeq <= existing.LedgerSeq {
-			return false // Not newer, ignore
+		if validation.LedgerSeq < existing.LedgerSeq {
+			return false
+		}
+		if validation.LedgerSeq == existing.LedgerSeq &&
+			(validation.LedgerID != existing.LedgerID ||
+				!validation.SignTime.After(existing.SignTime)) {
+			return false
 		}
 	}
 
@@ -441,6 +454,11 @@ func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.Ledger
 }
 
 // GetTrustedValidations returns trusted validations for a ledger.
+//
+// Unlike rippled's getTrustedForLedger(ledgerID, seq), which also
+// filters v.seq() == seq, no seq argument is needed here: this map is
+// keyed by ledger hash, and a ledger hash uniquely determines its seq,
+// so every entry under a given ledgerID already shares that seq.
 func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
