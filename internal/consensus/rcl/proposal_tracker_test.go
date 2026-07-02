@@ -207,22 +207,149 @@ func TestStartRound_ClearsDeadNodes(t *testing.T) {
 func alwaysTrusted(consensus.NodeID) bool { return true }
 
 // TestProposalTracker_StoreMonotonic verifies Store keeps the position with
-// the highest ProposeSeq and ignores a stale (lower-seq) one.
+// the highest ProposeSeq, drops stale (lower-seq) and same-seq ones, and
+// reports whether it stored.
 func TestProposalTracker_StoreMonotonic(t *testing.T) {
 	pt := NewProposalTracker()
 	node := consensus.NodeID{1}
 
-	pt.Store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{5}})
-	pt.Store(&consensus.Proposal{NodeID: node, Position: 3, TxSet: consensus.TxSetID{3}})
+	if !pt.Store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{5}}) {
+		t.Fatal("first proposal not stored")
+	}
+	if pt.Store(&consensus.Proposal{NodeID: node, Position: 3, TxSet: consensus.TxSetID{3}}) {
+		t.Fatal("stale proposal reported as stored")
+	}
 	if got := pt.proposals[node].Position; got != 5 {
 		t.Fatalf("stale proposal overwrote newer: Position = %d, want 5", got)
 	}
-	pt.Store(&consensus.Proposal{NodeID: node, Position: 7, TxSet: consensus.TxSetID{7}})
+	// Same-seq equivocation (different tx set) must be dropped.
+	if pt.Store(&consensus.Proposal{NodeID: node, Position: 5, TxSet: consensus.TxSetID{6}}) {
+		t.Fatal("same-seq proposal reported as stored")
+	}
+	if got := pt.proposals[node].TxSet; got != (consensus.TxSetID{5}) {
+		t.Fatalf("same-seq proposal overwrote position: TxSet = %v", got)
+	}
+	if !pt.Store(&consensus.Proposal{NodeID: node, Position: 7, TxSet: consensus.TxSetID{7}}) {
+		t.Fatal("newer proposal not reported as stored")
+	}
 	if got := pt.proposals[node].Position; got != 7 {
 		t.Fatalf("newer proposal not stored: Position = %d, want 7", got)
 	}
 	if pt.Count() != 1 {
 		t.Fatalf("Count = %d, want 1", pt.Count())
+	}
+}
+
+// TestOnProposal_NonIncreasingSeqDropped verifies OnProposal drops a proposal
+// whose ProposeSeq does not advance the peer's stored position before counting
+// its close-time vote or relaying it (rippled Consensus.h:795-802). A re-sent
+// or same-seq-equivocating initial proposal must not vote twice.
+func TestOnProposal_NonIncreasingSeqDropped(t *testing.T) {
+	adaptor := newMockAdaptor()
+	node := consensus.NodeID{2}
+	adaptor.setTrusted([]consensus.NodeID{node, {3}})
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	ct1 := time.Unix(1000, 0)
+	ct2 := time.Unix(2000, 0)
+
+	first := &consensus.Proposal{
+		Round:          round,
+		NodeID:         node,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      ct1,
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(first, 0); err != nil {
+		t.Fatalf("first OnProposal: %v", err)
+	}
+
+	// Same-seq equivocation: different close time and tx set at Position 0.
+	equivocation := &consensus.Proposal{
+		Round:          round,
+		NodeID:         node,
+		Position:       0,
+		TxSet:          consensus.TxSetID{9},
+		CloseTime:      ct2,
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(equivocation, 0); err != nil {
+		t.Fatalf("equivocation OnProposal: %v", err)
+	}
+
+	engine.mu.RLock()
+	votes1 := engine.state.CloseTimes.Peers[ct1]
+	votes2 := engine.state.CloseTimes.Peers[ct2]
+	storedTxSet := engine.proposalTracker.proposals[node].TxSet
+	engine.mu.RUnlock()
+	if votes1 != 1 {
+		t.Errorf("close-time votes for first proposal = %d, want 1", votes1)
+	}
+	if votes2 != 0 {
+		t.Errorf("same-seq equivocation counted a close-time vote: got %d, want 0", votes2)
+	}
+	if storedTxSet != (consensus.TxSetID{1}) {
+		t.Errorf("same-seq equivocation replaced stored position: TxSet = %v", storedTxSet)
+	}
+
+	adaptor.mu.Lock()
+	relayed := len(adaptor.proposalsRelayed)
+	adaptor.mu.Unlock()
+	if relayed != 1 {
+		t.Errorf("relayed %d proposals, want 1 (dropped proposal must not be relayed)", relayed)
+	}
+
+	// A genuinely newer position must still be accepted.
+	newer := &consensus.Proposal{
+		Round:          round,
+		NodeID:         node,
+		Position:       1,
+		TxSet:          consensus.TxSetID{2},
+		CloseTime:      ct2,
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(newer, 0); err != nil {
+		t.Fatalf("newer OnProposal: %v", err)
+	}
+	engine.mu.RLock()
+	storedPos := engine.proposalTracker.proposals[node].Position
+	engine.mu.RUnlock()
+	if storedPos != 1 {
+		t.Errorf("newer proposal not stored: Position = %d, want 1", storedPos)
+	}
+}
+
+// TestProposalTracker_ReplayDropsNonIncreasing verifies Replay does not count
+// a close-time vote for a buffered duplicate at a non-increasing ProposeSeq.
+func TestProposalTracker_ReplayDropsNonIncreasing(t *testing.T) {
+	pt := NewProposalTracker()
+	node := consensus.NodeID{1}
+	prev := consensus.LedgerID{7}
+	ct1 := time.Unix(1000, 0)
+	ct2 := time.Unix(2000, 0)
+
+	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 0, CloseTime: ct1, PreviousLedger: prev})
+	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 0, CloseTime: ct2, PreviousLedger: prev})
+	pt.BufferRecent(&consensus.Proposal{NodeID: node, Position: 1, PreviousLedger: prev})
+
+	closeTimes, replayed := pt.Replay(prev, alwaysTrusted)
+	if len(closeTimes) != 1 || !closeTimes[0].Equal(ct1) {
+		t.Fatalf("closeTimes = %v, want exactly [%v]", closeTimes, ct1)
+	}
+	if replayed != 2 {
+		t.Fatalf("trustedReplayed = %d, want 2", replayed)
+	}
+	if got := pt.proposals[node].Position; got != 1 {
+		t.Fatalf("final Position = %d, want 1", got)
 	}
 }
 

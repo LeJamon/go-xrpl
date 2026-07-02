@@ -668,7 +668,12 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		return nil
 	}
 
-	e.proposalTracker.Store(proposal)
+	// Drop non-increasing positions before counting close-time votes,
+	// relaying, or updating disputes — otherwise a re-sent or equivocating
+	// proposal at an already-seen ProposeSeq votes again.
+	if !e.proposalTracker.Store(proposal) {
+		return nil
+	}
 
 	// Record close time only from initial (Position == 0) proposals.
 	if proposal.Position == 0 {
