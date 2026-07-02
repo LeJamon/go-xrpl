@@ -424,8 +424,7 @@ func (s *BookStep) groomUnfundedOffer(sb, afView *PaymentSandbox, offer *state.L
 // removableOffers set. Reference: rippled OfferStream.cpp 333-340 (became
 // unfunded: deleted from view_ but not added to permToRemove_).
 func (s *BookStep) dropBecameOffer(sb *PaymentSandbox, offer *state.LedgerOffer, owner [20]byte) {
-	txHash, ledgerSeq := sb.GetTransactionContext()
-	_ = s.deleteOffer(sb, offer, owner, txHash, ledgerSeq)
+	_ = s.deleteOffer(sb, offer, owner)
 }
 
 // tipFullyConsumed reports whether the offer just consumed by the callback is now
@@ -491,8 +490,6 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 		return
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
-
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ownerID)
 	state.DirRemove(sb, ownerDirKey, offer.OwnerNode, offerKey, false)
@@ -505,7 +502,7 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 	sb.Erase(keylet.Keylet{Key: offerKey})
 
 	// Decrement owner count
-	s.adjustOwnerCount(sb, ownerID, -1, txHash, ledgerSeq)
+	s.adjustOwnerCount(sb, ownerID, -1)
 }
 
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency

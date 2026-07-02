@@ -11,8 +11,11 @@ import (
 // adjustOwnerCount adjusts the OwnerCount on an account.
 // Also records the change via AdjustOwnerCount for the PaymentSandbox's
 // OwnerCountHook, which returns the maximum count seen.
+// It must not touch PreviousTxnID/PreviousTxnLgrSeq: threading is the
+// ApplyStateTable's job at metadata time, and a mid-apply stamp defeats the
+// no-op guards for an owner whose count nets back to its original value.
 // Reference: rippled View.cpp adjustOwnerCount() calls adjustOwnerCountHook()
-func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int, txHash [32]byte, ledgerSeq uint32) error {
+func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int) error {
 	// Read the current owner count BEFORE modifying so we can record it.
 	accountKey := keylet.Account(account)
 	data, err := sb.Read(accountKey)
@@ -30,7 +33,7 @@ func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta 
 	sb.AdjustOwnerCount(account, curOC, uint32(newOC))
 
 	// Perform the actual modification.
-	return tx.AdjustOwnerCountWithTx(sb, account, delta, txHash, ledgerSeq)
+	return tx.AdjustOwnerCount(sb, account, delta)
 }
 
 // transferFunds transfers an amount between two accounts.

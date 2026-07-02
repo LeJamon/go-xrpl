@@ -46,8 +46,6 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 		return err
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
-
 	grossIn := consumedInGross
 	netIn := consumedInNet
 
@@ -95,7 +93,7 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 		if err := sb.Update(offerKey, offerData); err != nil {
 			return err
 		}
-		if err := s.deleteOffer(sb, offer, offerOwner, txHash, ledgerSeq); err != nil {
+		if err := s.deleteOffer(sb, offer, offerOwner); err != nil {
 			return err
 		}
 	} else {
@@ -135,7 +133,7 @@ func (s *BookStep) zeroIn() EitherAmount {
 }
 
 // deleteOffer properly deletes an offer from the ledger.
-func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, owner [20]byte, txHash [32]byte, ledgerSeq uint32) error {
+func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, owner [20]byte) error {
 	offerKey := keylet.Offer(owner, offer.Sequence)
 
 	ownerDirKey := keylet.OwnerDir(owner)
@@ -154,7 +152,7 @@ func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, own
 		s.applyDirRemoveResult(sb, bookResult)
 	}
 
-	if err := s.adjustOwnerCount(sb, owner, -1, txHash, ledgerSeq); err != nil {
+	if err := s.adjustOwnerCount(sb, owner, -1); err != nil {
 		return err
 	}
 
