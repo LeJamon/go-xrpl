@@ -6,14 +6,11 @@ import (
 	"strings"
 )
 
-// String renders the span as "<tipID>[start,end)", where tipID is the
-// uppercase hex of the span tip's ledger ID.
 func (s span) String() string {
 	tip := s.tip()
 	return fmt.Sprintf("%X[%d,%d)", tip.ID[:], s.start, s.end)
 }
 
-// String renders the node as "<span>(T:tipSupport,B:branchSupport)".
 func (n *node) String() string {
 	return fmt.Sprintf("%s(T:%d,B:%d)", n.s.String(), n.tipSupport, n.branchSupport)
 }
