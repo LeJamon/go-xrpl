@@ -20,12 +20,10 @@ import (
 // threaded ModifiedNode — old PreviousTxnID/PreviousTxnLgrSeq only, no
 // FinalFields, no PreviousFields (mainnet ledger 99358634, tx index 75).
 //
-// goXRPL diverged because the owner-count helpers stamped
-// PreviousTxnID/PreviousTxnLgrSeq on the AccountRoot mid-apply, so the
-// bytes.Equal(Original, Current) no-op guards in the ApplyStateTable misfired
-// and attached a spurious FinalFields block. Threading is the ApplyStateTable's
-// job at metadata time; rippled's adjustOwnerCount (View.cpp) only touches
-// OwnerCount.
+// Guards against mid-apply PreviousTxnID stamping in the owner-count helpers,
+// which would defeat the ApplyStateTable's no-op guard and attach a spurious
+// FinalFields block: threading belongs to the ApplyStateTable at metadata time
+// (rippled View.cpp adjustOwnerCount only touches OwnerCount).
 func TestPayment_NetZeroOwnerCount_EmitsBareThreadedNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 
@@ -84,8 +82,6 @@ func TestPayment_NetZeroOwnerCount_EmitsBareThreadedNode(t *testing.T) {
 	pay := env.Submit(payment.PayIssued(alice, bob, jtx.EUR(gw, 100)).SendMax(jtx.USD(gw, 100)).Build())
 	jtx.RequireTxSuccess(t, pay)
 
-	// Sanity: the offer was fully consumed and deleted, the USD line was
-	// created, and mm's AccountRoot is a true no-op (OwnerCount unchanged).
 	require.Nil(t, GetOffer(env, mm, mmOfferSeq), "mm's offer should be fully consumed and deleted")
 	jtx.RequireIOUBalance(t, env, mm, gw, "USD", 100)
 	jtx.RequireIOUBalance(t, env, mm, gw, "EUR", 900)
