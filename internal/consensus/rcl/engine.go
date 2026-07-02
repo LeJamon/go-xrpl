@@ -2584,8 +2584,55 @@ func (e *Engine) checkConvergence() {
 // next round doesn't count us, without touching phase or prevLedger.
 // Idempotent. Caller holds e.mu.
 func (e *Engine) leaveConsensusLocked() {
-	if e.mode == consensus.ModeProposing {
-		e.setMode(consensus.ModeObserving)
+	if e.mode != consensus.ModeProposing {
+		return
+	}
+	// Broadcast a bow-out (seqLeave) so peers immediately unVote and drop
+	// our position instead of counting it for up to ProposeFreshness after
+	// we've left (rippled leaveConsensus → position.bowOut + propose,
+	// Consensus.h:1807-1810).
+	if e.state != nil && e.state.OurPosition != nil && e.prevLedger != nil {
+		nodeID, err := e.adaptor.GetValidatorKey()
+		if err == nil {
+			bow := &consensus.Proposal{
+				Round:          e.state.Round,
+				NodeID:         nodeID,
+				Position:       0xFFFFFFFF, // seqLeave
+				TxSet:          e.state.OurPosition.TxSet,
+				CloseTime:      e.state.OurPosition.CloseTime,
+				PreviousLedger: e.prevLedger.ID(),
+				Timestamp:      e.adaptor.Now(),
+			}
+			if err := e.adaptor.SignProposal(bow); err == nil {
+				e.state.OurPosition = bow
+				e.enqueueProposalBroadcastLocked(bow)
+			}
+		}
+	}
+	e.setMode(consensus.ModeObserving)
+}
+
+// reproposeCurrentLocked re-emits our current position unchanged with a
+// bumped seq and fresh timestamp (rippled's freshness re-proposal). Caller
+// holds e.mu; caller guarantees OurPosition and prevLedger are non-nil.
+func (e *Engine) reproposeCurrentLocked() {
+	cur := e.state.OurPosition
+	nodeID, err := e.adaptor.GetValidatorKey()
+	if err != nil {
+		return
+	}
+	proposal := &consensus.Proposal{
+		Round:          e.state.Round,
+		NodeID:         nodeID,
+		Position:       cur.Position + 1,
+		TxSet:          cur.TxSet,
+		CloseTime:      cur.CloseTime,
+		PreviousLedger: e.prevLedger.ID(),
+		Timestamp:      e.adaptor.Now(),
+	}
+	if err := e.adaptor.SignProposal(proposal); err == nil {
+		e.state.OurPosition = proposal
+		e.enqueueProposalBroadcastLocked(proposal)
 	}
 }
 
@@ -2758,7 +2805,20 @@ func (e *Engine) updatePosition() {
 		)
 	}
 
-	if !proposing || len(changed) == 0 {
+	if !proposing {
+		return
+	}
+
+	// Freshness re-proposal (rippled Consensus.h:1636-1642): when nothing
+	// flipped but our position has gone stale (older than ProposeInterval),
+	// re-emit it with a bumped seq and fresh timestamp so peers don't prune
+	// it at ProposeFreshness during a long round — losing it would drop our
+	// vote from every peer's tally exactly when convergence is hardest.
+	if len(changed) == 0 {
+		if e.state.OurPosition != nil && e.prevLedger != nil &&
+			e.adaptor.Now().Sub(e.state.OurPosition.Timestamp) >= e.timing.ProposeInterval {
+			e.reproposeCurrentLocked()
+		}
 		return
 	}
 
