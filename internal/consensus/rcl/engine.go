@@ -469,9 +469,8 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
-	// Discard accumulated validation state on orderly shutdown, mirroring
-	// rippled's Validations::flush(). No archive interaction, so ordering
-	// relative to the archive close below is irrelevant.
+	// Flush has no archive interaction, so its ordering relative to the
+	// archive close below is irrelevant.
 	if e.validationTracker != nil {
 		e.validationTracker.Flush()
 	}
