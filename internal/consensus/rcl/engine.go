@@ -122,10 +122,10 @@ type Engine struct {
 	// peer pressure.
 	prevProposers int
 
-	// prevCloseTime is our own observed close time carried across rounds
-	// (rippled's prevCloseTime_ / rawCloseTimes_.self). shouldCloseLedger
-	// measures idle time from it, instead of the previous ledger's stored
-	// close time, when that close can't be trusted — see lastCloseBaseline.
+	// prevCloseTime is our own observed close time carried across rounds.
+	// shouldCloseLedger measures idle time from it, instead of the previous
+	// ledger's stored close time, when that close can't be trusted — see
+	// lastCloseBaseline.
 	prevCloseTime time.Time
 
 	// wrongLedgerID is the ledger we're acquiring in ModeWrongLedger;
@@ -505,10 +505,10 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
 
-	// Carry our own observed close time across rounds (rippled prevCloseTime_).
-	// The first round seeds from the seed ledger; afterwards we take the self
-	// close time of the round that just ended, read from e.state before it is
-	// replaced below (this runs for every round-start path).
+	// Carry our own observed close time across rounds. The first round seeds
+	// from the seed ledger; afterwards we take the self close time of the round
+	// that just ended, read from e.state before it is replaced below (this runs
+	// for every round-start path).
 	if e.state == nil {
 		if e.prevLedger != nil {
 			e.prevCloseTime = e.prevLedger.CloseTime()
@@ -1917,8 +1917,7 @@ type closeAgreementReporter interface {
 // lastCloseBaseline returns the reference close time the idle/close timers
 // measure from. When the previous close was reached by consensus it's the
 // previous ledger's stored close time; otherwise it's our own observed close
-// carried across rounds (prevCloseTime) — matching rippled's
-// previousCloseCorrect branch in phaseOpen.
+// carried across rounds (prevCloseTime).
 func (e *Engine) lastCloseBaseline() time.Time {
 	if e.previousCloseCorrect() {
 		return e.prevLedger.CloseTime()

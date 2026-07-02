@@ -45,7 +45,6 @@ func (w *LedgerWrapper) CloseAgree() bool {
 	return h.GetCloseAgree()
 }
 
-// ParentCloseTime returns the close time of this ledger's parent.
 func (w *LedgerWrapper) ParentCloseTime() time.Time {
 	return w.ledger.ParentCloseTime()
 }
