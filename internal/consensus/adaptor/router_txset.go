@@ -523,10 +523,9 @@ func (r *Router) requestTxSetMissingNodesUnicast(txSetID consensus.TxSetID, node
 // engine rejection is logged, not fatal — the engine re-checks the tx-set
 // ID, so a stale or duplicate set is dropped rather than corrupting state.
 func (r *Router) submitTxSetToEngine(txSetID consensus.TxSetID, blobs [][]byte) {
-	// Verify signatures off-strand while the round converges, so the accept
-	// build hits the sig-cache instead of paying a cold check per acquired tx
-	// under the apply mutex. Async: consensus must see the set immediately;
-	// any tx the prewarm hasn't reached simply verifies in-strand.
+	// Verify signatures off-strand so the accept build hits the sig-cache
+	// instead of a cold check per acquired tx under the apply mutex. Async:
+	// consensus sees the set immediately; anything unreached verifies in-strand.
 	if svc := r.adaptor.LedgerService(); svc != nil {
 		go svc.PrewarmSignatures(blobs)
 	}

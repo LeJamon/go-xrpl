@@ -24,9 +24,8 @@ func buildDeepBackedSource(t *testing.T, family *memoryFamily) (*SHAMap, [32]byt
 			t.Fatalf("Put spread %d: %v", b, err)
 		}
 	}
-	// Deep cluster: keys sharing nibbles 0..5 (key[0]=0x10, key[1]=0x20,
-	// key[2]=0x30) and branching at nibble 6 (key[3] high). This forces a
-	// single-child inner chain at depths 1..6, guaranteeing depth>=4 inners.
+	// Keys sharing nibbles 0..5, branching at nibble 6: forces a single-child
+	// inner chain at depths 1..6, guaranteeing depth>=4 inners.
 	for j := byte(0); j < 8; j++ {
 		var key [32]byte
 		key[0] = 0x10

@@ -8,8 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
-// fakeClock is a deterministic, advance-on-demand wall clock for tests that
-// need to measure a duration across the off-lock ledger build.
+// fakeClock is a deterministic, advance-on-demand test clock.
 type fakeClock struct {
 	mu sync.Mutex
 	t  time.Time
@@ -40,8 +39,7 @@ func driveToEstablish(t *testing.T, e *Engine, a *mockAdaptor) {
 // TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers proves the core
 // liveness invariant: while BuildLedger applies the LCL, e.mu is released, so
 // inbound OnProposal/OnValidation return promptly and buffer for the next round
-// instead of blocking on the consensus lock (rippled onAccept→jtACCEPT). Run
-// with -race to catch any shared-state access during the unlocked apply.
+// instead of blocking on the consensus lock (rippled onAccept→jtACCEPT).
 func TestEngine_AcceptLedger_OffLockDoesNotBlockPeerHandlers(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.setTrusted([]consensus.NodeID{{2}})

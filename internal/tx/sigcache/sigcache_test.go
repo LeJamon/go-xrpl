@@ -25,8 +25,7 @@ func TestCache_MissThenHit(t *testing.T) {
 	}
 }
 
-// TestCache_RotationRetainsPrevGeneration proves a verdict survives one
-// size-driven rotation (moves to prev) but is evicted after two.
+// A verdict survives one size-driven rotation (moves to prev), evicted after two.
 func TestCache_SizeRotationEviction(t *testing.T) {
 	c := NewCache(4, time.Hour, nil)
 	c.Add(id(100))
@@ -46,8 +45,7 @@ func TestCache_SizeRotationEviction(t *testing.T) {
 	}
 }
 
-// TestCache_TTLRotation proves an entry ages out once the TTL elapses even
-// without size pressure, using an injected clock.
+// An entry ages out once the TTL elapses without size pressure (injected clock).
 func TestCache_TTLRotation(t *testing.T) {
 	now := time.Unix(0, 0)
 	c := NewCache(1<<20, time.Minute, func() time.Time { return now })
@@ -76,8 +74,7 @@ func TestCache_Reset(t *testing.T) {
 	}
 }
 
-// TestGlobal_VerifiedAndReset exercises the process-wide accessors used by
-// the engine.
+// Exercises the process-wide accessors used by the engine.
 func TestGlobal_VerifiedAndReset(t *testing.T) {
 	Reset()
 	if Verified(id(1)) {

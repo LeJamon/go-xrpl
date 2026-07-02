@@ -13,11 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// completedCatchUpAcquisition builds a StateComplete InboundLedger for a ledger
-// at `seq` whose parent hash is deliberately absent from local history — the
-// exact shape a deep catch-up produces. The state and transaction trees are
-// empty so the acquisition completes on GotBase alone, letting the test exercise
-// the router's completion path without driving a full node-by-node sync.
+// completedCatchUpAcquisition builds a complete InboundLedger at seq whose
+// parent hash is absent from local history — the shape a deep catch-up produces.
+// The tx tree is empty so it completes once the state tree is filled.
 func completedCatchUpAcquisition(t *testing.T, seq uint32) *inbound.Ledger {
 	t.Helper()
 
@@ -74,14 +72,10 @@ func buildSelfHealSourceState(t *testing.T) (rootHash [32]byte, rootData []byte,
 	return rootHash, rootData, wire
 }
 
-// TestCompleteInboundLedger_CatchUpJumpAdoptsTip pins the issue #1161 self-heal
-// fix: when a legacy catch-up acquisition completes for a ledger two or more
-// ahead of our working ledger (its parent chain absent), the router adopts the
-// acquired tip directly — jumping the closed ledger forward so consensus can
-// rejoin — instead of stashing it and arming a backward parent chase that a busy
-// network outruns. Against the pre-fix behaviour the tip stashed (closed stayed
-// pinned behind the gap) and a backward parent acquisition was armed; both
-// assertions below flip.
+// Issue #1161 self-heal: a catch-up completing two or more ledgers ahead (parent
+// chain absent) adopts the acquired tip directly — jumping closed forward so
+// consensus rejoins — instead of stashing it and arming a backward parent chase
+// a busy network outruns.
 func TestCompleteInboundLedger_CatchUpJumpAdoptsTip(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	closedSeq := svc.GetClosedLedgerIndex()
@@ -104,11 +98,9 @@ func TestCompleteInboundLedger_CatchUpJumpAdoptsTip(t *testing.T) {
 		"catch-up jump must not arm a backward parent chase")
 }
 
-// TestCompleteInboundLedger_SingleLedgerCatchUpUsesHeldSeam verifies the fix is
-// scoped: a completion only one ledger ahead of our working ledger (gap == 1,
-// whose parent is our current closed ledger) is NOT treated as a jump. It routes
-// through the held-adoption seam and adopts against the present parent, so the
-// out-of-order cascade machinery the service unit tests pin is preserved.
+// The jump is scoped: a completion only one ledger ahead (gap == 1, parent is
+// our closed ledger) is NOT a jump. It routes through the held-adoption seam so
+// the out-of-order cascade machinery is preserved.
 func TestCompleteInboundLedger_SingleLedgerCatchUpUsesHeldSeam(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	parent := svc.GetClosedLedger()

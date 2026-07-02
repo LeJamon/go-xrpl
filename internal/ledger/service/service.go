@@ -704,13 +704,13 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	return res, nil
 }
 
-// PrewarmSignatures verifies the outer signatures of raw tx blobs in
-// parallel and caches the verdicts, so a consensus build over an acquired tx
-// set hits the sig-cache instead of paying cold signature checks in-strand
-// under the apply mutex. The per-relayed-tx prewarm in SubmitOpenLedgerTx
-// (#1105) covers only txs that arrived individually; wholesale-acquired
-// consensus sets go through here. Safe to call concurrently; unparseable
-// blobs are skipped (the in-strand preflight rejects them authoritatively).
+// PrewarmSignatures verifies the outer signatures of raw tx blobs in parallel
+// and caches the verdicts, so a consensus build over an acquired tx set hits the
+// sig-cache instead of paying cold checks in-strand under the apply mutex. The
+// per-relayed-tx prewarm in SubmitOpenLedgerTx (#1105) covers only individually-
+// arrived txs; wholesale-acquired consensus sets go through here. Safe to call
+// concurrently; unparseable blobs are skipped (the in-strand preflight rejects
+// them authoritatively).
 func (s *Service) PrewarmSignatures(blobs [][]byte) {
 	if len(blobs) == 0 {
 		return

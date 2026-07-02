@@ -532,10 +532,9 @@ func (a *Adaptor) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, nodeIDs
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
-	// checkLedger retries every heartbeat while pinned on a missing ledger,
-	// but each call is a BROADCAST TMGetLedger costing a resource charge at
-	// every peer. rippled paces acquisition retries on the InboundLedger
-	// timer (~3s); rate-limit per hash to match.
+	// Each call is a BROADCAST TMGetLedger charged at every peer, and checkLedger
+	// retries every heartbeat; rippled paces retries on the InboundLedger timer
+	// (~3s), so rate-limit per hash to match.
 	now := time.Now()
 	a.reqLedgerMu.Lock()
 	if last, ok := a.reqLedgerLast[id]; ok && now.Sub(last) < 3*time.Second {
@@ -836,10 +835,9 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		return nil, err
 	}
 	a.txSetCache.Put(ts)
-	// Announce each set hash at most once (and never the empty set): the
-	// engine rebuilds sets on every acquired-set compare and position
-	// update, and peers charge "useless data" for every duplicate tsHAVE —
-	// rippled never re-announces a hash a peer has already seen.
+	// Announce each set hash at most once (and never the empty set): the engine
+	// rebuilds sets frequently and peers charge "useless data" for every
+	// duplicate tsHAVE — rippled never re-announces a hash a peer has seen.
 	id := ts.ID()
 	if a.onTxSetBuilt != nil && id != (consensus.TxSetID{}) {
 		a.announcedSetsMu.Lock()
@@ -1295,12 +1293,11 @@ func (a *Adaptor) CloseOffset() time.Duration {
 }
 
 func (a *Adaptor) CloseTimeResolution() time.Duration {
-	// The round's rounding basis is the resolution of the ledger BEING BUILT
-	// — the parent's resolution stepped one rung on the ladder (rippled
-	// Consensus.h:724-727 getNextLedgerTimeResolution). Using the parent's
-	// raw value rounds close-time votes differently from rippled at every
-	// ladder boundary: a different agreed close time is a different ledger
-	// hash — a fork.
+	// Round on the resolution of the ledger BEING BUILT — the parent's stepped
+	// one rung on the ladder (rippled Consensus.h:724-727
+	// getNextLedgerTimeResolution). The parent's raw value would round close-time
+	// votes differently at ladder boundaries: a different agreed close time is a
+	// different ledger hash — a fork.
 	l := a.ledgerService.GetClosedLedger()
 	if l != nil {
 		hdr := l.Header()

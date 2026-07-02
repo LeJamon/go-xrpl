@@ -249,12 +249,10 @@ func (sm *SHAMap) boundBelow(node Node, ascending bool) (LeafNode, error) {
 // every non-empty branch whose child node is neither in memory nor
 // recoverable from sm's family.
 //
-// A transient family fetch failure is handled per mode: the lenient
-// request path (strict=false) reports the branch missing — rippled's
-// getMissingNodes collapse, self-correcting via the wire — while the
-// strict completeness path aborts with the error so FinishSync/IsComplete
-// never fabricate a missing node or conclude complete over a skipped
-// subtree.
+// On a transient family fetch failure: strict=false reports the branch
+// missing (rippled's getMissingNodes collapse, self-correcting via the
+// wire); strict=true aborts with the error so FinishSync/IsComplete never
+// fabricate a missing node or conclude complete over a skipped subtree.
 func walkSubtreeForMissing(
 	sm *SHAMap,
 	start *innerNode,

@@ -568,8 +568,7 @@ func (sm *SHAMap) AddRootNode(hash [32]byte, data []byte) error {
 
 	sm.root = root
 	sm.state = StateSyncing
-	// Entering sync with only the root: the tree is not yet fully present, so
-	// clear full as StartSync does — a stale full lets IsComplete report
+	// Clear full as StartSync does: a stale full lets IsComplete report
 	// complete while the FinishSync walk still finds missing nodes.
 	sm.full = false
 
@@ -602,9 +601,8 @@ func (sm *SHAMap) FinishSync() error {
 		return ErrSyncNotInProgress
 	}
 
-	// Verify the tree is complete. Strict walk: a transient store error is
-	// surfaced as itself, never as a phantom missing node the caller would
-	// re-request over the wire.
+	// Strict walk: surface a transient store error as itself, never as a
+	// phantom missing node the caller would re-request over the wire.
 	missingNodes, err := sm.missingNodesLocked(1, nil, true)
 	if err != nil {
 		return fmt.Errorf("sync completeness walk: %w", err)
@@ -631,9 +629,8 @@ func (sm *SHAMap) IsComplete() bool {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	// While syncing, completeness is authoritative via the missing-node walk,
-	// the same check FinishSync and GetMissingNodes use; a partially-built
-	// acquisition map can still carry a stale full, so never trust it here.
+	// A partially-built acquisition map can carry a stale full, so while
+	// syncing defer to the missing-node walk rather than trust full.
 	if sm.full && sm.state != StateSyncing {
 		return true
 	}

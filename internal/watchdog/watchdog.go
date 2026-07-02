@@ -101,11 +101,9 @@ type Watchdog struct {
 	// tests can assert it fires without parsing a real dump.
 	stack func() string
 
-	// stackSink receives the FULL goroutine dump verbatim, bypassing the
-	// structured logger whose per-attribute encoding truncates a large dump
-	// (the slog "stacks" field is capped well below a real 100+-goroutine
-	// dump). Defaults to os.Stderr so a container captures the complete dump;
-	// tests point it at a buffer.
+	// stackSink receives the full goroutine dump verbatim, bypassing the
+	// structured logger whose per-attribute cap truncates a large dump.
+	// Defaults to os.Stderr; tests point it at a buffer.
 	stackSink io.Writer
 
 	mu         sync.Mutex
@@ -264,12 +262,9 @@ func syncLogDescriptors() {
 	_ = os.Stdout.Sync()
 }
 
-// allGoroutineStacks returns a dump of every goroutine's stack — the Go
-// equivalent of rippled dumping its JobQueue at the first stall warning. The
-// buffer grows until the whole dump fits: runtime.Stack silently truncates to
-// the buffer length, and a wedged node under load can hold far more goroutines
-// than a fixed 1 MiB would capture (the overlay per-peer and worker tail is
-// exactly what a stall post-mortem needs).
+// allGoroutineStacks returns a dump of every goroutine's stack. The buffer
+// grows until the whole dump fits: runtime.Stack silently truncates to the
+// buffer length, and a wedged node under load can exceed a fixed 1 MiB.
 func allGoroutineStacks() string {
 	for size := 1 << 20; ; size *= 2 {
 		buf := make([]byte, size)

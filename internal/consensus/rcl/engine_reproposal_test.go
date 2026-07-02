@@ -10,8 +10,7 @@ import (
 // A proposing node whose position hasn't changed but has gone stale (older
 // than ProposeInterval) must re-broadcast it with a bumped seq, so peers
 // don't prune it at ProposeFreshness during a long round (rippled
-// Consensus.h:1636-1642). Before the fix, updatePosition returned without
-// emitting when no dispute flipped, and the position went silent.
+// Consensus.h:1636-1642).
 func TestEngine_UpdatePosition_FreshnessRepropose(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true

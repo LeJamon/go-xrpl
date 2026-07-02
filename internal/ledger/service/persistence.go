@@ -86,14 +86,11 @@ type persistJob struct {
 }
 
 // enqueuePersist hands a closed/adopted ledger to the persistence worker.
-// Persistence walks the ENTIRE state map (O(total state), seconds at 15k
-// tx/ledger) — running it inline held s.mu and the calling goroutine (the
-// router dispatch loop on adoption, the consensus accept path on close) for
-// the whole walk, freezing consensus ticks, RPC, and inbound dispatch: the
-// seq-75 whole-process stall. rippled runs the equivalent
-// pendSaveValidated on its job queue. Best-effort like every persist path:
-// a full queue drops with a loud log and the chain advances (the ledger
-// remains servable from the in-memory history window).
+// Persistence walks the ENTIRE state map (seconds at 15k tx/ledger); running it
+// inline under s.mu froze consensus ticks, RPC, and inbound dispatch. rippled
+// runs the equivalent pendSaveValidated on its job queue. Best-effort: a full
+// queue drops with a loud log and the chain advances (the ledger stays servable
+// from the in-memory history window).
 func (s *Service) enqueuePersist(l *ledger.Ledger) {
 	if l == nil {
 		return

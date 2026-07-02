@@ -968,9 +968,8 @@ func (p *Peer) runPingTick(now time.Time) error {
 		return ErrLargeSendQueue
 	}
 	// Probe at rippled's 60s peerTimerInterval cadence; the finer 15s tick
-	// exists only for the stale-ping and send-queue checks above. Peers
-	// charge every ping request, so probing 4x faster than rippled quietly
-	// quadruples our baseline resource cost at every peer.
+	// serves only the stale-ping and send-queue checks above. Peers charge
+	// every ping, so probing faster inflates our resource cost at each peer.
 	if !p.lastPingProbe.IsZero() && now.Sub(p.lastPingProbe) < pingTimeout {
 		return nil
 	}

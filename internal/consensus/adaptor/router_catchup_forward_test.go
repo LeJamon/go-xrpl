@@ -12,12 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Issue #1161 keep-up: catch-up must WALK FORWARD one ledger at a time via
-// replay-delta against the locally-held parent when we're behind on the SAME
-// branch — not jump-adopt the far tip's full state on every hop. These tests
-// pin the same-branch-forward-delta vs fork/cold-jump-adopt decision, the
-// forward-walk re-arm on completion, and that jump-adopt / initial-sync are
-// preserved.
+// Issue #1161 keep-up: catch-up WALKS FORWARD one ledger at a time via
+// replay-delta against the held parent when behind on the SAME branch, rather
+// than jump-adopting the far tip's full state on every hop.
 
 // Same branch, parent known: closed+1 descends from our closed ledger, tip a
 // few ahead. The router must issue a replay-delta for closed+1 (parent local),

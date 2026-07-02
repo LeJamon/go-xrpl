@@ -9,11 +9,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Issue #1161 keep-up: the gossip-driven catch-up must drive a SINGLE bounded
-// target (rippled LedgerMaster::doAdvance) rather than arming one InboundLedger
-// per gossiped status/validation. These tests pin the concurrency bound, the
-// retarget-on-completion loop, the preserved validated-tip eligibility gate,
-// and the preserved initial-sync arming.
+// Issue #1161 keep-up: gossip-driven catch-up drives a SINGLE bounded target
+// (rippled LedgerMaster::doAdvance), not one InboundLedger per gossiped
+// status/validation.
 
 // Feeding many trusted validations for ever-higher tips must arm at most
 // maxConcurrentCatchup acquisitions — not one per event — while still recording
@@ -50,10 +48,8 @@ func TestRouter_CatchupFanoutBoundedByCap(t *testing.T) {
 		"the recorded catch-up target must be the highest tip seen")
 }
 
-// When the single in-flight acquisition completes, the router must re-arm one
-// acquisition toward the LATEST recorded target — the retarget loop that
-// replaces the fan-out. Here no acquisition is armed for the completed tip; the
-// completion path itself drives the next one toward the recorded target.
+// On completion the router must re-arm one acquisition toward the LATEST
+// recorded target — the retarget loop that replaces the fan-out.
 func TestRouter_RetargetsOnCompletion(t *testing.T) {
 	r, _, rs, svc := makeRouter(t)
 	closedSeq := svc.GetClosedLedgerIndex()
@@ -102,10 +98,9 @@ func TestRouter_NoRetargetWhenCaughtUp(t *testing.T) {
 }
 
 // The validated-tip eligibility gate must survive the funnel: a trusted tip at
-// or below the validated index must neither arm an acquisition nor be recorded
-// as a catch-up target. (Corresponds to rippled LedgerMaster.cpp's seq gate;
-// bounding CONCURRENCY must not weaken ELIGIBILITY — the comments warn a
-// closed-based gate reintroduces the private-chain fork-stuck bug.)
+// or below the validated index must neither arm nor be recorded as a target.
+// Bounding CONCURRENCY must not weaken ELIGIBILITY — a closed-based gate
+// reintroduces the private-chain fork-stuck bug.
 func TestRouter_CatchupEligibilityGate_RejectsAtOrBelowValidated(t *testing.T) {
 	r, a, rs, svc := makeRouter(t)
 	trusted, err := a.GetValidatorKey()
@@ -123,9 +118,8 @@ func TestRouter_CatchupEligibilityGate_RejectsAtOrBelowValidated(t *testing.T) {
 	assert.Zero(t, tSeq, "an ineligible tip must not be recorded as a catch-up target")
 }
 
-// The initial-sync path must still arm: a fresh node (needsInitialSync=true,
-// closed at genesis) that hears a peer far ahead must acquire toward it — the
-// bound only collapses the already-synced fan-out, it must not stall first boot.
+// The initial-sync path must still arm: the bound collapses the already-synced
+// fan-out, it must not stall first boot.
 func TestRouter_InitialSyncPathStillArms(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	require.True(t, svc.NeedsInitialSync(),

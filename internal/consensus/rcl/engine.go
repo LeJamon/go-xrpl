@@ -41,9 +41,9 @@ type Engine struct {
 	prevLedger      consensus.Ledger
 
 	// buildInProgress is set while acceptLedger applies the LCL off e.mu
-	// (mirrors rippled's jtACCEPT job window). While set, the consensus
-	// goroutine's round-driving (timerEntry, OnLedger) parks so no second
-	// goroutine starts a round before the commit tail runs. Mutated under e.mu.
+	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
+	// OnLedger) parks so no second goroutine starts a round before the commit
+	// tail runs. Mutated under e.mu.
 	buildInProgress bool
 
 	ourTxSet  consensus.TxSet
@@ -1449,14 +1449,10 @@ func (e *Engine) checkLedger() {
 }
 
 // getNetworkLedger returns the network-preferred prevLedger. Trusted
-// validations decide first, like rippled's getPrevLedger — which is PURE
-// vals.getPreferred (RCLConsensus.cpp:301-303) — because only validations
-// break a proposal-count tie between two self-agreeing islands: two goxrpl
-// validators proposing to each other tally 3v3 against three rippled
-// proposals (own vote included, peer LCLs deduped) and never switch back,
-// while the validation trie sees 3 trusted validations against 2 and does.
-// The proposal+peer-LCL majority remains as the fallback for
-// validation-less phases (boot, before any trusted validation lands).
+// validations decide first, like rippled's getPrevLedger (pure
+// vals.getPreferred, RCLConsensus.cpp:301-303) — only validations break a
+// proposal-count tie between two self-agreeing islands. The proposal+peer-LCL
+// majority is the fallback for validation-less phases (boot).
 func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	if e.prevLedger == nil {
 		return consensus.LedgerID{}
@@ -1546,13 +1542,10 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 }
 
 // validationPreferredLocked derives the network-preferred prevLedger from
-// trusted validations, mirroring rippled getPreferred(curr, minValidSeq)
-// (Validations.h:849-917): the ancestry-trie tip seeded at our own issued
-// floor, else the most-supported trusted tip, then the stay/switch rules —
-// our own immediate child is not a switch, a tip ahead of us wins, a tip at
-// or below our seq wins only on a different chain — gated so the result
-// never rewinds behind the validated index. ok=false when no trusted
-// validation signal exists at all. Caller holds e.mu.
+// trusted validations, mirroring rippled getPreferred (Validations.h:849-917):
+// trie tip then the stay/switch rules, gated so the result never rewinds
+// behind the validated index. ok=false when no trusted validation signal
+// exists. Caller holds e.mu.
 func (e *Engine) validationPreferredLocked() (consensus.LedgerID, bool) {
 	if e.validationTracker == nil {
 		return consensus.LedgerID{}, false
@@ -2146,8 +2139,7 @@ func (e *Engine) phaseEstablish() {
 	// phaseEstablish returns before updateOurPositions until roundTime
 	// reaches ledgerMIN_CONSENSUS (Consensus.h:1393-1400). Updating our
 	// position or tallying close-time votes earlier diverges from the peer
-	// majority's timing. Counters above still advance each tick, as in
-	// rippled.
+	// majority's timing. Counters above still advance each tick.
 	if roundTime < e.timing.LedgerMinConsensus {
 		return
 	}
@@ -2669,8 +2661,8 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 
 	// agree/currentProposers are PEER-only counts (rippled currPeerPositions_);
 	// self joins only inside the Yes check via countSelf=proposing
-	// (Consensus.cpp:153-158). Folding self into the shared counts skewed the
-	// 3/4-proposers pause and the MovedOn denominator by one. stalled needs
+	// (Consensus.cpp:153-158) — folding it into the shared counts skews the
+	// 3/4-proposers pause and MovedOn denominator. stalled needs
 	// haveCloseTimeConsensus and a non-empty dispute set all individually
 	// stalled.
 	stalled := false
@@ -2987,10 +2979,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 
 	// prevRoundTime must exclude LCL build time (rippled ConsensusParms.h:
-	// "Does not include the time to build the LCL"); capture the establish
-	// duration before the off-lock apply so the converge-percent divisor and
-	// the abandon clamp track convergence, not the apply. roundDuration is the
-	// event metric, captured here for the same reason.
+	// "Does not include the time to build the LCL"); capture both durations
+	// before the off-lock apply so the converge-percent divisor and abandon
+	// clamp track convergence, not the apply.
 	roundTime := e.now().Sub(e.roundStartTime)
 	roundDuration := e.now().Sub(e.state.StartTime)
 

@@ -113,12 +113,9 @@ func (o *Overlay) sendEndpoints() {
 func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 	var out []message.Endpointv2
 	o.discovery.ForEachDiscovered(func(address string, hops uint32) {
-		// Only literal IP:port entries are gossipable: every implementation
-		// parses TMEndpoints with an IP-endpoint parser (rippled
-		// PeerImp.cpp:1213 from_string), so a config-bootstrap HOSTNAME
-		// entry is charged as "malformed endpoints" by every recipient,
-		// eroding our resource balance on each gossip round. Hostnames stay
-		// in Discovery for our own dialing; they just don't go on the wire.
+		// Only literal IP:port entries are gossipable: a hostname fails the
+		// recipient's IP-endpoint parse (rippled PeerImp.cpp:1213) and gets
+		// the sender charged "malformed endpoints" every gossip round.
 		if !gossipableEndpoint(address) {
 			return
 		}
@@ -139,10 +136,9 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 	return out
 }
 
-// gossipableEndpoint reports whether address is a literal IP:port pair —
-// the only shape the TMEndpoints wire format admits. The port must be
-// numeric: SplitHostPort accepts service names, which rippled's endpoint
-// parser rejects.
+// gossipableEndpoint reports whether address is a literal IP:port pair — the
+// only shape the TMEndpoints wire format admits. The port must be numeric;
+// SplitHostPort alone accepts service names, which the wire parser rejects.
 func gossipableEndpoint(address string) bool {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {

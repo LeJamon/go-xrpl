@@ -102,8 +102,7 @@ func TestWatchdog_NoLoopsNeverTrips(t *testing.T) {
 }
 
 // A silent loop escalates warn → fatal → abort at the right thresholds,
-// dumping goroutine stacks exactly once — right before the abort — so the
-// terminal wedge is captured in full to the sink.
+// dumping goroutine stacks exactly once — right before the abort — to the sink.
 func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	w, clk, logBuf, exits, stacks := newTestWatchdog(t)
 	var sink bytes.Buffer
@@ -140,12 +139,10 @@ func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	if abortAt != 600 {
 		t.Errorf("abort at %ds, want 600s", abortAt)
 	}
-	// Exactly one dump, captured fresh right before the abort. The 10s warn
-	// path must NOT stop the world on a merely-slow node.
+	// Exactly one dump, at abort only — the warn path must not stop the world.
 	if got := stacks.Load(); got != 1 {
 		t.Errorf("goroutine dump fired %d times, want exactly 1 (abort only)", got)
 	}
-	// The definitive abort dump reaches the sink verbatim, under its banner.
 	if !bytes.Contains(sink.Bytes(), []byte("fatal-stall goroutine dump")) {
 		t.Errorf("fatal-stall dump not written to sink")
 	}

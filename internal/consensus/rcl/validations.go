@@ -558,19 +558,17 @@ func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.L
 	return count
 }
 
-// GetPreferred returns the network-preferred ledger ID and sequence
-// as decided by the ancestry trie. ok is false when the trie is not
-// wired or empty, OR when the trie is blind to the majority: a trusted
-// validation whose ledger can't be locally resolved never enters the
-// trie (updateTrieLocked drops it), so on a consensus island the
-// majority branch is invisible while the trie confidently prefers our
-// own. rippled avoids this by acquiring the ledger from inside
-// Validations (acquireAsync) and re-inserting; until goXRPL's
-// acquisition lands, a trie missing more fresh trusted tips than it
-// holds is inconclusive and callers must fall back to the raw
-// trusted-tip majority. largestIssued is the highest sequence this
-// node has already validated; it seeds uncommitted support from
-// earlier seqs.
+// GetPreferred returns the network-preferred ledger ID and sequence as
+// decided by the ancestry trie. ok is false when the trie is not wired or
+// empty, OR when it is blind to the majority: a trusted validation whose
+// ledger can't be locally resolved never enters the trie (updateTrieLocked
+// drops it), so on a consensus island the majority branch is invisible while
+// the trie prefers our own. rippled avoids this by acquiring the ledger
+// (acquireAsync) and re-inserting; until goXRPL acquisition lands, a trie
+// missing more fresh trusted tips than it holds is inconclusive and callers
+// fall back to the raw trusted-tip majority. largestIssued is the highest
+// sequence this node has validated; it seeds uncommitted support from earlier
+// seqs.
 func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -760,13 +758,12 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 	return vt.byNode[nodeID]
 }
 
-// FlushStale drops non-current validations from the steering indexes
-// (byNode + trie tips), mirroring rippled's current() sweep inside withTrie
-// (Validations.h:509-533): a crashed or silent validator must stop steering
-// preferred-ledger selection once its last validation ages past the
-// isCurrent window. Driven from the engine heartbeat (rippled's doSweep
-// timer) because ExpireOld only runs on full-validation PROGRESS — during a
-// stall, precisely when stale steering matters, it never fires. Per-ledger
+// FlushStale drops non-current validations from the steering indexes (byNode
+// + trie tips), mirroring rippled's current() sweep inside withTrie
+// (Validations.h:509-533): a silent validator must stop steering
+// preferred-ledger selection once its last validation ages past the isCurrent
+// window. Driven from the engine heartbeat because ExpireOld only runs on
+// full-validation progress — during a stall it never fires. Per-ledger
 // history (vt.validations) still ages via ExpireOld.
 func (vt *ValidationTracker) FlushStale() {
 	vt.mu.Lock()

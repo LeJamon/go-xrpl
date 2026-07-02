@@ -269,9 +269,8 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 		return
 	}
 
-	// A below-tip backfill that the canonical entry above chains to (a history
-	// walk reaching a stale fork boundary at its bottom): the entries above are
-	// NOT orphans of this adopt — purge only the mismatched fork ledger below.
+	// A below-tip backfill the canonical entry above chains to: the entries
+	// above are NOT orphans of this adopt — purge only the fork ledger below.
 	if next, ok := s.ledgerHistory[adoptedSeq+1]; ok && next.ParentHash() == adopted.Hash() {
 		staleHash := prev.Hash()
 		if prev.IsValidated() {
@@ -423,10 +422,9 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	// ALWAYS rebuild the closed ledger fresh from the parent with exactly the
 	// agreed set — including the EMPTY set (rippled buildLCL). Closing the
-	// ingress open ledger directly leaked its node-local tx map into the
-	// header: an empty consensus round then carried a non-zero, per-node
-	// tx_root (a zero-transaction ledger must have tx_root=0), forking every
-	// validator that had different pending traffic.
+	// ingress open ledger directly leaks its node-local tx map into the header,
+	// so an empty round carries a non-zero per-node tx_root and forks validators
+	// with differing pending traffic (a zero-tx ledger must have tx_root=0).
 	var canonicalTxHashes []string
 	pending := make([]pendingTx, 0, len(txBlobs))
 	for _, blob := range txBlobs {
@@ -590,8 +588,8 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	}
 	_ = l.SetValidated()
 	// The validated tip is monotonic (rippled LedgerMaster.cpp:948): a late
-	// quorum for a backfilled below-tip seq marks the ledger validated but
-	// must not rewind the pointer — same rule as drainPendingLedgerValidationLocked.
+	// quorum for a below-tip seq marks it validated but must not rewind the
+	// pointer — same rule as drainPendingLedgerValidationLocked.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
 		s.mu.Unlock()
 		return

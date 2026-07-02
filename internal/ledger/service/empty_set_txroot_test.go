@@ -10,11 +10,9 @@ import (
 )
 
 // A zero-transaction consensus round must close with tx_root=0 no matter what
-// the ingress open ledger accumulated. The old empty-set path closed
-// s.openLedger directly, hashing its node-local tx map into the header — at
-// the first 15k-tx burst every validator carried different pending traffic,
-// so an agreed EMPTY round produced per-node tx_roots and forked the network
-// three ways (soak iter6, seq 70).
+// the ingress open ledger accumulated. Closing s.openLedger directly hashes its
+// node-local tx map into the header, so an agreed EMPTY round produces per-node
+// tx_roots and forks validators carrying different pending traffic.
 func TestAcceptConsensusResult_EmptySetClosesWithZeroTxRoot(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	require.NoError(t, err)

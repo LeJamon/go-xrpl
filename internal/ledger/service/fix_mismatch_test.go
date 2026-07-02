@@ -192,12 +192,10 @@ func TestAdoptLedgerWithState_NoMismatchNoOp(t *testing.T) {
 }
 
 // TestAdoptLedgerWithState_BackfillAtForkBoundaryKeepsCanonicalChain pins the
-// below-tip guard in fixMismatch: a history backfill descending from the
-// jump-adopted tip eventually adopts the ledger just above a stale fork
-// entry. Its parent hash mismatches the fork ledger below it, but the
-// canonical entry ABOVE it chains to it — so only the stale fork ledger may
-// be purged, never the canonical chain above (which the general mismatch
-// path would sweep as "orphans", nuking the freshly adopted tip).
+// below-tip guard in fixMismatch: a backfilled ledger whose parent mismatches
+// the stale fork entry below it but whose canonical entry above chains to it
+// must purge only the fork ledger, never the canonical chain above (which the
+// general mismatch path would sweep as "orphans", nuking the adopted tip).
 func TestAdoptLedgerWithState_BackfillAtForkBoundaryKeepsCanonicalChain(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)

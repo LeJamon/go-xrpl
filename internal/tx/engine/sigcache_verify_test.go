@@ -9,10 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-// TestSigCache_PopulatesOnVerifySuccess proves a genuine in-strand verify of a
-// good signature records the tx ID in the process-wide verified-good cache — the
-// SF_SIGGOOD analog the consensus build path relies on to skip the redundant
-// per-block re-verify.
+// A successful in-strand verify records the tx ID in the verified-good cache.
 func TestSigCache_PopulatesOnVerifySuccess(t *testing.T) {
 	sigcache.Reset()
 	rules := amendment.AllSupportedRules()
@@ -33,10 +30,8 @@ func TestSigCache_PopulatesOnVerifySuccess(t *testing.T) {
 	}
 }
 
-// TestSigCache_MissRejectsBadSignature is the security invariant: a bad-signature
-// transaction whose ID is NOT cached is fully verified and rejected on the
-// verify path (the same choke point the closed-ledger build funnels through),
-// and a failed verify must never populate the cache.
+// Security invariant: an uncached bad-signature tx is fully verified and
+// rejected, and a failed verify must never populate the cache.
 func TestSigCache_MissRejectsBadSignature(t *testing.T) {
 	sigcache.Reset()
 	rules := amendment.AllSupportedRules()
@@ -58,12 +53,10 @@ func TestSigCache_MissRejectsBadSignature(t *testing.T) {
 	}
 }
 
-// TestSigCache_HitSkipsVerify proves a tx-ID cache hit short-circuits the crypto
-// verify: the transaction here carries a BAD signature (a real verify would
-// reject it), but its ID is seeded in the cache, and the object-level flag is
-// cold — so a success can only come from the tx-ID cache hit. Paired with
-// TestSigCache_MissRejectsBadSignature (identical bad tx, no seed → rejected)
-// this demonstrates the skip is real and gated solely on the cache.
+// A tx-ID cache hit short-circuits the crypto verify: the tx carries a BAD
+// signature and a cold object flag, so a pass can only come from the seeded
+// cache entry. Paired with TestSigCache_MissRejectsBadSignature (same tx, no
+// seed → rejected), this proves the skip is gated solely on the cache.
 func TestSigCache_HitSkipsVerify(t *testing.T) {
 	sigcache.Reset()
 	rules := amendment.AllSupportedRules()
@@ -85,10 +78,8 @@ func TestSigCache_HitSkipsVerify(t *testing.T) {
 	sigcache.Reset()
 }
 
-// TestSigCache_BuildPathRejectsUnverifiedBadSig exercises the full preflight
-// pipeline (the path the consensus build runs per tx) with signature
-// verification ON: a structurally-valid tx with a bad signature and no cache
-// entry is rejected, confirming no unverified tx slips through the build.
+// Full preflight with verification on rejects a structurally-valid tx that has
+// a bad signature and no cache entry — no unverified tx slips through the build.
 func TestSigCache_BuildPathRejectsUnverifiedBadSig(t *testing.T) {
 	sigcache.Reset()
 	rules := amendment.AllSupportedRules()

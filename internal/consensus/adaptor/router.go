@@ -181,32 +181,27 @@ type Router struct {
 	// startup, before Run.
 	acquisitionFamily shamap.Family
 
-	// catchupMu guards catchup, the single consensus catch-up target. The
-	// gossip-driven arming sites (handleStatusChange, maybeAcquireFromValidation,
-	// checkBehind) all funnel through ensureCatchupAcquisition, which records the
-	// highest trusted (seq,hash) seen here and arms at most maxConcurrentCatchup
-	// acquisitions toward it — mirroring rippled's LedgerMaster::doAdvance driving
-	// one needed target rather than one InboundLedger per gossiped event.
+	// catchupMu guards catchup, the single consensus catch-up target: the highest
+	// trusted (seq,hash) seen, toward which at most maxConcurrentCatchup
+	// acquisitions are armed — rippled's LedgerMaster::doAdvance drives one needed
+	// target, not one InboundLedger per gossiped event.
 	catchupMu sync.Mutex
 	catchup   catchupTarget
 
-	// historyMu guards history, the single backward history-backfill target:
-	// the next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk
-	// is serial — each ingested ledger's header names its parent, the next
-	// target — and is driven from the maintenance tick. historyFloor bounds
-	// the walk to the jump gap (the pre-jump closed seq): below it our history
-	// is already contiguous, so descending further would re-fetch persisted
-	// ledgers evicted from the in-memory window.
+	// historyMu guards history, the single backward history-backfill target: the
+	// next ledger a jump-adopt skipped (rippled Reason::HISTORY). The walk is
+	// serial (each header names its parent) and tick-driven. historyFloor bounds
+	// it to the jump gap; below it history is already contiguous, so descending
+	// further would re-fetch persisted ledgers evicted from the in-memory window.
 	historyMu    sync.Mutex
 	history      catchupTarget
 	historyFloor uint32
 
 	// seqHashMu guards the seqHash table: the network's hash (and, when known,
-	// parent hash) per ledger sequence, learned from trusted validations and peer
-	// status_change gossip. It supplies the hash of closed+1 (the forward-delta
-	// catch-up target) and the parent linkage that proves closed+1 descends from
-	// our closed ledger. Bounded to seqHashRetain sequences; seqHashMax tracks the
-	// highest recorded seq so pruning keeps a trailing window.
+	// parent hash) per ledger sequence, from trusted validations and peer
+	// status_change gossip. Supplies the hash of closed+1 (the forward-delta
+	// catch-up target) and the parent linkage proving closed+1 descends from our
+	// closed ledger. Bounded to seqHashRetain; seqHashMax keeps a trailing window.
 	seqHashMu  sync.Mutex
 	seqHash    map[uint32]ledgerHashEntry
 	seqHashMax uint32
@@ -221,10 +216,9 @@ type catchupTarget struct {
 }
 
 // ledgerHashEntry is the network's view of one ledger sequence: its hash and,
-// when a status_change revealed it, the hash of its parent. Trusted validations
-// populate hash only (they carry no parent link); peer status_change gossip
-// populates both. haveParent distinguishes a real zero parent hash from "not yet
-// learned".
+// when a status_change revealed it, its parent's hash. Trusted validations carry
+// no parent link (hash only); status_change gossip populates both. haveParent
+// distinguishes a real zero parent hash from "not yet learned".
 type ledgerHashEntry struct {
 	hash       [32]byte
 	parentHash [32]byte
@@ -646,8 +640,7 @@ func (r *Router) maintenanceTick() {
 		}
 	}
 
-	// Timer-driven catch-up re-arm, rippled's LedgerMaster::doAdvance cadence:
-	// a recorded target still ahead of closed is re-attempted every tick, so a
+	// Timer-driven catch-up re-arm (rippled LedgerMaster::doAdvance cadence): a
 	// reaped/failed sole acquisition (cap=1) can't park catch-up until the next
 	// gossip event. No-ops while an acquisition is in flight or the target is
 	// reached; startLedgerAcquisition dedups the in-flight hash.

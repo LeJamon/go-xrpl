@@ -536,11 +536,8 @@ func TestSendEndpoints_NoSelfNoDiscovered_DoesNotEmit(t *testing.T) {
 	o.sendEndpoints()
 }
 
-// TestCollectDiscoveredEndpoints_SkipsHostnames pins the wire rule that
-// only literal IP:port entries are gossipable: config-bootstrap HOSTNAME
-// entries (e.g. Docker service names) fail every implementation's
-// IP-endpoint parse (rippled PeerImp.cpp:1213) and get the sender charged
-// "malformed endpoints" on every gossip round.
+// Only literal IP:port entries are gossipable; hostname entries fail the
+// recipient's IP-endpoint parse (rippled PeerImp.cpp:1213) and must be dropped.
 func TestCollectDiscoveredEndpoints_SkipsHostnames(t *testing.T) {
 	o := &Overlay{
 		cfg:       Config{},

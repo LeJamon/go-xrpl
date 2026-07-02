@@ -149,12 +149,9 @@ type Ledger struct {
 	timeouts  int
 	byHash    bool
 
-	// recentNodes de-dups reply-driven node re-requests within a single timer
-	// interval, keyed by missing-node content hash. Without it every peer reply
-	// re-requests the same outstanding nodes, spinning the acquisition at RTT
-	// rate; with it a node already asked for this interval is dropped from the
-	// reply path (the timeout fan-out bypasses the filter). Cleared each OnTimer
-	// due-fire so re-requests are paced at ~once per interval per node. Mirrors
+	// recentNodes de-dups reply-driven node re-requests within a timer interval
+	// (keyed by content hash) so peer replies can't re-request the same nodes at
+	// RTT rate; the timeout fan-out bypasses it, OnTimer clears it. Mirrors
 	// rippled InboundLedger::mRecentNodes/filterNodes. Guarded by mu.
 	recentNodes map[[32]byte]struct{}
 
@@ -211,9 +208,9 @@ func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, o
 	return l
 }
 
-// NewHistory creates a background history-backfill (ReasonHistory)
-// acquisition: on completion the ledger is store-ingested below the closed
-// tip, never advancing consensus state.
+// NewHistory creates a background history-backfill (ReasonHistory) acquisition:
+// on completion the ledger is store-ingested below the closed tip, never
+// advancing consensus state.
 func NewHistory(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger, opts ...Option) *Ledger {
 	l := New(hash, seq, peerID, logger, opts...)
 	l.reason = ReasonHistory
@@ -301,10 +298,8 @@ func (l *Ledger) OnTimer(now time.Time) TimerAction {
 	}
 	l.lastTimer = now
 
-	// Clear the per-interval re-request de-dup set so this tick's requests
-	// (timeout fan-out and the replies it draws) start fresh, pacing node
-	// re-requests at ~once per interval. Mirrors rippled onTimer's
-	// mRecentNodes.clear() (InboundLedger.cpp:368).
+	// Reset the per-interval de-dup set, pacing re-requests at ~once/interval.
+	// Mirrors rippled onTimer's mRecentNodes.clear() (InboundLedger.cpp:368).
 	clear(l.recentNodes)
 
 	if l.progress {
@@ -685,8 +680,7 @@ const missingNodeBatch = 16
 // Request-path widths, matching rippled InboundLedger.cpp: collect up to
 // missingNodesFind before the recentNodes de-dup, then cap the request at
 // reqNodesReply on a reply and reqNodes on a timeout fan-out. The wide
-// pre-dedup collect keeps per-reply frontier coverage at ~128 nodes/RTT on a
-// large state tree instead of a shifting 16-node subset.
+// pre-dedup collect keeps per-reply frontier coverage at ~128 nodes/RTT.
 const (
 	missingNodesFind = 256
 	reqNodesReply    = 128
@@ -734,22 +728,14 @@ func missingNodeIDs(m *shamap.SHAMap) [][]byte {
 }
 
 // CollectMissingRequest returns the wire-encoded NodeIDs of outstanding state-
-// and transaction-tree nodes to request, de-duplicated against the nodes
-// already asked for this timer interval (recentNodes, cleared each OnTimer
-// due-fire). It is the request-path counterpart to the pure NeedsMissing*
-// inspection queries, and is the choke point for the re-request throttle.
-//
-// isReply distinguishes the two trigger paths, mirroring rippled
-// InboundLedger::filterNodes(reason):
-//   - reply (isReply=true): a node already requested this interval is dropped,
-//     and a tree whose whole missing set is duplicates returns nil so the reply
-//     path sends nothing — this is what tames the per-reply spin.
-//   - timeout (isReply=false): the all-duplicates short-circuit is bypassed so
-//     the no-progress fan-out still queries every peer; freshly-seen nodes are
-//     still preferred when any exist.
-//
-// In both cases the returned nodes are recorded in recentNodes so subsequent
-// replies in the same interval de-dup against them.
+// and transaction-tree nodes to request, de-duplicated against the nodes already
+// asked for this timer interval. It is the request-path counterpart to the pure
+// NeedsMissing* inspection queries and the choke point for the re-request
+// throttle. isReply distinguishes the two trigger paths (rippled
+// InboundLedger::filterNodes(reason)): a reply drops already-requested nodes and
+// returns nil when the whole missing set is duplicates (taming the per-reply
+// spin); a timeout bypasses that short-circuit so the fan-out still queries every
+// peer.
 func (l *Ledger) CollectMissingRequest(isReply bool) (state, txn [][]byte) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -766,10 +752,9 @@ func (l *Ledger) CollectMissingRequest(isReply bool) (state, txn [][]byte) {
 	return state, txn
 }
 
-// filterMissingLocked applies the recentNodes de-dup to m's missing nodes and
-// returns the wire NodeIDs to request, recording them in recentNodes. Keyed by
-// content hash, matching rippled filterNodes (which de-dups on the node hash):
-// collect wide (missingNodesFind) BEFORE the de-dup, cap the request AFTER —
+// filterMissingLocked de-dups m's missing nodes against recentNodes (keyed by
+// content hash, matching rippled filterNodes) and returns the wire NodeIDs to
+// request: collect wide (missingNodesFind) before the de-dup, cap after —
 // reqNodesReply on a reply, reqNodes on a timeout. Caller holds mu.
 func (l *Ledger) filterMissingLocked(m *shamap.SHAMap, isReply bool) [][]byte {
 	missing := m.GetMissingNodes(missingNodesFind, nil)
