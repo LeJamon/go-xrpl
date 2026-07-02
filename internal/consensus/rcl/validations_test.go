@@ -191,13 +191,15 @@ func TestValidationTracker_NewerValidation(t *testing.T) {
 	}
 }
 
-// TestValidationTracker_SameSeqResignSupersede pins the signTime
-// tie-break for a same-seq re-sign, matching rippled's current_
-// replacement (Validations.h:690 — replace only when the new sign time
-// is strictly later). go-xrpl has no SeqEnforcer, so the by-node tip
-// still rejects a regressing seq and refuses to promote a same-seq
-// validation for a conflicting ledger.
-func TestValidationTracker_SameSeqResignSupersede(t *testing.T) {
+// TestValidationTracker_SameSeqResignRejected pins that a same-seq
+// re-sign never supersedes a node's tip. rippled leaves current_
+// untouched here: within the SeqEnforcer window a re-sign for the same
+// seq returns badSeq (same ledger) or conflicting (different ledger),
+// and the signTime tie-break only ever runs for a strictly higher seq
+// (Validations_test.cpp:285, :305-307, :344-353). go-xrpl has no
+// SeqEnforcer, so the by-node guard enforces the same outcome with a
+// strictly-higher-seq supersede rule.
+func TestValidationTracker_SameSeqResignRejected(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 
 	base := time.Unix(1_600_000_000, 0).UTC()
@@ -218,36 +220,22 @@ func TestValidationTracker_SameSeqResignSupersede(t *testing.T) {
 		t.Fatal("initial validation should be added")
 	}
 
-	// Same seq, same ledger, later sign time: supersedes.
-	later := base.Add(2 * time.Second)
-	if !vt.Add(&consensus.Validation{
-		LedgerID:  ledgerX,
-		LedgerSeq: 100,
-		NodeID:    node,
-		SignTime:  later,
-		Full:      true,
-	}) {
-		t.Error("same-seq re-sign with a later sign time should supersede")
-	}
-	if got := vt.GetLatestValidation(node); got == nil || !got.SignTime.Equal(later) {
-		t.Errorf("tip should reflect the later re-sign, got %+v", got)
-	}
-
-	// Same seq, same ledger, equal/earlier sign time: rejected, tip kept.
+	// Same seq, same ledger, later sign time: rejected, tip unchanged
+	// (rippled returns badSeq — no signTime supersede for the same seq).
 	if vt.Add(&consensus.Validation{
 		LedgerID:  ledgerX,
 		LedgerSeq: 100,
 		NodeID:    node,
-		SignTime:  base,
+		SignTime:  base.Add(2 * time.Second),
 		Full:      true,
 	}) {
-		t.Error("same-seq re-sign with an earlier sign time should be rejected")
+		t.Error("same-seq re-sign should not supersede the tip")
 	}
-	if got := vt.GetLatestValidation(node); got == nil || !got.SignTime.Equal(later) {
-		t.Errorf("tip should be unchanged after a stale re-sign, got %+v", got)
+	if got := vt.GetLatestValidation(node); got == nil || !got.SignTime.Equal(base) {
+		t.Errorf("tip should be unchanged after a same-seq re-sign, got %+v", got)
 	}
 
-	// Same seq, different ledger, even later sign time: equivocation, dropped.
+	// Same seq, different ledger: equivocation, dropped (rippled conflicting).
 	if vt.Add(&consensus.Validation{
 		LedgerID:  ledgerY,
 		LedgerSeq: 100,
@@ -255,10 +243,24 @@ func TestValidationTracker_SameSeqResignSupersede(t *testing.T) {
 		SignTime:  base.Add(4 * time.Second),
 		Full:      true,
 	}) {
-		t.Error("same-seq validation for a conflicting ledger should not be promoted")
+		t.Error("same-seq validation for a conflicting ledger should be dropped")
 	}
 	if got := vt.GetLatestValidation(node); got == nil || got.LedgerID != ledgerX {
 		t.Errorf("tip should still be ledgerX after equivocation, got %+v", got)
+	}
+
+	// A strictly higher seq still supersedes.
+	if !vt.Add(&consensus.Validation{
+		LedgerID:  ledgerY,
+		LedgerSeq: 101,
+		NodeID:    node,
+		SignTime:  base.Add(6 * time.Second),
+		Full:      true,
+	}) {
+		t.Error("a strictly higher seq should supersede")
+	}
+	if got := vt.GetLatestValidation(node); got == nil || got.LedgerID != ledgerY {
+		t.Errorf("tip should advance to ledgerY at the higher seq, got %+v", got)
 	}
 }
 

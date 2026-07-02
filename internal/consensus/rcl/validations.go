@@ -289,10 +289,8 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     accepts, validations for seqs many rounds back are noise that
 //     can never retroactively become quorum; keeping them in memory
 //     wastes work on every checkFullValidation pass.
-//   - Per-node supersede rule: a node's tracked tip is replaced only
-//     by a strictly newer validation — a higher seq, or a same-seq
-//     re-sign of the same ledger with a later sign time (rippled's
-//     signTime tie-break). Regressing-seq re-signs are rejected.
+//   - Per-node newer-seq-only rule: a node's tip is superseded only by
+//     a strictly higher seq; a same-or-lower seq is rejected.
 //
 // onFullyValidated is fired OUTSIDE vt.mu so the callback may call
 // back into the tracker (e.g. ExpireOld) or take other locks that
@@ -364,21 +362,13 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// happens at the wire seam, not here).
 	resolvedID := validation.NodeID
 
-	// Supersede a node's tip only with a strictly newer validation.
-	// A regressing seq is rejected here: go-xrpl has no SeqEnforcer to
-	// catch it downstream, and pulling byNode back to a stale ledger
-	// would skew ProposersFinished / PreferredFromValidations. For a
-	// same-seq re-sign of the same ledger, the later sign time wins,
-	// matching rippled's current_ signTime supersede; a same-seq
-	// validation for a different ledger is an equivocation we drop.
+	// Supersede a node's tip only with a strictly higher seq. go-xrpl
+	// has no SeqEnforcer; a same-or-lower-seq re-sign is rejected so a
+	// stale or sideways ledger can't skew ProposersFinished /
+	// PreferredFromValidations.
 	existing, hasExisting := vt.byNode[resolvedID]
 	if hasExisting {
-		if validation.LedgerSeq < existing.LedgerSeq {
-			return false
-		}
-		if validation.LedgerSeq == existing.LedgerSeq &&
-			(validation.LedgerID != existing.LedgerID ||
-				!validation.SignTime.After(existing.SignTime)) {
+		if validation.LedgerSeq <= existing.LedgerSeq {
 			return false
 		}
 	}
