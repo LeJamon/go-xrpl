@@ -123,6 +123,13 @@ type LedgerProvider interface {
 	// validated ledger (trusted-validation quorum reached), or zero if none.
 	GetValidatedLedgerHash() LedgerID
 
+	// GetMaxDisallowedLedgerSeq returns the highest ledger sequence persisted
+	// before this process started, or 0 when none. A restarted validator may
+	// already have signed validations up to that tip, so it must never
+	// propose or validate at or below this floor (anti-self-equivocation
+	// across restarts). Immutable after startup.
+	GetMaxDisallowedLedgerSeq() uint32
+
 	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time, closeTimeCorrect bool) (Ledger, error)
 
 	ValidateLedger(ledger Ledger) error
