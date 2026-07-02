@@ -589,6 +589,13 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 		return
 	}
 	_ = l.SetValidated()
+	// The validated tip is monotonic (rippled LedgerMaster.cpp:948): a late
+	// quorum for a backfilled below-tip seq marks the ledger validated but
+	// must not rewind the pointer — same rule as drainPendingLedgerValidationLocked.
+	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
+		s.mu.Unlock()
+		return
+	}
 	s.validatedLedger = l
 	s.evictOldHistoryLocked(seq)
 

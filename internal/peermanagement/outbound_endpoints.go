@@ -140,10 +140,15 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 }
 
 // gossipableEndpoint reports whether address is a literal IP:port pair —
-// the only shape the TMEndpoints wire format admits.
+// the only shape the TMEndpoints wire format admits. The port must be
+// numeric: SplitHostPort accepts service names, which rippled's endpoint
+// parser rejects.
 func gossipableEndpoint(address string) bool {
-	host, _, err := net.SplitHostPort(address)
+	host, port, err := net.SplitHostPort(address)
 	if err != nil {
+		return false
+	}
+	if _, convErr := strconv.Atoi(port); convErr != nil {
 		return false
 	}
 	return net.ParseIP(host) != nil

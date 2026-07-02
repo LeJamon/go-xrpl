@@ -1316,6 +1316,18 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 	return 30 * time.Second // protocol default
 }
 
+// PrevCloseTimeResolution returns the closed ledger's raw stored resolution,
+// the basis for the empty-ledger idle interval (rippled Consensus.h:1212-1214
+// uses previousLedger_.closeTimeResolution(), not the next-ledger value).
+func (a *Adaptor) PrevCloseTimeResolution() time.Duration {
+	if l := a.ledgerService.GetClosedLedger(); l != nil {
+		if res := l.Header().CloseTimeResolution; res >= 2 && res <= 120 {
+			return time.Duration(res) * time.Second
+		}
+	}
+	return 30 * time.Second // protocol default
+}
+
 // AdjustCloseTime weight-averages raw close times and applies quarter-step
 // damping toward the network's view of time. Arithmetic is in whole seconds:
 // NetClock is second-granular and a ns replace would never decay toward zero.

@@ -1939,12 +1939,13 @@ func (e *Engine) traceCloseMiss(openTime time.Duration, proposersClosed, propose
 // peer pressure is ruled out.
 func (e *Engine) closeOnTimers(openTime, timeSincePrevClose time.Duration) bool {
 	// No transactions: only close at the idle interval. rippled uses
-	// max(ledgerIDLE_INTERVAL, 2*closeResolution) (Consensus.h:1212-1234) so a
-	// coarse close-time resolution doesn't let an empty ledger close before a
-	// full resolution step has elapsed.
+	// max(ledgerIDLE_INTERVAL, 2*previousLedger_.closeTimeResolution())
+	// (Consensus.h:1212-1214) — the LCL's raw stored resolution, not the
+	// next-ledger rounding basis — so a coarse close-time resolution doesn't
+	// let an empty ledger close before a full resolution step has elapsed.
 	if len(e.adaptor.GetPendingTxs()) == 0 {
 		idle := e.timing.LedgerIdleInterval
-		if twoRes := 2 * e.adaptor.CloseTimeResolution(); twoRes > idle {
+		if twoRes := 2 * e.adaptor.PrevCloseTimeResolution(); twoRes > idle {
 			idle = twoRes
 		}
 		return timeSincePrevClose >= idle

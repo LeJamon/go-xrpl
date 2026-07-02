@@ -534,6 +534,8 @@ func (p *EnginePeer) Now() time.Time { return p.sched.NowTime() }
 
 func (p *EnginePeer) CloseTimeResolution() time.Duration { return time.Second }
 
+func (p *EnginePeer) PrevCloseTimeResolution() time.Duration { return time.Second }
+
 // AdjustCloseTime is intentionally a no-op: keeping Now() pinned to raw
 // scheduler time (no drifting offset) means every peer reads an identical
 // clock at each virtual instant, which is what makes the run deterministic
