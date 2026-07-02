@@ -385,7 +385,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	// Reference: rippled Transactor.cpp lines 1207-1209: removeDeletedTrustLines()
 	//   which calls deleteAMMTrustLine() for each collected trust line key.
 	if len(removedTrustLineKeys) > 0 {
-		e.removeDeletedTrustLines(tecTable, removedTrustLineKeys, st.txHash)
+		e.removeDeletedTrustLines(tecTable, removedTrustLineKeys)
 	}
 
 	// Restore account to original state, then apply only fee/sequence.
@@ -410,7 +410,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	// These offers were deleted in the (now discarded) sandbox.
 	// Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers()
 	if len(removedOfferKeys) > 0 {
-		e.removeUnfundedOffers(tecTable, removedOfferKeys, st.txHash)
+		e.removeUnfundedOffers(tecTable, removedOfferKeys)
 	}
 
 	// tecEXPIRED: re-delete expired NFTokenOffers and credentials.
@@ -419,7 +419,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 		// Re-delete NFTokenOffers through tecTable
 		for _, offerKey := range expiredNFTokenOfferKeys {
 			offerKL := keylet.Keylet{Key: offerKey}
-			deleteNFTokenOfferOnView(tecTable, offerKL, st.txHash, e.config.LedgerSequence)
+			deleteNFTokenOfferOnView(tecTable, offerKL)
 		}
 
 		// Credential deletion via TecApplier
@@ -528,7 +528,7 @@ func (e *Engine) eraseTicketEntry(st *applyState, table *applystate.ApplyStateTa
 // removeDeletedTrustLines re-deletes the supplied AMM trust line keys through
 // the recovery table.
 // Reference: rippled View.cpp deleteAMMTrustLine + Transactor.cpp lines 1207-1209.
-func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, keys [][32]byte, txHash [32]byte) {
+func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, keys [][32]byte) {
 	for _, lineKey := range keys {
 		lineKL := keylet.Keylet{Key: lineKey}
 		lineData, readErr := tecTable.Read(lineKL)
@@ -564,10 +564,10 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 			ammLow := lowAcct.AMMID != zeroHash
 			ammHigh := highAcct.AMMID != zeroHash
 			if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
-				adjustOwnerCountOnView(tecTable, lowID, -1, txHash, e.config.LedgerSequence)
+				adjustOwnerCountOnView(tecTable, lowID, -1)
 			}
 			if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
-				adjustOwnerCountOnView(tecTable, highID, -1, txHash, e.config.LedgerSequence)
+				adjustOwnerCountOnView(tecTable, highID, -1)
 			}
 		}
 	}
@@ -576,7 +576,7 @@ func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, k
 // removeUnfundedOffers re-deletes the supplied offer keys through the recovery
 // table.
 // Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers().
-func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys [][32]byte, txHash [32]byte) {
+func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys [][32]byte) {
 	for _, offerKey := range keys {
 		offerKL := keylet.Keylet{Key: offerKey}
 		offerData, readErr := e.view.Read(offerKL)
@@ -596,7 +596,7 @@ func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys
 		bookDirKey := keylet.Keylet{Type: 100, Key: offerObj.BookDirectory}
 		state.DirRemove(tecTable, bookDirKey, offerObj.BookNode, offerKey, false)
 		_ = tecTable.Erase(offerKL)
-		adjustOwnerCountOnView(tecTable, ownerID, -1, txHash, e.config.LedgerSequence)
+		adjustOwnerCountOnView(tecTable, ownerID, -1)
 	}
 }
 
