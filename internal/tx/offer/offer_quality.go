@@ -11,7 +11,13 @@ import (
 
 // Quality constants
 const (
-	maxTickSize uint8 = 15
+	// maxTickSize is the sentinel meaning "no tick-size rounding": a 16-digit
+	// mantissa is kept intact. It matches rippled's Quality::maxTickSize (16),
+	// NOT the maximum valid TickSize field value (15). Using 15 here would make
+	// applyTickSize/roundToTickSize skip rounding for TickSize-15 issuers, so a
+	// placed sell offer keeps its submitted amount instead of the tick-rounded
+	// value (see #1224).
+	maxTickSize uint8 = 16
 )
 
 // offerNativeDrops finalizes a muldiv-round magnitude as an XRP-drops Amount,
