@@ -536,10 +536,15 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
+	// An amendment-blocked node observes only: it can no longer build correct
+	// ledgers, so proposing or validating them would poison the network.
+	fullValidator := e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+		!e.adaptor.IsAmendmentBlocked()
 	switch {
-	case recovering && e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull:
+	case recovering && fullValidator:
 		e.setMode(consensus.ModeSwitchedLedger)
-	case proposing && e.adaptor.IsValidator() && e.adaptor.GetOperatingMode() == consensus.OpModeFull:
+	case proposing && fullValidator:
 		e.setMode(consensus.ModeProposing)
 	default:
 		e.setMode(consensus.ModeObserving)
@@ -1078,11 +1083,13 @@ func (e *Engine) IsProposing() bool {
 }
 
 // IsValidating reports whether the node is issuing validations this round:
-// a configured validator AND synced to OpModeFull. Lock-free reads, safe on
-// the server_info hot path under ledger.service.s.mu.
+// a configured validator, synced to OpModeFull, and not amendment-blocked.
+// Takes no engine lock, safe on the server_info hot path under
+// ledger.service.s.mu.
 func (e *Engine) IsValidating() bool {
 	return e.adaptor.IsValidator() &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+		!e.adaptor.IsAmendmentBlocked()
 }
 func (e *Engine) Timing() consensus.Timing {
 	return e.timing
@@ -1368,6 +1375,13 @@ func (e *Engine) timerEntry() {
 	// OpModeConnected — no round closes, so auto-promote never fires.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeDisconnected {
 		return
+	}
+
+	// An amendment-blocked node can no longer build correct ledgers: latch
+	// the operating mode down so it stops claiming to be synced.
+	if e.adaptor.GetOperatingMode() > consensus.OpModeConnected &&
+		e.adaptor.IsAmendmentBlocked() {
+		e.adaptor.SetOperatingMode(consensus.OpModeConnected)
 	}
 
 	// A peer-triggered accept may be applying the LCL off e.mu on another
@@ -3146,6 +3160,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// wrongLedger (the old behaviour) caused permanent quorum stalls (#451).
 	// ResultFail is a go-xrpl sentinel mapping to the MovedOn suppress class.
 	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
+	// blocked kills emission entirely: an amendment-blocked node builds
+	// un-amended ledgers, and even a partial from it would misdirect peers.
+	blocked := e.adaptor.IsAmendmentBlocked()
 	isValidator := e.adaptor.IsValidator()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	// isCompatible suppresses emission when the build is on a side chain (not
@@ -3153,7 +3170,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// wrongLedger-mode gate that blocked the ahead-but-compatible case (#451)
 	// while still preventing side-chain emits (#401).
 	compatible := e.isBuildCompatibleWithValidatedLocked(newLedger)
-	willEmit := isValidator && !consensusFail && canValidate && compatible
+	willEmit := isValidator && !blocked && !consensusFail && canValidate && compatible
 
 	newLedgerID := newLedger.ID()
 	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
@@ -3164,13 +3181,14 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"hash", hashShort,
 		"result", result.String(),
 		"is_validator", isValidator,
+		"amendment_blocked", blocked,
 		"consensus_fail", consensusFail,
 		"wrong_lcl", e.mode == consensus.ModeWrongLedger,
 		"compatible", compatible,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
 		"mode", e.mode.String(),
-		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate, compatible),
+		"decision", emitDecision(willEmit, isValidator, blocked, consensusFail, canValidate, compatible),
 	)
 
 	if willEmit {
@@ -3573,12 +3591,15 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 
 // emitDecision labels which arm of the validation gate fired. wrongLedger
 // is intentionally NOT a skip reason (rippled emits a partial there, #451).
-func emitDecision(emit, isValidator, consensusFail, canValidate, compatible bool) string {
+func emitDecision(emit, isValidator, blocked, consensusFail, canValidate, compatible bool) string {
 	if emit {
 		return "emit"
 	}
 	if !isValidator {
 		return "skip:not-validator"
+	}
+	if blocked {
+		return "skip:amendment-blocked"
 	}
 	if consensusFail {
 		return "skip:consensus-fail"
