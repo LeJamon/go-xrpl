@@ -1301,6 +1301,14 @@ func (a *Adaptor) IsStandalone() bool {
 	return a.ledgerService.IsStandalone()
 }
 
+// IsAmendmentBlocked reports whether an unsupported amendment has activated.
+func (a *Adaptor) IsAmendmentBlocked() bool {
+	if a.ledgerService == nil {
+		return false
+	}
+	return a.ledgerService.IsAmendmentBlocked()
+}
+
 func (a *Adaptor) Now() time.Time {
 	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
@@ -1397,6 +1405,11 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 }
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
+	// An amendment-blocked node is never more than connected: it cannot
+	// build correct ledgers, so it must not claim to be synced.
+	if mode > consensus.OpModeConnected && a.IsAmendmentBlocked() {
+		mode = consensus.OpModeConnected
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.operatingMode = mode
@@ -1543,8 +1556,9 @@ func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.Operating
 			}
 			return ourLCL
 		}
-		// No-trie fallback over trusted-validation tips (rippled's acquiring_
-		// majority, Validations.h:858-879); already filtered to seq >= minSeq.
+		// No-trie fallback over trusted-validation tips (the acquiring_
+		// majority is handled inside GetPreferred); already filtered to
+		// seq >= minSeq.
 		if id, _, ok := h.PreferredFromValidations(minSeq); ok {
 			return id
 		}
