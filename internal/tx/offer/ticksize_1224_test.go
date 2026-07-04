@@ -9,7 +9,7 @@ import (
 
 // TestTickSize1224 reproduces ledger 99478516 idx46: a tfSell OfferCreate
 // TakerGets 900000 drops XRP, TakerPays 5000000 HADA (issuer TickSize 15).
-// Mainnet places TakerPays = 5000000.000000004; goXRPL currently places 5000000.
+// Mainnet places TakerPays = 5000000.000000004; pre-fix goXRPL placed 5000000.
 func TestTickSize1224(t *testing.T) {
 	const hada = "4841444100000000000000000000000000000000"
 	const issuer = "rsR5JSisuXsbipP6sGdKdz5agjxn8BhHUC"
