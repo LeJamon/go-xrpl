@@ -112,6 +112,8 @@ type Engine struct {
 	prevRoundTime  time.Duration
 	roundStartTime time.Time
 
+	firstRound bool
+
 	// lastConvergePercent retains convergePercent() from the last
 	// phaseEstablish tick (reset at round start) so consensus_info reports a
 	// meaningful value between rounds. The live convergePercent() still
@@ -125,6 +127,12 @@ type Engine struct {
 	// Trusted proposers in the previous round; used by shouldCloseLedger for
 	// peer pressure.
 	prevProposers int
+
+	// prevCloseTime is our own observed close time carried across rounds.
+	// shouldCloseLedger measures idle time from it, instead of the previous
+	// ledger's stored close time, when that close can't be trusted — see
+	// lastCloseBaseline.
+	prevCloseTime time.Time
 
 	// wrongLedgerID is the ledger we're acquiring in ModeWrongLedger;
 	// prevents spamming handleWrongLedger.
@@ -334,6 +342,7 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		parms:           consensus.DefaultConsensusParms(),
 		now:             config.Clock,
 		manualTick:      config.ManualTick,
+		firstRound:      true,
 	}
 	if e.now == nil {
 		e.now = time.Now
@@ -473,6 +482,12 @@ func (e *Engine) Stop() error {
 	e.wg.Wait()
 	e.eventBus.Stop()
 
+	// Flush has no archive interaction, so its ordering relative to the
+	// archive close below is irrelevant.
+	if e.validationTracker != nil {
+		e.validationTracker.Flush()
+	}
+
 	if arc := e.loadArchive(); arc != nil {
 		// Bounded close — a stuck archive must not hang shutdown.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -500,15 +515,36 @@ func (e *Engine) StartRound(round consensus.RoundID, proposing bool) error {
 // the new round's tx-set isn't coherent yet and a stale emission would
 // poison convergence.
 func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering bool) error {
+	// First round after boot has no prior round to measure; seed prevRoundTime
+	// to the idle interval so round-1 convergePercent uses the 15s divisor, not
+	// the 5s floor (else avalanche state escalates ~3x faster than rippled).
+	if e.firstRound {
+		e.prevRoundTime = e.timing.LedgerIdleInterval
+		e.firstRound = false
+	}
+
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
+
+	// Carry our own observed close time across rounds. The first round seeds
+	// from the seed ledger; afterwards we take the self close time of the round
+	// that just ended, read from e.state before it is replaced below (this runs
+	// for every round-start path).
+	if e.state == nil {
+		if e.prevLedger != nil {
+			e.prevCloseTime = e.prevLedger.CloseTime()
+		}
+	} else {
+		e.prevCloseTime = e.state.CloseTimes.Self
+	}
 
 	// Voluntary bow-out: an expired validator list means our trust view is
 	// stale, so this round neither proposes nor validates (rippled
 	// preStartRound). Independent of sync state — a syncing validator must
-	// not emit partials on stale trust either.
+	// not emit partials on stale trust either. Amendment-blocked nodes skip
+	// the check (rippled gates it on validating_, already false for them).
 	bowedOut := e.adaptor.IsValidator() && !e.adaptor.IsStandalone() &&
-		e.adaptor.IsUNLBlocked()
+		!e.adaptor.IsAmendmentBlocked() && e.adaptor.IsUNLBlocked()
 	if bowedOut {
 		slog.Error("Voluntarily bowing out of consensus process because of an expired validator list",
 			"t", "consensus",
@@ -518,15 +554,17 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	}
 	e.bowedOut.Store(bowedOut)
 
-	validating := e.adaptor.IsValidator() &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull && !bowedOut
-
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
+	// An amendment-blocked node observes only: it can no longer build correct
+	// ledgers, so proposing or validating them would poison the network.
+	fullValidator := e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+		!e.adaptor.IsAmendmentBlocked() && !bowedOut
 	switch {
-	case recovering && validating:
+	case recovering && fullValidator:
 		e.setMode(consensus.ModeSwitchedLedger)
-	case proposing && validating:
+	case proposing && fullValidator:
 		e.setMode(consensus.ModeProposing)
 	default:
 		e.setMode(consensus.ModeObserving)
@@ -576,9 +614,15 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Replay buffered proposals for this round's prevLedger.
 	if e.prevLedger != nil {
-		closeTimes, replayed := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
+		closeTimes, replayed, relay := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
 		for _, ct := range closeTimes {
 			e.state.CloseTimes.Peers[ct]++
+		}
+
+		// Re-share replayed positions so peers that missed a proposal on this
+		// prevLedger get re-fed it from us during the recovery window.
+		for _, p := range relay {
+			e.adaptor.RelayProposal(p, 0)
 		}
 
 		// Peer pressure: if a majority of prior proposers already closed,
@@ -690,7 +734,12 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		return nil
 	}
 
-	e.proposalTracker.Store(proposal)
+	// Drop non-increasing positions before counting close-time votes,
+	// relaying, or updating disputes — otherwise a re-sent or equivocating
+	// proposal at an already-seen ProposeSeq votes again.
+	if !e.proposalTracker.Store(proposal) {
+		return nil
+	}
 
 	// Record close time only from initial (Position == 0) proposals.
 	if proposal.Position == 0 {
@@ -1054,12 +1103,13 @@ func (e *Engine) IsProposing() bool {
 }
 
 // IsValidating reports whether the node is issuing validations this round:
-// a configured validator, synced to OpModeFull, and not bowed out over an
-// expired validator list. Lock-free reads, safe on the server_info hot path
-// under ledger.service.s.mu.
+// a configured validator, synced to OpModeFull, not amendment-blocked, and
+// not bowed out over an expired validator list. Takes no engine lock, safe
+// on the server_info hot path under ledger.service.s.mu.
 func (e *Engine) IsValidating() bool {
 	return e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
+		!e.adaptor.IsAmendmentBlocked() &&
 		!e.bowedOut.Load()
 }
 func (e *Engine) Timing() consensus.Timing {
@@ -1346,6 +1396,13 @@ func (e *Engine) timerEntry() {
 	// OpModeConnected — no round closes, so auto-promote never fires.
 	if e.adaptor.GetOperatingMode() == consensus.OpModeDisconnected {
 		return
+	}
+
+	// An amendment-blocked node can no longer build correct ledgers: latch
+	// the operating mode down so it stops claiming to be synced.
+	if e.adaptor.GetOperatingMode() > consensus.OpModeConnected &&
+		e.adaptor.IsAmendmentBlocked() {
+		e.adaptor.SetOperatingMode(consensus.OpModeConnected)
 	}
 
 	// A peer-triggered accept may be applying the LCL off e.mu on another
@@ -1688,11 +1745,15 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 
 		// Replay proposals for the new ledger; close-time votes only if a
 		// round state exists.
-		closeTimes, _ := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
+		closeTimes, _, relay := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
 		if e.state != nil {
 			for _, ct := range closeTimes {
 				e.state.CloseTimes.Peers[ct]++
 			}
+		}
+
+		for _, p := range relay {
+			e.adaptor.RelayProposal(p, 0)
 		}
 	}
 
@@ -1889,7 +1950,7 @@ func (e *Engine) shouldCloseLedger() bool {
 		return false
 	}
 	openTime := e.now().Sub(e.state.StartTime)
-	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
+	timeSincePrevClose := e.adaptor.Now().Sub(e.lastCloseBaseline())
 
 	if e.closeTimesOutOfBounds(timeSincePrevClose) {
 		return true
@@ -1910,6 +1971,42 @@ func (e *Engine) shouldCloseLedger() bool {
 	e.traceCloseMiss(openTime, proposersClosed, proposersValidated)
 
 	return e.closeOnTimers(openTime, timeSincePrevClose)
+}
+
+// closeAgreementReporter is optionally implemented by a prevLedger that can
+// report whether its close time was reached by consensus. Ledgers that don't
+// (simulation/test ledgers) are treated as having agreed — the normal case.
+type closeAgreementReporter interface {
+	CloseAgree() bool
+	ParentCloseTime() time.Time
+}
+
+// lastCloseBaseline returns the reference close time the idle/close timers
+// measure from. When the previous close was reached by consensus it's the
+// previous ledger's stored close time; otherwise it's our own observed close
+// carried across rounds (prevCloseTime).
+func (e *Engine) lastCloseBaseline() time.Time {
+	if e.previousCloseCorrect() {
+		return e.prevLedger.CloseTime()
+	}
+	return e.prevCloseTime
+}
+
+// previousCloseCorrect reports whether the previous ledger's stored close
+// time can be trusted: we're not on the wrong ledger, its close time was
+// agreed, and it isn't the defaulted parentClose+1s.
+func (e *Engine) previousCloseCorrect() bool {
+	if e.mode == consensus.ModeWrongLedger {
+		return false
+	}
+	rep, ok := e.prevLedger.(closeAgreementReporter)
+	if !ok {
+		return true
+	}
+	if !rep.CloseAgree() {
+		return false
+	}
+	return !e.prevLedger.CloseTime().Equal(rep.ParentCloseTime().Add(time.Second))
 }
 
 // closeTimesOutOfBounds reports close times so unreasonable we should
@@ -3084,6 +3181,9 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// wrongLedger (the old behaviour) caused permanent quorum stalls (#451).
 	// ResultFail is a go-xrpl sentinel mapping to the MovedOn suppress class.
 	consensusFail := result == consensus.ResultMovedOn || result == consensus.ResultFail
+	// blocked kills emission entirely: an amendment-blocked node builds
+	// un-amended ledgers, and even a partial from it would misdirect peers.
+	blocked := e.adaptor.IsAmendmentBlocked()
 	// rippled's validating_ carries the bow-out into this gate the same way.
 	isValidator := e.adaptor.IsValidator() && !e.bowedOut.Load()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
@@ -3092,7 +3192,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// wrongLedger-mode gate that blocked the ahead-but-compatible case (#451)
 	// while still preventing side-chain emits (#401).
 	compatible := e.isBuildCompatibleWithValidatedLocked(newLedger)
-	willEmit := isValidator && !consensusFail && canValidate && compatible
+	willEmit := isValidator && !blocked && !consensusFail && canValidate && compatible
 
 	newLedgerID := newLedger.ID()
 	hashShort := fmt.Sprintf("%x", newLedgerID[:8])
@@ -3103,13 +3203,14 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"hash", hashShort,
 		"result", result.String(),
 		"is_validator", isValidator,
+		"amendment_blocked", blocked,
 		"consensus_fail", consensusFail,
 		"wrong_lcl", e.mode == consensus.ModeWrongLedger,
 		"compatible", compatible,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
 		"mode", e.mode.String(),
-		"decision", emitDecision(willEmit, isValidator, consensusFail, canValidate, compatible),
+		"decision", emitDecision(willEmit, isValidator, blocked, consensusFail, canValidate, compatible),
 	)
 
 	if willEmit {
@@ -3512,12 +3613,15 @@ func roundCloseTime(closeTime time.Time, resolution time.Duration) time.Time {
 
 // emitDecision labels which arm of the validation gate fired. wrongLedger
 // is intentionally NOT a skip reason (rippled emits a partial there, #451).
-func emitDecision(emit, isValidator, consensusFail, canValidate, compatible bool) string {
+func emitDecision(emit, isValidator, blocked, consensusFail, canValidate, compatible bool) string {
 	if emit {
 		return "emit"
 	}
 	if !isValidator {
 		return "skip:not-validator"
+	}
+	if blocked {
+		return "skip:amendment-blocked"
 	}
 	if consensusFail {
 		return "skip:consensus-fail"

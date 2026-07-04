@@ -164,6 +164,11 @@ type TxPool interface {
 type ValidatorIdentity interface {
 	IsValidator() bool
 
+	// IsAmendmentBlocked reports whether an unsupported amendment has
+	// activated. A blocked node can no longer build correct ledgers and
+	// must not propose or validate.
+	IsAmendmentBlocked() bool
+
 	GetValidatorKey() (NodeID, error)
 
 	SignProposal(proposal *Proposal) error
