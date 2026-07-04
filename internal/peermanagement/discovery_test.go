@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -698,5 +699,65 @@ func TestDiscoverySyncConnectedHosts_SkipsMalformedAddress(t *testing.T) {
 	defer d.mu.RUnlock()
 	if d.peers["badly-formed-no-port"].Connected {
 		t.Error("malformed address must not be marked connected")
+	}
+}
+
+// TestAddPeerCapEvictsOldest pins issue #1170: once d.peers reaches
+// MaxDiscoveredPeers, a new gossiped address evicts the least-recently-seen
+// non-connected, non-fixed entry instead of growing the map without bound.
+// The live connection and the fixed peer must survive the eviction.
+func TestAddPeerCapEvictsOldest(t *testing.T) {
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  []string{"fixed:51235"},
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+
+	// A connected peer and a stale fixed peer that must never be evicted.
+	d.MarkConnected("connected:51235", PeerID(1))
+	d.AddPeer("fixed:51235", 1, PeerID(2))
+
+	// Fill the map exactly to the ceiling with non-connected gossip entries.
+	for i := 0; len(d.peers) < MaxDiscoveredPeers; i++ {
+		d.AddPeer(fmt.Sprintf("gossip-%d:51235", i), 1, PeerID(3))
+	}
+
+	d.mu.RLock()
+	filled := len(d.peers)
+	d.mu.RUnlock()
+	if filled != MaxDiscoveredPeers {
+		t.Fatalf("setup: len(d.peers) = %d, want %d", filled, MaxDiscoveredPeers)
+	}
+
+	// Make one gossip entry the clear least-recently-seen victim, and mark
+	// the connected/fixed entries even staler to prove they are exempt.
+	stale := time.Now().Add(-24 * time.Hour)
+	d.mu.Lock()
+	d.peers["gossip-0:51235"].LastSeen = stale
+	d.peers["connected:51235"].LastSeen = stale.Add(-time.Hour)
+	d.peers["fixed:51235"].LastSeen = stale.Add(-time.Hour)
+	d.mu.Unlock()
+
+	// One more distinct address forces exactly one eviction.
+	d.AddPeer("fresh:51235", 1, PeerID(4))
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if len(d.peers) != MaxDiscoveredPeers {
+		t.Errorf("len(d.peers) = %d, want %d after over-cap insert", len(d.peers), MaxDiscoveredPeers)
+	}
+	if _, ok := d.peers["gossip-0:51235"]; ok {
+		t.Error("least-recently-seen gossip entry should have been evicted")
+	}
+	if _, ok := d.peers["fresh:51235"]; !ok {
+		t.Error("new address should have been inserted after eviction")
+	}
+	if _, ok := d.peers["connected:51235"]; !ok {
+		t.Error("connected peer must never be evicted")
+	}
+	if _, ok := d.peers["fixed:51235"]; !ok {
+		t.Error("fixed peer must never be evicted")
 	}
 }

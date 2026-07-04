@@ -19,6 +19,13 @@ const (
 	CacheEntryTTL          = 7 * 24 * time.Hour
 	MaxHops                = 3
 	DefaultReservationFile = "peer_reservations.json"
+
+	// MaxDiscoveredPeers caps the peer-discovery set. AddPeer evicts the
+	// least-recently-seen non-connected, non-fixed entry before exceeding
+	// it, so gossiped endpoint announcements cannot grow d.peers without
+	// bound (issue #1170). Sized well above any real network's reachable
+	// peer count; the live connection set and fixed peers are never evicted.
+	MaxDiscoveredPeers = 8192
 )
 
 // CachedEndpoint represents a cached peer endpoint.
@@ -416,12 +423,40 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 		return
 	}
 
+	if len(d.peers) >= MaxDiscoveredPeers && !d.evictOldestLocked() {
+		// At the ceiling with every entry a live or fixed peer we must
+		// keep — refuse the new gossiped address rather than grow unbounded.
+		return
+	}
+
 	d.peers[address] = &DiscoveredPeer{
 		Address:  address,
 		Hops:     hops,
 		LastSeen: time.Now(),
 		Source:   source,
 	}
+}
+
+// evictOldestLocked removes the least-recently-seen discardable entry to
+// make room under MaxDiscoveredPeers, returning false when every entry is
+// a connected or fixed peer that must be retained. Caller holds d.mu.
+func (d *Discovery) evictOldestLocked() bool {
+	var victim string
+	var oldest time.Time
+	for addr, p := range d.peers {
+		if p.Connected || d.fixedPeers[addr] {
+			continue
+		}
+		if victim == "" || p.LastSeen.Before(oldest) {
+			victim = addr
+			oldest = p.LastSeen
+		}
+	}
+	if victim == "" {
+		return false
+	}
+	delete(d.peers, victim)
+	return true
 }
 
 // AddRedirectCandidate records an address learned from a peer's 503
