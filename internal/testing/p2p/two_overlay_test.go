@@ -221,17 +221,14 @@ func to32(b []byte) ([32]byte, bool) {
 
 const (
 	// overlayReadyTimeout bounds the wait for a freshly-started overlay to
-	// publish its listener. It is deliberately generous: the wait returns
-	// the instant the overlay signals readiness, so the ceiling only bites
-	// if the bind genuinely wedges — and under -race on a saturated CI
-	// runner a healthy bind can take well over a second.
+	// publish its listener. The wait returns the instant readiness is
+	// signalled, so this generous ceiling only bites on a genuine wedge.
 	overlayReadyTimeout = 30 * time.Second
 
-	// peerConnectTimeout bounds the wait for two overlays to complete the
-	// TLS+HTTP handshake and register each other as peers. Same rationale
-	// as overlayReadyTimeout: it returns immediately on success, so a large
-	// ceiling only guards against a real stall rather than slowing the
-	// happy path.
+	// peerConnectTimeout bounds the wait for two overlays to finish the
+	// handshake and register each other. Same rationale as
+	// overlayReadyTimeout: it returns on success, so the ceiling only
+	// guards a real stall.
 	peerConnectTimeout = 30 * time.Second
 )
 
@@ -257,12 +254,9 @@ func startOverlay(t *testing.T) (*peermanagement.Overlay, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = o.Run(ctx) }()
 
-	// Block on the overlay's readiness signal instead of racing a
-	// wall-clock poll. startListener does a real Listen syscall plus a
-	// TLS-certificate build before ListenAddr() reports non-empty; under
-	// -race on a loaded CI runner the background Run goroutine can be
-	// scheduling-starved past a tight deadline, which surfaced as a
-	// spurious "overlay listener never came up" suite failure.
+	// Block on the readiness signal instead of a wall-clock poll: under
+	// -race on a loaded runner the Run goroutine can be starved past a
+	// tight deadline before ListenAddr() resolves.
 	select {
 	case <-o.ListenerReady():
 	case <-time.After(overlayReadyTimeout):

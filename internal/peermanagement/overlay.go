@@ -271,10 +271,7 @@ type Overlay struct {
 
 	// listenerReady is closed once Run has finished its listener-bind
 	// phase — after startListener publishes o.listener, or immediately
-	// when no listener is configured. Callers that need to wait for the
-	// bind (integration tests wiring two overlays on an ephemeral port)
-	// block on ListenerReady() instead of polling ListenAddr() against a
-	// wall clock, which is racy under load.
+	// when no listener is configured.
 	listenerReady     chan struct{}
 	listenerReadyOnce sync.Once
 
@@ -688,16 +685,15 @@ func (o *Overlay) ListenAddr() string {
 	return l.Addr().String()
 }
 
-// ListenerReady returns a channel that is closed once Run has finished
-// binding the listener (or determined none is configured). Waiting on it
-// is the race-free way to know ListenAddr() will report the resolved
-// ephemeral port — callers block on the event instead of polling.
+// ListenerReady returns a channel closed once Run has finished binding
+// the listener (or determined none is configured), after which
+// ListenAddr reports the resolved ephemeral port.
 func (o *Overlay) ListenerReady() <-chan struct{} {
 	return o.listenerReady
 }
 
-// signalListenerReady closes listenerReady exactly once. Guarded against
-// overlays constructed directly (outside New), whose channel is nil.
+// signalListenerReady closes listenerReady, guarding overlays built
+// directly (outside New) whose channel is nil.
 func (o *Overlay) signalListenerReady() {
 	if o.listenerReady == nil {
 		return
@@ -880,8 +876,6 @@ func (o *Overlay) Run(ctx context.Context) error {
 			return fmt.Errorf("listener error: %w", err)
 		}
 	}
-	// Unblock ListenerReady() waiters once the bind decision is made,
-	// whether a listener was started or none was configured.
 	o.signalListenerReady()
 
 	// Start resource manager (per-endpoint consumer table). The
