@@ -370,6 +370,8 @@ func NewFromConfig(
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
 		router.SetValidatorListAggregator(vlAgg)
+		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
+		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
 		// Listed-but-untrusted signers (published below the trust
 		// threshold) get their validations stored by the engine so a later
 		// trust change promotes what was already seen.

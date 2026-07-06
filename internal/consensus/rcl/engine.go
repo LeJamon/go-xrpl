@@ -44,8 +44,12 @@ type Engine struct {
 	// GetLastCloseInfo reads (same RPC-hot-path rationale as modeAtomic).
 	// Written from acceptLedger under e.mu via storeLastCloseLocked.
 	lastCloseAtomic atomic.Pointer[lastCloseInfo]
-	state           *consensus.RoundState
-	prevLedger      consensus.Ledger
+	// bowedOut is the per-round voluntary bow-out: the configured validator
+	// list expired, so this round neither proposes nor validates. Snapshotted
+	// at round start (under e.mu); atomic for the lock-free IsValidating path.
+	bowedOut   atomic.Bool
+	state      *consensus.RoundState
+	prevLedger consensus.Ledger
 
 	// buildInProgress is set while acceptLedger applies the LCL off e.mu
 	// (rippled's jtACCEPT job window). While set, round-driving (timerEntry,
@@ -567,6 +571,31 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		e.prevCloseTime = e.state.CloseTimes.Self
 	}
 
+	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
+	// within a round or two rather than only on the aggregator's 30s tick
+	// (rippled recomputes via updateTrusted at every ledger close). It runs
+	// async — inline would deadlock, since the refresh's OnChange fan-out
+	// re-enters e.mu via onTrustChanged — so this round reads the flag as of
+	// the previous refresh and the next round sees the fresh value. No-op
+	// without publisher lists.
+	e.adaptor.RefreshUNLState()
+
+	// Voluntary bow-out: an expired validator list means our trust view is
+	// stale, so this round neither proposes nor validates (rippled
+	// preStartRound). Independent of sync state — a syncing validator must
+	// not emit partials on stale trust either. Amendment-blocked nodes skip
+	// the check (rippled gates it on validating_, already false for them).
+	bowedOut := e.adaptor.IsValidator() && !e.adaptor.IsStandalone() &&
+		!e.adaptor.IsAmendmentBlocked() && e.adaptor.IsUNLBlocked()
+	if bowedOut {
+		slog.Error("Voluntarily bowing out of consensus process because of an expired validator list.",
+			"t", "consensus",
+			"event", "unl-expired-bow-out",
+			"seq", round.Seq,
+		)
+	}
+	e.bowedOut.Store(bowedOut)
+
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
 	// belowFloor holds a restarted validator in observing until the network
@@ -578,7 +607,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	belowFloor := round.Seq <= e.adaptor.GetMaxDisallowedLedgerSeq()
 	fullValidator := e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
-		!e.adaptor.IsAmendmentBlocked()
+		!e.adaptor.IsAmendmentBlocked() && !bowedOut
 	switch {
 	case belowFloor:
 		if proposing && e.adaptor.IsValidator() {
@@ -1123,13 +1152,14 @@ func (e *Engine) IsProposing() bool {
 }
 
 // IsValidating reports whether the node is issuing validations this round:
-// a configured validator, synced to OpModeFull, and not amendment-blocked.
-// Takes no engine lock, safe on the server_info hot path under
-// ledger.service.s.mu.
+// a configured validator, synced to OpModeFull, not amendment-blocked, and
+// not bowed out over an expired validator list. Takes no engine lock, safe
+// on the server_info hot path under ledger.service.s.mu.
 func (e *Engine) IsValidating() bool {
 	return e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
-		!e.adaptor.IsAmendmentBlocked()
+		!e.adaptor.IsAmendmentBlocked() &&
+		!e.bowedOut.Load()
 }
 func (e *Engine) Timing() consensus.Timing {
 	return e.timing
@@ -3204,7 +3234,8 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// blocked kills emission entirely: an amendment-blocked node builds
 	// un-amended ledgers, and even a partial from it would misdirect peers.
 	blocked := e.adaptor.IsAmendmentBlocked()
-	isValidator := e.adaptor.IsValidator()
+	// rippled's validating_ carries the bow-out into this gate the same way.
+	isValidator := e.adaptor.IsValidator() && !e.bowedOut.Load()
 	canValidate := e.peekCanValidateSeqLocked(newLedger.Seq())
 	// isCompatible suppresses emission when the build is on a side chain (not
 	// just ahead of validated on the same chain). Replaces the coarse

@@ -255,6 +255,16 @@ type TrustOracle interface {
 	// IsStandalone reports whether the node runs in standalone (single-node) mode.
 	IsStandalone() bool
 
+	// IsUNLBlocked reports the validator-list lock-down: a configured
+	// publisher list expired or the trusted union went empty. Adaptors
+	// without publisher lists return false.
+	IsUNLBlocked() bool
+
+	// RefreshUNLState re-evaluates the validator-list trust view against the
+	// live clock so IsUNLBlocked reflects an expired list this round. Called
+	// once per round-start; no-op for adaptors without publisher lists.
+	RefreshUNLState()
+
 	// GetCookie returns the validator's per-boot sfCookie value.
 	GetCookie() uint64
 

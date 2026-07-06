@@ -266,9 +266,13 @@ type Aggregator struct {
 	listed atomic.Pointer[map[consensus.NodeID]struct{}]
 
 	// unlBlocked mirrors rippled's NetworkOPs unlBlocked_ (NetworkOPs.cpp:750):
-	// the sticky UNL lock-down. Maintained under a.mu by recomputeAndEmitLocked;
-	// read via IsUNLBlocked, which documents the set/clear semantics.
-	unlBlocked bool
+	// the sticky UNL lock-down. Written under a.mu by recomputeAndEmitLocked
+	// but stored atomically so IsUNLBlocked reads it lock-free — the consensus
+	// bow-out polls it while holding the engine lock, and taking a.mu there
+	// would ABBA against the onChange -> onTrustChanged -> e.mu fan-out (same
+	// reason IsListed is lock-free). recomputeAndEmitLocked commits the flag in
+	// a single Store so readers never see a transient intermediate.
+	unlBlocked atomic.Bool
 
 	// clock returns the wall-clock time the aggregator uses to gate
 	// effective / expiration comparisons. Overridable for tests.
@@ -464,9 +468,7 @@ func (a *Aggregator) HasConfiguredPublishers() bool {
 // revoked after its list expired keeps the node blocked even while another
 // publisher stays healthy — a state a stateless snapshot cannot reproduce.
 func (a *Aggregator) IsUNLBlocked() bool {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return a.unlBlocked
+	return a.unlBlocked.Load()
 }
 
 // PublisherSnapshot returns a deep copy of the per-publisher state for
@@ -1183,19 +1185,24 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	// only when all publishers are available again — safety over liveness. Run
 	// before the no-op early-out below so the flag tracks state even when the
 	// trusted union is unchanged.
+	// Seed from the current (sticky) value: the latch only sets on an
+	// expiry transition or an empty union and only clears when every
+	// publisher is available again, so the flag carries across recomputes.
+	// Accumulate in the local and commit once below.
+	blocked := a.unlBlocked.Load()
 	good := true
 	for _, s := range a.state {
 		if s.Status == StatusAvailable && !s.Expiration.IsZero() && !s.Expiration.After(now) {
 			s.Status = StatusExpired
 			s.Validators = nil
-			a.unlBlocked = true
+			blocked = true
 		}
 		if s.Status != StatusAvailable {
 			good = false
 		}
 	}
 	if good {
-		a.unlBlocked = false
+		blocked = false
 	}
 
 	counts := a.computeValidatorCountsLocked(now)
@@ -1214,10 +1221,12 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	// the guard above) but the effective trusted union is empty
 	// (ValidatorList.cpp:2096-2101). Latch after the good/clear pass so an
 	// empty union always wins, matching rippled's ordering (clear at line 2006,
-	// then set at 2100).
+	// then set at 2100). Single Store so lock-free IsUNLBlocked never sees a
+	// transient.
 	if len(trusted) == 0 {
-		a.unlBlocked = true
+		blocked = true
 	}
+	a.unlBlocked.Store(blocked)
 
 	if slices.Equal(trusted, a.lastEmitted) {
 		return

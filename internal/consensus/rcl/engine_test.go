@@ -171,6 +171,12 @@ type mockAdaptor struct {
 	// OR-branch at RCLConsensus.cpp:352.
 	standalone bool
 
+	unlBlocked bool
+
+	// onRefreshUNL, when set, runs on each RefreshUNLState call so a test
+	// can model the aggregator latching the lock-down flag at round start.
+	onRefreshUNL func()
+
 	// proposableOverride lets a test pin a specific filtered set
 	// for GetProposableTxs to return, distinct from the raw pending
 	// pool, so closeLedger's wiring (proposing path uses the filtered
@@ -507,6 +513,21 @@ func (a *mockAdaptor) IsStandalone() bool {
 	return a.standalone
 }
 
+func (a *mockAdaptor) IsUNLBlocked() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.unlBlocked
+}
+
+func (a *mockAdaptor) RefreshUNLState() {
+	a.mu.RLock()
+	fn := a.onRefreshUNL
+	a.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func (a *mockAdaptor) GetCookie() uint64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -753,6 +774,116 @@ func TestEngine_StartRound_Observing(t *testing.T) {
 
 	if engine.Mode() != consensus.ModeObserving {
 		t.Errorf("Expected Observing mode, got %v", engine.Mode())
+	}
+}
+
+// TestEngine_StartRound_UNLExpiredBowsOut pins rippled preStartRound's
+// voluntary bow-out (RCLConsensus.cpp:1009-1021): a validator whose
+// configured validator list expired must neither propose nor validate.
+// The round drops to Observing, IsValidating reports false, and the
+// per-round bowedOut snapshot feeds the acceptLedger emission gate. Once
+// the list recovers, the next round re-evaluates and promotes back.
+func TestEngine_StartRound_UNLExpiredBowsOut(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.unlBlocked = true
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	if mode := engine.Mode(); mode != consensus.ModeObserving {
+		t.Errorf("bowed-out round: want Observing, got %v", mode)
+	}
+	if engine.IsValidating() {
+		t.Error("bowed-out round: IsValidating must report false")
+	}
+	if !engine.bowedOut.Load() {
+		t.Error("bowedOut snapshot must be set for the emission gate")
+	}
+
+	adaptor.mu.Lock()
+	adaptor.unlBlocked = false
+	adaptor.mu.Unlock()
+
+	next := consensus.RoundID{Seq: 102, ParentHash: consensus.LedgerID{2}}
+	engine.mu.Lock()
+	engine.startRoundLocked(next, true, false)
+	engine.mu.Unlock()
+
+	if mode := engine.Mode(); mode != consensus.ModeProposing {
+		t.Errorf("recovered round: want Proposing, got %v", mode)
+	}
+	if !engine.IsValidating() {
+		t.Error("recovered round: IsValidating must report true")
+	}
+	if engine.bowedOut.Load() {
+		t.Error("recovered round: bowedOut snapshot must be cleared")
+	}
+}
+
+// TestEngine_StartRound_UNLExpiredStandaloneSkips: standalone skips the
+// bow-out check entirely, matching rippled's !standalone() gate.
+func TestEngine_StartRound_UNLExpiredStandaloneSkips(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.standalone = true
+	adaptor.unlBlocked = true
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	if mode := engine.Mode(); mode != consensus.ModeProposing {
+		t.Errorf("standalone: want Proposing despite blocked list, got %v", mode)
+	}
+	if !engine.IsValidating() {
+		t.Error("standalone: IsValidating must report true")
+	}
+}
+
+// TestEngine_StartRound_UNLRefreshLatchesBowOut pins the round-start trust
+// refresh wiring: startRoundLocked calls RefreshUNLState before the bow-out
+// gate, so a refresh that latches the lock-down flag makes the node bow out.
+// The mock refreshes synchronously to exercise the gate; the production
+// adaptor dispatches the refresh on a background goroutine (it can't run
+// inline under the engine lock), so a real node reacts a round or two later
+// rather than the same round.
+func TestEngine_StartRound_UNLRefreshLatchesBowOut(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	// Flag starts clear; the aggregator latches it only when the round-start
+	// refresh re-evaluates the (now expired) list.
+	adaptor.onRefreshUNL = func() {
+		adaptor.mu.Lock()
+		adaptor.unlBlocked = true
+		adaptor.mu.Unlock()
+	}
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	if mode := engine.Mode(); mode != consensus.ModeObserving {
+		t.Errorf("refresh-latched bow-out: want Observing, got %v", mode)
+	}
+	if engine.IsValidating() {
+		t.Error("refresh-latched bow-out: IsValidating must report false")
+	}
+	if !engine.bowedOut.Load() {
+		t.Error("refresh-latched bow-out: bowedOut snapshot must be set by the round-start refresh")
 	}
 }
 

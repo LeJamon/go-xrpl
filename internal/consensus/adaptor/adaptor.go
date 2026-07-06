@@ -244,6 +244,27 @@ type Adaptor struct {
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
+	// unlBlocked reports the validator-list aggregator's UNL lock-down flag.
+	// Wired at startup when publisher lists are configured; nil (no
+	// publishers) means never blocked. Written once before the engine
+	// starts, then only read. The underlying aggregator read is lock-free
+	// (atomic) so the consensus bow-out can poll it while holding the engine
+	// lock without an agg-mu -> e.mu ABBA against onTrustChanged.
+	unlBlocked func() bool
+
+	// refreshUNL re-evaluates the aggregator's trust view against the live
+	// clock (promote rotations, latch/clear the lock-down flag). Wired to
+	// the aggregator's Tick so consensus can drive it once per round —
+	// rippled refreshes via updateTrusted at every ledger close, but
+	// goXRPL's standalone 30s ticker leaves the flag stale for several
+	// rounds after a list lapses. nil (no publishers) means no-op. Same
+	// write-once-before-start lifetime as unlBlocked.
+	refreshUNL func()
+
+	// refreshInFlight single-flights RefreshUNLState's background refresh so
+	// per-round dispatches can't pile up goroutines if a tick runs slow.
+	refreshInFlight atomic.Bool
+
 	// relayValidations is the operator's [relay_validations] stance.
 	// Immutable after New — read without a.mu.
 	relayValidations RelayValidationsPolicy
@@ -1394,6 +1415,52 @@ func (a *Adaptor) IsStandalone() bool {
 		return false
 	}
 	return a.ledgerService.IsStandalone()
+}
+
+// SetUNLBlockedFunc wires the validator-list aggregator's lock-down flag
+// into the consensus bow-out gate. Must be called before the engine starts.
+func (a *Adaptor) SetUNLBlockedFunc(fn func() bool) {
+	a.unlBlocked = fn
+}
+
+// IsUNLBlocked reports the validator-list UNL lock-down. Always false when
+// no publisher lists are configured.
+func (a *Adaptor) IsUNLBlocked() bool {
+	if a.unlBlocked == nil {
+		return false
+	}
+	return a.unlBlocked()
+}
+
+// SetUNLRefreshFunc wires the aggregator's per-round trust refresh. Must be
+// called before the engine starts.
+func (a *Adaptor) SetUNLRefreshFunc(fn func()) {
+	a.refreshUNL = fn
+}
+
+// RefreshUNLState kicks off a live re-evaluation of the aggregator's trust
+// view (promote rotations, latch/clear the lock-down flag) so the consensus
+// bow-out reacts to an expiring list within a round or two instead of only on
+// the standalone refresh tick. No-op without publisher lists.
+//
+// Runs on a background goroutine, deliberately NOT inline: the refresh takes
+// the aggregator lock and its OnChange fan-out reaches onTrustChanged ->
+// Engine.refreshTrustedSet, which locks e.mu. The caller holds e.mu at round
+// start, so an inline call would self-deadlock (e.mu is not reentrant) and, on
+// the ticker goroutine, ABBA against it. The bow-out reads the sticky flag
+// lock-free via IsUNLBlocked; the single-flight guard drops overlapping
+// refreshes so a slow tick can't pile up goroutines.
+func (a *Adaptor) RefreshUNLState() {
+	if a.refreshUNL == nil {
+		return
+	}
+	if !a.refreshInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer a.refreshInFlight.Store(false)
+		a.refreshUNL()
+	}()
 }
 
 // IsAmendmentBlocked reports whether an unsupported amendment has activated.
