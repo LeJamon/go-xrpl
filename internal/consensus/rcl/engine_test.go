@@ -1163,6 +1163,69 @@ func TestEngine_OnProposal_Untrusted(t *testing.T) {
 	}
 }
 
+// TestEngine_OnProposal_SelfKey pins issue #1210: a trusted proposal signed
+// with our own validator key — a duplicate-key misconfiguration or our own
+// proposal routed back to us — is dropped and not relayed, rather than absorbed
+// as a foreign position that would double-count our own vote. A proposal from a
+// different trusted validator is still accepted, so the drop is specific to the
+// self-key guard.
+func TestEngine_OnProposal_SelfKey(t *testing.T) {
+	adaptor := newMockAdaptor()
+	ourKey, err := adaptor.GetValidatorKey()
+	if err != nil {
+		t.Fatalf("GetValidatorKey: %v", err)
+	}
+	adaptor.setTrusted([]consensus.NodeID{ourKey, {2}})
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	// A proposal carrying our own validator key is dropped.
+	selfProposal := &consensus.Proposal{
+		Round:          round,
+		NodeID:         ourKey,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(selfProposal, 0); err != nil {
+		t.Fatalf("OnProposal(self) returned error: %v", err)
+	}
+
+	adaptor.mu.RLock()
+	relayed := len(adaptor.proposalsRelayed)
+	adaptor.mu.RUnlock()
+	if relayed != 0 {
+		t.Errorf("self-key proposal relayed %d times, want 0", relayed)
+	}
+	if got := engine.proposalTracker.Count(); got != 0 {
+		t.Errorf("self-key proposal stored %d positions, want 0", got)
+	}
+
+	// A proposal from a different trusted validator is still accepted, proving
+	// the drop is specific to the self-key guard, not the round setup.
+	peerProposal := &consensus.Proposal{
+		Round:          round,
+		NodeID:         consensus.NodeID{2},
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(peerProposal, 0); err != nil {
+		t.Fatalf("OnProposal(peer) returned error: %v", err)
+	}
+	if got := engine.proposalTracker.Count(); got != 1 {
+		t.Errorf("trusted peer proposal stored %d positions, want 1", got)
+	}
+}
+
 // TestEngine_StartRound_ResharesReplayedProposals pins issue #1188: after a
 // ledger switch / round start, buffered peer proposals for the new prevLedger
 // are re-shared to peers (rippled playbackProposals + adaptor_.share), not just

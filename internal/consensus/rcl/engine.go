@@ -762,6 +762,20 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		return nil
 	}
 
+	// A trusted proposal signed with our own validator key means a duplicate-key
+	// misconfiguration (two nodes sharing our key) or our own proposal routed
+	// back to us. Drop it and log loudly — absorbing it double-counts our position.
+	if e.adaptor.IsValidator() {
+		if ourKey, err := e.adaptor.GetValidatorKey(); err == nil && proposal.NodeID == ourKey {
+			slog.Error("dropping proposal signed with our own validator key",
+				"t", "consensus",
+				"event", "self-key-proposal",
+				"peer", originPeer,
+				"node", fmt.Sprintf("%x", proposal.NodeID[:6]))
+			return nil
+		}
+	}
+
 	// Buffer for future playback, even between rounds.
 	e.proposalTracker.BufferRecent(proposal)
 
