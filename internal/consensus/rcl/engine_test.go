@@ -1226,6 +1226,63 @@ func TestEngine_OnProposal_SelfKey(t *testing.T) {
 	}
 }
 
+// TestEngine_OnProposal_SelfKey_UntrustedStillGuarded pins the reachability half
+// of issue #1210. Unlike rippled — which lists its own key in its trusted set —
+// go-xrpl never self-lists, so the self-key guard runs before the trust gate.
+// A proposal carrying our own validator key is therefore still recognised,
+// dropped, and logged as a misconfiguration even when our key is absent from the
+// trusted set; without the pre-gate placement the trust gate would drop it
+// silently as "untrusted" and the operator would lose the duplicate-key signal.
+func TestEngine_OnProposal_SelfKey_UntrustedStillGuarded(t *testing.T) {
+	adaptor := newMockAdaptor()
+	ourKey, err := adaptor.GetValidatorKey()
+	if err != nil {
+		t.Fatalf("GetValidatorKey: %v", err)
+	}
+	// Our own key is deliberately NOT in the trusted set.
+	adaptor.setTrusted([]consensus.NodeID{{2}})
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	config := DefaultConfig()
+	engine := NewEngine(adaptor, config)
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	selfProposal := &consensus.Proposal{
+		Round:          round,
+		NodeID:         ourKey,
+		Position:       0,
+		TxSet:          consensus.TxSetID{1},
+		CloseTime:      time.Now(),
+		PreviousLedger: consensus.LedgerID{1},
+		Timestamp:      time.Now(),
+	}
+	if err := engine.OnProposal(selfProposal, 0); err != nil {
+		t.Fatalf("OnProposal(self) returned error: %v", err)
+	}
+
+	// The guard must have fired before the trust gate: with our key untrusted,
+	// a post-gate guard would never run and nothing would be logged.
+	if !strings.Contains(buf.String(), "self-key-proposal") {
+		t.Errorf("expected the self-key guard to log and drop before the trust gate; got log %q", buf.String())
+	}
+
+	adaptor.mu.RLock()
+	relayed := len(adaptor.proposalsRelayed)
+	adaptor.mu.RUnlock()
+	if relayed != 0 {
+		t.Errorf("self-key proposal relayed %d times, want 0", relayed)
+	}
+	if got := engine.proposalTracker.Count(); got != 0 {
+		t.Errorf("self-key proposal stored %d positions, want 0", got)
+	}
+}
+
 // TestEngine_StartRound_ResharesReplayedProposals pins issue #1188: after a
 // ledger switch / round start, buffered peer proposals for the new prevLedger
 // are re-shared to peers (rippled playbackProposals + adaptor_.share), not just
