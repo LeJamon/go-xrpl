@@ -102,6 +102,10 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 		want  ValStatus
 	}{
 		{name: "first validation", v: mk(100, ledgerA, base, 1), want: ValStatusCurrent},
+		// Freshness gate (isCurrent) rejects a validation signed far in the
+		// past before any evidence or enforcer state is touched, so the row
+		// order around it is immaterial.
+		{name: "stale sign time", v: mk(105, ledgerA, base.Add(-time.Hour), 1), want: ValStatusStale},
 		{name: "identical resend", v: mk(100, ledgerA, base, 1), want: ValStatusBadSeq},
 		{name: "same seq different ledger", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
 		{name: "same seq same ledger different signtime", v: mk(100, ledgerA, base.Add(time.Second), 1), want: ValStatusConflicting},
@@ -129,6 +133,61 @@ func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 		if got := vt.AddStatus(tc.v); got != tc.want {
 			t.Errorf("%s: AddStatus = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+// TestValidationTracker_AddStatus_PartialDoubleSign checks the double-sign
+// detector on PARTIAL validations: classification runs before any Full-based
+// branch, so a partial equivocation is flagged just like a full one.
+func TestValidationTracker_AddStatus_PartialDoubleSign(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	vt := NewValidationTracker(10, 5*time.Minute)
+	vt.SetNow(func() time.Time { return base })
+
+	node := consensus.NodeID{0x7}
+	partial := func(seq uint32, ledger consensus.LedgerID) *consensus.Validation {
+		return &consensus.Validation{
+			LedgerSeq: seq, LedgerID: ledger, NodeID: node,
+			SignTime: base, Full: false,
+		}
+	}
+
+	if got := vt.AddStatus(partial(100, consensus.LedgerID{0xA})); got != ValStatusCurrent {
+		t.Fatalf("first partial: AddStatus = %v, want current", got)
+	}
+	if got := vt.AddStatus(partial(100, consensus.LedgerID{0xB})); got != ValStatusConflicting {
+		t.Errorf("partial same-seq different-ledger: AddStatus = %v, want conflicting", got)
+	}
+}
+
+// TestSeqEnforcer_IdleResetBoundary pins the monotonic-seq invariant and the
+// exact validationSetExpires idle-reset edge: at the boundary the floor still
+// holds; one tick past it the floor resets and re-admits a lower seq.
+func TestSeqEnforcer_IdleResetBoundary(t *testing.T) {
+	base := time.Unix(1_700_000_000, 0)
+	var enf seqEnforcer
+
+	if !enf.advance(base, 1) {
+		t.Fatal("seq 1 must advance from an empty floor")
+	}
+	if !enf.advance(base, 10) {
+		t.Fatal("seq 10 must advance past floor 1")
+	}
+	if enf.advance(base, 5) {
+		t.Error("seq 5 must be rejected below floor 10")
+	}
+	if enf.advance(base, 9) {
+		t.Error("seq 9 must be rejected below floor 10")
+	}
+
+	// At exactly validationSetExpires the floor has NOT expired (strict >),
+	// so a lower seq is still rejected.
+	if enf.advance(base.Add(validationSetExpires), 1) {
+		t.Error("at exactly validationSetExpires the floor holds; seq 1 must be rejected")
+	}
+	// One tick past the window the floor resets to 0 and re-admits seq 1.
+	if !enf.advance(base.Add(validationSetExpires+time.Nanosecond), 1) {
+		t.Error("past validationSetExpires the floor resets; seq 1 must be re-admitted")
 	}
 }
 
