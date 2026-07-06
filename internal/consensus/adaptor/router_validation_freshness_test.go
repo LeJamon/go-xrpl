@@ -11,8 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// buildValidationAt serializes a minimal well-formed validation with the
-// given sign-time into an inbound TMValidation frame from peerID.
 func buildValidationAt(t *testing.T, peerID peermanagement.PeerID, signTime time.Time) *peermanagement.InboundMessage {
 	t.Helper()
 	key := [33]byte{0x02, 0x77}

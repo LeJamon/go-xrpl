@@ -255,10 +255,6 @@ const (
 //
 // `now` is the network-adjusted time from the adaptor so the freshness
 // window honors the close-offset consensus has converged on.
-//
-// Exported for the router's ingress gate, which drops non-current
-// validations before suppression/relay (rippled PeerImp does the same
-// immediately after deserialization).
 func IsCurrent(now, signTime, seenTime time.Time) bool {
 	// Past bound on signTime (rippled uses EARLY=3m here, NOT WALL=5m):
 	// a validation signed more than EARLY in the past is stale —
