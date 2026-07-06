@@ -460,7 +460,7 @@ func TestIsCurrent_WindowBoundaries(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := isCurrent(now, tc.signTime, tc.seenTime)
+			got := IsCurrent(now, tc.signTime, tc.seenTime)
 			if got != tc.want {
 				t.Fatalf("isCurrent: got %v, want %v", got, tc.want)
 			}

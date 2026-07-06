@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
@@ -212,6 +213,20 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		r.logger.Debug("dropping malformed validation",
 			"peer", msg.PeerID, "bad_field", badField)
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-malformed-"+badField)
+		return
+	}
+
+	// Ingress freshness gate: charge and drop a stale or future-dated
+	// validation before suppression/relay, mirroring rippled's PeerImp
+	// isCurrent check right after deserialization. The tracker applies
+	// the same window for quorum/trie accounting, but by the time it
+	// runs the engine has already relayed the validation.
+	if !rcl.IsCurrent(r.adaptor.Now(), validation.SignTime, validation.SeenTime) {
+		r.logger.Debug("dropping non-current validation",
+			"peer", msg.PeerID,
+			"seq", validation.LedgerSeq,
+			"sign_time", validation.SignTime)
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-not-current")
 		return
 	}
 

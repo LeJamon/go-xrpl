@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +46,7 @@ func TestRouter_ResolveMasterNodeID_Validation_RewritesToMaster(t *testing.T) {
 	v := &consensus.Validation{
 		Full:      true,
 		LedgerSeq: 99,
-		SignTime:  time.Unix(protocol.RippleEpochUnix+12345, 0),
+		SignTime:  time.Now(),
 	}
 	for i := range v.LedgerID {
 		v.LedgerID[i] = byte(i + 1)
@@ -108,7 +107,7 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 	v := &consensus.Validation{
 		Full:      true,
 		LedgerSeq: 100,
-		SignTime:  time.Unix(protocol.RippleEpochUnix+12345, 0),
+		SignTime:  time.Now(),
 	}
 	for i := range v.LedgerID {
 		v.LedgerID[i] = byte(i + 1)
