@@ -304,7 +304,10 @@ func flushBroadcasts(pending []func()) {
 	}
 }
 
-// SeqEnforcer reset window (validationSET_EXPIRES).
+// validationSetExpires mirrors rippled's validationSET_EXPIRES. It is
+// both the SeqEnforcer reset window and the access-age retention floor
+// for per-ledger validation sets: ExpireOld keeps a set resident until
+// at least this long has passed since it was created or last read.
 const validationSetExpires = 10 * time.Minute
 
 // defaultInMemoryLedgers bounds the tracker's retention with no archive

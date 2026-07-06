@@ -263,6 +263,7 @@ func TestValidationTracker_ExpireOldUnparks(t *testing.T) {
 	vt.SetLedgerAncestryProvider(newMapAncestryProvider())
 
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
+	now = now.Add(validationSetExpires + time.Second)
 	vt.ExpireOld(abcd.Seq() + 1)
 
 	if _, _, ok := vt.GetPreferred(0); ok {

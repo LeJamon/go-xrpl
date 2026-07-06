@@ -520,6 +520,9 @@ func TestValidationTracker_ExpireOld_FiresOnStale(t *testing.T) {
 	var fired []*consensus.Validation
 	vt.SetOnStale(func(v *consensus.Validation) { fired = append(fired, v) })
 
+	// Sets are access-age guarded; jump the clock past
+	// validationSetExpires so the seq floor can evict.
+	vt.SetNow(func() time.Time { return time.Now().Add(validationSetExpires + time.Second) })
 	vt.ExpireOld(200)
 
 	if len(fired) != 2 {
@@ -550,6 +553,7 @@ func TestValidationTracker_ExpireOld_ClearsByNode(t *testing.T) {
 		t.Fatal("precondition: Add should have populated byNode")
 	}
 
+	vt.SetNow(func() time.Time { return time.Now().Add(validationSetExpires + time.Second) })
 	vt.ExpireOld(200)
 
 	if vt.GetLatestValidation(nodeA) != nil {
@@ -571,12 +575,108 @@ func TestValidationTracker_ExpireOld_OnStaleRunsOutsideLock(t *testing.T) {
 		close(done)
 	})
 
+	vt.SetNow(func() time.Time { return time.Now().Add(validationSetExpires + time.Second) })
 	vt.ExpireOld(200)
 
 	select {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("onStale callback deadlocked or never fired")
+	}
+}
+
+// A set below the seq floor but accessed within validationSetExpires
+// must survive ExpireOld — rippled's validationSET_EXPIRES access-age
+// window keeps recently-used ledgers queryable regardless of how far
+// back their sequence is.
+func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	ledger := consensus.LedgerID{1}
+	vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+
+	var fired int
+	vt.SetOnStale(func(*consensus.Validation) { fired++ })
+
+	// Below the floor but touched moments ago: retained, no onStale.
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(ledger); got != 1 {
+		t.Fatalf("hot set evicted: count=%d, want 1", got)
+	}
+	if fired != 0 {
+		t.Fatalf("onStale fired %d times for a hot set, want 0", fired)
+	}
+
+	// Once cold, the same floor evicts it.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(ledger); got != 0 {
+		t.Fatalf("cold set survived: count=%d, want 0", got)
+	}
+	if fired != 1 {
+		t.Fatalf("onStale fired %d times for the cold eviction, want 1", fired)
+	}
+}
+
+// Reading a ledger's validations refreshes its access age — rippled's
+// byLedger touch — so an actively-queried set keeps surviving ExpireOld
+// while an unqueried sibling at the same seq expires.
+func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	hot := consensus.LedgerID{1}
+	cold := consensus.LedgerID{2}
+	vt.SetTrusted([]consensus.NodeID{{0xA}, {0xB}})
+	vt.Add(&consensus.Validation{LedgerID: hot, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+	vt.Add(&consensus.Validation{LedgerID: cold, LedgerSeq: 100, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true})
+
+	// Query the hot ledger just before the window closes on both sets.
+	now = now.Add(validationSetExpires - time.Second)
+	if got := len(vt.GetTrustedValidations(hot)); got != 1 {
+		t.Fatalf("precondition: hot ledger has %d trusted validations, want 1", got)
+	}
+
+	// Past the original window: the untouched set expires, the read
+	// refreshed the other.
+	now = now.Add(2 * time.Second)
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(cold); got != 0 {
+		t.Fatalf("unqueried set survived: count=%d, want 0", got)
+	}
+	if got := vt.GetValidationCount(hot); got != 1 {
+		t.Fatalf("queried set evicted despite recent read: count=%d, want 1", got)
+	}
+}
+
+// A write into an existing set does not refresh its access age —
+// rippled's aged byLedger_ container stamps on insert and touches on
+// read only, so a below-floor set kept alive purely by late incoming
+// validations still expires once its creation/read age passes the
+// window.
+func TestValidationTracker_ExpireOld_WriteDoesNotExtend(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	ledger := consensus.LedgerID{1}
+	vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+
+	// A second validator writes into the existing set just before the
+	// window closes.
+	now = now.Add(validationSetExpires - time.Second)
+	if !vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true}) {
+		t.Fatal("precondition: second Add rejected")
+	}
+
+	// Past the creation age: the late write must not have refreshed it.
+	now = now.Add(2 * time.Second)
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(ledger); got != 0 {
+		t.Fatalf("write-refreshed set survived: count=%d, want 0", got)
 	}
 }
 

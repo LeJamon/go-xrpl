@@ -3,6 +3,7 @@ package rcl
 import (
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -99,6 +100,26 @@ type seqValidations struct {
 	byNode  map[consensus.NodeID]*consensus.Validation
 }
 
+// ledgerValidations is one per-ledger validation set plus the
+// access-age bookkeeping ExpireOld needs. lastAccess holds unix-nanos
+// of the set's creation or last read touch — writes into an existing
+// set do not refresh it, matching rippled's aged byLedger_ container,
+// which stamps on insert and touches on read only. Stored atomically
+// so query paths holding only vt.mu.RLock can refresh it. Aging
+// deliberately follows the tracker clock (adaptor.Now in production)
+// rather than rippled's monotonic steady_clock: touch and the
+// ExpireOld cutoff share that clock — consistent with the engine's
+// other validationSetExpires windows — so a close-offset adjustment
+// shifts retention by at most the adjustment.
+type ledgerValidations struct {
+	vals       map[consensus.NodeID]*consensus.Validation
+	lastAccess atomic.Int64
+}
+
+func (lv *ledgerValidations) touch(now time.Time) {
+	lv.lastAccess.Store(now.UnixNano())
+}
+
 // ValidationTracker tracks validations and determines ledger finality.
 type ValidationTracker struct {
 	mu sync.RWMutex
@@ -113,7 +134,7 @@ type ValidationTracker struct {
 	now func() time.Time
 
 	// validations maps ledger ID to validations for that ledger
-	validations map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation
+	validations map[consensus.LedgerID]*ledgerValidations
 
 	// byNode maps node ID to their latest validation
 	byNode map[consensus.NodeID]*consensus.Validation
@@ -203,7 +224,7 @@ type ValidationTracker struct {
 func NewValidationTracker(quorum int, freshness time.Duration) *ValidationTracker {
 	return &ValidationTracker{
 		now:          time.Now,
-		validations:  make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation),
+		validations:  make(map[consensus.LedgerID]*ledgerValidations),
 		byNode:       make(map[consensus.NodeID]*consensus.Validation),
 		bySequence:   make(map[uint32]*seqValidations),
 		seqEnforcers: make(map[consensus.NodeID]*seqEnforcer),
@@ -506,10 +527,11 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 	// Add to ledger validations
 	ledgerVals, exists := vt.validations[validation.LedgerID]
 	if !exists {
-		ledgerVals = make(map[consensus.NodeID]*consensus.Validation)
+		ledgerVals = &ledgerValidations{vals: make(map[consensus.NodeID]*consensus.Validation)}
+		ledgerVals.touch(vt.now())
 		vt.validations[validation.LedgerID] = ledgerVals
 	}
-	ledgerVals[resolvedID] = validation
+	ledgerVals.vals[resolvedID] = validation
 
 	// Steer the trie on trusted() alone — negUNL validators included —
 	// mirroring rippled's updateTrie precondition. negUNL exclusion lives
@@ -581,16 +603,16 @@ func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.Ledger
 		return ledgerID, 0, false
 	}
 	ledgerVals, exists := vt.validations[ledgerID]
-	if !exists || len(ledgerVals) == 0 {
+	if !exists || len(ledgerVals.vals) == 0 {
 		return ledgerID, 0, false
 	}
 
 	var sampleSeq uint32
-	for _, v := range ledgerVals {
+	for _, v := range ledgerVals.vals {
 		sampleSeq = v.LedgerSeq
 		break
 	}
-	trustedCount := vt.countTrustedExcludingNegUNLLocked(ledgerVals)
+	trustedCount := vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
 
 	if trustedCount >= vt.quorum {
 		vt.fired[ledgerID] = struct{}{}
@@ -602,6 +624,8 @@ func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.Ledger
 // GetTrustedValidations returns trusted validations for a ledger. No
 // seq argument is needed: entries are keyed by ledger hash, which
 // uniquely determines the seq, so all entries under a ledgerID share it.
+// Reading a ledger's set refreshes its access age (rippled's
+// byLedger touch) so actively-queried ledgers survive ExpireOld.
 func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -610,9 +634,10 @@ func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) 
 	if !exists {
 		return nil
 	}
+	ledgerVals.touch(vt.now())
 
 	var result []*consensus.Validation
-	for nodeID, v := range ledgerVals {
+	for nodeID, v := range ledgerVals.vals {
 		if vt.trusted[nodeID] {
 			result = append(result, v)
 		}
@@ -634,7 +659,8 @@ func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.Ledger
 	if !exists {
 		return 0
 	}
-	return vt.countTrustedExcludingNegUNLLocked(ledgerVals)
+	ledgerVals.touch(vt.now())
+	return vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
 }
 
 // countTrustedExcludingNegUNLLocked counts validators in ledgerVals
@@ -689,7 +715,8 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 		if !exists {
 			return 0
 		}
-		return vt.countTrustedExcludingNegUNLLocked(ledgerVals)
+		ledgerVals.touch(vt.now())
+		return vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
 	}
 	vt.checkAcquiredLocked()
 	return vt.branchSupportExcludingNegUNLLocked(lgr)
@@ -793,8 +820,9 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	if !ok {
 		return 0
 	}
+	perLedger.touch(vt.now())
 	count := 0
-	for nodeID, v := range perLedger {
+	for nodeID, v := range perLedger.vals {
 		if !vt.trusted[nodeID] {
 			continue
 		}
@@ -967,22 +995,36 @@ func (vt *ValidationTracker) FlushStale() {
 // ExpireOld drops validations below minSeq from every index and fires
 // onStale outside the mutex. Trie tips for dropped validators are also
 // removed so phantom branchSupport doesn't linger on stale ancestors.
+//
+// A set created or read within validationSetExpires is retained even
+// below the sequence floor — rippled's access-age expiry
+// (validationSET_EXPIRES with byLedger touch) — so hot ledgers stay
+// queryable for RPC and late peers. Memory stays bounded: Add rejects
+// below the engine's minSeq gate, so a below-floor set cannot reheat
+// from the network, and it drops on the first ExpireOld after going
+// cold. The seq floor itself plays rippled's setSeqToKeep role of
+// protecting the recent (negative-UNL voting) window from expiry.
 func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	vt.mu.Lock()
 
 	onStale := vt.onStale
 	var stale []*consensus.Validation
 
+	cutoff := vt.now().Add(-validationSetExpires).UnixNano()
+
 	for ledgerID, ledgerVals := range vt.validations {
 		var sample *consensus.Validation
-		for _, v := range ledgerVals {
+		for _, v := range ledgerVals.vals {
 			sample = v
 			break
 		}
 		if sample == nil || sample.LedgerSeq >= minSeq {
 			continue
 		}
-		for nodeID, v := range ledgerVals {
+		if ledgerVals.lastAccess.Load() > cutoff {
+			continue
+		}
+		for nodeID, v := range ledgerVals.vals {
 			stale = append(stale, v)
 			if latest, ok := vt.byNode[nodeID]; ok && latest == v {
 				delete(vt.byNode, nodeID)
@@ -1022,7 +1064,7 @@ func (vt *ValidationTracker) Flush() {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
-	vt.validations = make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation)
+	vt.validations = make(map[consensus.LedgerID]*ledgerValidations)
 	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
 	vt.bySequence = make(map[uint32]*seqValidations)
 	vt.seqEnforcers = make(map[consensus.NodeID]*seqEnforcer)

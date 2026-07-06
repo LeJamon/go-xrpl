@@ -75,6 +75,9 @@ func TestEngine_SetArchive_PostStart(t *testing.T) {
 	if !engine.validationTracker.Add(v) {
 		t.Fatal("Add returned false; precondition broken")
 	}
+	// Jump the tracker clock past the access-age window so the seq
+	// floor can evict the just-touched set.
+	engine.validationTracker.SetNow(func() time.Time { return time.Now().Add(validationSetExpires + time.Second) })
 	engine.validationTracker.ExpireOld(200)
 
 	if arc.staleCount() != 1 {
@@ -116,6 +119,12 @@ func TestEngine_FullyValidated_TriggersExpireOldAndArchive(t *testing.T) {
 		t.Fatal("seed Add returned false")
 	}
 
+	// The seed set was just touched; move the tracker clock past the
+	// access-age window so the retention floor can evict it. The driving
+	// validations are signed at the same future instant to stay current.
+	future := now.Add(validationSetExpires + time.Second)
+	engine.validationTracker.SetNow(func() time.Time { return future })
+
 	// Drive two trusted validations at seq 300 so the tracker fires the
 	// fully-validated callback. Quorum=2.
 	for _, n := range []consensus.NodeID{{1}, {2}} {
@@ -123,7 +132,7 @@ func TestEngine_FullyValidated_TriggersExpireOldAndArchive(t *testing.T) {
 			LedgerSeq: 300,
 			LedgerID:  consensus.LedgerID{0xB},
 			NodeID:    n,
-			SignTime:  now,
+			SignTime:  future,
 			Full:      true,
 		}
 		engine.validationTracker.Add(v)
@@ -182,6 +191,9 @@ func TestEngine_SetArchive_NilDetaches(t *testing.T) {
 	if !engine.validationTracker.Add(v) {
 		t.Fatal("Add returned false; precondition broken")
 	}
+	// Jump the clock so the eviction really happens — otherwise the
+	// zero-stale assertion below would pass vacuously.
+	engine.validationTracker.SetNow(func() time.Time { return time.Now().Add(validationSetExpires + time.Second) })
 	engine.validationTracker.ExpireOld(200)
 
 	if got := arc.staleCount(); got != 0 {
