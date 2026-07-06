@@ -2,11 +2,31 @@ package nodestore
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 )
+
+// resurrectOnIterate wraps a store and fires a one-shot callback immediately
+// after the prune iterator has snapshotted the keyspace, before the flush runs.
+// It reproduces the online-delete race: a key present below the boundary in the
+// frozen snapshot is re-created live (at seq >= boundary) during the scan window.
+type resurrectOnIterate struct {
+	*memorydb.MemDatabase
+	once sync.Once
+	fn   func()
+}
+
+func (r *resurrectOnIterate) NewIterator(prefix, start []byte) kvstore.Iterator {
+	it := r.MemDatabase.NewIterator(prefix, start)
+	if r.fn != nil {
+		r.once.Do(r.fn)
+	}
+	return it
+}
 
 // storeNodeAt persists a node carrying an explicit ledger sequence so the
 // prune scanner can classify it. The key is derived from the data plus seq so
@@ -142,6 +162,45 @@ func TestDeleteBefore_EvictsPositiveCache(t *testing.T) {
 	}
 	if present(t, db, h) {
 		t.Fatal("pruned node must not be fetchable after cache eviction")
+	}
+}
+
+func TestDeleteBefore_ResurrectedDuringScanSurvives(t *testing.T) {
+	// A key whose snapshot copy is below the boundary is re-created live at
+	// seq >= boundary after the prune iterator snapshots but before the flush
+	// (e.g. AccountDelete then re-funding the same deterministic keylet). The
+	// flush must observe the live value and leave the resurrected node alone.
+	store := &resurrectOnIterate{MemDatabase: memorydb.New()}
+	db := NewKVDatabase(store, "mem", 1000, time.Hour)
+	defer db.Close()
+
+	data := Blob("resurrected-account-state")
+	h := ComputeHash256(data)
+	writeAt := func(seq uint32) {
+		node := &Node{Type: NodeAccount, Hash: h, Data: data, LedgerSeq: seq}
+		if err := db.Store(context.Background(), node); err != nil {
+			t.Fatalf("Store(seq=%d): %v", seq, err)
+		}
+	}
+
+	// Snapshot copy: a superseded (below-boundary) sequence.
+	writeAt(3)
+	// Live resurrection at a retained sequence, injected after the snapshot.
+	store.fn = func() { writeAt(50) }
+
+	if _, err := db.DeleteBefore(context.Background(), 40, 0); err != nil {
+		t.Fatalf("DeleteBefore: %v", err)
+	}
+	if !present(t, db, h) {
+		t.Fatal("node re-created live during the scan window must not be pruned")
+	}
+	// The live value must also be intact, not a stale below-boundary copy.
+	n, err := db.Fetch(context.Background(), h)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if n == nil || n.LedgerSeq != 50 {
+		t.Fatalf("resurrected node LedgerSeq = %v, want 50", n)
 	}
 }
 

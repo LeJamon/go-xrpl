@@ -14,6 +14,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -246,7 +247,9 @@ type Adaptor struct {
 	// unlBlocked reports the validator-list aggregator's UNL lock-down flag.
 	// Wired at startup when publisher lists are configured; nil (no
 	// publishers) means never blocked. Written once before the engine
-	// starts, then only read.
+	// starts, then only read. The underlying aggregator read is lock-free
+	// (atomic) so the consensus bow-out can poll it while holding the engine
+	// lock without an agg-mu -> e.mu ABBA against onTrustChanged.
 	unlBlocked func() bool
 
 	// refreshUNL re-evaluates the aggregator's trust view against the live
@@ -258,10 +261,32 @@ type Adaptor struct {
 	// write-once-before-start lifetime as unlBlocked.
 	refreshUNL func()
 
+	// refreshInFlight single-flights RefreshUNLState's background refresh so
+	// per-round dispatches can't pile up goroutines if a tick runs slow.
+	refreshInFlight atomic.Bool
+
+	// relayValidations is the operator's [relay_validations] stance.
+	// Immutable after New — read without a.mu.
+	relayValidations RelayValidationsPolicy
+
+	// listedFn resolves validator-list membership (Aggregator.IsListed).
+	// nil when no publisher trust is configured — nothing is listed.
+	listedFn func(consensus.NodeID) bool
+
+	// onTrustChanged fires after every SetTrustedValidators swap (outside
+	// a.mu) so the engine can promote stored validations at trust-change
+	// time. nil-safe.
+	onTrustChanged func()
+
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
 	// the trie-descent floor for preferredLCL. Zero for a non-validator.
 	lastIssuedValidationSeq atomic.Uint32
+
+	// maxDisallowedSeq is the highest ledger seq persisted before this
+	// process started; the engine never proposes or validates at or below
+	// it (anti-double-sign across restarts). Immutable after New.
+	maxDisallowedSeq uint32
 
 	// reqLedgerLast rate-limits per-hash broadcast TMGetLedger retries from
 	// the engine's checkLedger heartbeat (see RequestLedger).
@@ -302,6 +327,39 @@ func defaultFeeVote() FeeVoteStance {
 	}
 }
 
+// RelayValidationsPolicy mirrors rippled's RELAY_UNTRUSTED_VALIDATIONS
+// tri-state, set by the [relay_validations] config key: forward verified
+// current validations from outside the UNL (default), forward trusted only,
+// or drop untrusted before signature verification.
+type RelayValidationsPolicy int
+
+const (
+	// RelayValidationsAll relays untrusted validations too — rippled's
+	// default (RELAY_UNTRUSTED_VALIDATIONS = 1). The zero value, so bare
+	// Config{} adaptors get the network-friendly default.
+	RelayValidationsAll RelayValidationsPolicy = iota
+	// RelayValidationsTrusted verifies and processes untrusted validations
+	// but relays only trusted ones (rippled 0).
+	RelayValidationsTrusted
+	// RelayValidationsDropUntrusted drops untrusted validations at the
+	// router before signature verification (rippled -1).
+	RelayValidationsDropUntrusted
+)
+
+// ParseRelayValidationsPolicy maps the [relay_validations] config string
+// (case-insensitive; "" = default "all") to its policy. Unknown values are
+// rejected by config validation upstream; fall back to the default here.
+func ParseRelayValidationsPolicy(s string) RelayValidationsPolicy {
+	switch strings.ToLower(s) {
+	case "trusted":
+		return RelayValidationsTrusted
+	case "drop_untrusted":
+		return RelayValidationsDropUntrusted
+	default:
+		return RelayValidationsAll
+	}
+}
+
 type Config struct {
 	LedgerService *service.Service
 	Sender        NetworkSender
@@ -322,6 +380,9 @@ type Config struct {
 	// abstain, upvoted → up) over registry defaults. Shared with the ledger
 	// service, which folds validated flag ledgers in via DoValidatedLedger.
 	AmendmentTable *amendment.AmendmentTable
+	// RelayValidations is the operator's [relay_validations] stance; the
+	// zero value relays untrusted validations (rippled's default).
+	RelayValidations RelayValidationsPolicy
 }
 
 // generateCookie returns a non-zero random 64-bit cookie. On a read error it
@@ -412,6 +473,15 @@ func New(cfg Config) *Adaptor {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
+	// Non-validators never emit, so skip the floor read (see maxDisallowedSeq).
+	var maxDisallowedSeq uint32
+	if cfg.Identity != nil && cfg.LedgerService != nil {
+		maxDisallowedSeq = cfg.LedgerService.MaxPersistedLedgerSeq(context.Background())
+		if maxDisallowedSeq > 0 {
+			logger.Info("max persisted ledger floor for validations", "seq", maxDisallowedSeq)
+		}
+	}
+
 	// NegativeUNL voter: constructed only with both a local identity and UNL
 	// master keys (needed for the local-participation check and the emitted
 	// UNLModify tx). nil otherwise — GenerateNegativeUNLPseudoTx returns no votes.
@@ -438,11 +508,13 @@ func New(cfg Config) *Adaptor {
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
 		reqLedgerLast:     make(map[consensus.LedgerID]time.Time),
 		announcedSets:     make(map[consensus.TxSetID]struct{}),
+		maxDisallowedSeq:  maxDisallowedSeq,
 		cookie:            cookie,
 		feeVote:           feeVote,
 		amendmentStances:  amendmentStances,
 		amendmentTable:    cfg.AmendmentTable,
 		trustedVotes:      trustedVotes,
+		relayValidations:  cfg.RelayValidations,
 		logger:            logger,
 	}
 }
@@ -711,6 +783,10 @@ func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
 	return consensus.LedgerID(vl.Hash())
 }
 
+func (a *Adaptor) GetMaxDisallowedLedgerSeq() uint32 {
+	return a.maxDisallowedSeq
+}
+
 func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool) (consensus.Ledger, error) {
 	// Unwrap the parent for the service. Critical for chain switching: the
 	// parent may differ from the service's closedLedger after wrong-ledger detection.
@@ -972,6 +1048,44 @@ func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
 	return ok
 }
 
+// SetListedLookup installs the validator-list membership resolver
+// (Aggregator.IsListed). Wired once at startup when publisher trust is
+// configured; nil (the default) means nothing is listed.
+func (a *Adaptor) SetListedLookup(fn func(consensus.NodeID) bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listedFn = fn
+}
+
+// IsListed implements consensus.ListedOracle: whether node appears in at
+// least one live publisher list without (necessarily) being trusted.
+func (a *Adaptor) IsListed(node consensus.NodeID) bool {
+	a.mu.Lock()
+	fn := a.listedFn
+	a.mu.Unlock()
+	return fn != nil && fn(node)
+}
+
+// RelayUntrustedValidations implements consensus.ValidationRelayPolicy:
+// true under the default [relay_validations] "all" stance.
+func (a *Adaptor) RelayUntrustedValidations() bool {
+	return a.relayValidations == RelayValidationsAll
+}
+
+// DropUntrustedValidations reports the "drop_untrusted" stance; the router
+// then sheds untrusted validations before signature verification.
+func (a *Adaptor) DropUntrustedValidations() bool {
+	return a.relayValidations == RelayValidationsDropUntrusted
+}
+
+// OnTrustChanged implements consensus.TrustChangeNotifier: fn runs after
+// every SetTrustedValidators swap, outside a.mu.
+func (a *Adaptor) OnTrustChanged(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onTrustChanged = fn
+}
+
 func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1013,6 +1127,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.trustedValidators = vCopy
 	a.trustedSet = newSet
 	a.trustedMasterKeys = mkCopy
+	onTrustChanged := a.onTrustChanged
 	a.mu.Unlock()
 
 	// trustedVotes is assigned once in New and never reassigned, so the
@@ -1020,6 +1135,11 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	// releasing a.mu to avoid lock nesting.
 	if a.trustedVotes != nil {
 		a.trustedVotes.TrustChanged(vCopy)
+	}
+	// Outside a.mu: the engine's trust refresh reads back through
+	// GetTrustedValidators / GetQuorum, which re-lock it.
+	if onTrustChanged != nil {
+		onTrustChanged()
 	}
 }
 
@@ -1318,17 +1438,29 @@ func (a *Adaptor) SetUNLRefreshFunc(fn func()) {
 	a.refreshUNL = fn
 }
 
-// RefreshUNLState drives a live re-evaluation of the aggregator's trust view
-// so the consensus bow-out sees an expired list the round it lapses rather
-// than waiting for the standalone refresh tick. No-op without publisher
-// lists. Safe under the engine lock: the aggregator's OnChange fan-out
-// reaches only the adaptor/static/trusted-votes mutexes, never back into the
-// engine, so the engine->aggregator lock order stays acyclic.
+// RefreshUNLState kicks off a live re-evaluation of the aggregator's trust
+// view (promote rotations, latch/clear the lock-down flag) so the consensus
+// bow-out reacts to an expiring list within a round or two instead of only on
+// the standalone refresh tick. No-op without publisher lists.
+//
+// Runs on a background goroutine, deliberately NOT inline: the refresh takes
+// the aggregator lock and its OnChange fan-out reaches onTrustChanged ->
+// Engine.refreshTrustedSet, which locks e.mu. The caller holds e.mu at round
+// start, so an inline call would self-deadlock (e.mu is not reentrant) and, on
+// the ticker goroutine, ABBA against it. The bow-out reads the sticky flag
+// lock-free via IsUNLBlocked; the single-flight guard drops overlapping
+// refreshes so a slow tick can't pile up goroutines.
 func (a *Adaptor) RefreshUNLState() {
 	if a.refreshUNL == nil {
 		return
 	}
-	a.refreshUNL()
+	if !a.refreshInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer a.refreshInFlight.Store(false)
+		a.refreshUNL()
+	}()
 }
 
 // IsAmendmentBlocked reports whether an unsupported amendment has activated.

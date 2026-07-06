@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"fmt"
 	"net"
 	"testing"
 	"time"
@@ -781,4 +782,91 @@ func TestHandleEndpoints_RejectsNonIPHost(t *testing.T) {
 	defer o.discovery.mu.RUnlock()
 	require.Len(t, o.discovery.peers, 1)
 	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
+}
+
+// TestHandleEndpoints_RateLimitsPerPeer pins issue #1170: after a peer's
+// TMEndpoints frame is accepted, a second frame arriving inside the
+// secondsPerMessage window is dropped silently (no charge, no ingest),
+// mirroring rippled's whenAcceptEndpoints gate. Once the window elapses
+// the peer is served again.
+func TestHandleEndpoints_RateLimitsPerPeer(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(18))
+
+	send := func(addr string) {
+		o.onMessageReceived(Event{
+			PeerID:      peer.ID(),
+			MessageType: uint16(message.TypeEndpoints),
+			Payload:     encodeEndpoints(t, 2, []message.Endpointv2{{Endpoint: addr, Hops: 1}}),
+		})
+	}
+
+	send("10.0.0.1:51235")
+	send("10.0.0.2:51235") // inside the window → silently dropped
+
+	o.discovery.mu.RLock()
+	require.Len(t, o.discovery.peers, 1, "second frame inside the window must not ingest")
+	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235")
+	o.discovery.mu.RUnlock()
+	assert.Zero(t, peer.BadDataCount(), "rate-limited frame must not be charged")
+
+	// Simulate the window elapsing, then a fresh frame is accepted again.
+	peer.acceptEndpointsMu.Lock()
+	peer.whenAcceptEndpoints = time.Now().Add(-time.Second)
+	peer.acceptEndpointsMu.Unlock()
+
+	send("10.0.0.2:51235")
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 2, "frame after the window must ingest")
+	assert.Contains(t, o.discovery.peers, "10.0.0.2:51235")
+}
+
+// TestHandleEndpoints_SamplesOversizedFrame pins issue #1170: a frame
+// carrying more than numberOfEndpointsMax valid entries (but under the
+// 1024 wholesale-reject bound) is sampled down before ingest, so a single
+// accepted frame contributes at most endpointsIngestSampleMax addresses.
+func TestHandleEndpoints_SamplesOversizedFrame(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(19))
+
+	const n = endpointsIngestSampleMax * 3
+	eps := make([]message.Endpointv2, n)
+	for i := range eps {
+		eps[i] = message.Endpointv2{Endpoint: fmt.Sprintf("10.%d.%d.1:51235", i/256, i%256), Hops: 1}
+	}
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     encodeEndpoints(t, 2, eps),
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Len(t, o.discovery.peers, endpointsIngestSampleMax,
+		"accepted frame must be sampled down to numberOfEndpointsMax")
+	assert.Zero(t, peer.BadDataCount(), "well-formed oversized-but-sub-1024 frame is not charged")
+}
+
+// TestHandleEndpoints_DropsBeyondHorizon pins issue #1170: an entry whose
+// hop count exceeds our discovery horizon (MaxHops) is dropped at ingest
+// without a charge, while a sibling within the horizon is still ingested.
+// Mirrors rippled's hops>maxHops preprocess drop.
+func TestHandleEndpoints_DropsBeyondHorizon(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(20))
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: MaxHops},
+		{Endpoint: "10.0.0.2:51235", Hops: MaxHops + 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 1)
+	assert.Contains(t, o.discovery.peers, "10.0.0.1:51235", "hops within horizon must ingest")
+	assert.NotContains(t, o.discovery.peers, "10.0.0.2:51235", "hops beyond horizon must be dropped")
+	assert.Zero(t, peer.BadDataCount(), "over-horizon hop count is dropped, not charged")
 }

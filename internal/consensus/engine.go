@@ -69,6 +69,33 @@ type WireableAdaptor interface {
 	SetValidationHistorian(h ValidationHistorian)
 }
 
+// ListedOracle is an optional TrustOracle extension reporting validator-list
+// membership: a listed validator is published by at least one configured list
+// publisher but not (necessarily) in the UNL. The engine stores validations
+// from listed signers so a later trust change promotes the ones already seen
+// instead of waiting for a fresh validation. Absent → nothing is listed.
+type ListedOracle interface {
+	IsListed(node NodeID) bool
+}
+
+// ValidationRelayPolicy is an optional Adaptor extension exposing the
+// operator's [relay_validations] stance. Absent → only trusted validations
+// are relayed.
+type ValidationRelayPolicy interface {
+	// RelayUntrustedValidations reports whether verified, current validations
+	// signed by validators outside the UNL are forwarded to peers, so nodes
+	// with a different UNL that do trust the signer still receive them.
+	RelayUntrustedValidations() bool
+}
+
+// TrustChangeNotifier is an optional Adaptor extension: implementers invoke
+// the registered callback after every runtime UNL mutation so the engine can
+// promote stored validations from newly-trusted validators immediately rather
+// than at the next accepted ledger.
+type TrustChangeNotifier interface {
+	OnTrustChanged(fn func())
+}
+
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
 // on the narrowest one that satisfies your needs.
 
@@ -122,6 +149,13 @@ type LedgerProvider interface {
 	// GetValidatedLedgerHash returns the hash of the most recent fully
 	// validated ledger (trusted-validation quorum reached), or zero if none.
 	GetValidatedLedgerHash() LedgerID
+
+	// GetMaxDisallowedLedgerSeq returns the highest ledger sequence persisted
+	// before this process started, or 0 when none. A restarted validator may
+	// already have signed validations up to that tip, so it must never
+	// propose or validate at or below this floor (anti-self-equivocation
+	// across restarts). Immutable after startup.
+	GetMaxDisallowedLedgerSeq() uint32
 
 	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time, closeTimeCorrect bool) (Ledger, error)
 

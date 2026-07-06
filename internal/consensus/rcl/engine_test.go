@@ -92,6 +92,17 @@ type mockAdaptor struct {
 	trusted map[consensus.NodeID]bool
 	quorum  int
 
+	// listed backs the optional ListedOracle; nil/empty = nothing listed.
+	listed map[consensus.NodeID]bool
+
+	// relayUntrusted backs the optional ValidationRelayPolicy. Defaults
+	// false so pre-existing tests keep trusted-only relay semantics.
+	relayUntrusted bool
+
+	// trustChanged is the engine's TrustChangeNotifier callback, captured
+	// at Start; tests fire it via notifyTrustChanged.
+	trustChanged func()
+
 	// Data stores
 	ledgers map[consensus.LedgerID]consensus.Ledger
 	txSets  map[consensus.TxSetID]consensus.TxSet
@@ -137,6 +148,9 @@ type mockAdaptor struct {
 	// R4.10 test sets this to a non-zero LedgerID to exercise the
 	// sfValidatedHash gate path.
 	validatedLedgerHashOverride consensus.LedgerID
+
+	// Restart validation floor; zero = no persisted history.
+	maxDisallowedSeq uint32
 
 	// Amendment vote stance for the R5.3 test. Empty means no vote.
 	amendmentVote [][32]byte
@@ -232,6 +246,12 @@ func (a *mockAdaptor) UpdateRelaySlot(_ []byte, _ uint64, _ []uint64) {}
 // PeersThatHave returns nil — the rcl engine tests never query the
 // overlay's reverse index since they go through a mockAdaptor.
 func (a *mockAdaptor) PeersThatHave(_ [32]byte) []uint64 { return nil }
+
+func (a *mockAdaptor) GetMaxDisallowedLedgerSeq() uint32 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.maxDisallowedSeq
+}
 
 func (a *mockAdaptor) GetValidatedLedgerHash() consensus.LedgerID {
 	// Test mock: no validated ledger tracking by default. Tests that
@@ -628,6 +648,48 @@ func (a *mockAdaptor) setTrusted(nodes []consensus.NodeID) {
 	}
 }
 
+func (a *mockAdaptor) setListed(nodes []consensus.NodeID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listed = make(map[consensus.NodeID]bool)
+	for _, n := range nodes {
+		a.listed[n] = true
+	}
+}
+
+// IsListed implements the optional consensus.ListedOracle.
+func (a *mockAdaptor) IsListed(nodeID consensus.NodeID) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.listed[nodeID]
+}
+
+// RelayUntrustedValidations implements the optional
+// consensus.ValidationRelayPolicy.
+func (a *mockAdaptor) RelayUntrustedValidations() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.relayUntrusted
+}
+
+// OnTrustChanged implements the optional consensus.TrustChangeNotifier.
+func (a *mockAdaptor) OnTrustChanged(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.trustChanged = fn
+}
+
+// notifyTrustChanged fires the engine's registered trust-change callback,
+// standing in for the production SetTrustedValidators tail.
+func (a *mockAdaptor) notifyTrustChanged() {
+	a.mu.RLock()
+	fn := a.trustChanged
+	a.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // Tests
 
 func TestEngine_NewEngine(t *testing.T) {
@@ -788,11 +850,13 @@ func TestEngine_StartRound_UNLExpiredStandaloneSkips(t *testing.T) {
 	}
 }
 
-// TestEngine_StartRound_UNLRefreshLatchesBowOut pins the per-round trust
-// refresh (rippled updateTrusted at every ledger close): the lock-down flag
-// is clear entering the round, but RefreshUNLState — driven at round start —
-// latches it against the live clock, so the node bows out that same round
-// instead of waiting for the aggregator's standalone refresh tick.
+// TestEngine_StartRound_UNLRefreshLatchesBowOut pins the round-start trust
+// refresh wiring: startRoundLocked calls RefreshUNLState before the bow-out
+// gate, so a refresh that latches the lock-down flag makes the node bow out.
+// The mock refreshes synchronously to exercise the gate; the production
+// adaptor dispatches the refresh on a background goroutine (it can't run
+// inline under the engine lock), so a real node reacts a round or two later
+// rather than the same round.
 func TestEngine_StartRound_UNLRefreshLatchesBowOut(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
@@ -3341,6 +3405,152 @@ func TestSendValidation_SeqEnforcerExpiresAfterIdle(t *testing.T) {
 		t.Fatalf("post-reset floor not re-armed: a seq below the new "+
 			"floor (300) was wrongly accepted; want 2 emissions, got %d",
 			final)
+	}
+}
+
+// TestEngine_StartRound_RestartFloorForcesObserving pins the anti-
+// self-equivocation floor after restart (rippled preStartRound,
+// RCLConsensus.cpp:1006): a validator whose relational DB held ledgers
+// up to seq N before restart must not re-enter a validating mode for
+// any round at or below N — it may already have signed a conflicting
+// validation for those sequences. Rounds strictly above N (prevLedger
+// seq >= N) promote normally.
+func TestEngine_StartRound_RestartFloorForcesObserving(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.maxDisallowedSeq = 500
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Round building seq 500 == floor → held in observing.
+	round := consensus.RoundID{Seq: 500, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if engine.Mode() != consensus.ModeObserving {
+		t.Fatalf("round at the restart floor: want Observing, got %v", engine.Mode())
+	}
+
+	// Round building seq 501 (prevLedger seq 500 >= floor) → proposes.
+	round = consensus.RoundID{Seq: 501, ParentHash: consensus.LedgerID{2}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+	if engine.Mode() != consensus.ModeProposing {
+		t.Fatalf("round above the restart floor: want Proposing, got %v", engine.Mode())
+	}
+}
+
+// TestSendValidation_RestartFloor_BlocksAtOrBelow pins the emission
+// side of the restart floor: go-xrpl emits validations regardless of
+// mode, so the SeqEnforcer must also refuse any seq at or below the
+// max ledger persisted before this process started, even when the
+// in-memory floor (ourLastValidatedSeq) is still 0.
+func TestSendValidation_RestartFloor_BlocksAtOrBelow(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.maxDisallowedSeq = 500
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx := t.Context()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 501, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// At and below the persisted tip → dropped (possible double-sign).
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 500})
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 499})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	blocked := len(adaptor.validationsBroadcast)
+	adaptor.mu.RUnlock()
+	if blocked != 0 {
+		t.Fatalf("restart floor: emissions at seq <= 500 must be dropped, got %d", blocked)
+	}
+
+	// First seq above the persisted tip → emits.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xC3}, seq: 501})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+	if len(emitted) != 1 || emitted[0].LedgerSeq != 501 {
+		t.Fatalf("restart floor: want exactly one emission at seq=501, got %d", len(emitted))
+	}
+}
+
+// TestSendValidation_RestartFloorSurvivesIdleExpiry pins the
+// difference between the two floors: the in-memory SeqEnforcer floor
+// resets after validationSetExpires of silence, but the boot-time
+// restart floor is rippled's maxDisallowedLedger_ — immutable for the
+// process lifetime. Without the clamp, a validator idle for 10+
+// minutes after restart could re-sign a pre-restart sequence.
+func TestSendValidation_RestartFloorSurvivesIdleExpiry(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.maxDisallowedSeq = 500
+
+	baseTime := time.Unix(1_700_000_000, 0).UTC()
+	adaptor.mu.Lock()
+	adaptor.now = baseTime
+	adaptor.mu.Unlock()
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	ctx := t.Context()
+	if err := engine.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer engine.Stop()
+
+	round := consensus.RoundID{Seq: 501, ParentHash: consensus.LedgerID{1}}
+	engine.StartRound(round, true)
+
+	adaptor.mu.Lock()
+	adaptor.validationsBroadcast = nil
+	adaptor.mu.Unlock()
+
+	// Emit at 501, then go idle past the SeqEnforcer expiry.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xA1}, seq: 501})
+	engine.mu.Unlock()
+
+	adaptor.mu.Lock()
+	adaptor.now = baseTime.Add(validationSetExpires + time.Second)
+	adaptor.mu.Unlock()
+
+	// The idle reset drops ourLastValidatedSeq to 0, but the restart
+	// floor must still refuse a pre-restart sequence.
+	engine.mu.Lock()
+	engine.sendValidation(&mockLedger{id: consensus.LedgerID{0xB2}, seq: 400})
+	engine.mu.Unlock()
+
+	adaptor.mu.RLock()
+	emitted := append([]*consensus.Validation(nil), adaptor.validationsBroadcast...)
+	adaptor.mu.RUnlock()
+	if len(emitted) != 1 {
+		t.Fatalf("restart floor must survive the idle reset: seq=400 <= "+
+			"persisted tip 500 was wrongly emitted; want 1 emission, got %d",
+			len(emitted))
+	}
+	if emitted[0].LedgerSeq != 501 {
+		t.Fatalf("kept emission seq: want 501, got %d", emitted[0].LedgerSeq)
 	}
 }
 

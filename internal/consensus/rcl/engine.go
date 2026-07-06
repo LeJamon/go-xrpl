@@ -26,6 +26,13 @@ type Engine struct {
 	adaptor  consensus.Adaptor
 	eventBus *consensus.EventBus
 
+	// listedOracle / relayPolicy are the adaptor's optional untrusted-
+	// validation extensions, resolved once at construction. Nil when the
+	// adaptor doesn't implement them: nothing is listed, only trusted
+	// validations relay.
+	listedOracle consensus.ListedOracle
+	relayPolicy  consensus.ValidationRelayPolicy
+
 	// Current state
 	mode  consensus.Mode
 	phase consensus.Phase
@@ -347,6 +354,8 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	if e.now == nil {
 		e.now = time.Now
 	}
+	e.listedOracle, _ = adaptor.(consensus.ListedOracle)
+	e.relayPolicy, _ = adaptor.(consensus.ValidationRelayPolicy)
 	e.modeAtomic.Store(int32(e.mode))
 	return e
 }
@@ -408,6 +417,23 @@ func (e *Engine) SetStallPing(ping func()) {
 	e.stallPing.Store(&ping)
 }
 
+// refreshTrustedSet re-syncs the validation tracker's trusted set and quorum
+// after a runtime UNL change (rippled trustChanged): the trie rebuild inside
+// SetTrusted promotes stored validations from newly-trusted validators into
+// branch support immediately, and quorum reads pick up the new set on the
+// next check. Runs on the trust-change caller's goroutine; takes e.mu only
+// briefly to snapshot the tracker, so it must not be called while holding it.
+func (e *Engine) refreshTrustedSet() {
+	e.mu.RLock()
+	vt := e.validationTracker
+	e.mu.RUnlock()
+	if vt == nil {
+		return
+	}
+	vt.SetTrusted(e.adaptor.GetTrustedValidators())
+	vt.SetQuorum(e.adaptor.GetQuorum())
+}
+
 func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -427,6 +453,13 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
 		wired.SetValidationHistorian(e.validationTracker)
+	}
+	// Promote stored validations the moment the UNL mutates (rippled
+	// trustChanged) instead of at the next accepted ledger — a stalled node
+	// may never accept, and the whole point of a runtime trust grant is to
+	// count what the newly-trusted validator already signed.
+	if notifier, ok := e.adaptor.(consensus.TrustChangeNotifier); ok {
+		notifier.OnTrustChanged(e.refreshTrustedSet)
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -538,11 +571,13 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		e.prevCloseTime = e.state.CloseTimes.Self
 	}
 
-	// Refresh the trust view before reading it: rippled recomputes via
-	// updateTrusted at every ledger close, so an expired list bows the node
-	// out that round. goXRPL's aggregator otherwise only refreshes on its
-	// 30s tick, leaving the lock-down flag stale for several rounds after a
-	// list lapses. No-op without publisher lists.
+	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
+	// within a round or two rather than only on the aggregator's 30s tick
+	// (rippled recomputes via updateTrusted at every ledger close). It runs
+	// async — inline would deadlock, since the refresh's OnChange fan-out
+	// re-enters e.mu via onTrustChanged — so this round reads the flag as of
+	// the previous refresh and the next round sees the fresh value. No-op
+	// without publisher lists.
 	e.adaptor.RefreshUNLState()
 
 	// Voluntary bow-out: an expired validator list means our trust view is
@@ -563,12 +598,27 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Determine mode. recovering forces switchedLedger for exactly one round
 	// even when we'd otherwise propose; the next round gets normal treatment.
+	// belowFloor holds a restarted validator in observing until the network
+	// passes the pre-restart persisted tip, so it can't re-sign a sequence it
+	// may already have validated (round.Seq is prevLedger.Seq()+1, making
+	// this rippled preStartRound's prevLgr.seq() >= maxDisallowedLedger).
 	// An amendment-blocked node observes only: it can no longer build correct
 	// ledgers, so proposing or validating them would poison the network.
+	belowFloor := round.Seq <= e.adaptor.GetMaxDisallowedLedgerSeq()
 	fullValidator := e.adaptor.IsValidator() &&
 		e.adaptor.GetOperatingMode() == consensus.OpModeFull &&
 		!e.adaptor.IsAmendmentBlocked() && !bowedOut
 	switch {
+	case belowFloor:
+		if proposing && e.adaptor.IsValidator() {
+			slog.Info("Observing: round at or below restart validation floor",
+				"t", "consensus",
+				"event", "restart-floor-observe",
+				"round_seq", round.Seq,
+				"floor", e.adaptor.GetMaxDisallowedLedgerSeq(),
+			)
+		}
+		e.setMode(consensus.ModeObserving)
 	case recovering && fullValidator:
 		e.setMode(consensus.ModeSwitchedLedger)
 	case proposing && fullValidator:
@@ -830,30 +880,49 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 
 	trusted := e.adaptor.IsTrusted(validation.NodeID)
 
-	// Same-seq Byzantine detection: a trusted validator must not sign two
+	// Track listed-but-untrusted signers too: a validator published by a
+	// configured list publisher but below the trust threshold gets its
+	// validations stored (untrusted — quorum and trie filter on the trusted
+	// set at read time), so a later trust change promotes what was already
+	// seen instead of waiting one validation interval for a fresh one.
+	// Publisher lists bound the key space, so this can't grow unboundedly.
+	tracked := trusted
+	if !tracked && e.listedOracle != nil {
+		tracked = e.listedOracle.IsListed(validation.NodeID)
+	}
+
+	// Operator [relay_validations] stance: "all" (the default, matching
+	// rippled) also forwards verified, current validations signed outside
+	// our UNL, so peers with a different UNL that do trust the signer still
+	// receive them.
+	relay := trusted || (e.relayPolicy != nil && e.relayPolicy.RelayUntrustedValidations())
+
+	// Same-seq Byzantine detection: a tracked validator must not sign two
 	// ledgers (or re-sign differently) for one seq. On conflict, keep it out
 	// of quorum/trie but STILL relay it (peers should observe it too) and
 	// charge no one. The returned error only tells the router to skip the
 	// catch-up acquire — not to penalise the relaying peer.
-	if trusted && e.validationTracker != nil {
+	if tracked && e.validationTracker != nil {
 		if reason, conflict := validationConflict(
 			e.validationTracker.GetLatestValidation(validation.NodeID),
 			validation,
 		); conflict {
-			e.adaptor.RelayValidation(validation, originPeer)
-			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: reason}
+			if relay {
+				e.adaptor.RelayValidation(validation, originPeer)
+			}
+			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: reason, Trusted: trusted}
 		}
 	}
 
-	// Store trusted-only: an untrusted key could grow the map unboundedly.
+	// Round-scoped bookkeeping stays trusted-only.
 	if trusted {
 		e.proposalTracker.SetValidation(validation)
 	}
 
 	// Feed the tracker — the gate that advances validated_ledger once a
 	// quorum of trusted FULL validations accumulates (partials steer the trie
-	// but don't count). Trust-gate to avoid a byNode entry per untrusted key.
-	if trusted && e.validationTracker != nil {
+	// but don't count). Untrusted keys must be listed to get a byNode entry.
+	if tracked && e.validationTracker != nil {
 		e.validationTracker.Add(validation)
 	}
 
@@ -863,9 +932,7 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 		Timestamp:  e.adaptor.Now(),
 	})
 
-	// Relay trusted validations (excluding origin); drop untrusted for the
-	// same spam reason as OnProposal.
-	if trusted {
+	if relay {
 		e.adaptor.RelayValidation(validation, originPeer)
 	}
 
@@ -3216,6 +3283,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"compatible", compatible,
 		"can_validate_seq", canValidate,
 		"our_last_validated_seq", e.ourLastValidatedSeq,
+		"max_disallowed_seq", e.adaptor.GetMaxDisallowedLedgerSeq(),
 		"mode", e.mode.String(),
 		"decision", emitDecision(willEmit, isValidator, blocked, consensusFail, canValidate, compatible),
 	)
@@ -3452,12 +3520,16 @@ func (e *Engine) determineCloseTime() time.Time {
 }
 
 // peekCanValidateSeqLocked is the non-mutating SeqEnforcer predicate.
-// Caller holds e.mu read.
+// The restart floor never idle-expires: the pre-restart persisted tip stays
+// disallowed for the process lifetime. Caller holds e.mu read.
 func (e *Engine) peekCanValidateSeqLocked(seq uint32) bool {
 	floor := e.ourLastValidatedSeq
 	if !e.ourLastValidatedTime.IsZero() &&
 		e.adaptor.Now().Sub(e.ourLastValidatedTime) > validationSetExpires {
 		floor = 0
+	}
+	if d := e.adaptor.GetMaxDisallowedLedgerSeq(); floor < d {
+		floor = d
 	}
 	return seq > floor
 }
@@ -3471,7 +3543,7 @@ func (e *Engine) tryAdvanceValidatedSeqLocked(seq uint32) bool {
 		now.Sub(e.ourLastValidatedTime) > validationSetExpires {
 		e.ourLastValidatedSeq = 0
 	}
-	if seq <= e.ourLastValidatedSeq {
+	if seq <= e.ourLastValidatedSeq || seq <= e.adaptor.GetMaxDisallowedLedgerSeq() {
 		return false
 	}
 	e.ourLastValidatedSeq = seq

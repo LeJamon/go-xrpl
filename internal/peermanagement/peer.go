@@ -129,6 +129,15 @@ type Peer struct {
 
 	tracking atomic.Int32
 
+	// whenAcceptEndpoints is the earliest instant this peer may have
+	// another inbound TMEndpoints frame accepted. Enforces the per-peer
+	// endpoint rate-limit (rippled PeerFinder secondsPerMessage): a frame
+	// arriving inside the window is dropped silently so a single peer
+	// cannot stream endpoint announcements unbounded. Guarded by
+	// acceptEndpointsMu.
+	acceptEndpointsMu   sync.Mutex
+	whenAcceptEndpoints time.Time
+
 	// Consecutive ErrSendBufferFull count; close at sendqIntervals.
 	// PeerImp.cpp:705-708 "Large send queue".
 	largeSendQ atomic.Uint32
@@ -408,6 +417,23 @@ func (p *Peer) Tracking() PeerTracking {
 
 func (p *Peer) setTracking(t PeerTracking) {
 	p.tracking.Store(int32(t))
+}
+
+// acceptEndpoints reports whether an inbound TMEndpoints frame from this
+// peer may be processed now, arming the next window when it may. Mirrors
+// rippled's per-slot whenAcceptEndpoints gate (PeerFinder secondsPerMessage):
+// a frame arriving inside the window is rejected so one peer cannot stream
+// endpoint announcements unbounded. Returns false as a silent drop (no
+// charge), matching rippled.
+func (p *Peer) acceptEndpoints() bool {
+	now := time.Now()
+	p.acceptEndpointsMu.Lock()
+	defer p.acceptEndpointsMu.Unlock()
+	if now.Before(p.whenAcceptEndpoints) {
+		return false
+	}
+	p.whenAcceptEndpoints = now.Add(endpointsBroadcastInterval)
+	return true
 }
 
 // CheckTracking mirrors rippled PeerImp::checkTracking (PeerImp.cpp:1986-2005).
