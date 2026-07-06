@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	consensuscommon "github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	testenv "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 )
 
 // buildSignedPaymentBlob constructs a signed Payment binary blob from sender
@@ -137,7 +140,7 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 	if parent == nil {
 		t.Fatal("GetClosedLedger nil before AcceptConsensusResult")
 	}
-	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, time.Now(), true); err != nil {
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, time.Now(), true); err != nil {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
@@ -175,7 +178,7 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	if parent == nil {
 		t.Fatal("GetClosedLedger nil before AcceptConsensusResult")
 	}
-	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, [][]byte{blob1}, time.Now(), true); err != nil {
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, [][]byte{blob1}, nil, time.Now(), true); err != nil {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
@@ -188,6 +191,77 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	}
 	if svc.OpenLedgerHasTx(hash1) {
 		t.Errorf("post-Accept open view still contains tx1 (already in closed ledger)")
+	}
+	if got := svc.OpenLedgerTxs(); len(got) != 0 {
+		t.Errorf("post-Accept OpenLedgerTxs len = %d, want 0", len(got))
+	}
+}
+
+// TestService_AcceptConsensusResult_DisputedTxsFirstCrack verifies that a
+// disputed tx we voted NO on — peer-proposed, never in our open ledger —
+// is replayed into the fresh open view on the LCL transition, not into the
+// closed ledger.
+func TestService_AcceptConsensusResult_DisputedTxsFirstCrack(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+
+	env := testenv.NewTestEnv(t)
+	master := testenv.MasterAccount()
+	alice := testenv.NewAccount("alice")
+
+	disputedBlob, disputedHash := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
+
+	parent := svc.GetClosedLedger()
+	if parent == nil {
+		t.Fatal("GetClosedLedger nil before AcceptConsensusResult")
+	}
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, [][]byte{disputedBlob}, time.Now(), true); err != nil {
+		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
+
+	closed := svc.GetClosedLedger()
+	if closed == nil {
+		t.Fatal("GetClosedLedger nil after AcceptConsensusResult")
+	}
+	if closed.TxExists(disputedHash) {
+		t.Errorf("disputed tx landed in the closed ledger; must only reach the open view")
+	}
+	if !svc.OpenLedgerHasTx(disputedHash) {
+		t.Errorf("post-Accept open view missing the disputed we-voted-NO tx")
+	}
+}
+
+// TestService_AcceptConsensusResult_DisputedPseudoTxSkipped verifies that a
+// disputed pseudo-tx is dropped from the replay: a pseudo-tx rejected by
+// consensus cannot be successfully applied in a later ledger.
+func TestService_AcceptConsensusResult_DisputedPseudoTxSkipped(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+
+	ledgerSeq := uint32(2)
+	pseudoBlob, err := consensuscommon.BuildPseudoTx(tx.TypeAmendment, func(base tx.BaseTx) tx.Transaction {
+		return &pseudo.EnableAmendment{
+			BaseTx:         base,
+			Amendment:      strings.Repeat("AB", 32),
+			LedgerSequence: &ledgerSeq,
+		}
+	})
+	if err != nil {
+		t.Fatalf("BuildPseudoTx: %v", err)
+	}
+	pseudoTx, err := openledger.ParsePendingTx(pseudoBlob)
+	if err != nil {
+		t.Fatalf("ParsePendingTx: %v", err)
+	}
+
+	parent := svc.GetClosedLedger()
+	if parent == nil {
+		t.Fatal("GetClosedLedger nil before AcceptConsensusResult")
+	}
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, [][]byte{pseudoBlob}, time.Now(), true); err != nil {
+		t.Fatalf("AcceptConsensusResult: %v", err)
+	}
+
+	if svc.OpenLedgerHasTx(pseudoTx.Hash) {
+		t.Errorf("post-Accept open view contains a disputed pseudo-tx; pseudo-txs must be skipped")
 	}
 	if got := svc.OpenLedgerTxs(); len(got) != 0 {
 		t.Errorf("post-Accept OpenLedgerTxs len = %d, want 0", len(got))

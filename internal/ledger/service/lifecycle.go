@@ -208,7 +208,11 @@ func (s *Service) advanceToNewOpenLedgerLocked(closedSeq uint32, closedLedgerHas
 	s.processClosedLedgerLocked()
 
 	// LCL transition: replay the prior view's txs via Accept, retries-first for
-	// the build pass's retry set (a harmless superset of rippled's disputed set).
+	// retriableTxs (disputed we-voted-NO txs plus the build pass's leftovers).
+	// rippled gates retries-first on disputes alone, but its retry loop drains
+	// the shared retriable set during the current-view replay either way;
+	// ApplyTxs never re-applies pre-existing retries, so the first pass must
+	// run whenever the set is non-empty or the leftovers would be dropped.
 	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
 
 	ledgerInfo := &LedgerInfo{
@@ -390,7 +394,10 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 // doesn't require standalone, and does NOT auto-validate (the validation tracker
 // does). parent is the ledger to build on; when consensus switches chains it may
 // differ from s.closedLedger, and the service resets state accordingly.
-func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
+// disputedBlobs are the round's disputed txs we voted NO on (peer-proposed,
+// excluded from the agreed set); they get first crack at the new open ledger,
+// ahead of the TxQ.
+func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs, disputedBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -438,6 +445,37 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	retriableTxs, err := s.buildClosedLedgerLocked(pending, closeTime, false)
 	if err != nil {
 		return 0, err
+	}
+
+	// Merge the disputed we-voted-NO txs into the retriable set so they are
+	// replayed into the new open ledger ahead of the TxQ. Pseudo-txs can't
+	// succeed in a later ledger; malformed blobs are dropped. The merged set
+	// is re-sorted with the agreed set's SHAMap root as salt, matching the
+	// canonical order rippled's retriable set applies in.
+	if len(disputedBlobs) > 0 {
+		seen := make(map[[32]byte]struct{}, len(retriableTxs))
+		for _, ptx := range retriableTxs {
+			seen[ptx.Hash] = struct{}{}
+		}
+		added := false
+		for _, blob := range disputedBlobs {
+			ptx, perr := parsePendingTx(blob)
+			if perr != nil {
+				continue
+			}
+			if ptx.Parsed.TxType().IsPseudoTransaction() {
+				continue
+			}
+			if _, dup := seen[ptx.Hash]; dup {
+				continue
+			}
+			seen[ptx.Hash] = struct{}{}
+			retriableTxs = append(retriableTxs, ptx)
+			added = true
+		}
+		if added {
+			canonicalSort(retriableTxs, computeSalt(pending))
+		}
 	}
 
 	// pending is now in canonical order for the round-summary log.

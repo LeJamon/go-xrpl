@@ -120,7 +120,7 @@ func fundAccountsAndClose(
 	if parent == nil {
 		t.Fatal("GetClosedLedger nil before AcceptConsensusResult")
 	}
-	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, fundingBlobs, time.Now(), true); err != nil {
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, fundingBlobs, nil, time.Now(), true); err != nil {
 		t.Fatalf("AcceptConsensusResult: %v", err)
 	}
 
