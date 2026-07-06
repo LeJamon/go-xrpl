@@ -657,6 +657,33 @@ func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
 	}
 }
 
+// The keep-range high bound is exclusive: a set whose seq equals keepHigh is
+// not pinned and still evicts once below the floor and cold, while a set at
+// keepLow (inclusive) survives. Mirrors rippled setSeqToKeep(C-1, C) dropping
+// the set at C (Validations_test.cpp).
+func TestValidationTracker_ExpireOld_SeqToKeepHighExclusive(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	atLow := consensus.LedgerID{0x10}  // seq 100 == keepLow  → kept (inclusive)
+	atHigh := consensus.LedgerID{0x20} // seq 150 == keepHigh → dropped (exclusive)
+	vt.Add(&consensus.Validation{LedgerID: atLow, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+	vt.Add(&consensus.Validation{LedgerID: atHigh, LedgerSeq: 150, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true})
+
+	// Both below the floor and cold; the pin's boundaries decide who survives.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.SetSeqToKeep(100, 150)
+	vt.ExpireOld(200)
+
+	if got := vt.GetValidationCount(atLow); got != 1 {
+		t.Fatalf("keepLow boundary evicted (should be inclusive): count=%d, want 1", got)
+	}
+	if got := vt.GetValidationCount(atHigh); got != 0 {
+		t.Fatalf("keepHigh boundary survived (should be exclusive): count=%d, want 0", got)
+	}
+}
+
 // Reading a ledger's validations refreshes its access age — rippled's
 // byLedger touch — so an actively-queried set keeps surviving ExpireOld
 // while an unqueried sibling at the same seq expires.

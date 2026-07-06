@@ -241,6 +241,27 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 	assert.Equal(t, upcoming+protocol.FlagLedgerInterval, hist.keepHigh, "keep-range high mirrors rippled's forward window")
 }
 
+// At the first flag ledger the parent seq is below FlagLedgerInterval, so the
+// pin's widened low end would underflow uint32; it must saturate to 0 (keeping
+// the whole window) rather than wrap and self-clear. The pin is also set
+// before the skip-list length check, so an incomplete skip-list that can't
+// build a table still records the keep-range — as rippled does, calling
+// setSeqToKeep before its ancestor-count gate.
+func TestBuildScoreTable_PinLowSaturatesAtFirstFlagLedger(t *testing.T) {
+	a := newTestAdaptor(t)
+	hist := &stubHistorian{}
+
+	const prevSeq = protocol.FlagLedgerInterval - 1 // parent of the first flag ledger
+	_, ok := a.buildNegativeUNLScoreTable(
+		&stubSkipListProvider{seq: prevSeq}, // empty skip-list → no table
+		hist,
+	)
+	require.False(t, ok, "an incomplete skip-list cannot build a table")
+
+	assert.Equal(t, uint32(0), hist.keepLow, "pin low saturates to 0, not a uint32 underflow")
+	assert.Equal(t, prevSeq+1+protocol.FlagLedgerInterval, hist.keepHigh, "pin high is still upcoming+interval")
+}
+
 // TestAdaptor_OnUNLChange_NoVoterIsNoOp covers the no-master-keys
 // adaptor: OnUNLChange must be safe to call (a no-op) when the
 // NegativeUNL voter was never constructed. Mirrors rippled's

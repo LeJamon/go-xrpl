@@ -183,18 +183,23 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 	},
 	historian consensus.ValidationHistorian,
 ) (map[consensus.NodeID]uint32, bool) {
+	// Pin the window this vote scans so a concurrent ExpireOld can't drop its
+	// low end. rippled keeps [seq-1, seq+interval) for the forward window
+	// against its time-based expiry; go-xrpl expires by sequence, so we also
+	// widen the pin down over the ancestors we read, and pin before the
+	// skip-list check so it holds on a round we can't vote. seq = prevSeq + 1;
+	// the low end saturates to avoid underflow at the first flag ledger.
+	upcoming := prev.Sequence() + 1
+	var keepLow uint32
+	if upcoming >= 1+protocol.FlagLedgerInterval {
+		keepLow = upcoming - 1 - protocol.FlagLedgerInterval
+	}
+	historian.SetSeqToKeep(keepLow, upcoming+protocol.FlagLedgerInterval)
+
 	ancestors, err := prev.SkipListHashes()
 	if err != nil || uint32(len(ancestors)) < protocol.FlagLedgerInterval {
 		return nil, false
 	}
-
-	// Pin the window we are about to scan so a concurrent ExpireOld can't drop
-	// its low end. rippled sets [seq-1, seq+interval) to keep the *forward*
-	// window alive against its time-based expiry; go-xrpl expires by sequence,
-	// so the exposure is the low end of the window this vote reads — we widen
-	// the pin down to cover it. seq = prevSeq + 1 is the upcoming ledger.
-	upcoming := prev.Sequence() + 1
-	historian.SetSeqToKeep(upcoming-1-protocol.FlagLedgerInterval, upcoming+protocol.FlagLedgerInterval)
 
 	n := uint32(len(ancestors))
 	window := protocol.FlagLedgerInterval
