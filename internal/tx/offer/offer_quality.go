@@ -11,7 +11,10 @@ import (
 
 // Quality constants
 const (
-	maxTickSize uint8 = 15
+	// maxTickSize is the "no rounding" sentinel (rippled Quality::maxTickSize),
+	// not the maximum valid TickSize field value (15): using 15 skips rounding
+	// for TickSize-15 issuers (#1224).
+	maxTickSize uint8 = 16
 )
 
 // offerNativeDrops finalizes a muldiv-round magnitude as an XRP-drops Amount,
