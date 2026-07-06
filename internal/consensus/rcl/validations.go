@@ -32,6 +32,73 @@ func safeTrieCall(fn string, op func()) (panicked bool) {
 	return false
 }
 
+// ValStatus classifies the outcome of AddStatus, mirroring rippled's
+// ValStatus (Validations.h:169-180).
+type ValStatus int
+
+const (
+	// ValStatusCurrent — added; counts toward quorum and steers the trie.
+	ValStatusCurrent ValStatus = iota
+	// ValStatusStale — outside the freshness window, below the sequence
+	// floor, or superseded by the node's tracked tip.
+	ValStatusStale
+	// ValStatusBadSeq — violates the increasing-seq requirement without
+	// double-sign evidence.
+	ValStatusBadSeq
+	// ValStatusMultiple — same seq and ledger signed with different
+	// cookies (likely two servers sharing a validator key).
+	ValStatusMultiple
+	// ValStatusConflicting — same seq signed for different ledgers, or
+	// re-signed with a different sign time.
+	ValStatusConflicting
+)
+
+func (s ValStatus) String() string {
+	switch s {
+	case ValStatusCurrent:
+		return "current"
+	case ValStatusStale:
+		return "stale"
+	case ValStatusBadSeq:
+		return "badSeq"
+	case ValStatusMultiple:
+		return "multiple"
+	case ValStatusConflicting:
+		return "conflicting"
+	default:
+		return "unknown"
+	}
+}
+
+// seqEnforcer tracks the largest validation seq a node issued within the
+// validationSetExpires window; the floor resets after that long idle. A
+// validation must exceed the floor to be considered monotonic.
+type seqEnforcer struct {
+	seq  uint32
+	when time.Time
+}
+
+// advance reports whether seq exceeds the non-expired floor, bumping the
+// floor when it does.
+func (s *seqEnforcer) advance(now time.Time, seq uint32) bool {
+	if now.Sub(s.when) > validationSetExpires {
+		s.seq = 0
+	}
+	if seq <= s.seq {
+		return false
+	}
+	s.seq = seq
+	s.when = now
+	return true
+}
+
+// seqValidations is one bySequence bucket: the validation each node
+// signed at a given seq, plus the last-access time driving expiry.
+type seqValidations struct {
+	touched time.Time
+	byNode  map[consensus.NodeID]*consensus.Validation
+}
+
 // ValidationTracker tracks validations and determines ledger finality.
 type ValidationTracker struct {
 	mu sync.RWMutex
@@ -50,6 +117,18 @@ type ValidationTracker struct {
 
 	// byNode maps node ID to their latest validation
 	byNode map[consensus.NodeID]*consensus.Validation
+
+	// bySequence tracks, per ledger seq, the validation each node signed
+	// at that seq — the evidence the Byzantine cross-check runs against
+	// when a node submits a non-monotonic seq, so equivocation is caught
+	// even at seqs the node has already superseded. Buckets age out after
+	// validationSetExpires without access (FlushStale sweep).
+	bySequence map[uint32]*seqValidations
+
+	// seqEnforcers holds the per-remote-node monotonic-seq floor with
+	// idle reset. Distinct from the engine's local enforcer, which gates
+	// what WE sign; these gate what each remote node may submit.
+	seqEnforcers map[consensus.NodeID]*seqEnforcer
 
 	// trusted is the set of trusted validators
 	trusted map[consensus.NodeID]bool
@@ -123,14 +202,16 @@ type ValidationTracker struct {
 // close-time offset.
 func NewValidationTracker(quorum int, freshness time.Duration) *ValidationTracker {
 	return &ValidationTracker{
-		now:         time.Now,
-		validations: make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation),
-		byNode:      make(map[consensus.NodeID]*consensus.Validation),
-		trusted:     make(map[consensus.NodeID]bool),
-		negUNL:      make(map[consensus.NodeID]bool),
-		quorum:      quorum,
-		freshness:   freshness,
-		fired:       make(map[consensus.LedgerID]struct{}),
+		now:          time.Now,
+		validations:  make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation),
+		byNode:       make(map[consensus.NodeID]*consensus.Validation),
+		bySequence:   make(map[uint32]*seqValidations),
+		seqEnforcers: make(map[consensus.NodeID]*seqEnforcer),
+		trusted:      make(map[consensus.NodeID]bool),
+		negUNL:       make(map[consensus.NodeID]bool),
+		quorum:       quorum,
+		freshness:    freshness,
+		fired:        make(map[consensus.LedgerID]struct{}),
 	}
 }
 
@@ -280,6 +361,14 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
+func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
+	return vt.AddStatus(validation) == ValStatusCurrent
+}
+
+// AddStatus adds a validation and classifies the outcome. Only
+// ValStatusCurrent validations enter the quorum/trie indexes; every
+// non-stale one is recorded in the by-seq evidence index first, so a
+// double-sign is detected even at a seq the node has already superseded.
 //
 // Inbound filters match rippled's Validations::add (Validations.h:
 // 623-707) and isCurrent:
@@ -293,6 +382,11 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     blinds every peer's preferred-ledger steering during recovery.
 //   - Stale or clock-skewed validations (outside the wall/local
 //     windows defined above) are rejected via isCurrent.
+//   - A non-monotonic seq (per-node enforcer floor, idle-reset after
+//     validationSetExpires) is rejected: as conflicting when the node
+//     already signed a different ledger — or the same ledger with a
+//     different sign time — at that seq, as multiple on a cookie
+//     mismatch, else as badSeq.
 //   - Validations with seq below minSeq are rejected. Once a ledger
 //     accepts, validations for seqs many rounds back are noise that
 //     can never retroactively become quorum; keeping them in memory
@@ -314,7 +408,7 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //
 // Defer order is LIFO: vt.mu.Unlock runs first (released before the
 // callback), then the captured fire-tuple is dispatched.
-func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
+func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStatus {
 	var (
 		fireID     consensus.LedgerID
 		fireSeq    uint32
@@ -353,13 +447,9 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// raw time.Now so the check honors the network-adjusted close
 	// offset and doesn't reject our own just-signed validations on a
 	// clock-skewed node.
-	if !isCurrent(vt.now(), validation.SignTime, validation.SeenTime) {
-		return false
-	}
-
-	// Reject far-stale validations below the sequence floor.
-	if vt.minSeq > 0 && validation.LedgerSeq < vt.minSeq {
-		return false
+	now := vt.now()
+	if !isCurrent(now, validation.SignTime, validation.SeenTime) {
+		return ValStatusStale
 	}
 
 	// validation.NodeID is already master-shaped on entry — the
@@ -370,13 +460,43 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// happens at the wire seam, not here).
 	resolvedID := validation.NodeID
 
+	// Byzantine detector (Validations.h:637-681). Record the validation
+	// as by-seq evidence, then enforce monotonically increasing seqs per
+	// node. On a non-monotonic seq, classify against the entry already
+	// tracked at that exact seq — catching a double-sign even after the
+	// node's tip moved past it. Runs before the minSeq gate: rippled
+	// classifies anything inside the freshness window.
+	tracked := vt.trackBySequenceLocked(resolvedID, validation, now)
+	enf := vt.seqEnforcers[resolvedID]
+	if enf == nil {
+		enf = &seqEnforcer{}
+		vt.seqEnforcers[resolvedID] = enf
+	}
+	if !enf.advance(now, validation.LedgerSeq) {
+		if tracked.LedgerID != validation.LedgerID {
+			return ValStatusConflicting
+		}
+		if !tracked.SignTime.Equal(validation.SignTime) {
+			return ValStatusConflicting
+		}
+		if tracked.Cookie != validation.Cookie {
+			return ValStatusMultiple
+		}
+		return ValStatusBadSeq
+	}
+
+	// Reject far-stale validations below the sequence floor.
+	if vt.minSeq > 0 && validation.LedgerSeq < vt.minSeq {
+		return ValStatusStale
+	}
+
 	// Supersede a node's tip only with a strictly higher seq; a
 	// same-or-lower-seq re-sign is rejected so a stale or sideways
 	// ledger can't skew ProposersFinished / PreferredFromValidations.
 	existing, hasExisting := vt.byNode[resolvedID]
 	if hasExisting {
 		if validation.LedgerSeq <= existing.LedgerSeq {
-			return false
+			return ValStatusStale
 		}
 	}
 
@@ -406,7 +526,32 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	// invokes onFullyValidated after vt.mu.Unlock has run.
 	fireID, fireSeq, shouldFire = vt.checkFullValidationLocked(validation.LedgerID)
 	cb = vt.onFullyValidated
-	return true
+	return ValStatusCurrent
+}
+
+// trackBySequenceLocked records validation in the by-seq evidence index
+// and returns the entry tracked for (seq, node) — the prior validation
+// when one exists, else validation itself. A prior entry signed more
+// than validationCurrentWall before a newer one is disregarded and
+// replaced, so an ancient double-sign no longer reads as conflicting
+// (Validations.h:640-651). Caller must hold vt.mu.
+func (vt *ValidationTracker) trackBySequenceLocked(
+	nodeID consensus.NodeID,
+	validation *consensus.Validation,
+	now time.Time,
+) *consensus.Validation {
+	bucket := vt.bySequence[validation.LedgerSeq]
+	if bucket == nil {
+		bucket = &seqValidations{byNode: make(map[consensus.NodeID]*consensus.Validation)}
+		vt.bySequence[validation.LedgerSeq] = bucket
+	}
+	bucket.touched = now
+	tracked, ok := bucket.byNode[nodeID]
+	if !ok || validation.SignTime.Sub(tracked.SignTime) > validationCurrentWall {
+		bucket.byNode[nodeID] = validation
+		return validation
+	}
+	return tracked
 }
 
 // checkFullValidationLocked records that a ledger crossed the quorum
@@ -803,6 +948,20 @@ func (vt *ValidationTracker) FlushStale() {
 			delete(vt.trieTips, nodeID)
 		}
 	}
+
+	// Age out by-seq evidence and idle enforcer floors — rippled's
+	// beast::expire(bySequence_) sweep. An enforcer idle past the window
+	// would self-reset on next use, so deleting it is equivalent.
+	for seq, bucket := range vt.bySequence {
+		if now.Sub(bucket.touched) > validationSetExpires {
+			delete(vt.bySequence, seq)
+		}
+	}
+	for nodeID, enf := range vt.seqEnforcers {
+		if now.Sub(enf.when) > validationSetExpires {
+			delete(vt.seqEnforcers, nodeID)
+		}
+	}
 }
 
 // ExpireOld drops validations below minSeq from every index and fires
@@ -865,6 +1024,8 @@ func (vt *ValidationTracker) Flush() {
 
 	vt.validations = make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation)
 	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
+	vt.bySequence = make(map[uint32]*seqValidations)
+	vt.seqEnforcers = make(map[consensus.NodeID]*seqEnforcer)
 	vt.fired = make(map[consensus.LedgerID]struct{})
 	vt.rebuildTrieLocked()
 }
