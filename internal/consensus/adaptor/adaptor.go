@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1711,6 +1712,16 @@ func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.Operating
 	}
 
 	if h := a.validationHistorian; h != nil {
+		// Dump the trie's support state before selecting; this is the primary
+		// handle for diagnosing why a given branch was preferred. Built only
+		// when debug logging is on, mirroring rippled's lazy ValidationTrie log.
+		if a.logger.Enabled(context.Background(), slog.LevelDebug) {
+			if trie := h.GetJsonTrie(); trie != nil {
+				if raw, err := json.Marshal(trie); err == nil {
+					a.logger.Debug("ValidationTrie", "trie", string(raw))
+				}
+			}
+		}
 		if id, seq, ok := h.GetPreferred(a.lastIssuedValidationSeq.Load()); ok {
 			id, seq = a.resolvePreferredVsCurrent(id, seq, ledger)
 			if seq >= minSeq {

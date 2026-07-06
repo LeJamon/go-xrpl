@@ -61,6 +61,8 @@ func (s *stubHistorian) PreferredFromValidations(minSeq uint32) (consensus.Ledge
 	return s.preferredID, s.preferredSeq, s.preferredOK
 }
 
+func (s *stubHistorian) GetJsonTrie() map[string]any { return nil }
+
 func TestAdaptor_NegativeUNL_NilVoterReturnsNil(t *testing.T) {
 	// Adaptor constructed without master keys → voter is nil.
 	a := newTestAdaptor(t)

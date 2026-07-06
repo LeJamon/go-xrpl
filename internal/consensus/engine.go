@@ -60,6 +60,11 @@ type ValidationHistorian interface {
 	GetTrustedValidations(ledgerID LedgerID) []*Validation
 	GetPreferred(largestIssued uint32) (LedgerID, uint32, bool)
 	PreferredFromValidations(minSeq uint32) (LedgerID, uint32, bool)
+
+	// GetJsonTrie returns a JSON-serializable snapshot of the ancestry trie's
+	// support state for debugging preferred-ledger divergence, or nil when the
+	// trie is disabled.
+	GetJsonTrie() map[string]any
 }
 
 // WireableAdaptor is an optional extension engine wires after constructing its
