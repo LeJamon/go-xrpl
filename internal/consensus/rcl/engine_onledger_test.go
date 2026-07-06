@@ -86,6 +86,30 @@ func TestEngine_OnLedger_StopsAtChainBreak(t *testing.T) {
 	}
 }
 
+// Issue #1207: adopting a different LCL must fire OnLedgerSwitched so peers
+// are told the jump (SWITCHED_LEDGER) and drop our abandoned ledger from
+// their tallies.
+func TestEngine_OnLedger_AnnouncesSwitchedLedger(t *testing.T) {
+	a := newMockAdaptor()
+	e := NewEngine(a, DefaultConfig())
+	initial := a.ledgers[consensus.LedgerID{1}]
+	a.StoreLedger(chainLedger(101, 101, 1))
+	e.prevLedger = initial
+	e.mode = consensus.ModeWrongLedger
+
+	if err := e.OnLedger(consensus.LedgerID{101}, nil); err != nil {
+		t.Fatalf("OnLedger: %v", err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.switchedLedgers) != 1 {
+		t.Fatalf("OnLedgerSwitched calls = %d, want 1", len(a.switchedLedgers))
+	}
+	if got := a.switchedLedgers[0].Seq(); got != 101 {
+		t.Fatalf("switched ledger seq = %d, want 101", got)
+	}
+}
+
 func TestEngine_OnLedger_StopsAtGap(t *testing.T) {
 	a := newMockAdaptor()
 	e := NewEngine(a, DefaultConfig())

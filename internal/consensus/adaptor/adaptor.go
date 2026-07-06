@@ -189,6 +189,12 @@ type Adaptor struct {
 	// Atomic ns so the Now() hot path avoids lock contention.
 	closeOffsetNs atomic.Int64
 
+	// consensusMode mirrors the engine's live consensus mode (stored by
+	// OnModeChange, which the engine serializes with the phase callbacks);
+	// broadcastStatus reads it to substitute LOST_SYNC while building on
+	// the wrong LCL.
+	consensusMode atomic.Int32
+
 	// consensusPhaseCh serializes consensus-phase notifications to the ledger
 	// service's OnConsensusPhase hook: a single dispatcher goroutine drains it
 	// in order (preventing out-of-order delivery). Enqueue is non-blocking, so
@@ -1776,10 +1782,19 @@ func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 }
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
+	a.consensusMode.Store(int32(newMode))
 	a.logger.Info("Consensus mode changed",
 		"from", oldMode.String(),
 		"to", newMode.String(),
 	)
+
+	// The engine pins in wrongLedger without running rounds, so no
+	// phase-driven status would go out; tell peers directly that our
+	// advertised LCL is stale (rippled keeps re-sending LOST_SYNC each
+	// wrong-LCL round instead).
+	if newMode == consensus.ModeWrongLedger {
+		a.broadcastStatus(message.NodeEventLostSync)
+	}
 }
 
 // NeedsInitialSync returns true if the node hasn't yet adopted a ledger from peers.
@@ -1805,6 +1820,10 @@ func (a *Adaptor) AdoptLedgerFromHeader(headerData []byte) error {
 	// Transition to Tracking mode — the router manages the Full transition
 	// once we verify our LCL matches the network.
 	a.SetOperatingMode(consensus.OpModeTracking)
+
+	// Tell peers about the jump so their tallies replace whatever LCL they
+	// last recorded for us.
+	a.broadcastSwitchedLedger(h.LedgerIndex, h.Hash[:], h.ParentHash[:])
 
 	a.logger.Info("Adopted peer ledger",
 		"seq", h.LedgerIndex,
@@ -1832,11 +1851,45 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	a.emitConsensusPhase(newPhase.String())
 }
 
-// broadcastStatus sends a TMStatusChange message to all peers.
+// OnLedgerSwitched tells peers we abandoned our previous LCL for ledger,
+// mirroring rippled's switchLastClosedLedger broadcast.
+func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) {
+	if ledger == nil {
+		return
+	}
+	id := ledger.ID()
+	parent := ledger.ParentID()
+	a.broadcastSwitchedLedger(ledger.Seq(), id[:], parent[:])
+}
+
+// broadcastSwitchedLedger sends a SWITCHED_LEDGER status change carrying the
+// adopted ledger's identity. No status or validated-range fields: receivers
+// inherit the prior status, and the jump says nothing about served history.
+func (a *Adaptor) broadcastSwitchedLedger(seq uint32, hash, parentHash []byte) {
+	sc := &message.StatusChange{
+		NewEvent:           message.NodeEventSwitchedLedger,
+		LedgerSeq:          seq,
+		LedgerHash:         hash,
+		LedgerHashPrevious: parentHash,
+		NetworkTime:        uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+	}
+	if err := a.sender.BroadcastStatusChange(sc); err != nil {
+		a.logger.Warn("failed to broadcast status change", "error", err)
+	}
+}
+
+// broadcastStatus sends a TMStatusChange message to all peers. While the
+// engine is building on the wrong LCL the given event is replaced with
+// LOST_SYNC, mirroring rippled notify()'s haveCorrectLCL substitution, so
+// peers stop counting our advertised ledger.
 func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 	l := a.ledgerService.GetClosedLedger()
 	if l == nil {
 		return
+	}
+
+	if consensus.Mode(a.consensusMode.Load()) == consensus.ModeWrongLedger {
+		event = message.NodeEventLostSync
 	}
 
 	hash := l.Hash()

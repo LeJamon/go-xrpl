@@ -581,6 +581,7 @@ func (p *EnginePeer) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uin
 
 func (p *EnginePeer) OnModeChange(consensus.Mode, consensus.Mode)    {}
 func (p *EnginePeer) OnPhaseChange(consensus.Phase, consensus.Phase) {}
+func (p *EnginePeer) OnLedgerSwitched(consensus.Ledger)              {}
 
 // helpers
 

@@ -309,6 +309,11 @@ type StatusEvents interface {
 	OnModeChange(oldMode, newMode Mode)
 
 	OnPhaseChange(oldPhase, newPhase Phase)
+
+	// OnLedgerSwitched fires when the engine abandons its previous LCL and
+	// adopts ledger (wrong-ledger recovery), so peers can be told the jump
+	// via a SWITCHED_LEDGER status change.
+	OnLedgerSwitched(ledger Ledger)
 }
 
 // Adaptor is the full seam between the consensus engine and the node; new code

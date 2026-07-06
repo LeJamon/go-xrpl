@@ -555,6 +555,12 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
 
+	// A recovery restart means we just jumped to a different LCL — tell peers
+	// via SWITCHED_LEDGER so their tallies drop our abandoned ledger.
+	if recovering && e.prevLedger != nil {
+		e.adaptor.OnLedgerSwitched(e.prevLedger)
+	}
+
 	// Carry our own observed close time across rounds. The first round seeds
 	// from the seed ledger; afterwards we take the self close time of the round
 	// that just ended, read from e.state before it is replaced below (this runs
