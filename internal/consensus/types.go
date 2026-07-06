@@ -342,6 +342,10 @@ type ByzantineValidationError struct {
 	// different sign time) or "multiple" (same ledger and sign time but a
 	// different cookie — probably accidental misconfiguration).
 	Reason string
+	// Trusted reports whether the double-signing validator is in our UNL;
+	// the router logs trusted offenders at error and listed-but-untrusted
+	// ones at info, mirroring rippled's journal-level split.
+	Trusted bool
 }
 
 func (e *ByzantineValidationError) Error() string {

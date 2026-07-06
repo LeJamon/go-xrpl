@@ -14,6 +14,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -243,6 +244,19 @@ type Adaptor struct {
 	// can broadcast mtHAVE_SET{tsHAVE} for it. nil-safe.
 	onTxSetBuilt func(consensus.TxSetID)
 
+	// relayValidations is the operator's [relay_validations] stance.
+	// Immutable after New — read without a.mu.
+	relayValidations RelayValidationsPolicy
+
+	// listedFn resolves validator-list membership (Aggregator.IsListed).
+	// nil when no publisher trust is configured — nothing is listed.
+	listedFn func(consensus.NodeID) bool
+
+	// onTrustChanged fires after every SetTrustedValidators swap (outside
+	// a.mu) so the engine can promote stored validations at trust-change
+	// time. nil-safe.
+	onTrustChanged func()
+
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
 	// the trie-descent floor for preferredLCL. Zero for a non-validator.
@@ -292,6 +306,39 @@ func defaultFeeVote() FeeVoteStance {
 	}
 }
 
+// RelayValidationsPolicy mirrors rippled's RELAY_UNTRUSTED_VALIDATIONS
+// tri-state, set by the [relay_validations] config key: forward verified
+// current validations from outside the UNL (default), forward trusted only,
+// or drop untrusted before signature verification.
+type RelayValidationsPolicy int
+
+const (
+	// RelayValidationsAll relays untrusted validations too — rippled's
+	// default (RELAY_UNTRUSTED_VALIDATIONS = 1). The zero value, so bare
+	// Config{} adaptors get the network-friendly default.
+	RelayValidationsAll RelayValidationsPolicy = iota
+	// RelayValidationsTrusted verifies and processes untrusted validations
+	// but relays only trusted ones (rippled 0).
+	RelayValidationsTrusted
+	// RelayValidationsDropUntrusted drops untrusted validations at the
+	// router before signature verification (rippled -1).
+	RelayValidationsDropUntrusted
+)
+
+// ParseRelayValidationsPolicy maps the [relay_validations] config string
+// (case-insensitive; "" = default "all") to its policy. Unknown values are
+// rejected by config validation upstream; fall back to the default here.
+func ParseRelayValidationsPolicy(s string) RelayValidationsPolicy {
+	switch strings.ToLower(s) {
+	case "trusted":
+		return RelayValidationsTrusted
+	case "drop_untrusted":
+		return RelayValidationsDropUntrusted
+	default:
+		return RelayValidationsAll
+	}
+}
+
 type Config struct {
 	LedgerService *service.Service
 	Sender        NetworkSender
@@ -312,6 +359,9 @@ type Config struct {
 	// abstain, upvoted → up) over registry defaults. Shared with the ledger
 	// service, which folds validated flag ledgers in via DoValidatedLedger.
 	AmendmentTable *amendment.AmendmentTable
+	// RelayValidations is the operator's [relay_validations] stance; the
+	// zero value relays untrusted validations (rippled's default).
+	RelayValidations RelayValidationsPolicy
 }
 
 // generateCookie returns a non-zero random 64-bit cookie. On a read error it
@@ -443,6 +493,7 @@ func New(cfg Config) *Adaptor {
 		amendmentStances:  amendmentStances,
 		amendmentTable:    cfg.AmendmentTable,
 		trustedVotes:      trustedVotes,
+		relayValidations:  cfg.RelayValidations,
 		logger:            logger,
 	}
 }
@@ -976,6 +1027,44 @@ func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
 	return ok
 }
 
+// SetListedLookup installs the validator-list membership resolver
+// (Aggregator.IsListed). Wired once at startup when publisher trust is
+// configured; nil (the default) means nothing is listed.
+func (a *Adaptor) SetListedLookup(fn func(consensus.NodeID) bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listedFn = fn
+}
+
+// IsListed implements consensus.ListedOracle: whether node appears in at
+// least one live publisher list without (necessarily) being trusted.
+func (a *Adaptor) IsListed(node consensus.NodeID) bool {
+	a.mu.Lock()
+	fn := a.listedFn
+	a.mu.Unlock()
+	return fn != nil && fn(node)
+}
+
+// RelayUntrustedValidations implements consensus.ValidationRelayPolicy:
+// true under the default [relay_validations] "all" stance.
+func (a *Adaptor) RelayUntrustedValidations() bool {
+	return a.relayValidations == RelayValidationsAll
+}
+
+// DropUntrustedValidations reports the "drop_untrusted" stance; the router
+// then sheds untrusted validations before signature verification.
+func (a *Adaptor) DropUntrustedValidations() bool {
+	return a.relayValidations == RelayValidationsDropUntrusted
+}
+
+// OnTrustChanged implements consensus.TrustChangeNotifier: fn runs after
+// every SetTrustedValidators swap, outside a.mu.
+func (a *Adaptor) OnTrustChanged(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.onTrustChanged = fn
+}
+
 func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1017,6 +1106,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	a.trustedValidators = vCopy
 	a.trustedSet = newSet
 	a.trustedMasterKeys = mkCopy
+	onTrustChanged := a.onTrustChanged
 	a.mu.Unlock()
 
 	// trustedVotes is assigned once in New and never reassigned, so the
@@ -1024,6 +1114,11 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	// releasing a.mu to avoid lock nesting.
 	if a.trustedVotes != nil {
 		a.trustedVotes.TrustChanged(vCopy)
+	}
+	// Outside a.mu: the engine's trust refresh reads back through
+	// GetTrustedValidators / GetQuorum, which re-lock it.
+	if onTrustChanged != nil {
+		onTrustChanged()
 	}
 }
 

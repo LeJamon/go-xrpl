@@ -1,8 +1,10 @@
 package adaptor
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -213,6 +215,14 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	// Operator opt-out ([relay_validations] = drop_untrusted): shed
+	// validations signed outside our UNL here, before the engine spends
+	// CPU verifying the signature. rippled's PeerImp does the same under
+	// RELAY_UNTRUSTED_VALIDATIONS == -1.
+	if r.adaptor.DropUntrustedValidations() && !r.adaptor.IsTrusted(validation.NodeID) {
+		return
+	}
+
 	originPeer := uint64(msg.PeerID)
 
 	// Observe-before-engine for consistent duplicate accounting. Hash
@@ -247,15 +257,20 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		// A same-seq double-sign (conflicting/multiple) is Byzantine
 		// behaviour, but the validation is well-formed and correctly
 		// signed and the engine has already relayed it. Like rippled
-		// (handleNewValidation logs at error level and forwards; no
-		// Resource::Charge), log it loudly and do NOT charge the delivering
-		// peer — it is an innocent relay.
+		// (handleNewValidation logs trusted offenders at error, untrusted
+		// at info, and forwards; no Resource::Charge), log it and do NOT
+		// charge the delivering peer — it is an innocent relay.
 		var bv *consensus.ByzantineValidationError
 		if errors.As(err, &bv) {
-			r.logger.Error("byzantine validation detected",
+			level := slog.LevelError
+			if !bv.Trusted {
+				level = slog.LevelInfo
+			}
+			r.logger.Log(context.Background(), level, "byzantine validation detected",
 				"t", "consensus",
 				"event", "byzantine-validation",
 				"reason", bv.Reason,
+				"trusted", bv.Trusted,
 				"peer", msg.PeerID)
 			return
 		}

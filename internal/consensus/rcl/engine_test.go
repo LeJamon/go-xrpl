@@ -92,6 +92,17 @@ type mockAdaptor struct {
 	trusted map[consensus.NodeID]bool
 	quorum  int
 
+	// listed backs the optional ListedOracle; nil/empty = nothing listed.
+	listed map[consensus.NodeID]bool
+
+	// relayUntrusted backs the optional ValidationRelayPolicy. Defaults
+	// false so pre-existing tests keep trusted-only relay semantics.
+	relayUntrusted bool
+
+	// trustChanged is the engine's TrustChangeNotifier callback, captured
+	// at Start; tests fire it via notifyTrustChanged.
+	trustChanged func()
+
 	// Data stores
 	ledgers map[consensus.LedgerID]consensus.Ledger
 	txSets  map[consensus.TxSetID]consensus.TxSet
@@ -613,6 +624,48 @@ func (a *mockAdaptor) setTrusted(nodes []consensus.NodeID) {
 	a.trusted = make(map[consensus.NodeID]bool)
 	for _, n := range nodes {
 		a.trusted[n] = true
+	}
+}
+
+func (a *mockAdaptor) setListed(nodes []consensus.NodeID) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.listed = make(map[consensus.NodeID]bool)
+	for _, n := range nodes {
+		a.listed[n] = true
+	}
+}
+
+// IsListed implements the optional consensus.ListedOracle.
+func (a *mockAdaptor) IsListed(nodeID consensus.NodeID) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.listed[nodeID]
+}
+
+// RelayUntrustedValidations implements the optional
+// consensus.ValidationRelayPolicy.
+func (a *mockAdaptor) RelayUntrustedValidations() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.relayUntrusted
+}
+
+// OnTrustChanged implements the optional consensus.TrustChangeNotifier.
+func (a *mockAdaptor) OnTrustChanged(fn func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.trustChanged = fn
+}
+
+// notifyTrustChanged fires the engine's registered trust-change callback,
+// standing in for the production SetTrustedValidators tail.
+func (a *mockAdaptor) notifyTrustChanged() {
+	a.mu.RLock()
+	fn := a.trustChanged
+	a.mu.RUnlock()
+	if fn != nil {
+		fn()
 	}
 }
 
