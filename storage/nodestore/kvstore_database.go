@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,6 +39,11 @@ func DefaultDatabaseConfig() *DatabaseConfig {
 
 // KVDatabaseImpl wraps a kvstore.KeyValueStore to implement the Database interface.
 type KVDatabaseImpl struct {
+	// pruneMu serialises online-delete pruning against writers. Writers take
+	// the read side; DeleteBefore's flush takes the write side so its
+	// re-read-then-delete of each key is atomic w.r.t. a concurrent Store —
+	// otherwise a key re-created live during a prune could be erased.
+	pruneMu       sync.RWMutex
 	store         kvstore.KeyValueStore
 	cache         *Cache
 	negativeCache *NegativeCache
@@ -101,11 +107,13 @@ func (d *KVDatabaseImpl) Store(ctx context.Context, node *Node) error {
 	}
 
 	encoded := encodeNodeData(node)
-	if err := d.store.Put(node.Hash[:], encoded); err != nil {
-		releaseEncodeBuf(encoded)
+	d.pruneMu.RLock()
+	err := d.store.Put(node.Hash[:], encoded)
+	d.pruneMu.RUnlock()
+	releaseEncodeBuf(encoded)
+	if err != nil {
 		return fmt.Errorf("store failed: %w", err)
 	}
-	releaseEncodeBuf(encoded)
 
 	atomic.AddUint64(&d.stats.writes, 1)
 	atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
@@ -195,7 +203,10 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 			return fmt.Errorf("store batch failed: %w", err)
 		}
 	}
-	if err := batch.Write(); err != nil {
+	d.pruneMu.RLock()
+	err := batch.Write()
+	d.pruneMu.RUnlock()
+	if err != nil {
 		return fmt.Errorf("store batch commit failed: %w", err)
 	}
 
