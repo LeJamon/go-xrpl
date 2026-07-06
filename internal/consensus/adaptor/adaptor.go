@@ -1860,6 +1860,12 @@ func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) {
 	a.broadcastSwitchedLedger(ledger.Seq(), id[:], parent[:])
 }
 
+// networkTime is the current time-adjusted clock as ripple-epoch seconds, for
+// the TMStatusChange networktime field.
+func (a *Adaptor) networkTime() uint64 {
+	return uint64(a.Now().Unix() - protocol.RippleEpochUnix)
+}
+
 // broadcastSwitchedLedger sends a SWITCHED_LEDGER status change carrying the
 // adopted ledger's identity. No status or validated-range fields: receivers
 // inherit the prior status, and the jump says nothing about served history.
@@ -1869,7 +1875,7 @@ func (a *Adaptor) broadcastSwitchedLedger(seq uint32, hash, parentHash []byte) {
 		LedgerSeq:          seq,
 		LedgerHash:         hash,
 		LedgerHashPrevious: parentHash,
-		NetworkTime:        uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+		NetworkTime:        a.networkTime(),
 	}
 	if err := a.sender.BroadcastStatusChange(sc); err != nil {
 		a.logger.Warn("failed to broadcast status change", "error", err)
@@ -1878,7 +1884,9 @@ func (a *Adaptor) broadcastSwitchedLedger(seq uint32, hash, parentHash []byte) {
 
 // broadcastStatus sends a TMStatusChange message to all peers. While the
 // engine is building on the wrong LCL the given event is replaced with
-// LOST_SYNC, so peers stop counting our advertised ledger.
+// LOST_SYNC, so peers stop counting our advertised ledger. No newstatus is
+// set: peers inherit the status they last recorded for us, and the advertised
+// [first, last] is the range we durably serve (0/0 when none).
 func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 	l := a.ledgerService.GetClosedLedger()
 	if l == nil {
@@ -1892,24 +1900,17 @@ func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 	hash := l.Hash()
 	parentHash := l.ParentHash()
 
-	status := message.NodeStatusConnected
-	if a.IsValidator() {
-		status = message.NodeStatusValidating
+	var firstSeq, lastSeq uint32
+	if first, last, ok := a.ledgerService.AdvertisableLedgerRange(); ok {
+		firstSeq, lastSeq = first, last
 	}
 
-	// NetworkTime is XRPL epoch seconds on the wire, not microseconds.
-	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
-
-	firstSeq := uint32(2) // genesis sequence
-	lastSeq := l.Sequence()
-
 	sc := &message.StatusChange{
-		NewStatus:          status,
 		NewEvent:           event,
 		LedgerSeq:          l.Sequence(),
 		LedgerHash:         hash[:],
 		LedgerHashPrevious: parentHash[:],
-		NetworkTime:        networkTime,
+		NetworkTime:        a.networkTime(),
 		FirstSeq:           &firstSeq,
 		LastSeq:            &lastSeq,
 	}

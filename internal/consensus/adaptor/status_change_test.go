@@ -118,3 +118,37 @@ func TestStatusChange_AdoptLedgerFromHeaderAnnouncesSwitch(t *testing.T) {
 	assert.Equal(t, h.Hash[:], sc.LedgerHash)
 	assert.Equal(t, h.ParentHash[:], sc.LedgerHashPrevious)
 }
+
+// A phase-driven status change omits new_status (peers inherit their last
+// record, as rippled's notify() sends none) and advertises the range we
+// durably serve — clamped up to the online-delete floor, not genesis..tip.
+func TestStatusChange_OmitsNewStatusAdvertisesServedRange(t *testing.T) {
+	sender := &scRecordingSender{}
+	svc := newTestLedgerService(t)
+	a := New(Config{LedgerService: svc, Sender: sender})
+
+	for range 3 {
+		_, err := svc.AcceptLedger(context.TODO())
+		require.NoError(t, err)
+	}
+	_, maxSeq, ok := svc.AvailableLedgerRange()
+	require.True(t, ok)
+	require.Greater(t, maxSeq, uint32(2))
+	// Only the tip is durably served: the advertised range must start at the
+	// floor, proving it is not the old hard-coded genesis lower bound.
+	svc.SetMinimumOnlineFunc(func() uint32 { return maxSeq })
+
+	a.OnPhaseChange(consensus.PhaseOpen, consensus.PhaseEstablish)
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	require.Len(t, sender.scs, 1)
+	sc := sender.scs[0]
+	assert.Equal(t, message.NodeEventClosingLedger, sc.NewEvent)
+	assert.Equal(t, message.NodeStatus(0), sc.NewStatus)
+	require.NotNil(t, sc.FirstSeq)
+	require.NotNil(t, sc.LastSeq)
+	assert.Equal(t, maxSeq, *sc.FirstSeq)
+	assert.Equal(t, maxSeq, *sc.LastSeq)
+	assert.NotZero(t, sc.NetworkTime)
+}
