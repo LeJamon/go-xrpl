@@ -269,6 +269,12 @@ type Overlay struct {
 	listenerMu sync.RWMutex
 	listener   net.Listener
 
+	// listenerReady is closed once Run has finished its listener-bind
+	// phase — after startListener publishes o.listener, or immediately
+	// when no listener is configured.
+	listenerReady     chan struct{}
+	listenerReadyOnce sync.Once
+
 	// Lifecycle
 	// lifecycleMu guards ctx/cancel against the Run-write vs Stop-read
 	// race: Run is typically launched in its own goroutine and lazily
@@ -679,6 +685,22 @@ func (o *Overlay) ListenAddr() string {
 	return l.Addr().String()
 }
 
+// ListenerReady returns a channel closed once Run has finished binding
+// the listener (or determined none is configured), after which
+// ListenAddr reports the resolved ephemeral port.
+func (o *Overlay) ListenerReady() <-chan struct{} {
+	return o.listenerReady
+}
+
+// signalListenerReady closes listenerReady, guarding overlays built
+// directly (outside New) whose channel is nil.
+func (o *Overlay) signalListenerReady() {
+	if o.listenerReady == nil {
+		return
+	}
+	o.listenerReadyOnce.Do(func() { close(o.listenerReady) })
+}
+
 // messageBufferSize returns the inbound-message channel capacity,
 // falling back to DefaultMessageBufferSize when the configured value
 // is non-positive. A non-positive size would create an unbuffered
@@ -774,6 +796,7 @@ func New(opts ...Option) (*Overlay, error) {
 		ledgerData:      make(chan *InboundMessage, DefaultLedgerDataBufferSize),
 		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
 		stopCh:          make(chan struct{}),
+		listenerReady:   make(chan struct{}),
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
 		clockForIndex:   time.Now,
 		inboundSem:      make(chan struct{}, inboundCap),
@@ -853,6 +876,7 @@ func (o *Overlay) Run(ctx context.Context) error {
 			return fmt.Errorf("listener error: %w", err)
 		}
 	}
+	o.signalListenerReady()
 
 	// Start resource manager (per-endpoint consumer table). The
 	// periodic-activity goroutine ages out inactive entries; the

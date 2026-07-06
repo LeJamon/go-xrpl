@@ -219,6 +219,19 @@ func to32(b []byte) ([32]byte, bool) {
 	return out, true
 }
 
+const (
+	// overlayReadyTimeout bounds the wait for a freshly-started overlay to
+	// publish its listener. The wait returns the instant readiness is
+	// signalled, so this generous ceiling only bites on a genuine wedge.
+	overlayReadyTimeout = 30 * time.Second
+
+	// peerConnectTimeout bounds the wait for two overlays to finish the
+	// handshake and register each other. Same rationale as
+	// overlayReadyTimeout: it returns on success, so the ceiling only
+	// guards a real stall.
+	peerConnectTimeout = 30 * time.Second
+)
+
 // startOverlay spins up a single Overlay bound to localhost on an
 // ephemeral port. Returns the overlay and a cancel function.
 func startOverlay(t *testing.T) (*peermanagement.Overlay, context.CancelFunc) {
@@ -241,12 +254,12 @@ func startOverlay(t *testing.T) (*peermanagement.Overlay, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { _ = o.Run(ctx) }()
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if o.ListenAddr() != "" {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Block on the readiness signal instead of a wall-clock poll: under
+	// -race on a loaded runner the Run goroutine can be starved past a
+	// tight deadline before ListenAddr() resolves.
+	select {
+	case <-o.ListenerReady():
+	case <-time.After(overlayReadyTimeout):
 	}
 	require.NotEmpty(t, o.ListenAddr(), "overlay listener never came up")
 	return o, cancel
@@ -285,7 +298,7 @@ func TestTwoOverlay_HandshakeAndConnect(t *testing.T) {
 
 	require.NoError(t, b.Connect(a.ListenAddr()),
 		"two overlays must complete the XRPL TLS+HTTP handshake against each other")
-	waitForPeers(t, a, b, 5*time.Second)
+	waitForPeers(t, a, b, peerConnectTimeout)
 
 	infosA := a.Peers()
 	infosB := b.Peers()
@@ -317,7 +330,7 @@ func TestTwoOverlay_PostHandshakeSendReceive(t *testing.T) {
 
 	require.NoError(t, b.Connect(a.ListenAddr()),
 		"two overlays must complete the XRPL TLS+HTTP handshake")
-	waitForPeers(t, a, b, 5*time.Second)
+	waitForPeers(t, a, b, peerConnectTimeout)
 
 	// Find the peer-id of B as seen by A (the inbound peer on A). We
 	// send from A -> B (A initiates the send, B's readLoop must
@@ -414,7 +427,7 @@ func TestTwoOverlay_ReplayDelta_RoundTrip(t *testing.T) {
 
 	require.NoError(t, b.Connect(a.ListenAddr()),
 		"two overlays must complete the XRPL TLS+HTTP handshake")
-	waitForPeers(t, a, b, 5*time.Second)
+	waitForPeers(t, a, b, peerConnectTimeout)
 
 	// B's view of A (outbound peer on B).
 	infosB := b.Peers()
@@ -481,7 +494,7 @@ func TestTwoOverlay_Squelch_RoundTrip(t *testing.T) {
 
 	require.NoError(t, b.Connect(a.ListenAddr()),
 		"two overlays must complete the XRPL TLS+HTTP handshake")
-	waitForPeers(t, a, b, 5*time.Second)
+	waitForPeers(t, a, b, peerConnectTimeout)
 
 	// Both overlays see exactly one peer.
 	infosA := a.Peers()
@@ -591,7 +604,7 @@ func TestTwoOverlay_ProofPath_RoundTrip(t *testing.T) {
 	a.LedgerSync().SetProvider(provider)
 
 	require.NoError(t, b.Connect(a.ListenAddr()))
-	waitForPeers(t, a, b, 5*time.Second)
+	waitForPeers(t, a, b, peerConnectTimeout)
 
 	infosB := b.Peers()
 	require.Len(t, infosB, 1)
