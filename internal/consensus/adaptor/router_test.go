@@ -14,7 +14,6 @@ import (
 	testenv "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -157,7 +156,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 	testVal := &consensus.Validation{
 		Full:      true,
 		LedgerSeq: 42,
-		SignTime:  time.Unix(protocol.RippleEpochUnix+828618000, 0), // XRPL epoch + offset
+		SignTime:  time.Now(),
 		LoadFee:   0,
 	}
 	copy(testVal.LedgerID[:], []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32})

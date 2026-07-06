@@ -340,7 +340,7 @@ const (
 	validationCurrentEarly = 3 * time.Minute
 )
 
-// isCurrent reports whether a validation's sign-time and seen-time are
+// IsCurrent reports whether a validation's sign-time and seen-time are
 // close enough to now to be considered "current" in rippled's sense.
 // Exact mirror of Validations.h:148-166 isCurrent:
 //
@@ -357,7 +357,7 @@ const (
 //
 // `now` is the network-adjusted time from the adaptor so the freshness
 // window honors the close-offset consensus has converged on.
-func isCurrent(now, signTime, seenTime time.Time) bool {
+func IsCurrent(now, signTime, seenTime time.Time) bool {
 	// Past bound on signTime (rippled uses EARLY=3m here, NOT WALL=5m):
 	// a validation signed more than EARLY in the past is stale —
 	// interoperating peers already moved on.
@@ -469,7 +469,7 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 	// offset and doesn't reject our own just-signed validations on a
 	// clock-skewed node.
 	now := vt.now()
-	if !isCurrent(now, validation.SignTime, validation.SeenTime) {
+	if !IsCurrent(now, validation.SignTime, validation.SeenTime) {
 		return ValStatusStale
 	}
 
@@ -966,7 +966,7 @@ func (vt *ValidationTracker) FlushStale() {
 	defer vt.mu.Unlock()
 	now := vt.now()
 	for nodeID, v := range vt.byNode {
-		if isCurrent(now, v.SignTime, v.SeenTime) {
+		if IsCurrent(now, v.SignTime, v.SeenTime) {
 			continue
 		}
 		delete(vt.byNode, nodeID)
