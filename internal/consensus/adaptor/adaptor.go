@@ -1808,9 +1808,11 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 	)
 }
 
-// refreshRemoteFee takes the sfLoadFee of each trusted validation
-// (defaulting to LoadBase when the validator omitted the field) and
-// forwards the median to LoadFeeTrack.
+// refreshRemoteFee takes the sfLoadFee of each trusted, FULL validation
+// (defaulting to LoadBase when the validator omitted the field) across
+// both the validated ledger and its parent, and forwards the median to
+// LoadFeeTrack. Partial validations are excluded, and folding in the
+// parent widens the sample the same way rippled does.
 func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 	if a.ledgerService == nil || a.validationHistorian == nil {
 		return
@@ -1819,14 +1821,28 @@ func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 	if ft == nil {
 		return
 	}
-	vals := a.validationHistorian.GetTrustedValidations(ledgerID)
-	if len(vals) == 0 {
+	base := ft.GetLoadBase()
+
+	fees := a.collectValidationFees(ledgerID, base)
+	if l, err := a.ledgerService.GetLedgerByHash(ledgerID); err == nil && l != nil {
+		fees = append(fees, a.collectValidationFees(consensus.LedgerID(l.ParentHash()), base)...)
+	}
+	if len(fees) == 0 {
 		return
 	}
-	base := ft.GetLoadBase()
+	slices.Sort(fees)
+	ft.SetRemoteFee(fees[len(fees)/2])
+}
+
+// collectValidationFees returns the sfLoadFee (defaulting to base when
+// the validator omitted the field) of each trusted, FULL validation of
+// ledgerID. Trusted partials are dropped so only finality-bearing
+// validations feed the remote-fee median.
+func (a *Adaptor) collectValidationFees(ledgerID consensus.LedgerID, base uint32) []uint32 {
+	vals := a.validationHistorian.GetTrustedValidations(ledgerID)
 	fees := make([]uint32, 0, len(vals))
 	for _, v := range vals {
-		if v == nil {
+		if v == nil || !v.Full {
 			continue
 		}
 		fee := v.LoadFee
@@ -1835,11 +1851,7 @@ func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 		}
 		fees = append(fees, fee)
 	}
-	if len(fees) == 0 {
-		return
-	}
-	slices.Sort(fees)
-	ft.SetRemoteFee(fees[len(fees)/2])
+	return fees
 }
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
