@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1717,6 +1718,15 @@ func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.Operating
 	}
 
 	if h := a.validationHistorian; h != nil {
+		// Dump the trie's support state to diagnose why a branch was preferred.
+		// Debug-gated because building it walks and marshals the whole trie.
+		if a.logger.Enabled(context.Background(), slog.LevelDebug) {
+			if trie := h.GetJsonTrie(); trie != nil {
+				if raw, err := json.Marshal(trie); err == nil {
+					a.logger.Debug("ValidationTrie", "trie", string(raw))
+				}
+			}
+		}
 		if id, seq, ok := h.GetPreferred(a.lastIssuedValidationSeq.Load()); ok {
 			id, seq = a.resolvePreferredVsCurrent(id, seq, ledger)
 			if seq >= minSeq {
