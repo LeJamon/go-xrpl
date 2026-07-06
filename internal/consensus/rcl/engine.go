@@ -3133,11 +3133,12 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// goroutine parks its round-driving until the commit tail runs.
 	prevLedger := e.prevLedger
 	closeTimeCorrect := e.closeTime.haveConsensus
+	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
 	e.buildInProgress = true
 	e.setPhase(consensus.PhaseAccepted)
 
 	e.mu.Unlock()
-	newLedger, err := e.adaptor.BuildLedger(prevLedger, txSet, closeTime, closeTimeCorrect)
+	newLedger, err := e.adaptor.BuildLedger(prevLedger, txSet, closeTime, closeTimeCorrect, disputedNoTxs)
 	if err == nil {
 		if err = e.adaptor.ValidateLedger(newLedger); err == nil {
 			err = e.adaptor.StoreLedger(newLedger)

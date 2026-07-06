@@ -80,7 +80,7 @@ func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
 	// Build the flag ledger (seq 256) through the consensus path with an EMPTY
 	// tx set — the sub-path that skipped the transition before this fix.
 	closeTime = closeTime.Add(2 * time.Second)
-	seq, err := svc.AcceptConsensusResult(context.TODO(), open255, nil, closeTime, true)
+	seq, err := svc.AcceptConsensusResult(context.TODO(), open255, nil, nil, closeTime, true)
 	if err != nil {
 		t.Fatalf("flag-ledger consensus close: %v", err)
 	}

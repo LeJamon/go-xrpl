@@ -456,7 +456,7 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 	probeSvc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	require.NoError(t, probeSvc.Start())
-	_, err = probeSvc.AcceptConsensusResult(context.TODO(), parentReal, nil, closeTime, true)
+	_, err = probeSvc.AcceptConsensusResult(context.TODO(), parentReal, nil, nil, closeTime, true)
 	require.NoError(t, err)
 
 	probeSvc.mu.RLock()
@@ -476,7 +476,7 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 	// Close the consensus ledger. F4 drain sees the matching-hash,
 	// non-expired stash and promotes validatedLedger. eventCallback MUST
 	// fire inline because no later SetValidatedLedger will arrive.
-	closedSeq, err := svc.AcceptConsensusResult(context.TODO(), parentReal, nil, closeTime, true)
+	closedSeq, err := svc.AcceptConsensusResult(context.TODO(), parentReal, nil, nil, closeTime, true)
 	require.NoError(t, err)
 	require.Equal(t, expectedSeq, closedSeq)
 

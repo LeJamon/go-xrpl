@@ -317,6 +317,21 @@ func (dt *DisputeTracker) Has(txID consensus.TxID) bool {
 	return ok
 }
 
+// DisputedNoTxs returns the raw blobs of every dispute we currently vote NO
+// on — txs peers proposed that end up excluded from the consensus set.
+func (dt *DisputeTracker) DisputedNoTxs() [][]byte {
+	dt.mu.RLock()
+	defer dt.mu.RUnlock()
+
+	var txs [][]byte
+	for _, d := range dt.disputes {
+		if !d.OurVote {
+			txs = append(txs, d.Tx)
+		}
+	}
+	return txs
+}
+
 // GetAll returns all disputed transactions.
 func (dt *DisputeTracker) GetAll() []*consensus.DisputedTx {
 	dt.mu.RLock()

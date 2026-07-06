@@ -27,7 +27,7 @@ func TestAcceptConsensusResult_EmptySetClosesWithZeroTxRoot(t *testing.T) {
 	parent := svc.GetClosedLedger()
 	require.NotNil(t, parent)
 
-	_, err = svc.AcceptConsensusResult(context.TODO(), parent, nil, time.Unix(1700000000, 0), true)
+	_, err = svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, time.Unix(1700000000, 0), true)
 	require.NoError(t, err)
 
 	svc.mu.RLock()

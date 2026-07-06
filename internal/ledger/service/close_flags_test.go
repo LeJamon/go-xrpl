@@ -59,7 +59,7 @@ func closeAndGetHeader(t *testing.T, closeTimeCorrect bool) header.LedgerHeader 
 	require.NotNil(t, parent)
 	closeTime := time.Unix(1700000000, 0)
 
-	_, err = svc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, closeTimeCorrect)
+	_, err = svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, closeTime, closeTimeCorrect)
 	require.NoError(t, err)
 
 	svc.mu.RLock()

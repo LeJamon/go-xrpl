@@ -766,7 +766,7 @@ func (a *Adaptor) GetMaxDisallowedLedgerSeq() uint32 {
 	return a.maxDisallowedSeq
 }
 
-func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool) (consensus.Ledger, error) {
+func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (consensus.Ledger, error) {
 	// Unwrap the parent for the service. Critical for chain switching: the
 	// parent may differ from the service's closedLedger after wrong-ledger detection.
 	var parentLedger *ledger.Ledger
@@ -775,7 +775,7 @@ func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, cl
 	}
 	// context.TODO: BuildLedger's interface has no context, so persistence
 	// here can't be cancelled by the engine (#185).
-	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), closeTime, closeTimeCorrect)
+	seq, err := a.ledgerService.AcceptConsensusResult(context.TODO(), parentLedger, txSet.Txs(), disputedTxs, closeTime, closeTimeCorrect)
 	if err != nil {
 		return nil, err
 	}
