@@ -705,7 +705,9 @@ func TestDiscoverySyncConnectedHosts_SkipsMalformedAddress(t *testing.T) {
 // TestAddPeerCapEvictsOldest pins issue #1170: once d.peers reaches
 // MaxDiscoveredPeers, a new gossiped address evicts the least-recently-seen
 // non-connected, non-fixed entry instead of growing the map without bound.
-// The live connection and the fixed peer must survive the eviction.
+// The live connection and the fixed peer sit at the stale end of the
+// recency order and must survive the eviction; a re-announced gossip entry
+// is refreshed to the recent end and must survive too.
 func TestAddPeerCapEvictsOldest(t *testing.T) {
 	cfg := &Config{
 		MaxPeers:    50,
@@ -715,7 +717,8 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 	}
 	d := NewDiscovery(cfg, make(chan Event, 1))
 
-	// A connected peer and a stale fixed peer that must never be evicted.
+	// Inserted first, so both sit at the least-recently-seen end where a
+	// naive eviction would pick them.
 	d.MarkConnected("connected:51235", PeerID(1))
 	d.AddPeer("fixed:51235", 1, PeerID(2))
 
@@ -731,14 +734,9 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 		t.Fatalf("setup: len(d.peers) = %d, want %d", filled, MaxDiscoveredPeers)
 	}
 
-	// Make one gossip entry the clear least-recently-seen victim, and mark
-	// the connected/fixed entries even staler to prove they are exempt.
-	stale := time.Now().Add(-24 * time.Hour)
-	d.mu.Lock()
-	d.peers["gossip-0:51235"].LastSeen = stale
-	d.peers["connected:51235"].LastSeen = stale.Add(-time.Hour)
-	d.peers["fixed:51235"].LastSeen = stale.Add(-time.Hour)
-	d.mu.Unlock()
+	// Re-announcing gossip-0 refreshes its recency, leaving gossip-1 as
+	// the least-recently-seen discardable entry.
+	d.AddPeer("gossip-0:51235", 1, PeerID(3))
 
 	// One more distinct address forces exactly one eviction.
 	d.AddPeer("fresh:51235", 1, PeerID(4))
@@ -748,8 +746,11 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 	if len(d.peers) != MaxDiscoveredPeers {
 		t.Errorf("len(d.peers) = %d, want %d after over-cap insert", len(d.peers), MaxDiscoveredPeers)
 	}
-	if _, ok := d.peers["gossip-0:51235"]; ok {
+	if _, ok := d.peers["gossip-1:51235"]; ok {
 		t.Error("least-recently-seen gossip entry should have been evicted")
+	}
+	if _, ok := d.peers["gossip-0:51235"]; !ok {
+		t.Error("re-announced gossip entry should have been refreshed, not evicted")
 	}
 	if _, ok := d.peers["fresh:51235"]; !ok {
 		t.Error("new address should have been inserted after eviction")

@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"container/list"
 	"context"
 	"encoding/json"
 	"math/rand/v2"
@@ -327,6 +328,9 @@ type DiscoveredPeer struct {
 	Connected bool
 	PeerID    PeerID
 	Source    PeerID
+
+	// Position in Discovery.lru; guarded by Discovery.mu.
+	lruEntry *list.Element
 }
 
 // Discovery manages peer discovery and connection maintenance.
@@ -335,7 +339,11 @@ type Discovery struct {
 
 	cfg Config
 
-	peers       map[string]*DiscoveredPeer
+	peers map[string]*DiscoveredPeer
+	// lru orders d.peers by last-seen recency (front = most recent) so
+	// eviction at MaxDiscoveredPeers pops from the stale end instead of
+	// scanning the whole map. Every peers insert/delete updates it.
+	lru         list.List
 	connected   map[PeerID]*DiscoveredPeer
 	fixedPeers  map[string]bool
 	bootCache   *BootCache
@@ -420,6 +428,7 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 			existing.Source = source
 		}
 		existing.LastSeen = time.Now()
+		d.lru.MoveToFront(existing.lruEntry)
 		return
 	}
 
@@ -429,34 +438,35 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 		return
 	}
 
-	d.peers[address] = &DiscoveredPeer{
+	d.insertPeerLocked(&DiscoveredPeer{
 		Address:  address,
 		Hops:     hops,
 		LastSeen: time.Now(),
 		Source:   source,
-	}
+	})
+}
+
+// insertPeerLocked adds p to the peer map and the recency list as the
+// most recently seen entry. Caller holds d.mu.
+func (d *Discovery) insertPeerLocked(p *DiscoveredPeer) {
+	p.lruEntry = d.lru.PushFront(p)
+	d.peers[p.Address] = p
 }
 
 // evictOldestLocked removes the least-recently-seen discardable entry to
 // make room under MaxDiscoveredPeers, returning false when every entry is
 // a connected or fixed peer that must be retained. Caller holds d.mu.
 func (d *Discovery) evictOldestLocked() bool {
-	var victim string
-	var oldest time.Time
-	for addr, p := range d.peers {
-		if p.Connected || d.fixedPeers[addr] {
+	for e := d.lru.Back(); e != nil; e = e.Prev() {
+		p := e.Value.(*DiscoveredPeer)
+		if p.Connected || d.fixedPeers[p.Address] {
 			continue
 		}
-		if victim == "" || p.LastSeen.Before(oldest) {
-			victim = addr
-			oldest = p.LastSeen
-		}
+		d.lru.Remove(e)
+		delete(d.peers, p.Address)
+		return true
 	}
-	if victim == "" {
-		return false
-	}
-	delete(d.peers, victim)
-	return true
+	return false
 }
 
 // AddRedirectCandidate records an address learned from a peer's 503
@@ -482,12 +492,12 @@ func (d *Discovery) AddRedirectCandidate(address string, source PeerID) {
 	}
 
 	if _, exists := d.peers[address]; !exists {
-		d.peers[address] = &DiscoveredPeer{
+		d.insertPeerLocked(&DiscoveredPeer{
 			Address:  address,
 			Hops:     1,
 			LastSeen: time.Now(),
 			Source:   source,
-		}
+		})
 	}
 }
 
@@ -499,7 +509,7 @@ func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 	peer, exists := d.peers[address]
 	if !exists {
 		peer = &DiscoveredPeer{Address: address, LastSeen: time.Now()}
-		d.peers[address] = peer
+		d.insertPeerLocked(peer)
 	}
 
 	peer.Connected = true
@@ -689,6 +699,7 @@ func (d *Discovery) prune() {
 	cutoff := time.Now().Add(-1 * time.Hour)
 	for addr, peer := range d.peers {
 		if !peer.Connected && peer.LastSeen.Before(cutoff) {
+			d.lru.Remove(peer.lruEntry)
 			delete(d.peers, addr)
 		}
 	}
