@@ -818,31 +818,28 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 
 	trusted := e.adaptor.IsTrusted(validation.NodeID)
 
-	// Same-seq Byzantine detection: a trusted validator must not sign two
-	// ledgers (or re-sign differently) for one seq. On conflict, keep it out
-	// of quorum/trie but STILL relay it (peers should observe it too) and
-	// charge no one. The returned error only tells the router to skip the
-	// catch-up acquire — not to penalise the relaying peer.
+	// Feed the tracker — the gate that advances validated_ledger once a
+	// quorum of trusted FULL validations accumulates (partials steer the trie
+	// but don't count). Trust-gate to avoid a byNode entry per untrusted key.
+	//
+	// The tracker doubles as the Byzantine detector: a trusted validator
+	// must not sign two ledgers (or re-sign differently) for one seq, even
+	// a seq its tip has already superseded. On conflicting/multiple, the
+	// validation is kept out of quorum/trie but STILL relayed (peers should
+	// observe it too) and no one is charged. The returned error only tells
+	// the router to skip the catch-up acquire — not to penalise the
+	// relaying peer.
 	if trusted && e.validationTracker != nil {
-		if reason, conflict := validationConflict(
-			e.validationTracker.GetLatestValidation(validation.NodeID),
-			validation,
-		); conflict {
+		switch status := e.validationTracker.AddStatus(validation); status {
+		case ValStatusConflicting, ValStatusMultiple:
 			e.adaptor.RelayValidation(validation, originPeer)
-			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: reason}
+			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: status.String()}
 		}
 	}
 
 	// Store trusted-only: an untrusted key could grow the map unboundedly.
 	if trusted {
 		e.proposalTracker.SetValidation(validation)
-	}
-
-	// Feed the tracker — the gate that advances validated_ledger once a
-	// quorum of trusted FULL validations accumulates (partials steer the trie
-	// but don't count). Trust-gate to avoid a byNode entry per untrusted key.
-	if trusted && e.validationTracker != nil {
-		e.validationTracker.Add(validation)
 	}
 
 	e.eventBus.Publish(&consensus.ValidationReceivedEvent{
@@ -858,29 +855,6 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	}
 
 	return nil
-}
-
-// validationConflict classifies a new validation against the latest
-// tracked one for the same node. conflict=true only when they share a
-// seq but disagree: different ledger (or same ledger, different sign
-// time) → "conflicting"; same ledger+time, different cookie → "multiple".
-// nil prev, a different seq, or an identical resend is no conflict. Only
-// the latest seq per node is checked, so a conflict at an already-passed
-// seq is missed — harmless, it can't affect quorum.
-func validationConflict(prev, v *consensus.Validation) (string, bool) {
-	if prev == nil || prev.LedgerSeq != v.LedgerSeq {
-		return "", false
-	}
-	if prev.LedgerID != v.LedgerID {
-		return "conflicting", true
-	}
-	if !prev.SignTime.Equal(v.SignTime) {
-		return "conflicting", true
-	}
-	if prev.Cookie != v.Cookie {
-		return "multiple", true
-	}
-	return "", false
 }
 
 // OnTxSet handles receiving a transaction set we requested.

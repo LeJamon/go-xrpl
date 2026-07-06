@@ -72,10 +72,17 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 	}
 }
 
-// TestValidationConflict covers the A6 classification of same-seq
-// double-signs against the most recent tracked tip.
-func TestValidationConflict(t *testing.T) {
+// TestValidationTracker_AddStatus_Classification covers the A6
+// classification of double-signs. Non-monotonic seqs are cross-checked
+// against the validation tracked at that exact seq — not just the node's
+// latest tip — so equivocation is flagged even at superseded seqs. Steps
+// run in order against one tracker, sharing evidence and enforcer state.
+func TestValidationTracker_AddStatus_Classification(t *testing.T) {
 	base := time.Unix(1_700_000_000, 0)
+	now := base
+	vt := NewValidationTracker(10, 5*time.Minute)
+	vt.SetNow(func() time.Time { return now })
+
 	node := consensus.NodeID{0x9}
 	mk := func(seq uint32, ledger consensus.LedgerID, signTime time.Time, cookie uint64) *consensus.Validation {
 		return &consensus.Validation{
@@ -85,27 +92,43 @@ func TestValidationConflict(t *testing.T) {
 	}
 	ledgerA := consensus.LedgerID{0xA}
 	ledgerB := consensus.LedgerID{0xB}
+	ledgerC := consensus.LedgerID{0xC}
 
-	tests := []struct {
-		name       string
-		prev, next *consensus.Validation
-		wantReason string
-		wantConfl  bool
+	steps := []struct {
+		name  string
+		at    time.Duration // tracker clock offset from base
+		flush bool          // run the FlushStale heartbeat sweep first
+		v     *consensus.Validation
+		want  ValStatus
 	}{
-		{"nil prev", nil, mk(100, ledgerA, base, 0), "", false},
-		{"different seq", mk(100, ledgerA, base, 0), mk(101, ledgerB, base, 0), "", false},
-		{"identical resend", mk(100, ledgerA, base, 1), mk(100, ledgerA, base, 1), "", false},
-		{"same seq different ledger", mk(100, ledgerA, base, 0), mk(100, ledgerB, base, 0), "conflicting", true},
-		{"same seq same ledger different signtime", mk(100, ledgerA, base, 0), mk(100, ledgerA, base.Add(time.Second), 0), "conflicting", true},
-		{"same seq same ledger different cookie", mk(100, ledgerA, base, 1), mk(100, ledgerA, base, 2), "multiple", true},
+		{name: "first validation", v: mk(100, ledgerA, base, 1), want: ValStatusCurrent},
+		{name: "identical resend", v: mk(100, ledgerA, base, 1), want: ValStatusBadSeq},
+		{name: "same seq different ledger", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
+		{name: "same seq same ledger different signtime", v: mk(100, ledgerA, base.Add(time.Second), 1), want: ValStatusConflicting},
+		{name: "same seq same ledger different cookie", v: mk(100, ledgerA, base, 2), want: ValStatusMultiple},
+		{name: "tip advances", v: mk(101, ledgerC, base, 1), want: ValStatusCurrent},
+		// The deep-detector case: the tip is at 101, yet the double-sign
+		// at the superseded seq 100 is still flagged.
+		{name: "conflict at superseded seq", v: mk(100, ledgerB, base, 1), want: ValStatusConflicting},
+		{name: "unseen lower seq", v: mk(99, ledgerB, base, 1), want: ValStatusBadSeq},
+		// Tracked evidence signed >validationCurrentWall before a newer
+		// submission is disregarded and replaced: the same (100, B) pair
+		// that was conflicting above degrades to badSeq.
+		{name: "stale evidence disregarded", at: 6 * time.Minute, v: mk(100, ledgerB, base.Add(6*time.Minute), 1), want: ValStatusBadSeq},
+		// After validationSetExpires idle the enforcer floor resets (and
+		// the heartbeat sweep drops the stale tip + aged evidence), so a
+		// node may legitimately re-validate a lower seq, e.g. after a
+		// network restart.
+		{name: "idle reset readmits lower seq", at: 17 * time.Minute, flush: true, v: mk(100, ledgerB, base.Add(17*time.Minute), 1), want: ValStatusCurrent},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			reason, confl := validationConflict(tc.prev, tc.next)
-			if confl != tc.wantConfl || reason != tc.wantReason {
-				t.Errorf("validationConflict = (%q, %v), want (%q, %v)", reason, confl, tc.wantReason, tc.wantConfl)
-			}
-		})
+	for _, tc := range steps {
+		now = base.Add(tc.at)
+		if tc.flush {
+			vt.FlushStale()
+		}
+		if got := vt.AddStatus(tc.v); got != tc.want {
+			t.Errorf("%s: AddStatus = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 
@@ -163,6 +186,62 @@ func TestEngine_OnValidation_ConflictingDoubleSign(t *testing.T) {
 	}
 	if !relayedConflict {
 		t.Error("conflicting validation must still be relayed (rippled forwards Byzantine validations)")
+	}
+}
+
+// TestEngine_OnValidation_SupersededSeqDoubleSign pins the deep detector
+// end-to-end: equivocation at a seq the validator's tip has already
+// superseded is still flagged as Byzantine (the cross-check runs against
+// the by-seq evidence, not just the node's latest tip), kept out of
+// quorum/trie, and still relayed.
+func TestEngine_OnValidation_SupersededSeqDoubleSign(t *testing.T) {
+	adaptor := newMockAdaptor()
+	n := consensus.NodeID{0x9}
+	adaptor.setTrusted([]consensus.NodeID{n})
+	engine := NewEngine(adaptor, DefaultConfig())
+	if err := engine.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { engine.Stop() })
+
+	now := adaptor.Now()
+	v1 := &consensus.Validation{LedgerSeq: 100, LedgerID: consensus.LedgerID{0xA}, NodeID: n, SignTime: now, SeenTime: now, Full: true}
+	if err := engine.OnValidation(v1, 7); err != nil {
+		t.Fatalf("seq-100 validation rejected: %v", err)
+	}
+	v2 := &consensus.Validation{LedgerSeq: 101, LedgerID: consensus.LedgerID{0xC}, NodeID: n, SignTime: now, SeenTime: now, Full: true}
+	if err := engine.OnValidation(v2, 7); err != nil {
+		t.Fatalf("seq-101 validation rejected: %v", err)
+	}
+
+	// Double-sign at seq 100 — already superseded by the seq-101 tip.
+	v3 := &consensus.Validation{LedgerSeq: 100, LedgerID: consensus.LedgerID{0xB}, NodeID: n, SignTime: now, SeenTime: now, Full: true}
+	err := engine.OnValidation(v3, 7)
+	var bv *consensus.ByzantineValidationError
+	if !errors.As(err, &bv) {
+		t.Fatalf("expected *consensus.ByzantineValidationError, got %v", err)
+	}
+	if bv.Reason != "conflicting" {
+		t.Errorf("reason = %q, want conflicting", bv.Reason)
+	}
+
+	// The tip must stay at the seq-101 ledger.
+	if tip := engine.validationTracker.GetLatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
+		t.Errorf("tracked tip should remain the seq-101 ledger; got %+v", tip)
+	}
+
+	// Still relayed so peers observe the equivocation too.
+	adaptor.mu.RLock()
+	relayed := append([]*consensus.Validation(nil), adaptor.validationsRelayed...)
+	adaptor.mu.RUnlock()
+	var relayedConflict bool
+	for _, v := range relayed {
+		if v.LedgerID == (consensus.LedgerID{0xB}) {
+			relayedConflict = true
+		}
+	}
+	if !relayedConflict {
+		t.Error("superseded-seq double-sign must still be relayed")
 	}
 }
 
