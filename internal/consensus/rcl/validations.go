@@ -954,6 +954,29 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 	return vt.byNode[nodeID]
 }
 
+// GetCurrentNodeIDs returns the node IDs of every validator whose latest
+// tracked validation still passes the IsCurrent freshness gate — the set
+// observed actively validating right now, partial or full, trusted or not.
+// The gate matches Add()'s admission check, so a node appears iff its most
+// recent validation is neither stale nor clock-skewed against the
+// network-adjusted clock. Enumeration only; FlushStale does the paired
+// eviction that rippled folds into its current() sweep. Mirrors rippled's
+// Validations::getCurrentNodeIDs — the live-participation set gathered when
+// the engine refreshes the trusted set and quorum each round.
+func (vt *ValidationTracker) GetCurrentNodeIDs() []consensus.NodeID {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	now := vt.now()
+	ids := make([]consensus.NodeID, 0, len(vt.byNode))
+	for nodeID, v := range vt.byNode {
+		if IsCurrent(now, v.SignTime, v.SeenTime) {
+			ids = append(ids, nodeID)
+		}
+	}
+	return ids
+}
+
 // FlushStale drops non-current validations from the steering indexes (byNode
 // + trie tips), mirroring rippled's current() sweep inside withTrie
 // (Validations.h:509-533): a silent validator must stop steering
