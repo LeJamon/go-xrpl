@@ -954,6 +954,33 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 	return s.ledgerHistoryRangeLocked()
 }
 
+// advertisableLedgerRangeLocked returns the held [first, last] span clamped up
+// to the online-delete retention floor, so we never advertise ledgers we won't
+// serve. ok is false when nothing durable remains. Caller holds s.mu.
+func (s *Service) advertisableLedgerRangeLocked() (first, last uint32, ok bool) {
+	minSeq, maxSeq, have := s.ledgerHistoryRangeLocked()
+	if !have {
+		return 0, 0, false
+	}
+	if s.minimumOnlineFunc != nil {
+		if floor := s.minimumOnlineFunc(); floor > minSeq {
+			minSeq = floor
+		}
+	}
+	if minSeq > maxSeq {
+		return 0, 0, false
+	}
+	return minSeq, maxSeq, true
+}
+
+// AdvertisableLedgerRange is the locking wrapper over
+// advertisableLedgerRangeLocked, read by the peer status-change broadcast.
+func (s *Service) AdvertisableLedgerRange() (first, last uint32, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.advertisableLedgerRangeLocked()
+}
+
 // GetValidatedLedgerIndex returns the highest validated ledger index
 func (s *Service) GetValidatedLedgerIndex() uint32 {
 	s.mu.RLock()
@@ -1074,21 +1101,10 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
 	}
 
-	if minSeq, maxSeq, ok := s.ledgerHistoryRangeLocked(); ok {
-		// Clamp the lower bound up to the online-delete floor: the in-memory
-		// window can outlast the node store after a rotation. complete_ledgers
-		// must report durable availability.
-		if s.minimumOnlineFunc != nil {
-			if floor := s.minimumOnlineFunc(); floor > minSeq {
-				minSeq = floor
-			}
-		}
-		switch {
-		case minSeq > maxSeq:
-			// The whole window sits below the floor — nothing durable to advertise.
-		case minSeq == maxSeq:
+	if minSeq, maxSeq, ok := s.advertisableLedgerRangeLocked(); ok {
+		if minSeq == maxSeq {
 			info.CompleteLedgers = strconv.FormatUint(uint64(minSeq), 10)
-		default:
+		} else {
 			info.CompleteLedgers = formatRange(minSeq, maxSeq)
 		}
 	}
