@@ -61,6 +61,11 @@ type ValidationHistorian interface {
 	GetPreferred(largestIssued uint32) (LedgerID, uint32, bool)
 	PreferredFromValidations(minSeq uint32) (LedgerID, uint32, bool)
 
+	// SetSeqToKeep pins the validation range [low, high) against expiry so
+	// the negative-UNL vote's flag-ledger scan window survives a
+	// fast-advancing retention floor.
+	SetSeqToKeep(low, high uint32)
+
 	// GetJsonTrie returns a JSON-serializable snapshot of the ancestry trie's
 	// support state for debugging preferred-ledger divergence, or nil when the
 	// trie is disabled.

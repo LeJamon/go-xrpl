@@ -30,8 +30,13 @@ func (s *stubLedgerReader) Read(k keylet.Keylet) ([]byte, error) {
 // stubSkipListProvider satisfies the narrow interface
 // buildNegativeUNLScoreTable consumes.
 type stubSkipListProvider struct {
+	seq    uint32
 	hashes [][32]byte
 	err    error
+}
+
+func (s *stubSkipListProvider) Sequence() uint32 {
+	return s.seq
 }
 
 func (s *stubSkipListProvider) SkipListHashes() ([][32]byte, error) {
@@ -47,6 +52,11 @@ type stubHistorian struct {
 	preferredID  consensus.LedgerID
 	preferredSeq uint32
 	preferredOK  bool
+
+	// keepLow/keepHigh record the last SetSeqToKeep call so tests can
+	// assert the negative-UNL vote pins its scan window before reading.
+	keepLow  uint32
+	keepHigh uint32
 }
 
 func (s *stubHistorian) GetTrustedValidations(id consensus.LedgerID) []*consensus.Validation {
@@ -59,6 +69,10 @@ func (s *stubHistorian) GetPreferred(largestIssued uint32) (consensus.LedgerID, 
 
 func (s *stubHistorian) PreferredFromValidations(minSeq uint32) (consensus.LedgerID, uint32, bool) {
 	return s.preferredID, s.preferredSeq, s.preferredOK
+}
+
+func (s *stubHistorian) SetSeqToKeep(low, high uint32) {
+	s.keepLow, s.keepHigh = low, high
 }
 
 func (s *stubHistorian) GetJsonTrie() map[string]any { return nil }
@@ -177,7 +191,7 @@ func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 	}
 
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
-		&stubSkipListProvider{hashes: ancestors},
+		&stubSkipListProvider{seq: 2 * protocol.FlagLedgerInterval, hashes: ancestors},
 		&stubHistorian{byLedger: byLedger},
 	)
 	require.True(t, ok, "a full skip-list must build a table regardless of local participation")
@@ -209,15 +223,45 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 		byLedger[consensus.LedgerID(h)] = vals
 	}
 
+	const prevSeq = 2 * protocol.FlagLedgerInterval // a flag ledger
+	hist := &stubHistorian{byLedger: byLedger}
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
-		&stubSkipListProvider{hashes: ancestors},
-		&stubHistorian{byLedger: byLedger},
+		&stubSkipListProvider{seq: prevSeq, hashes: ancestors},
+		hist,
 	)
 	require.True(t, ok, "a full skip-list of FlagLedgerInterval ancestors builds the table")
 	require.NotNil(t, scoreTable)
 
 	assert.Equal(t, protocol.FlagLedgerInterval, scoreTable[myID], "local validator scored on every ancestor")
 	assert.Equal(t, uint32(50), scoreTable[offline], "offline validator scored only on first 50 ancestors")
+
+	// The vote must pin the scan window before reading so a concurrent
+	// ExpireOld can't prune its low end. Window is [prevSeq-interval,
+	// prevSeq+1+interval) with upcoming = prevSeq+1.
+	upcoming := prevSeq + 1
+	assert.Equal(t, upcoming-1-protocol.FlagLedgerInterval, hist.keepLow, "keep-range low pins the oldest scanned ledger")
+	assert.Equal(t, upcoming+protocol.FlagLedgerInterval, hist.keepHigh, "keep-range high mirrors rippled's forward window")
+}
+
+// At the first flag ledger the parent seq is below FlagLedgerInterval, so the
+// pin's widened low end would underflow uint32; it must saturate to 0 (keeping
+// the whole window) rather than wrap and self-clear. The pin is also set
+// before the skip-list length check, so an incomplete skip-list that can't
+// build a table still records the keep-range — as rippled does, calling
+// setSeqToKeep before its ancestor-count gate.
+func TestBuildScoreTable_PinLowSaturatesAtFirstFlagLedger(t *testing.T) {
+	a := newTestAdaptor(t)
+	hist := &stubHistorian{}
+
+	const prevSeq = protocol.FlagLedgerInterval - 1 // parent of the first flag ledger
+	_, ok := a.buildNegativeUNLScoreTable(
+		&stubSkipListProvider{seq: prevSeq}, // empty skip-list → no table
+		hist,
+	)
+	require.False(t, ok, "an incomplete skip-list cannot build a table")
+
+	assert.Equal(t, uint32(0), hist.keepLow, "pin low saturates to 0, not a uint32 underflow")
+	assert.Equal(t, prevSeq+1+protocol.FlagLedgerInterval, hist.keepHigh, "pin high is still upcoming+interval")
 }
 
 // TestAdaptor_OnUNLChange_NoVoterIsNoOp covers the no-master-keys
