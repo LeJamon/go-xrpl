@@ -2232,7 +2232,7 @@ func (e *Engine) closeLedger() {
 	e.acquiredTxSets[txSet.ID()] = txSet
 
 	// Record the set we're proposing this round for censorship detection,
-	// unless we're acquiring the correct ledger (rippled's !wrongLCL gate).
+	// unless we're acquiring the correct ledger.
 	if e.prevLedger != nil && e.mode != consensus.ModeWrongLedger {
 		e.censorship.propose(txSet.TxIDs(), e.prevLedger.Seq()+1)
 	}
