@@ -167,9 +167,9 @@ func (vt *ValidationTracker) insertTipLocked(nodeID consensus.NodeID, lgr ledger
 }
 
 // GetJsonTrie returns a JSON-serializable snapshot of the ancestry trie's
-// support state for diagnosing preferred-ledger divergence, mirroring rippled's
-// Validations::getJsonTrie. Returns nil when the trie is disabled (no ancestry
-// provider wired) or a serialization panic is trapped. Guarded by vt.mu.
+// support state for diagnosing preferred-ledger divergence. Returns nil when
+// the trie is disabled (no ancestry provider wired) or a serialization panic
+// is trapped. Guarded by vt.mu.
 func (vt *ValidationTracker) GetJsonTrie() map[string]any {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()

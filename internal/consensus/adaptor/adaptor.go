@@ -1712,9 +1712,8 @@ func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.Operating
 	}
 
 	if h := a.validationHistorian; h != nil {
-		// Dump the trie's support state before selecting; this is the primary
-		// handle for diagnosing why a given branch was preferred. Built only
-		// when debug logging is on, mirroring rippled's lazy ValidationTrie log.
+		// Dump the trie's support state to diagnose why a branch was preferred.
+		// Debug-gated because building it walks and marshals the whole trie.
 		if a.logger.Enabled(context.Background(), slog.LevelDebug) {
 			if trie := h.GetJsonTrie(); trie != nil {
 				if raw, err := json.Marshal(trie); err == nil {

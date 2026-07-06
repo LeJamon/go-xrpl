@@ -7,8 +7,7 @@ import (
 
 // GetJson returns a JSON-serializable snapshot of the trie's support state:
 // the compressed ancestry trie under "trie" and a per-sequence tip-count map
-// under "seq_support". It is the primary observability handle for diagnosing
-// preferred-ledger divergence — why GetPreferred picked a given branch.
+// under "seq_support".
 func (t *Trie) GetJson() map[string]any {
 	seqSupport := make(map[string]uint32, len(t.seqSupport))
 	for seq, sup := range t.seqSupport {
@@ -22,7 +21,7 @@ func (t *Trie) GetJson() map[string]any {
 
 // getJSON recursively serializes n and its descendants. The "span" string is
 // the tip ID followed by the half-open [start,end) interval, matching rippled's
-// Span stream format.
+// wire format.
 func (n *node) getJSON() map[string]any {
 	tip := n.s.tip()
 	startID := n.s.startID()
