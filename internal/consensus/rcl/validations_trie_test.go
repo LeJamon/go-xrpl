@@ -411,7 +411,9 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 		t.Fatalf("pre-expire branchSupport(ab): got %d, want 2", got)
 	}
 
-	// Expire validations below seq 4 — drops both tips.
+	// Expire validations below seq 4 — drops both tips. Jump the clock
+	// first so the access-age guard doesn't retain the sets.
+	now = now.Add(validationSetExpires + time.Second)
 	vt.ExpireOld(4)
 
 	// After expiry the trie must drop both tips. branchSupport on any

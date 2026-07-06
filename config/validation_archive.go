@@ -38,7 +38,9 @@ type ValidationArchiveConfig struct {
 	// InMemoryLedgers is the ExpireOld trigger. Every time a ledger is
 	// fully validated at seq S, the tracker drops validations for
 	// ledgers below (S - InMemoryLedgers) — which then stream into the
-	// archive via OnStale. Must be >= 1.
+	// archive via OnStale. Sets read or written within the last 10
+	// minutes (rippled's validationSET_EXPIRES) are held past the window
+	// and archived once cold. Must be >= 1.
 	InMemoryLedgers uint32 `toml:"in_memory_ledgers" mapstructure:"in_memory_ledgers"`
 }
 

@@ -11,7 +11,9 @@
 // isCurrent() returned false — i.e. on time-window violations
 // (SignTime/SeenTime drifted outside the wall/local windows). go-xrpl
 // fires onStale only from ExpireOld(seq - inMemoryLedgers), which is
-// driven by ledger-seq retention from the fully-validated callback.
+// driven by ledger-seq retention from the fully-validated callback —
+// a per-ledger set accessed within validationSET_EXPIRES is held past
+// the window and archived on the first sweep after it goes cold.
 //
 // Practical consequence: time-stale validations that never reach a
 // fully-validated ledger (e.g. orphaned validations on losing forks)

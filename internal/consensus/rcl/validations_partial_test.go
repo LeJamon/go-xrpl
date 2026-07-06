@@ -193,9 +193,14 @@ func TestEngine_RetentionWithoutArchive(t *testing.T) {
 		t.Fatalf("precondition: seed validation not tracked (got %d)", got)
 	}
 
+	// Move the tracker clock past the access-age window so the seed set
+	// is cold when the retention floor sweeps it.
+	future := now.Add(validationSetExpires + time.Second)
+	engine.validationTracker.SetNow(func() time.Time { return future })
+
 	// Drive a quorum at seq 300 to fire the fully-validated callback.
 	for _, id := range []consensus.NodeID{{1}, {2}} {
-		v := &consensus.Validation{LedgerSeq: 300, LedgerID: consensus.LedgerID{0xB}, NodeID: id, SignTime: now, Full: true}
+		v := &consensus.Validation{LedgerSeq: 300, LedgerID: consensus.LedgerID{0xB}, NodeID: id, SignTime: future, Full: true}
 		engine.validationTracker.Add(v)
 	}
 

@@ -15,7 +15,7 @@ func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int
 	if !exists {
 		return 0
 	}
-	return len(ledgerVals)
+	return len(ledgerVals.vals)
 }
 
 // GetCurrentValidators returns nodes that have recently validated.
@@ -42,7 +42,7 @@ func (vt *ValidationTracker) Clear() {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
-	vt.validations = make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation)
+	vt.validations = make(map[consensus.LedgerID]*ledgerValidations)
 	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
 	vt.fired = make(map[consensus.LedgerID]struct{})
 	vt.rebuildTrieLocked()
@@ -65,7 +65,7 @@ func (vt *ValidationTracker) GetStats() ValidationStats {
 	trustedValidations := 0
 
 	for _, ledgerVals := range vt.validations {
-		for nodeID := range ledgerVals {
+		for nodeID := range ledgerVals.vals {
 			totalValidations++
 			if vt.trusted[nodeID] {
 				trustedValidations++

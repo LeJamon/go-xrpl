@@ -71,6 +71,9 @@ func TestValidationArchive_StaleValidationWrittenOnPrune(t *testing.T) {
 		t.Fatal("Add returned false; precondition broken")
 	}
 
+	// Jump the tracker clock past the access-age retention window
+	// (rippled's validationSET_EXPIRES) so the seq floor can evict.
+	tracker.SetNow(func() time.Time { return time.Now().Add(10*time.Minute + time.Second) })
 	tracker.ExpireOld(200) // v becomes stale
 
 	if err := a.Flush(context.Background()); err != nil {
@@ -249,6 +252,13 @@ func TestValidationArchive_EngineDrivenFlow(t *testing.T) {
 		t.Fatal("seed Add returned false")
 	}
 
+	// The seed set was just touched; move the tracker clock past the
+	// access-age retention window (rippled's validationSET_EXPIRES) so
+	// the eviction sweep can drop it. The driving validations are signed
+	// at the same future instant to stay current.
+	future := time.Now().Add(10*time.Minute + time.Second)
+	tracker.SetNow(func() time.Time { return future })
+
 	// Drive quorum at seq 300: two trusted validations for the SAME
 	// ledger hash (mkValidation's hash varies by node, so we pin a
 	// deterministic LedgerID here and only swap NodeID).
@@ -257,6 +267,7 @@ func TestValidationArchive_EngineDrivenFlow(t *testing.T) {
 		v := mkValidation(300, n[0])
 		v.LedgerID = sharedLedger
 		v.NodeID = n
+		v.SignTime = future
 		if !tracker.Add(v) {
 			t.Fatalf("Add at seq=300 returned false for node %v", n)
 		}
