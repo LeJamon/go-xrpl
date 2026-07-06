@@ -3303,9 +3303,8 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 			// just-accepted ledger still count.
 			e.validationTracker.SetMinSeq(newLedger.Seq() - 128)
 		}
-		// Gather the live-participation set where rippled feeds
-		// getCurrentNodeIDs() into updateTrusted. Rippled's quorum ignores that
-		// set, so surface it for partial-outage visibility, not for quorum.
+		// rippled feeds getCurrentNodeIDs() into updateTrusted, but its quorum
+		// ignores the set — surface it for partial-outage visibility, not quorum.
 		slog.Debug("live validator participation",
 			"current", len(e.validationTracker.GetCurrentNodeIDs()),
 			"quorum", e.adaptor.GetQuorum(),
