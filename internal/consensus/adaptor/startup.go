@@ -370,6 +370,7 @@ func NewFromConfig(
 		}
 		router.SetValidatorListAggregator(vlAgg)
 		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
+		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after
 		// every successful apply, and hydrated on cold start so the

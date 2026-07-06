@@ -223,6 +223,11 @@ type TrustOracle interface {
 	// without publisher lists return false.
 	IsUNLBlocked() bool
 
+	// RefreshUNLState re-evaluates the validator-list trust view against the
+	// live clock so IsUNLBlocked reflects an expired list this round. Called
+	// once per round-start; no-op for adaptors without publisher lists.
+	RefreshUNLState()
+
 	// GetCookie returns the validator's per-boot sfCookie value.
 	GetCookie() uint64
 

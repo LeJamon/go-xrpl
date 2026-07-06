@@ -538,6 +538,13 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		e.prevCloseTime = e.state.CloseTimes.Self
 	}
 
+	// Refresh the trust view before reading it: rippled recomputes via
+	// updateTrusted at every ledger close, so an expired list bows the node
+	// out that round. goXRPL's aggregator otherwise only refreshes on its
+	// 30s tick, leaving the lock-down flag stale for several rounds after a
+	// list lapses. No-op without publisher lists.
+	e.adaptor.RefreshUNLState()
+
 	// Voluntary bow-out: an expired validator list means our trust view is
 	// stale, so this round neither proposes nor validates (rippled
 	// preStartRound). Independent of sync state — a syncing validator must
@@ -546,7 +553,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	bowedOut := e.adaptor.IsValidator() && !e.adaptor.IsStandalone() &&
 		!e.adaptor.IsAmendmentBlocked() && e.adaptor.IsUNLBlocked()
 	if bowedOut {
-		slog.Error("Voluntarily bowing out of consensus process because of an expired validator list",
+		slog.Error("Voluntarily bowing out of consensus process because of an expired validator list.",
 			"t", "consensus",
 			"event", "unl-expired-bow-out",
 			"seq", round.Seq,

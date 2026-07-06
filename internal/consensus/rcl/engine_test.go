@@ -159,6 +159,10 @@ type mockAdaptor struct {
 
 	unlBlocked bool
 
+	// onRefreshUNL, when set, runs on each RefreshUNLState call so a test
+	// can model the aggregator latching the lock-down flag at round start.
+	onRefreshUNL func()
+
 	// proposableOverride lets a test pin a specific filtered set
 	// for GetProposableTxs to return, distinct from the raw pending
 	// pool, so closeLedger's wiring (proposing path uses the filtered
@@ -495,6 +499,15 @@ func (a *mockAdaptor) IsUNLBlocked() bool {
 	return a.unlBlocked
 }
 
+func (a *mockAdaptor) RefreshUNLState() {
+	a.mu.RLock()
+	fn := a.onRefreshUNL
+	a.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 func (a *mockAdaptor) GetCookie() uint64 {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -772,6 +785,41 @@ func TestEngine_StartRound_UNLExpiredStandaloneSkips(t *testing.T) {
 	}
 	if !engine.IsValidating() {
 		t.Error("standalone: IsValidating must report true")
+	}
+}
+
+// TestEngine_StartRound_UNLRefreshLatchesBowOut pins the per-round trust
+// refresh (rippled updateTrusted at every ledger close): the lock-down flag
+// is clear entering the round, but RefreshUNLState — driven at round start —
+// latches it against the live clock, so the node bows out that same round
+// instead of waiting for the aggregator's standalone refresh tick.
+func TestEngine_StartRound_UNLRefreshLatchesBowOut(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	// Flag starts clear; the aggregator latches it only when the round-start
+	// refresh re-evaluates the (now expired) list.
+	adaptor.onRefreshUNL = func() {
+		adaptor.mu.Lock()
+		adaptor.unlBlocked = true
+		adaptor.mu.Unlock()
+	}
+
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	round := consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}
+	if err := engine.StartRound(round, true); err != nil {
+		t.Fatalf("StartRound: %v", err)
+	}
+
+	if mode := engine.Mode(); mode != consensus.ModeObserving {
+		t.Errorf("refresh-latched bow-out: want Observing, got %v", mode)
+	}
+	if engine.IsValidating() {
+		t.Error("refresh-latched bow-out: IsValidating must report false")
+	}
+	if !engine.bowedOut.Load() {
+		t.Error("refresh-latched bow-out: bowedOut snapshot must be set by the round-start refresh")
 	}
 }
 

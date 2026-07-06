@@ -249,6 +249,15 @@ type Adaptor struct {
 	// starts, then only read.
 	unlBlocked func() bool
 
+	// refreshUNL re-evaluates the aggregator's trust view against the live
+	// clock (promote rotations, latch/clear the lock-down flag). Wired to
+	// the aggregator's Tick so consensus can drive it once per round —
+	// rippled refreshes via updateTrusted at every ledger close, but
+	// goXRPL's standalone 30s ticker leaves the flag stale for several
+	// rounds after a list lapses. nil (no publishers) means no-op. Same
+	// write-once-before-start lifetime as unlBlocked.
+	refreshUNL func()
+
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
 	// the trie-descent floor for preferredLCL. Zero for a non-validator.
@@ -1301,6 +1310,25 @@ func (a *Adaptor) IsUNLBlocked() bool {
 		return false
 	}
 	return a.unlBlocked()
+}
+
+// SetUNLRefreshFunc wires the aggregator's per-round trust refresh. Must be
+// called before the engine starts.
+func (a *Adaptor) SetUNLRefreshFunc(fn func()) {
+	a.refreshUNL = fn
+}
+
+// RefreshUNLState drives a live re-evaluation of the aggregator's trust view
+// so the consensus bow-out sees an expired list the round it lapses rather
+// than waiting for the standalone refresh tick. No-op without publisher
+// lists. Safe under the engine lock: the aggregator's OnChange fan-out
+// reaches only the adaptor/static/trusted-votes mutexes, never back into the
+// engine, so the engine->aggregator lock order stays acyclic.
+func (a *Adaptor) RefreshUNLState() {
+	if a.refreshUNL == nil {
+		return
+	}
+	a.refreshUNL()
 }
 
 // IsAmendmentBlocked reports whether an unsupported amendment has activated.

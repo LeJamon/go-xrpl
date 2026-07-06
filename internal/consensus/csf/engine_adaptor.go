@@ -524,6 +524,7 @@ func (p *EnginePeer) IsFeatureEnabled(string) bool                           { r
 func (p *EnginePeer) IsFeatureEnabledOnLedger(consensus.Ledger, string) bool { return true }
 func (p *EnginePeer) IsStandalone() bool                                     { return false }
 func (p *EnginePeer) IsUNLBlocked() bool                                     { return false }
+func (p *EnginePeer) RefreshUNLState()                                       {}
 func (p *EnginePeer) GetCookie() uint64                                      { return uint64(p.id) + 1 }
 func (p *EnginePeer) GetServerVersion() uint64                               { return 0 }
 func (p *EnginePeer) GetLoadFee() uint32                                     { return 0 }
