@@ -868,33 +868,31 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	// receive them.
 	relay := trusted || (e.relayPolicy != nil && e.relayPolicy.RelayUntrustedValidations())
 
-	// Same-seq Byzantine detection: a tracked validator must not sign two
-	// ledgers (or re-sign differently) for one seq. On conflict, keep it out
-	// of quorum/trie but STILL relay it (peers should observe it too) and
-	// charge no one. The returned error only tells the router to skip the
-	// catch-up acquire — not to penalise the relaying peer.
+	// Feed the tracker — the gate that advances validated_ledger once a
+	// quorum of trusted FULL validations accumulates (partials steer the trie
+	// but don't count). Listed-but-untrusted keys are tracked too so a later
+	// trust change promotes what was already seen; untrusted-and-unlisted keys
+	// are dropped so the byNode map can't grow unboundedly.
+	//
+	// AddStatus doubles as the Byzantine detector: a validator must not sign
+	// two ledgers (or re-sign differently) for one seq, even a seq its tip has
+	// already superseded. On conflicting/multiple the validation is kept out
+	// of quorum/trie but STILL relayed under the relay policy (peers should
+	// observe it too) and no one is charged; the returned error only tells the
+	// router to skip the catch-up acquire, not to penalise the relaying peer.
 	if tracked && e.validationTracker != nil {
-		if reason, conflict := validationConflict(
-			e.validationTracker.GetLatestValidation(validation.NodeID),
-			validation,
-		); conflict {
+		switch status := e.validationTracker.AddStatus(validation); status {
+		case ValStatusConflicting, ValStatusMultiple:
 			if relay {
 				e.adaptor.RelayValidation(validation, originPeer)
 			}
-			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: reason, Trusted: trusted}
+			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: status.String(), Trusted: trusted}
 		}
 	}
 
 	// Round-scoped bookkeeping stays trusted-only.
 	if trusted {
 		e.proposalTracker.SetValidation(validation)
-	}
-
-	// Feed the tracker — the gate that advances validated_ledger once a
-	// quorum of trusted FULL validations accumulates (partials steer the trie
-	// but don't count). Untrusted keys must be listed to get a byNode entry.
-	if tracked && e.validationTracker != nil {
-		e.validationTracker.Add(validation)
 	}
 
 	e.eventBus.Publish(&consensus.ValidationReceivedEvent{
@@ -908,29 +906,6 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	}
 
 	return nil
-}
-
-// validationConflict classifies a new validation against the latest
-// tracked one for the same node. conflict=true only when they share a
-// seq but disagree: different ledger (or same ledger, different sign
-// time) → "conflicting"; same ledger+time, different cookie → "multiple".
-// nil prev, a different seq, or an identical resend is no conflict. Only
-// the latest seq per node is checked, so a conflict at an already-passed
-// seq is missed — harmless, it can't affect quorum.
-func validationConflict(prev, v *consensus.Validation) (string, bool) {
-	if prev == nil || prev.LedgerSeq != v.LedgerSeq {
-		return "", false
-	}
-	if prev.LedgerID != v.LedgerID {
-		return "conflicting", true
-	}
-	if !prev.SignTime.Equal(v.SignTime) {
-		return "conflicting", true
-	}
-	if prev.Cookie != v.Cookie {
-		return "multiple", true
-	}
-	return "", false
 }
 
 // OnTxSet handles receiving a transaction set we requested.
@@ -3158,11 +3133,12 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// goroutine parks its round-driving until the commit tail runs.
 	prevLedger := e.prevLedger
 	closeTimeCorrect := e.closeTime.haveConsensus
+	disputedNoTxs := e.disputeTracker.DisputedNoTxs()
 	e.buildInProgress = true
 	e.setPhase(consensus.PhaseAccepted)
 
 	e.mu.Unlock()
-	newLedger, err := e.adaptor.BuildLedger(prevLedger, txSet, closeTime, closeTimeCorrect)
+	newLedger, err := e.adaptor.BuildLedger(prevLedger, txSet, closeTime, closeTimeCorrect, disputedNoTxs)
 	if err == nil {
 		if err = e.adaptor.ValidateLedger(newLedger); err == nil {
 			err = e.adaptor.StoreLedger(newLedger)

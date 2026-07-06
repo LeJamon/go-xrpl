@@ -552,10 +552,10 @@ func (s *Service) tickLoadFeeLocked() {
 }
 
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL transition to
-// s.closedLedger. No-op pre-Start. buildRetries are the build pass's retry-state
-// txs, replayed first; anyDisputes is the retriesFirst flag. closedSeq is for log
-// context only. Caller must hold s.mu.
-func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []openledger.PendingTx, anyDisputes bool) {
+// s.closedLedger. No-op pre-Start. retriableTxs are the disputed we-voted-NO txs
+// plus the build pass's retry-state txs, replayed first; anyDisputes is the
+// retriesFirst flag. closedSeq is for log context only. Caller must hold s.mu.
+func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, retriableTxs []openledger.PendingTx, anyDisputes bool) {
 	if s.openLedgerView == nil {
 		return
 	}
@@ -589,8 +589,8 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 	if s.localTxs != nil {
 		locals = s.localTxs.GetTxSet()
 	}
-	// Seed retries with the build-pass leftovers; Accept drains then re-fills it.
-	retries := append([]openledger.PendingTx(nil), buildRetries...)
+	// Seed retries with the disputed/build-pass set; Accept drains then re-fills it.
+	retries := append([]openledger.PendingTx(nil), retriableTxs...)
 	relay := s.txRelay
 	relayCB := func(_ [32]byte, blob []byte) {
 		if relay != nil {
