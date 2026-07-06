@@ -60,6 +60,11 @@ type Engine struct {
 	ourTxSet  consensus.TxSet
 	converged bool
 
+	// censorship tracks txs we propose but that never get included, warning
+	// on persistent exclusion. Observational only; touched solely from the
+	// consensus goroutine under e.mu.
+	censorship censorshipDetector
+
 	// proposalTracker owns the round-scoped peer-signal maps. Accessed only
 	// under e.mu (see ProposalTracker).
 	proposalTracker *ProposalTracker
@@ -1963,6 +1968,13 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	})
 
 	e.adaptor.OnModeChange(oldMode, newMode)
+
+	// Leaving proposing/observing resets censorship tracking: entries recorded
+	// under the old mode no longer reflect a set we keep proposing, so warning
+	// on them would be bogus (setMode already guarantees oldMode != newMode).
+	if oldMode == consensus.ModeProposing || oldMode == consensus.ModeObserving {
+		e.censorship.reset()
+	}
 }
 
 func (e *Engine) setPhase(newPhase consensus.Phase) {
@@ -2224,6 +2236,12 @@ func (e *Engine) closeLedger() {
 	// Our own tx set is immediately "acquired" so dispute wiring recognizes
 	// proposals referencing our position.
 	e.acquiredTxSets[txSet.ID()] = txSet
+
+	// Record the set we're proposing this round for censorship detection,
+	// unless we're acquiring the correct ledger.
+	if e.prevLedger != nil && e.mode != consensus.ModeWrongLedger {
+		e.censorship.propose(txSet.TxIDs(), e.prevLedger.Seq()+1)
+	}
 
 	// Raw now; rounding happens later via effCloseTime at acceptance.
 	closeTime := e.adaptor.Now()
@@ -3213,6 +3231,32 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"result", result.String(),
 		"mode", e.mode.String(),
 	)
+
+	// Censorship detection: reconcile the txs we've been proposing against the
+	// accepted set now that the LCL is built. Only meaningful with the correct
+	// LCL and full consensus (a timed-out round proves nothing about exclusion).
+	if e.state.HaveCorrectLCL && result == consensus.ResultSuccess {
+		accepted := txSet.TxIDs()
+		curr := newLedger.Seq()
+		e.censorship.check(accepted, func(id consensus.TxID, seq uint32) bool {
+			// Reached only for txs we proposed that stayed out of the accepted
+			// set. Keep tracking them (never drop) so the wait accumulates as
+			// they get re-proposed from the pending pool each round; txs we
+			// genuinely stop proposing fall out via propose(), not here. Warn
+			// each time persistent exclusion crosses the interval.
+			if curr > seq && (curr-seq)%censorshipWarnInterval == 0 {
+				slog.Warn("potential censorship: eligible tx not yet included",
+					"t", "consensus",
+					"event", "censorship-warn",
+					"tx", fmt.Sprintf("%x", id[:8]),
+					"tracked_since_seq", seq,
+					"current_seq", curr,
+					"waited", curr-seq,
+				)
+			}
+			return false
+		})
+	}
 
 	e.eventBus.Publish(&consensus.ConsensusReachedEvent{
 		Round:     e.state.Round,
