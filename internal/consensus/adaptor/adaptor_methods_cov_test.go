@@ -63,7 +63,7 @@ func TestAdg_BuildLedger(t *testing.T) {
 	txSet, err := a.BuildTxSet(nil)
 	require.NoError(t, err)
 
-	built, err := a.BuildLedger(lcl, txSet, time.Now(), true)
+	built, err := a.BuildLedger(lcl, txSet, time.Now(), true, nil)
 	require.NoError(t, err)
 	require.NotNil(t, built)
 	assert.Equal(t, lcl.Seq()+1, built.Seq())

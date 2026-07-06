@@ -84,7 +84,7 @@ func TestService_AcceptConsensusResult_LedgerHashesInvariants(t *testing.T) {
 			t.Fatalf("closedLedger nil after %d closes", i)
 		}
 		closeTime = closeTime.Add(2 * time.Second)
-		seq, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, true)
+		seq, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, closeTime, true)
 		if err != nil {
 			t.Fatalf("AcceptConsensusResult at iter %d: %v", i, err)
 		}
@@ -154,7 +154,7 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 	for i := range 5 {
 		closeTime = closeTime.Add(2 * time.Second)
 		parent := svc.GetClosedLedger()
-		if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, true); err != nil {
+		if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, closeTime, true); err != nil {
 			t.Fatalf("warm-up close %d: %v", i, err)
 		}
 	}
@@ -165,7 +165,7 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 	parentSeq := parent.Sequence()
 
 	closeTime = closeTime.Add(2 * time.Second)
-	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, true); err != nil {
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, closeTime, true); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
 
@@ -173,7 +173,7 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 	// parent again. This resets s.closedLedger to parent and rebuilds
 	// the open ledger.
 	closeTime = closeTime.Add(2 * time.Second)
-	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, true); err != nil {
+	if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, closeTime, true); err != nil {
 		t.Fatalf("second build (chain switch): %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
 	for i := range 5 {
 		closeTime = closeTime.Add(2 * time.Second)
 		for _, svc := range []*Service{alt, canonical} {
-			if _, err := svc.AcceptConsensusResult(context.TODO(), svc.GetClosedLedger(), nil, closeTime, true); err != nil {
+			if _, err := svc.AcceptConsensusResult(context.TODO(), svc.GetClosedLedger(), nil, nil, closeTime, true); err != nil {
 				t.Fatalf("warm-up close iter %d: %v", i, err)
 			}
 		}
@@ -250,10 +250,10 @@ func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
 	// they produce sibling hashes at the same seq.
 	altCloseTime := closeTime.Add(2 * time.Second)
 	canonCloseTime := closeTime.Add(7 * time.Second)
-	if _, err := alt.AcceptConsensusResult(context.TODO(), altSync, nil, altCloseTime, true); err != nil {
+	if _, err := alt.AcceptConsensusResult(context.TODO(), altSync, nil, nil, altCloseTime, true); err != nil {
 		t.Fatalf("alt fork build: %v", err)
 	}
-	if _, err := canonical.AcceptConsensusResult(context.TODO(), canonSync, nil, canonCloseTime, true); err != nil {
+	if _, err := canonical.AcceptConsensusResult(context.TODO(), canonSync, nil, nil, canonCloseTime, true); err != nil {
 		t.Fatalf("canonical fork build: %v", err)
 	}
 	altTip := alt.GetClosedLedger()
@@ -270,7 +270,7 @@ func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
 	// chain-switch check (seq matches), and alt's openLedger stayed
 	// pinned to the alt-built state.
 	nextCloseTime := altCloseTime.Add(2 * time.Second)
-	if _, err := alt.AcceptConsensusResult(context.TODO(), canonTip, nil, nextCloseTime, true); err != nil {
+	if _, err := alt.AcceptConsensusResult(context.TODO(), canonTip, nil, nil, nextCloseTime, true); err != nil {
 		t.Fatalf("alt rebuild on canonical parent: %v", err)
 	}
 

@@ -397,7 +397,7 @@ func (p *EnginePeer) GetMaxDisallowedLedgerSeq() uint32 {
 	return 0
 }
 
-func (p *EnginePeer) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool) (consensus.Ledger, error) {
+func (p *EnginePeer) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, closeTime time.Time, _ bool, _ [][]byte) (consensus.Ledger, error) {
 	l := buildSimLedger(parent.ID(), parent.Seq()+1, txSet.ID(), closeTime)
 	p.mu.Lock()
 	p.ledgers[l.id] = l
