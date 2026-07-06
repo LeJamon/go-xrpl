@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync/atomic"
+	"sync"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/cockroachdb/pebble"
@@ -14,9 +14,16 @@ import (
 )
 
 // Store is a thin wrapper around CockroachDB/Pebble that implements kvstore.KeyValueStore.
+//
+// mu serialises every operation against Close: an op holds RLock across both its
+// closed-check and the underlying s.db call, while Close takes the exclusive
+// lock. Pebble panics ("pebble: closed") on any op against a closed DB, so a
+// bare atomic flag — checked, then acted on — leaves a window where a racing
+// Close turns the panic loose. The RWMutex closes that window.
 type Store struct {
+	mu       sync.RWMutex
 	db       *pebble.DB
-	closed   atomic.Bool
+	closed   bool
 	readonly bool
 }
 
@@ -78,7 +85,9 @@ func New(path string, cache int, handles int, readonly bool) (*Store, error) {
 
 // Has returns true if the key exists in the store.
 func (s *Store) Has(key []byte) (bool, error) {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return false, kvstore.ErrClosed
 	}
 	_, closer, err := s.db.Get(key)
@@ -95,7 +104,9 @@ func (s *Store) Has(key []byte) (bool, error) {
 // Get retrieves the value for the given key.
 // Returns kvstore.ErrNotFound if the key does not exist.
 func (s *Store) Get(key []byte) ([]byte, error) {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return nil, kvstore.ErrClosed
 	}
 	val, closer, err := s.db.Get(key)
@@ -114,7 +125,9 @@ func (s *Store) Get(key []byte) ([]byte, error) {
 
 // Put stores the value for the given key.
 func (s *Store) Put(key []byte, value []byte) error {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return kvstore.ErrClosed
 	}
 	return s.db.Set(key, value, pebble.NoSync)
@@ -122,15 +135,24 @@ func (s *Store) Put(key []byte, value []byte) error {
 
 // Delete removes the value for the given key.
 func (s *Store) Delete(key []byte) error {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return kvstore.ErrClosed
 	}
 	return s.db.Delete(key, pebble.NoSync)
 }
 
-// NewBatch returns a new batch for accumulating writes.
+// NewBatch returns a new batch for accumulating writes. On a closed store it
+// returns a batch that reports ErrClosed rather than allocating one against
+// the closed DB; the returned batch also re-checks on Write.
 func (s *Store) NewBatch() kvstore.Batch {
-	return &batch{b: s.db.NewBatch()}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return &errBatch{err: kvstore.ErrClosed}
+	}
+	return &batch{store: s, b: s.db.NewBatch()}
 }
 
 // NewIterator returns an iterator over key/value pairs with the given prefix,
@@ -138,7 +160,9 @@ func (s *Store) NewBatch() kvstore.Batch {
 // If the store is closed or the underlying iterator cannot be opened, the
 // returned iterator is empty and reports the failure via Error.
 func (s *Store) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return &errIterator{err: kvstore.ErrClosed}
 	}
 	opts := &pebble.IterOptions{}
@@ -196,7 +220,9 @@ func prefixUpperBound(prefix []byte) []byte {
 
 // Stat returns a string with database statistics.
 func (s *Store) Stat() (string, error) {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return "", kvstore.ErrClosed
 	}
 	if m := s.db.Metrics(); m != nil {
@@ -207,7 +233,9 @@ func (s *Store) Stat() (string, error) {
 
 // Compact compacts the database in the given key range.
 func (s *Store) Compact(start []byte, limit []byte) error {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return kvstore.ErrClosed
 	}
 	return s.db.Compact(start, limit, true)
@@ -217,7 +245,9 @@ func (s *Store) Compact(start []byte, limit []byte) error {
 // record to the WAL. Writes use pebble.NoSync, so this is the only point
 // at which acknowledged writes are guaranteed to survive a crash.
 func (s *Store) Sync() error {
-	if s.closed.Load() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
 		return kvstore.ErrClosed
 	}
 	if s.readonly {
@@ -228,10 +258,17 @@ func (s *Store) Sync() error {
 
 // Close closes the database, flushing pending writes first. The underlying
 // handle is always closed, even if the flush fails.
+//
+// The exclusive lock is held across the whole close, so any in-flight op has
+// already released its RLock (and finished touching s.db) before the handle is
+// closed, and any op that arrives later observes closed == true.
 func (s *Store) Close() error {
-	if !s.closed.CompareAndSwap(false, true) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
 		return nil // already closed
 	}
+	s.closed = true
 	var flushErr error
 	if !s.readonly {
 		flushErr = s.db.Flush()
@@ -239,10 +276,13 @@ func (s *Store) Close() error {
 	return errors.Join(flushErr, s.db.Close())
 }
 
-// batch implements kvstore.Batch using a pebble.Batch.
+// batch implements kvstore.Batch using a pebble.Batch. Put/Delete/Reset only
+// touch the in-memory pebble.Batch buffer, so they are safe after Close; Write
+// commits against s.db and therefore re-checks the closed state under the lock.
 type batch struct {
-	b    *pebble.Batch
-	size int
+	store *Store
+	b     *pebble.Batch
+	size  int
 }
 
 // Put queues a key/value write.
@@ -262,6 +302,11 @@ func (b *batch) ValueSize() int {
 }
 
 func (b *batch) Write() error {
+	b.store.mu.RLock()
+	defer b.store.mu.RUnlock()
+	if b.store.closed {
+		return kvstore.ErrClosed
+	}
 	return b.b.Commit(pebble.NoSync)
 }
 
@@ -328,6 +373,19 @@ func (i *errIterator) Key() []byte   { return nil }
 func (i *errIterator) Value() []byte { return nil }
 func (i *errIterator) Error() error  { return i.err }
 func (i *errIterator) Release()      {}
+
+// errBatch is a no-op batch that reports a fixed error, returned by NewBatch
+// when the store is already closed so callers never buffer writes against a
+// closed DB.
+type errBatch struct {
+	err error
+}
+
+func (b *errBatch) Put(key []byte, value []byte) error { return b.err }
+func (b *errBatch) Delete(key []byte) error            { return b.err }
+func (b *errBatch) ValueSize() int                     { return 0 }
+func (b *errBatch) Write() error                       { return b.err }
+func (b *errBatch) Reset()                             {}
 
 // Ensure Store implements kvstore.KeyValueStore at compile time.
 var _ kvstore.KeyValueStore = (*Store)(nil)

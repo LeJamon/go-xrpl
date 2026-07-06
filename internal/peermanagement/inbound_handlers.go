@@ -6,6 +6,7 @@ package peermanagement
 
 import (
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"strconv"
 	"time"
@@ -381,6 +382,14 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 // rejected wholesale and the peer charged for useless data.
 const endpointsIngestMaxEntries = 1024
 
+// endpointsIngestSampleMax bounds how many addresses a single accepted
+// TMEndpoints frame may contribute to Discovery. Mirrors rippled's
+// PeerFinder numberOfEndpointsMax (Tuning.h:116, Logic.h:792-796): a
+// larger accepted set is shuffled and truncated to this many before
+// ingest, so one frame cannot enqueue an unbounded address batch even
+// while staying under the 1024 wholesale-reject bound.
+const endpointsIngestSampleMax = 64
+
 // handleEndpointsMessage processes mtENDPOINTS from a peer and feeds the
 // advertised addresses into Discovery, the gossip half of overlay peer
 // discovery. Mirrors rippled PeerImp::onMessage(TMEndpoints) at
@@ -397,6 +406,13 @@ const endpointsIngestMaxEntries = 1024
 // self-reported host is untrustworthy, so we overwrite it with the
 // socket's observed remote IP (keeping the advertised port), matching
 // rippled's remote_address_.at_port(result->port()).
+//
+// The surviving set is then bounded like rippled's PeerFinder before it
+// reaches Discovery: sampled down to numberOfEndpointsMax (64), gated by
+// the per-peer secondsPerMessage rate-limit (one accepted frame per
+// window), and clipped to our discovery horizon (hops<=MaxHops). Without
+// these an announced address stream would grow d.peers without bound
+// (issue #1170).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
 	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
@@ -429,6 +445,11 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	}
 
 	remoteIP := peer.RemoteIP()
+	type ingestEndpoint struct {
+		address string
+		hops    uint32
+	}
+	accepted := make([]ingestEndpoint, 0, len(eps.EndpointsV2))
 	for _, tm := range eps.EndpointsV2 {
 		parsed, parseErr := ParseEndpoint(tm.Endpoint)
 		if parseErr != nil || net.ParseIP(parsed.Host) == nil {
@@ -450,7 +471,40 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 			address = Endpoint{Host: remoteIP, Port: parsed.Port}.String()
 		}
 
-		o.discovery.AddPeer(address, tm.Hops, evt.PeerID)
+		accepted = append(accepted, ingestEndpoint{address: address, hops: tm.Hops})
+	}
+
+	// rippled hands the parsed set to PeerFinder only when at least one
+	// entry survived (PeerImp.cpp:1249); an all-malformed frame never
+	// touches the rate-limit window.
+	if len(accepted) == 0 {
+		return
+	}
+
+	// Sample down to numberOfEndpointsMax before ingest so an oversized
+	// (but sub-1024) frame cannot enqueue its whole batch.
+	if len(accepted) > endpointsIngestSampleMax {
+		rand.Shuffle(len(accepted), func(i, j int) {
+			accepted[i], accepted[j] = accepted[j], accepted[i]
+		})
+		accepted = accepted[:endpointsIngestSampleMax]
+	}
+
+	// Per-peer inbound rate-limit: one accepted frame per window. A frame
+	// arriving inside the window is dropped silently (no charge), matching
+	// rippled's whenAcceptEndpoints gate.
+	if !peer.acceptEndpoints() {
+		return
+	}
+
+	for _, e := range accepted {
+		// Drop endpoints beyond our discovery horizon rather than storing
+		// addresses SelectPeersToConnect would never dial; mirrors
+		// rippled's hops>maxHops preprocess drop.
+		if e.hops > MaxHops {
+			continue
+		}
+		o.discovery.AddPeer(e.address, e.hops, evt.PeerID)
 	}
 }
 

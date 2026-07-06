@@ -26,6 +26,13 @@ type Engine struct {
 	adaptor  consensus.Adaptor
 	eventBus *consensus.EventBus
 
+	// listedOracle / relayPolicy are the adaptor's optional untrusted-
+	// validation extensions, resolved once at construction. Nil when the
+	// adaptor doesn't implement them: nothing is listed, only trusted
+	// validations relay.
+	listedOracle consensus.ListedOracle
+	relayPolicy  consensus.ValidationRelayPolicy
+
 	// Current state
 	mode  consensus.Mode
 	phase consensus.Phase
@@ -343,6 +350,8 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 	if e.now == nil {
 		e.now = time.Now
 	}
+	e.listedOracle, _ = adaptor.(consensus.ListedOracle)
+	e.relayPolicy, _ = adaptor.(consensus.ValidationRelayPolicy)
 	e.modeAtomic.Store(int32(e.mode))
 	return e
 }
@@ -404,6 +413,23 @@ func (e *Engine) SetStallPing(ping func()) {
 	e.stallPing.Store(&ping)
 }
 
+// refreshTrustedSet re-syncs the validation tracker's trusted set and quorum
+// after a runtime UNL change (rippled trustChanged): the trie rebuild inside
+// SetTrusted promotes stored validations from newly-trusted validators into
+// branch support immediately, and quorum reads pick up the new set on the
+// next check. Runs on the trust-change caller's goroutine; takes e.mu only
+// briefly to snapshot the tracker, so it must not be called while holding it.
+func (e *Engine) refreshTrustedSet() {
+	e.mu.RLock()
+	vt := e.validationTracker
+	e.mu.RUnlock()
+	if vt == nil {
+		return
+	}
+	vt.SetTrusted(e.adaptor.GetTrustedValidators())
+	vt.SetQuorum(e.adaptor.GetQuorum())
+}
+
 func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -423,6 +449,13 @@ func (e *Engine) Start(ctx context.Context) error {
 	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
 		wired.SetValidationHistorian(e.validationTracker)
+	}
+	// Promote stored validations the moment the UNL mutates (rippled
+	// trustChanged) instead of at the next accepted ledger — a stalled node
+	// may never accept, and the whole point of a runtime trust grant is to
+	// count what the newly-trusted validator already signed.
+	if notifier, ok := e.adaptor.(consensus.TrustChangeNotifier); ok {
+		notifier.OnTrustChanged(e.refreshTrustedSet)
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -818,26 +851,46 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 
 	trusted := e.adaptor.IsTrusted(validation.NodeID)
 
+	// Track listed-but-untrusted signers too: a validator published by a
+	// configured list publisher but below the trust threshold gets its
+	// validations stored (untrusted — quorum and trie filter on the trusted
+	// set at read time), so a later trust change promotes what was already
+	// seen instead of waiting one validation interval for a fresh one.
+	// Publisher lists bound the key space, so this can't grow unboundedly.
+	tracked := trusted
+	if !tracked && e.listedOracle != nil {
+		tracked = e.listedOracle.IsListed(validation.NodeID)
+	}
+
+	// Operator [relay_validations] stance: "all" (the default, matching
+	// rippled) also forwards verified, current validations signed outside
+	// our UNL, so peers with a different UNL that do trust the signer still
+	// receive them.
+	relay := trusted || (e.relayPolicy != nil && e.relayPolicy.RelayUntrustedValidations())
+
 	// Feed the tracker — the gate that advances validated_ledger once a
 	// quorum of trusted FULL validations accumulates (partials steer the trie
-	// but don't count). Trust-gate to avoid a byNode entry per untrusted key.
+	// but don't count). Listed-but-untrusted keys are tracked too so a later
+	// trust change promotes what was already seen; untrusted-and-unlisted keys
+	// are dropped so the byNode map can't grow unboundedly.
 	//
-	// The tracker doubles as the Byzantine detector: a trusted validator
-	// must not sign two ledgers (or re-sign differently) for one seq, even
-	// a seq its tip has already superseded. On conflicting/multiple, the
-	// validation is kept out of quorum/trie but STILL relayed (peers should
-	// observe it too) and no one is charged. The returned error only tells
-	// the router to skip the catch-up acquire — not to penalise the
-	// relaying peer.
-	if trusted && e.validationTracker != nil {
+	// AddStatus doubles as the Byzantine detector: a validator must not sign
+	// two ledgers (or re-sign differently) for one seq, even a seq its tip has
+	// already superseded. On conflicting/multiple the validation is kept out
+	// of quorum/trie but STILL relayed under the relay policy (peers should
+	// observe it too) and no one is charged; the returned error only tells the
+	// router to skip the catch-up acquire, not to penalise the relaying peer.
+	if tracked && e.validationTracker != nil {
 		switch status := e.validationTracker.AddStatus(validation); status {
 		case ValStatusConflicting, ValStatusMultiple:
-			e.adaptor.RelayValidation(validation, originPeer)
-			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: status.String()}
+			if relay {
+				e.adaptor.RelayValidation(validation, originPeer)
+			}
+			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: status.String(), Trusted: trusted}
 		}
 	}
 
-	// Store trusted-only: an untrusted key could grow the map unboundedly.
+	// Round-scoped bookkeeping stays trusted-only.
 	if trusted {
 		e.proposalTracker.SetValidation(validation)
 	}
@@ -848,9 +901,7 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 		Timestamp:  e.adaptor.Now(),
 	})
 
-	// Relay trusted validations (excluding origin); drop untrusted for the
-	// same spam reason as OnProposal.
-	if trusted {
+	if relay {
 		e.adaptor.RelayValidation(validation, originPeer)
 	}
 

@@ -58,16 +58,32 @@ func (d *KVDatabaseImpl) DeleteBefore(ctx context.Context, boundary uint32, batc
 		if len(pending) == 0 {
 			return nil
 		}
+
+		// Keys were queued from the iterator's frozen snapshot, but a snapshot
+		// copy below the boundary may have been re-created live at seq >=
+		// boundary during the scan window. Re-read each key's current value
+		// under the write lock and delete only keys still below the boundary,
+		// so a resurrected node is never erased.
+		d.pruneMu.Lock()
 		batch := d.store.NewBatch()
+		deletedKeys := make([][]byte, 0, len(pending))
 		for _, k := range pending {
+			if cur, err := d.store.Get(k); err == nil &&
+				len(cur) >= nodeEncodingHeaderSize &&
+				binary.BigEndian.Uint32(cur[1:5]) >= boundary {
+				continue
+			}
 			if err := batch.Delete(k); err != nil {
+				d.pruneMu.Unlock()
 				return fmt.Errorf("delete-before batch: %w", err)
 			}
+			deletedKeys = append(deletedKeys, k)
 		}
 		if err := batch.Write(); err != nil {
+			d.pruneMu.Unlock()
 			return fmt.Errorf("delete-before commit: %w", err)
 		}
-		for _, k := range pending {
+		for _, k := range deletedKeys {
 			var h Hash256
 			copy(h[:], k)
 			if d.cache != nil {
@@ -77,7 +93,9 @@ func (d *KVDatabaseImpl) DeleteBefore(ctx context.Context, boundary uint32, batc
 				d.negativeCache.MarkMissing(h)
 			}
 		}
-		deleted += uint64(len(pending))
+		d.pruneMu.Unlock()
+
+		deleted += uint64(len(deletedKeys))
 		pending = pending[:0]
 		return nil
 	}

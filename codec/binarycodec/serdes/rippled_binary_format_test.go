@@ -70,21 +70,20 @@ func TestVariableLengthEncoding(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name:        "length 12479 (max two byte)",
+			name:        "length 12479",
 			length:      12479,
 			expectedHex: "f0fe",
 			expectError: false,
 		},
-		// Three byte encoding (12480-918744)
-		// Note: implementation uses 12480 as start of 3-byte encoding
 		{
-			name:        "length 12480 (min three byte)",
+			name:        "length 12480 (max two byte)",
 			length:      12480,
-			expectedHex: "f0ffff",
+			expectedHex: "f0ff",
 			expectError: false,
 		},
+		// Three byte encoding (12481-918744)
 		{
-			name:        "length 12481",
+			name:        "length 12481 (min three byte)",
 			length:      12481,
 			expectedHex: "f10000",
 			expectError: false,
@@ -237,6 +236,8 @@ func TestVariableLengthRoundtrip(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, length, decoded, "VL roundtrip failed for length %d", length)
+			assert.Equal(t, 0, parser.Remaining(),
+				"decoder must consume the entire prefix for length %d; leftover bytes mean the encoder emitted a prefix the decoder reads shorter", length)
 		})
 	}
 }
