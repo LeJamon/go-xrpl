@@ -954,6 +954,37 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 	return s.ledgerHistoryRangeLocked()
 }
 
+// AdvertisedLedgerRange returns the [first, last] ledger span this node tells
+// peers it holds and is willing to serve. last is the validated tip; first is
+// the low end of retained history raised to the online-delete floor — the
+// earliest ledger still durably held. ok is false, and first/last are zero,
+// when no validated ledger exists yet, so the node advertises an empty range
+// instead of claiming to serve the whole chain from genesis. Peers use this to
+// avoid selecting the node for ledger-data requests it cannot satisfy.
+func (s *Service) AdvertisedLedgerRange() (first, last uint32, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.validatedLedger == nil {
+		return 0, 0, false
+	}
+	last = s.validatedLedger.Sequence()
+
+	first = last
+	if minSeq, _, has := s.ledgerHistoryRangeLocked(); has && minSeq < first {
+		first = minSeq
+	}
+	if s.minimumOnlineFunc != nil {
+		if floor := s.minimumOnlineFunc(); floor > first {
+			first = floor
+		}
+	}
+	if first > last {
+		return 0, 0, false
+	}
+	return first, last, true
+}
+
 // GetValidatedLedgerIndex returns the highest validated ledger index
 func (s *Service) GetValidatedLedgerIndex() uint32 {
 	s.mu.RLock()

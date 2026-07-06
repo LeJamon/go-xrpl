@@ -1917,8 +1917,8 @@ func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 	// NetworkTime is XRPL epoch seconds on the wire, not microseconds.
 	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
 
-	firstSeq := uint32(2) // genesis sequence
-	lastSeq := l.Sequence()
+	// Advertise only what we retain and will serve, not the whole chain.
+	firstSeq, lastSeq, _ := a.ledgerService.AdvertisedLedgerRange()
 
 	sc := &message.StatusChange{
 		NewStatus:          status,
