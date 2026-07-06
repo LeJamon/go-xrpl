@@ -439,6 +439,19 @@ func testClosed(t *testing.T, store kvstore.KeyValueStore) {
 		t.Fatalf("closed-store iterator Error = %v, want ErrClosed", err)
 	}
 	it.Release()
+
+	// A batch obtained from a closed store must never commit against the
+	// closed backend; Write reports ErrClosed and nothing panics. Put's
+	// return is left unchecked because backends differ on when they surface
+	// the closed state (at buffer time vs. at Write) — Write is the contract.
+	b := store.NewBatch()
+	if b == nil {
+		t.Fatal("NewBatch on closed store returned nil")
+	}
+	_ = b.Put([]byte("k"), []byte("v"))
+	if err := b.Write(); !errors.Is(err, kvstore.ErrClosed) {
+		t.Fatalf("batch Write on closed store err = %v, want ErrClosed", err)
+	}
 }
 
 func insert(t *testing.T, store kvstore.KeyValueStore, kv map[string]string) {

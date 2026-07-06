@@ -2,7 +2,11 @@ package pebble_test
 
 import (
 	"bytes"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/LeJamon/go-xrpl/storage/kvstore/kvstoretest"
@@ -133,4 +137,86 @@ func TestStoreReadonly(t *testing.T) {
 		t.Fatalf("reopen after readonly close: %v", err)
 	}
 	_ = again.Close()
+}
+
+// TestConcurrentCloseNoPanic races every point operation against Close.
+// Pebble panics ("pebble: closed") on any op against a closed DB, so the old
+// check-then-act atomic guard let that panic escape once Close landed in the
+// window between the closed-check and the s.db call. Each op must instead be
+// serialised against Close by the RWMutex and return cleanly. Run under -race,
+// this also proves the closed flag and db handle are never touched
+// unsynchronised. Every op must return success, ErrClosed, or ErrNotFound —
+// never a panic.
+func TestConcurrentCloseNoPanic(t *testing.T) {
+	dir := t.TempDir()
+	store, err := pebble.New(dir, 0, 0, false)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := store.Put([]byte("seed"), []byte("v")); err != nil {
+		t.Fatalf("seed Put: %v", err)
+	}
+
+	accept := func(op string, err error) {
+		if err == nil ||
+			errors.Is(err, kvstore.ErrClosed) ||
+			errors.Is(err, kvstore.ErrNotFound) {
+			return
+		}
+		t.Errorf("%s: unexpected error %v", op, err)
+	}
+
+	const workers = 16
+	var wg sync.WaitGroup
+	var panics atomic.Int64
+	start := make(chan struct{})
+
+	for i := range workers {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					panics.Add(1)
+					t.Errorf("worker %d panicked (use-after-close leaked through): %v", id, r)
+				}
+			}()
+			<-start
+			key := []byte{byte(id)}
+			for range 300 {
+				accept("Put", store.Put(key, []byte("v")))
+				_, gerr := store.Get(key)
+				accept("Get", gerr)
+				_, herr := store.Has([]byte("seed"))
+				accept("Has", herr)
+				accept("Delete", store.Delete(key))
+				b := store.NewBatch()
+				_ = b.Put(key, []byte("v"))
+				accept("Batch.Write", b.Write())
+				accept("Sync", store.Sync())
+				_, serr := store.Stat()
+				accept("Stat", serr)
+			}
+		}(i)
+	}
+
+	close(start)
+	// Let the workers get going so some ops land before Close and some after.
+	time.Sleep(time.Millisecond)
+	if err := store.Close(); err != nil {
+		t.Errorf("Close: %v", err)
+	}
+	wg.Wait()
+
+	if n := panics.Load(); n != 0 {
+		t.Fatalf("%d worker(s) panicked on use-after-close", n)
+	}
+	// Close is idempotent.
+	if err := store.Close(); err != nil {
+		t.Errorf("second Close: %v", err)
+	}
+	// Every op is rejected once closed.
+	if _, err := store.Get([]byte("seed")); !errors.Is(err, kvstore.ErrClosed) {
+		t.Errorf("Get after close = %v, want ErrClosed", err)
+	}
 }
