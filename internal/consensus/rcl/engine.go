@@ -766,6 +766,23 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// A proposal carrying our own validator identity — a duplicate-key
+	// misconfiguration (two nodes sharing our key) or our own proposal routed
+	// back to us — must not be absorbed as a foreign position; that double-counts
+	// our vote. Checked before the trust gate because we don't list our own key
+	// in our trusted set, so an unrecognised self-keyed proposal would otherwise
+	// be dropped just below as "untrusted", losing the misconfiguration signal.
+	if e.adaptor.IsValidator() {
+		if ourKey, err := e.adaptor.GetValidatorKey(); err == nil && proposal.NodeID == ourKey {
+			slog.Error("dropping proposal signed with our own validator key",
+				"t", "consensus",
+				"event", "self-key-proposal",
+				"peer", originPeer,
+				"node", fmt.Sprintf("%x", proposal.NodeID[:6]))
+			return nil
+		}
+	}
+
 	// Drop untrusted proposals: buffering them would let throwaway keypairs
 	// grow the tracker unboundedly and feed phantom proposers into
 	// convergence counts.
