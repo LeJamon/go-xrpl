@@ -1790,8 +1790,7 @@ func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
 
 	// The engine pins in wrongLedger without running rounds, so no
 	// phase-driven status would go out; tell peers directly that our
-	// advertised LCL is stale (rippled keeps re-sending LOST_SYNC each
-	// wrong-LCL round instead).
+	// advertised LCL is stale.
 	if newMode == consensus.ModeWrongLedger {
 		a.broadcastStatus(message.NodeEventLostSync)
 	}
@@ -1851,8 +1850,7 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	a.emitConsensusPhase(newPhase.String())
 }
 
-// OnLedgerSwitched tells peers we abandoned our previous LCL for ledger,
-// mirroring rippled's switchLastClosedLedger broadcast.
+// OnLedgerSwitched tells peers we abandoned our previous LCL for ledger.
 func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) {
 	if ledger == nil {
 		return
@@ -1880,8 +1878,7 @@ func (a *Adaptor) broadcastSwitchedLedger(seq uint32, hash, parentHash []byte) {
 
 // broadcastStatus sends a TMStatusChange message to all peers. While the
 // engine is building on the wrong LCL the given event is replaced with
-// LOST_SYNC, mirroring rippled notify()'s haveCorrectLCL substitution, so
-// peers stop counting our advertised ledger.
+// LOST_SYNC, so peers stop counting our advertised ledger.
 func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 	l := a.ledgerService.GetClosedLedger()
 	if l == nil {
