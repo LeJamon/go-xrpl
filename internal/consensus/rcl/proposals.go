@@ -318,8 +318,7 @@ func (dt *DisputeTracker) Has(txID consensus.TxID) bool {
 }
 
 // DisputedNoTxs returns the raw blobs of every dispute we currently vote NO
-// on — txs peers proposed that end up excluded from the consensus set. The
-// accept path replays them into the next open ledger ahead of the queue.
+// on — txs peers proposed that end up excluded from the consensus set.
 func (dt *DisputeTracker) DisputedNoTxs() [][]byte {
 	dt.mu.RLock()
 	defer dt.mu.RUnlock()

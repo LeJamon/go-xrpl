@@ -447,11 +447,9 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		return 0, err
 	}
 
-	// Merge the disputed we-voted-NO txs into the retriable set so they are
-	// replayed into the new open ledger ahead of the TxQ. Pseudo-txs can't
-	// succeed in a later ledger; malformed blobs are dropped. The merged set
-	// is re-sorted with the agreed set's SHAMap root as salt, matching the
-	// canonical order rippled's retriable set applies in.
+	// Pseudo-txs can't succeed in a later ledger; malformed blobs are
+	// dropped. The merged set is re-sorted with the agreed set's SHAMap root
+	// as salt, matching the canonical order rippled's retriable set applies in.
 	if len(disputedBlobs) > 0 {
 		seen := make(map[[32]byte]struct{}, len(retriableTxs))
 		for _, ptx := range retriableTxs {

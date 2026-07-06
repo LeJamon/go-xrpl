@@ -159,9 +159,7 @@ type LedgerProvider interface {
 
 	// BuildLedger closes a ledger from the agreed tx set on parent.
 	// disputedTxs are the raw blobs of the round's disputed txs we voted NO
-	// on; they are replayed into the next open ledger ahead of the queue —
-	// first crack goes to txs proposed by trusted validators but excluded
-	// from the consensus set.
+	// on; they are replayed into the next open ledger ahead of the queue.
 	BuildLedger(parent Ledger, txSet TxSet, closeTime time.Time, closeTimeCorrect bool, disputedTxs [][]byte) (Ledger, error)
 
 	ValidateLedger(ledger Ledger) error
