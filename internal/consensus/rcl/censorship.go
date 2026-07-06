@@ -36,8 +36,8 @@ func (c *censorshipDetector) propose(proposed []consensus.TxID, seq uint32) {
 
 // check drops every tracked tx that made it into the accepted set, then
 // invokes pred for each remaining tx so it can warn about persistent
-// exclusion. pred returns true for entries to drop without warning (txs we
-// no longer vote for), false to keep tracking.
+// exclusion. pred returns true for entries to drop without warning, false
+// to keep tracking.
 func (c *censorshipDetector) check(accepted []consensus.TxID, pred func(id consensus.TxID, seq uint32) bool) {
 	acc := make(map[consensus.TxID]struct{}, len(accepted))
 	for _, id := range accepted {

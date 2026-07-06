@@ -332,20 +332,6 @@ func (dt *DisputeTracker) DisputedNoTxs() [][]byte {
 	return txs
 }
 
-// DisputedNoIDs returns the TxIDs of every dispute we currently vote NO on.
-func (dt *DisputeTracker) DisputedNoIDs() []consensus.TxID {
-	dt.mu.RLock()
-	defer dt.mu.RUnlock()
-
-	var ids []consensus.TxID
-	for id, d := range dt.disputes {
-		if !d.OurVote {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
 // GetAll returns all disputed transactions.
 func (dt *DisputeTracker) GetAll() []*consensus.DisputedTx {
 	dt.mu.RLock()
