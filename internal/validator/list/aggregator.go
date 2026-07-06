@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -254,6 +255,15 @@ type Aggregator struct {
 	// when a publisher list update doesn't move any validator into or
 	// out of the union.
 	lastEmitted [][33]byte
+
+	// listed is the NodeID snapshot of every validator carried by at
+	// least one live publisher list (count >= 1 — rippled's "listed", as
+	// opposed to "trusted" at count >= threshold). Refreshed on every
+	// count recompute and published via atomic pointer: IsListed serves
+	// the consensus validation path, which runs under the engine's lock
+	// while the OnChange → SetTrustedValidators → engine trust-refresh
+	// chain runs under a.mu — reading a.mu here would be an ABBA deadlock.
+	listed atomic.Pointer[map[consensus.NodeID]struct{}]
 
 	// unlBlocked mirrors rippled's NetworkOPs unlBlocked_ (NetworkOPs.cpp:750):
 	// the sticky UNL lock-down. Maintained under a.mu by recomputeAndEmitLocked;
@@ -1094,7 +1104,9 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 
 // computeValidatorCountsLocked counts, per validator master key, how many
 // publishers with a live (available, effective, unexpired) list carry
-// it. Caller must hold a.mu and filters by threshold afterwards.
+// it. Caller must hold a.mu and filters by threshold afterwards. As a
+// side effect the listed-NodeID snapshot is republished, so IsListed
+// tracks every count recompute (ingest, Tick, trusted-set reads).
 func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]int {
 	counts := make(map[[33]byte]int, 64)
 	for _, s := range a.state {
@@ -1118,7 +1130,25 @@ func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]in
 			counts[k]++
 		}
 	}
+	listed := make(map[consensus.NodeID]struct{}, len(counts))
+	for k := range counts {
+		listed[consensus.CalcNodeID(k)] = struct{}{}
+	}
+	a.listed.Store(&listed)
 	return counts
+}
+
+// IsListed reports whether node's master key appears in at least one live
+// publisher list — rippled's ValidatorList::listed, one tier below trusted.
+// Lock-free (atomic snapshot) so the consensus validation path can query it
+// without ordering against a.mu.
+func (a *Aggregator) IsListed(node consensus.NodeID) bool {
+	listed := a.listed.Load()
+	if listed == nil {
+		return false
+	}
+	_, ok := (*listed)[node]
+	return ok
 }
 
 // recomputeAndEmitLocked walks the per-publisher state, computes the

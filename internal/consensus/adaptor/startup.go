@@ -278,7 +278,8 @@ func NewFromConfig(
 		AmendmentTable: ledgerSvc.AmendmentTable(),
 		// The operator's [voting] stanza. Zero values mean unset —
 		// New() substitutes the network defaults.
-		FeeVote: feeVoteFromConfig(appCfg.Voting),
+		FeeVote:          feeVoteFromConfig(appCfg.Voting),
+		RelayValidations: ParseRelayValidationsPolicy(appCfg.RelayValidations),
 	})
 
 	modeManager := NewModeManager(adaptor)
@@ -369,6 +370,10 @@ func NewFromConfig(
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
 		router.SetValidatorListAggregator(vlAgg)
+		// Listed-but-untrusted signers (published below the trust
+		// threshold) get their validations stored by the engine so a later
+		// trust change promotes what was already seen.
+		adaptor.SetListedLookup(vlAgg.IsListed)
 		// On-disk publisher-list cache: accepted lists are persisted
 		// under <database_path>/validator-list/cache.<pubHex> after
 		// every successful apply, and hydrated on cold start so the
