@@ -803,3 +803,60 @@ func TestValidationTracker_Flush(t *testing.T) {
 		t.Error("post-flush: GetPreferred should resolve again after re-adding")
 	}
 }
+
+// TestValidationTracker_GetCurrentNodeIDs pins issue #1193: the live
+// participation set enumerates every byNode entry still passing IsCurrent —
+// trusted or not, partial or full — excludes entries whose latest validation
+// has aged out, and does not mutate the tracker (FlushStale owns eviction).
+func TestValidationTracker_GetCurrentNodeIDs(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	t0 := time.Now()
+	vt.SetNow(func() time.Time { return t0 })
+
+	ledger := consensus.LedgerID{9}
+	const seq = uint32(100)
+	n1 := consensus.NodeID{1} // trusted, full, stays fresh
+	n2 := consensus.NodeID{2} // trusted, full, ages out before the read
+	n3 := consensus.NodeID{3} // untrusted, fresh — still enumerated
+	n4 := consensus.NodeID{4} // trusted, partial, fresh — still enumerated
+
+	vt.SetTrusted([]consensus.NodeID{n1, n2, n4})
+
+	// n2 signs at t0; it falls outside the isCurrent window once time moves.
+	if !vt.Add(makeTrustedValidation(n2, ledger, seq, t0)) {
+		t.Fatal("n2 validation should be accepted while current")
+	}
+
+	// Advance past the early bound so n2's t0 signature is now stale, then
+	// add the remaining validators against the new clock.
+	t1 := t0.Add(validationCurrentEarly + time.Minute)
+	vt.SetNow(func() time.Time { return t1 })
+
+	if !vt.Add(makeTrustedValidation(n1, ledger, seq, t1)) {
+		t.Fatal("n1 validation should be accepted at t1")
+	}
+	if !vt.Add(makeTrustedValidation(n3, ledger, seq, t1)) {
+		t.Fatal("n3 (untrusted) validation should still be tracked")
+	}
+	partial := makeTrustedValidation(n4, ledger, seq, t1)
+	partial.Full = false
+	if !vt.Add(partial) {
+		t.Fatal("n4 partial validation should be accepted at t1")
+	}
+
+	got := vt.GetCurrentNodeIDs()
+	want := map[consensus.NodeID]bool{n1: true, n3: true, n4: true}
+	if len(got) != len(want) {
+		t.Fatalf("GetCurrentNodeIDs: want %d live nodes, got %d (%v)", len(want), len(got), got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("GetCurrentNodeIDs returned %v; n2 is stale and must be excluded", id)
+		}
+	}
+
+	// Enumeration must not evict the stale entry — that is FlushStale's job.
+	if vt.GetLatestValidation(n2) == nil {
+		t.Error("GetCurrentNodeIDs must not mutate byNode (n2 was evicted)")
+	}
+}

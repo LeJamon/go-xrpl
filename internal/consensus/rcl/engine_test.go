@@ -123,6 +123,7 @@ type mockAdaptor struct {
 	ledgersRequested     []consensus.LedgerID
 	modeChanges          []consensus.Mode
 	phaseChanges         []consensus.Phase
+	switchedLedgers      []consensus.Ledger
 
 	// Time
 	now time.Time
@@ -637,6 +638,12 @@ func (a *mockAdaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.phaseChanges = append(a.phaseChanges, newPhase)
+}
+
+func (a *mockAdaptor) OnLedgerSwitched(ledger consensus.Ledger) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.switchedLedgers = append(a.switchedLedgers, ledger)
 }
 
 func (a *mockAdaptor) setTrusted(nodes []consensus.NodeID) {
