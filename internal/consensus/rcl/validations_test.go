@@ -620,6 +620,43 @@ func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
 	}
 }
 
+// SetSeqToKeep pins a sequence range so ExpireOld retains it even when a set
+// is BOTH below the floor and past its access age — the negative-UNL vote
+// relies on this to keep its flag-ledger scan window alive against a
+// fast-advancing tip. The pin is selective (sequences below its low still
+// evict) and clearing it restores normal expiry.
+func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	ledgerKeep := consensus.LedgerID{0x10}
+	ledgerDrop := consensus.LedgerID{0x20}
+	vt.Add(&consensus.Validation{LedgerID: ledgerKeep, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+	vt.Add(&consensus.Validation{LedgerID: ledgerDrop, LedgerSeq: 50, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true})
+
+	// Both are below the floor and cold; only the pinned range must survive.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.SetSeqToKeep(100, 400)
+	vt.ExpireOld(200)
+
+	if got := vt.GetValidationCount(ledgerKeep); got != 1 {
+		t.Fatalf("pinned set evicted: count=%d, want 1", got)
+	}
+	if got := vt.GetValidationCount(ledgerDrop); got != 0 {
+		t.Fatalf("set below the pin survived: count=%d, want 0", got)
+	}
+
+	// Clearing the pin lets the floor evict the once-pinned set. Advance the
+	// clock again so the GetValidationCount touches above go cold.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.SetSeqToKeep(0, 0)
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(ledgerKeep); got != 0 {
+		t.Fatalf("unpinned set survived: count=%d, want 0", got)
+	}
+}
+
 // Reading a ledger's validations refreshes its access age — rippled's
 // byLedger touch — so an actively-queried set keeps surviving ExpireOld
 // while an unqueried sibling at the same seq expires.

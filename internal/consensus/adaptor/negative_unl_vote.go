@@ -178,6 +178,7 @@ func (a *Adaptor) negativeUNLState(l interface {
 // table (NodeIDs that have since left the UNL) is harmless.
 func (a *Adaptor) buildNegativeUNLScoreTable(
 	prev interface {
+		Sequence() uint32
 		SkipListHashes() ([][32]byte, error)
 	},
 	historian consensus.ValidationHistorian,
@@ -186,6 +187,14 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 	if err != nil || uint32(len(ancestors)) < protocol.FlagLedgerInterval {
 		return nil, false
 	}
+
+	// Pin the window we are about to scan so a concurrent ExpireOld can't drop
+	// its low end. rippled sets [seq-1, seq+interval) to keep the *forward*
+	// window alive against its time-based expiry; go-xrpl expires by sequence,
+	// so the exposure is the low end of the window this vote reads — we widen
+	// the pin down to cover it. seq = prevSeq + 1 is the upcoming ledger.
+	upcoming := prev.Sequence() + 1
+	historian.SetSeqToKeep(upcoming-1-protocol.FlagLedgerInterval, upcoming+protocol.FlagLedgerInterval)
 
 	n := uint32(len(ancestors))
 	window := protocol.FlagLedgerInterval

@@ -60,6 +60,10 @@ type ValidationHistorian interface {
 	GetTrustedValidations(ledgerID LedgerID) []*Validation
 	GetPreferred(largestIssued uint32) (LedgerID, uint32, bool)
 	PreferredFromValidations(minSeq uint32) (LedgerID, uint32, bool)
+	// SetSeqToKeep pins the validation range [low, high) against expiry so
+	// the negative-UNL vote's flag-ledger scan window survives a
+	// fast-advancing retention floor.
+	SetSeqToKeep(low, high uint32)
 }
 
 // WireableAdaptor is an optional extension engine wires after constructing its
