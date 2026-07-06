@@ -199,7 +199,7 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	validation, err := ValidationFromMessage(val)
+	validation, err := ValidationFromMessage(val, r.adaptor.Now())
 	if err != nil {
 		r.logger.Warn("failed to parse validation", "error", err, "peer", msg.PeerID)
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "validation-parse")

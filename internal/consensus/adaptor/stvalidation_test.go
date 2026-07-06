@@ -291,13 +291,14 @@ func TestValidationFromMessage_Integration(t *testing.T) {
 	blob := SerializeSTValidation(orig)
 
 	msg := &message.Validation{Validation: blob}
-	parsed, err := ValidationFromMessage(msg)
+	seen := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	parsed, err := ValidationFromMessage(msg, seen)
 	require.NoError(t, err)
 
 	assert.Equal(t, orig.LedgerSeq, parsed.LedgerSeq)
 	assert.Equal(t, orig.LedgerID, parsed.LedgerID)
 	assert.Equal(t, orig.Full, parsed.Full)
-	assert.NotZero(t, parsed.SeenTime) // should be set by ValidationFromMessage
+	assert.Equal(t, seen, parsed.SeenTime)
 }
 
 func TestSignSerializeParseVerify_Roundtrip(t *testing.T) {

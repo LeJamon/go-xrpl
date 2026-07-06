@@ -56,13 +56,15 @@ func ProposalToMessage(p *consensus.Proposal) *message.ProposeSet {
 }
 
 // ValidationFromMessage parses a decoded Validation message (containing an
-// XRPL-binary-encoded STValidation) into a consensus.Validation.
-func ValidationFromMessage(msg *message.Validation) (*consensus.Validation, error) {
+// XRPL-binary-encoded STValidation) into a consensus.Validation. seen
+// becomes the validation's SeenTime; pass the network-adjusted clock so
+// freshness checks compare it against the same clock they gate on.
+func ValidationFromMessage(msg *message.Validation, seen time.Time) (*consensus.Validation, error) {
 	v, err := parseSTValidation(msg.Validation)
 	if err != nil {
 		return nil, err
 	}
-	v.SeenTime = time.Now()
+	v.SeenTime = seen
 	return v, nil
 }
 
