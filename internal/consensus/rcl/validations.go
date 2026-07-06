@@ -35,9 +35,15 @@ func safeTrieCall(fn string, op func()) (panicked bool) {
 
 // ledgerValidations is one per-ledger validation set plus the
 // access-age bookkeeping ExpireOld needs. lastAccess holds unix-nanos
-// of the last read or write touch, stored atomically so query paths
-// holding only vt.mu.RLock can refresh it — the equivalent of rippled's
-// byLedger_.touch on every byLedger access.
+// of the set's creation or last read touch — writes into an existing
+// set do not refresh it, matching rippled's aged byLedger_ container,
+// which stamps on insert and touches on read only. Stored atomically
+// so query paths holding only vt.mu.RLock can refresh it. Aging
+// deliberately follows the tracker clock (adaptor.Now in production)
+// rather than rippled's monotonic steady_clock: touch and the
+// ExpireOld cutoff share that clock — consistent with the engine's
+// other validationSetExpires windows — so a close-offset adjustment
+// shifts retention by at most the adjustment.
 type ledgerValidations struct {
 	vals       map[consensus.NodeID]*consensus.Validation
 	lastAccess atomic.Int64
@@ -402,10 +408,10 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	ledgerVals, exists := vt.validations[validation.LedgerID]
 	if !exists {
 		ledgerVals = &ledgerValidations{vals: make(map[consensus.NodeID]*consensus.Validation)}
+		ledgerVals.touch(vt.now())
 		vt.validations[validation.LedgerID] = ledgerVals
 	}
 	ledgerVals.vals[resolvedID] = validation
-	ledgerVals.touch(vt.now())
 
 	// Steer the trie on trusted() alone — negUNL validators included —
 	// mirroring rippled's updateTrie precondition. negUNL exclusion lives
@@ -831,7 +837,7 @@ func (vt *ValidationTracker) FlushStale() {
 // onStale outside the mutex. Trie tips for dropped validators are also
 // removed so phantom branchSupport doesn't linger on stale ancestors.
 //
-// A set read or written within validationSetExpires is retained even
+// A set created or read within validationSetExpires is retained even
 // below the sequence floor — rippled's access-age expiry
 // (validationSET_EXPIRES with byLedger touch) — so hot ledgers stay
 // queryable for RPC and late peers. Memory stays bounded: Add rejects

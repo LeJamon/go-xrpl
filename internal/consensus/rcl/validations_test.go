@@ -652,6 +652,34 @@ func TestValidationTracker_ExpireOld_TouchOnReadExtends(t *testing.T) {
 	}
 }
 
+// A write into an existing set does not refresh its access age —
+// rippled's aged byLedger_ container stamps on insert and touches on
+// read only, so a below-floor set kept alive purely by late incoming
+// validations still expires once its creation/read age passes the
+// window.
+func TestValidationTracker_ExpireOld_WriteDoesNotExtend(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	ledger := consensus.LedgerID{1}
+	vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+
+	// A second validator writes into the existing set just before the
+	// window closes.
+	now = now.Add(validationSetExpires - time.Second)
+	if !vt.Add(&consensus.Validation{LedgerID: ledger, LedgerSeq: 100, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true}) {
+		t.Fatal("precondition: second Add rejected")
+	}
+
+	// Past the creation age: the late write must not have refreshed it.
+	now = now.Add(2 * time.Second)
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(ledger); got != 0 {
+		t.Fatalf("write-refreshed set survived: count=%d, want 0", got)
+	}
+}
+
 // TestValidationTracker_Flush mirrors rippled's Validations::flush()
 // (Validations.h:1103-1110, called on orderly shutdown at
 // Application.cpp:1612): all accumulated validation state is discarded
