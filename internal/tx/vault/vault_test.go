@@ -947,12 +947,10 @@ func TestVaultConstants(t *testing.T) {
 	assert.Equal(t, uint32(0x00020000), VaultFlagShareNonTransferable)
 }
 
-// TestVaultAmendmentRemainsUnsupported guards the stubbed Apply implementations.
-// The Apply methods in this package return a hard error and mutate no state
-// because the real vault semantics are not implemented. SingleAssetVault MUST
-// stay SupportedNo so the engine rejects these transactions at preflight
-// (temDISABLED) and Apply is never reached. Do not flip this to SupportedYes
-// until the Apply methods are fully implemented.
+// TestVaultAmendmentRemainsUnsupported keeps SingleAssetVault SupportedNo. The
+// vault transactors are implemented here, but flipping the amendment to
+// SupportedYes (so nodes vote for and default-enable it) is a later phase.
+// Conformance fixtures enable it per-fixture, so the flag can stay SupportedNo.
 func TestVaultAmendmentRemainsUnsupported(t *testing.T) {
 	f := amendment.GetFeature(amendment.FeatureSingleAssetVault)
 	require.NotNil(t, f, "SingleAssetVault must be registered")

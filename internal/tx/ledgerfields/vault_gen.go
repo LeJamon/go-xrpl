@@ -34,6 +34,7 @@ type Vault struct {
 	LossUnrealized    any
 	ShareMPTID        string
 	WithdrawalPolicy  int
+	Scale             int
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -52,6 +53,7 @@ const (
 	vaultBitLossUnrealized
 	vaultBitShareMPTID
 	vaultBitWithdrawalPolicy
+	vaultBitScale
 	vaultBitFlags
 	vaultBitPreviousTxnID
 	vaultBitPreviousTxnLgrSeq
@@ -177,6 +179,9 @@ func (v *Vault) Decode(data []byte) error {
 			}
 			val := int(byteVal)
 			switch fieldCode {
+			case 4:
+				v.Scale = val
+				v.present |= vaultBitScale
 			case 20:
 				v.WithdrawalPolicy = val
 				v.present |= vaultBitWithdrawalPolicy
@@ -254,6 +259,9 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitWithdrawalPolicy != 0 && !(skipDefault && v.WithdrawalPolicy == 0) {
 		out["WithdrawalPolicy"] = v.WithdrawalPolicy
 	}
+	if v.present&vaultBitScale != 0 && !(skipDefault && v.Scale == 0) {
+		out["Scale"] = v.Scale
+	}
 	if v.present&vaultBitFlags != 0 && !(skipDefault && v.Flags == 0) {
 		out["Flags"] = v.Flags
 	}
@@ -290,6 +298,7 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "LossUnrealized", prv.LossUnrealized, v.LossUnrealized, prv.present&vaultBitLossUnrealized, v.present&vaultBitLossUnrealized)
 	emitIfChangedString(out, "ShareMPTID", prv.ShareMPTID, v.ShareMPTID, prv.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
 	emitIfChangedInt(out, "WithdrawalPolicy", prv.WithdrawalPolicy, v.WithdrawalPolicy, prv.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
+	emitIfChangedInt(out, "Scale", prv.Scale, v.Scale, prv.present&vaultBitScale, v.present&vaultBitScale)
 	emitIfChangedUint32(out, "Flags", prv.Flags, v.Flags, prv.present&vaultBitFlags, v.present&vaultBitFlags)
 }
 
@@ -334,6 +343,9 @@ func (v *Vault) EmitChangeOrigFields(out map[string]any) {
 	}
 	if v.present&vaultBitWithdrawalPolicy != 0 {
 		out["WithdrawalPolicy"] = v.WithdrawalPolicy
+	}
+	if v.present&vaultBitScale != 0 {
+		out["Scale"] = v.Scale
 	}
 	if v.present&vaultBitFlags != 0 {
 		out["Flags"] = v.Flags
@@ -414,6 +426,9 @@ func (v *Vault) ToMap() map[string]any {
 	}
 	if v.present&vaultBitWithdrawalPolicy != 0 {
 		out["WithdrawalPolicy"] = v.WithdrawalPolicy
+	}
+	if v.present&vaultBitScale != 0 {
+		out["Scale"] = v.Scale
 	}
 	if v.present&vaultBitFlags != 0 {
 		out["Flags"] = v.Flags
