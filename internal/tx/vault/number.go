@@ -40,3 +40,61 @@ func numberToString(n state.XRPLNumber) string {
 	}
 	return fmt.Sprintf("%de%d", n.Mantissa(), n.Exponent())
 }
+
+// amountToNumber converts an asset amount into an XRPLNumber. XRP is measured in
+// drops and MPT in its integer units; an IOU carries a decimal value.
+func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
+	if a.IsNative() {
+		return state.NewXRPLNumber(a.Drops(), 0), nil
+	}
+	if a.IsMPT() {
+		return vaultNumber(a.Value())
+	}
+	return vaultNumber(a.Value())
+}
+
+// pow10 returns 10^scale as an XRPLNumber.
+func pow10(scale uint8) state.XRPLNumber {
+	return state.NewXRPLNumber(1, int(scale))
+}
+
+// assetsToSharesDeposit converts a deposit of assets into freshly minted shares.
+// The share count is truncated toward zero. Reference: rippled View.cpp.
+func assetsToSharesDeposit(assetsTotal, shareTotal, assets state.XRPLNumber, scale uint8) state.XRPLNumber {
+	if assetsTotal.IsZero() {
+		return assets.Mul(pow10(scale)).Truncate()
+	}
+	return shareTotal.Mul(assets).Div(assetsTotal).Truncate()
+}
+
+// sharesToAssetsDeposit converts a share count back to assets on the deposit
+// path (used to verify the exchange does not exceed the offered amount).
+func sharesToAssetsDeposit(assetsTotal, shareTotal, shares state.XRPLNumber, scale uint8) state.XRPLNumber {
+	if assetsTotal.IsZero() {
+		return shares.Div(pow10(scale))
+	}
+	return assetsTotal.Mul(shares).Div(shareTotal)
+}
+
+// assetsToSharesWithdraw converts a withdrawal of assets into the shares that
+// must be redeemed. The effective asset total excludes unrealized losses.
+func assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets state.XRPLNumber, truncate bool) state.XRPLNumber {
+	effective := assetsTotal.Sub(lossUnrealized)
+	if effective.IsZero() {
+		return state.NewXRPLNumber(0, 0)
+	}
+	result := shareTotal.Mul(assets).Div(effective)
+	if truncate {
+		result = result.Truncate()
+	}
+	return result
+}
+
+// sharesToAssetsWithdraw converts a share count into the assets it redeems.
+func sharesToAssetsWithdraw(assetsTotal, lossUnrealized, shareTotal, shares state.XRPLNumber) state.XRPLNumber {
+	effective := assetsTotal.Sub(lossUnrealized)
+	if effective.IsZero() {
+		return state.NewXRPLNumber(0, 0)
+	}
+	return effective.Mul(shares).Div(shareTotal)
+}
