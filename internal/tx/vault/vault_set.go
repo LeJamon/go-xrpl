@@ -19,8 +19,9 @@ type VaultSet struct {
 	// DomainID is the permissioned domain ID (optional)
 	DomainID string `json:"DomainID,omitempty" xrpl:"DomainID,omitempty"`
 
-	// AssetsMaximum is the maximum assets (optional)
-	AssetsMaximum *int64 `json:"AssetsMaximum,omitempty" xrpl:"AssetsMaximum,omitempty"`
+	// AssetsMaximum is the maximum assets (optional). NUMBER field, carried as
+	// its decimal/scientific string form.
+	AssetsMaximum *string `json:"AssetsMaximum,omitempty" xrpl:"AssetsMaximum,omitempty"`
 }
 
 // NewVaultSet creates a new VaultSet transaction
@@ -72,8 +73,8 @@ func (v *VaultSet) Validate() error {
 		}
 	}
 
-	// Validate AssetsMaximum if present
-	if v.AssetsMaximum != nil && *v.AssetsMaximum < 0 {
+	// Validate AssetsMaximum if present. It is a NUMBER: negative is rejected.
+	if v.AssetsMaximum != nil && isNegativeNumberString(*v.AssetsMaximum) {
 		return ErrVaultAssetsMaxNeg
 	}
 

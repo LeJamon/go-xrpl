@@ -82,7 +82,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "valid - vault create with AssetsMaximum",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				max := int64(1000000)
+				max := "1000000"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -177,7 +177,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "invalid - AssetsMaximum negative",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				max := int64(-100)
+				max := "-100"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -261,7 +261,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "valid - update AssetsMaximum",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				max := int64(2000000)
+				max := "2000000"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -310,7 +310,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "invalid - AssetsMaximum negative",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				max := int64(-100)
+				max := "-100"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -764,7 +764,7 @@ func TestVaultFlatten(t *testing.T) {
 	t.Run("VaultCreate", func(t *testing.T) {
 		v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
 		v.Data = "test data"
-		max := int64(1000000)
+		max := "1000000"
 		v.AssetsMaximum = &max
 
 		flat, err := v.Flatten()
@@ -773,13 +773,13 @@ func TestVaultFlatten(t *testing.T) {
 		assert.Equal(t, "rOwner", flat["Account"])
 		assert.Equal(t, "VaultCreate", flat["TransactionType"])
 		assert.Equal(t, "test data", flat["Data"])
-		assert.Equal(t, int64(1000000), flat["AssetsMaximum"])
+		assert.Equal(t, "1000000", flat["AssetsMaximum"])
 	})
 
 	t.Run("VaultSet", func(t *testing.T) {
 		v := NewVaultSet("rOwner", makeValidVaultID())
 		v.Data = "updated data"
-		max := int64(2000000)
+		max := "2000000"
 		v.AssetsMaximum = &max
 
 		flat, err := v.Flatten()
@@ -787,7 +787,7 @@ func TestVaultFlatten(t *testing.T) {
 
 		assert.Equal(t, makeValidVaultID(), flat["VaultID"])
 		assert.Equal(t, "updated data", flat["Data"])
-		assert.Equal(t, int64(2000000), flat["AssetsMaximum"])
+		assert.Equal(t, "2000000", flat["AssetsMaximum"])
 	})
 
 	t.Run("VaultDelete", func(t *testing.T) {
@@ -943,8 +943,8 @@ func TestVaultConstants(t *testing.T) {
 	assert.Equal(t, 256, MaxVaultDataLength)
 	assert.Equal(t, 1024, MaxMPTokenMetadataLength)
 	assert.Equal(t, uint8(1), VaultStrategyFirstComeFirstServe)
-	assert.Equal(t, uint32(0x00000001), VaultFlagPrivate)
-	assert.Equal(t, uint32(0x00000002), VaultFlagShareNonTransferable)
+	assert.Equal(t, uint32(0x00010000), VaultFlagPrivate)
+	assert.Equal(t, uint32(0x00020000), VaultFlagShareNonTransferable)
 }
 
 // TestVaultAmendmentRemainsUnsupported guards the stubbed Apply implementations.
