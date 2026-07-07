@@ -30,26 +30,36 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	// ledger_hash takes precedence over ledger_index, matching rippled's
-	// RPC::lookupLedger.
+	// RPC::ledgerFromRequest. A JSON null in either field is treated as absent
+	// (rippled's isNull() / isConvertibleTo checks), a present non-string
+	// ledger_hash is ledgerHashNotString, and an unparseable ledger_index is
+	// ledgerIndexMalformed.
 	ledgerIndex := "validated"
-	if lh, ok := rawParams["ledger_hash"]; ok {
+	if lh, ok := rawParams["ledger_hash"]; ok && !isJSONNull(lh) {
 		var lhStr string
 		if err := json.Unmarshal(lh, &lhStr); err != nil {
-			return nil, types.RpcErrorExpectedField("ledger_hash", "string")
+			return nil, types.RpcErrorInvalidParams("ledgerHashNotString")
 		}
 		if raw, err := hex.DecodeString(lhStr); err != nil || len(raw) != 32 {
 			return nil, types.RpcErrorInvalidParams("ledgerHashMalformed")
 		}
 		ledgerIndex = lhStr
-	} else if li, ok := rawParams["ledger_index"]; ok {
-		var liStr string
-		if err := json.Unmarshal(li, &liStr); err == nil {
+	} else if li, ok := rawParams["ledger_index"]; ok && !isJSONNull(li) {
+		tok := strings.TrimSpace(string(li))
+		if len(tok) > 0 && tok[0] == '"' {
+			var liStr string
+			if err := json.Unmarshal(li, &liStr); err != nil {
+				return nil, types.RpcErrorInvalidParams("ledgerIndexMalformed")
+			}
 			ledgerIndex = liStr
 		} else {
+			// A numeric ledger_index must be an integral, in-range uint32;
+			// objects/arrays/booleans/non-integral doubles are malformed.
 			var liNum uint32
-			if err := json.Unmarshal(li, &liNum); err == nil {
-				ledgerIndex = strings.TrimSpace(string(li))
+			if err := json.Unmarshal(li, &liNum); err != nil {
+				return nil, types.RpcErrorInvalidParams("ledgerIndexMalformed")
 			}
+			ledgerIndex = tok
 		}
 	}
 
@@ -235,7 +245,19 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// nftoken_offer: string (hex ID)
+	// nft_offer: string (hex ID) — rippled's canonical selector key
+	// (ledger_entries.macro rpcName). nftoken_offer is a go-xrpl alias.
+	if !keySet {
+		if raw, ok := rawParams["nft_offer"]; ok {
+			entryKey, rpcErr = parseHex256(raw, "nft_offer")
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			keySet = true
+		}
+	}
+
+	// nftoken_offer: string (hex ID) — go-xrpl alias for nft_offer
 	if !keySet {
 		if raw, ok := rawParams["nftoken_offer"]; ok {
 			entryKey, rpcErr = parseHex256(raw, "nftoken_offer")
@@ -379,15 +401,32 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorUnknownOption("")
 	}
 
+	// The type the matched filter selects (rippled's per-filter expectedType).
+	// "" means the `index` alias (ltANY), which accepts any entry type.
+	expectedType := expectedLedgerEntryType(rawParams)
+
 	result, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
-			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
+			return nil, types.RpcErrorEntryNotFound("")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
+	}
+
+	// Decode the entry once — needed for the type check (in both output modes)
+	// and for the JSON node body.
+	decoded, decodeErr := decodeLedgerEntryNode(result.Node)
+
+	// unexpectedLedgerType: the entry found at the requested index must match
+	// the filter's type (rippled LedgerEntry.cpp:853-856). The `index` alias
+	// opts out via expectedType == "".
+	if expectedType != "" && decodeErr == nil {
+		if actual, _ := decoded["LedgerEntryType"].(string); actual != "" && actual != expectedType {
+			return nil, types.RpcErrorUnexpectedLedgerType()
+		}
 	}
 
 	response := map[string]any{
@@ -399,20 +438,80 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	if binary {
 		response["node_binary"] = result.NodeBinary
+	} else if decodeErr == nil {
+		decoded["index"] = strings.ToUpper(result.Index)
+		response["node"] = decoded
 	} else {
-		// Decode to JSON
-		hexData := hex.EncodeToString(result.Node)
-		decoded, err := binarycodec.Decode(hexData)
-		if err != nil {
-			// Fallback to hex string
-			response["node"] = strings.ToUpper(hexData)
-		} else {
-			decoded["index"] = strings.ToUpper(result.Index)
-			response["node"] = decoded
-		}
+		response["node"] = strings.ToUpper(hex.EncodeToString(result.Node))
 	}
 
 	return response, nil
+}
+
+// decodeLedgerEntryNode decodes an SLE to its JSON object form. Production
+// nodes are binary (binarycodec); the test path supplies JSON directly, so a
+// JSON fallback keeps both working. Returns an error only when neither decodes.
+func decodeLedgerEntryNode(node []byte) (map[string]any, error) {
+	if decoded, err := binarycodec.Decode(hex.EncodeToString(node)); err == nil {
+		return decoded, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(node, &m); err == nil {
+		return m, nil
+	}
+	return nil, errors.New("ledger_entry: undecodable node")
+}
+
+// ledgerEntryFilterTypes maps each ledger_entry filter key to the
+// LedgerEntryType name it selects, in the handler's resolution priority order.
+// It mirrors rippled's per-filter expectedType (LedgerEntry.cpp dispatch
+// table). `index` is absent: it is the ltANY alias and skips the type check.
+var ledgerEntryFilterTypes = []struct {
+	key      string
+	typeName string
+}{
+	{"account_root", "AccountRoot"},
+	{"amm", "AMM"},
+	{"bridge", "Bridge"},
+	{"check", "Check"},
+	{"credential", "Credential"},
+	{"delegate", "Delegate"},
+	{"deposit_preauth", "DepositPreauth"},
+	{"did", "DID"},
+	{"directory", "DirectoryNode"},
+	{"escrow", "Escrow"},
+	{"mpt_issuance", "MPTokenIssuance"},
+	{"mptoken", "MPToken"},
+	{"nft_page", "NFTokenPage"},
+	{"nft_offer", "NFTokenOffer"},
+	{"nftoken_offer", "NFTokenOffer"},
+	{"offer", "Offer"},
+	{"oracle", "Oracle"},
+	{"payment_channel", "PayChannel"},
+	{"permissioned_domain", "PermissionedDomain"},
+	{"ripple_state", "RippleState"},
+	{"state", "RippleState"},
+	{"signer_list", "SignerList"},
+	{"ticket", "Ticket"},
+	{"vault", "Vault"},
+	{"xchain_owned_claim_id", "XChainOwnedClaimID"},
+	{"xchain_owned_create_account_claim_id", "XChainOwnedCreateAccountClaimID"},
+}
+
+// expectedLedgerEntryType returns the LedgerEntryType the matched filter
+// selects, or "" for the `index` alias (which accepts any type) and when no
+// typed filter is present. The `index` key is checked first because it has
+// resolution priority in the handler.
+func expectedLedgerEntryType(rawParams map[string]json.RawMessage) string {
+	if _, ok := rawParams["index"]; ok {
+		return ""
+	}
+	for _, f := range ledgerEntryFilterTypes {
+		if _, ok := rawParams[f.key]; ok {
+			return f.typeName
+		}
+	}
+	return ""
 }
 
 // decodeAccountID decodes a base58 account address to a 20-byte account ID

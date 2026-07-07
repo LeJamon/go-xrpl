@@ -46,12 +46,16 @@ func (m *mockLedgerEntryService) GetLedgerEntry(_ context.Context, entryKey [32]
 	if m.ledgerEntryResult != nil {
 		return m.ledgerEntryResult, nil
 	}
-	// Default result
+	// Default result. The node deliberately omits LedgerEntryType so the naive
+	// "any key returns this node" stub does not spuriously trip the 3.0.0
+	// unexpectedLedgerType check in tests that only exercise key derivation.
+	// Type-match behaviour is covered by dedicated tests that set an explicit
+	// LedgerEntryType.
 	return &types.LedgerEntryResult{
 		Index:       hex.EncodeToString(entryKey[:]),
 		LedgerIndex: m.validatedLedgerIndex,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
-		Node:        []byte(`{"LedgerEntryType": "AccountRoot", "Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`),
+		Node:        []byte(`{"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`),
 		Validated:   true,
 	}, nil
 }
@@ -1277,8 +1281,9 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, -1, rpcErr.Code, "Entry not found returns rippled's bare entryNotFound token (code -1)")
-	assert.Contains(t, rpcErr.Message, "not found")
+	assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code, "ledger_entry returns rpcENTRY_NOT_FOUND (98) in rippled 3.0.0")
+	assert.Equal(t, "entryNotFound", rpcErr.ErrorString)
+	assert.Equal(t, "Entry not found.", rpcErr.Message)
 }
 
 // AccountRoot Entry Tests
@@ -2089,13 +2094,11 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 		Services:   services,
 	}
 
-	// Test requesting an entry using the wrong type
-	// e.g., using an AccountRoot index when requesting a check
-	t.Run("Entry type mismatch should succeed with index lookup", func(t *testing.T) {
-		// When using direct index lookup, it returns whatever entry is at that index
-		// regardless of what type was expected
-		accountRootIndex := "9CE54C3B934E473A995B477E92EC229F99CED5B62BF4D2ACE4DC42719103AE2F"
+	accountRootIndex := "9CE54C3B934E473A995B477E92EC229F99CED5B62BF4D2ACE4DC42719103AE2F"
 
+	// A typed selector whose key resolves to a different entry type returns
+	// rpcUNEXPECTED_LEDGER_TYPE (rippled 3.0.0 LedgerEntry.cpp:853-856).
+	t.Run("typed selector on mismatched entry returns unexpectedLedgerType", func(t *testing.T) {
 		mock.ledgerEntryResult = &types.LedgerEntryResult{
 			Index:       accountRootIndex,
 			LedgerIndex: 3,
@@ -2105,7 +2108,7 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 		}
 		mock.ledgerEntryErr = nil
 
-		// Using check field but providing an AccountRoot index
+		// The `check` selector expects a Check, but the entry is an AccountRoot.
 		params := map[string]any{
 			"check":        accountRootIndex,
 			"ledger_index": "validated",
@@ -2115,9 +2118,34 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
-		// Current implementation does direct index lookup, so it returns the entry
-		require.Nil(t, rpcErr, "Direct index lookup should succeed")
-		require.NotNil(t, result, "Expected result")
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr, "Expected unexpectedLedgerType error")
+		assert.Equal(t, types.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
+		assert.Equal(t, "unexpectedLedgerType", rpcErr.ErrorString)
+		assert.Equal(t, "Unexpected ledger type.", rpcErr.Message)
+	})
+
+	// The `index` alias (ltANY) accepts any entry type — no type check.
+	t.Run("index selector accepts any entry type", func(t *testing.T) {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:       accountRootIndex,
+			LedgerIndex: 3,
+			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Node:        []byte(`{"LedgerEntryType": "AccountRoot", "Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`),
+			Validated:   true,
+		}
+		mock.ledgerEntryErr = nil
+
+		params := map[string]any{
+			"index":        accountRootIndex,
+			"ledger_index": "validated",
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr, "index lookup must not type-check")
+		require.NotNil(t, result)
 	})
 }
 
@@ -2435,11 +2463,13 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if !tc.expectError {
+				// This case exercises hex validation only; the node is left
+				// type-agnostic so it does not trip the unexpectedLedgerType check.
 				mock.ledgerEntryResult = &types.LedgerEntryResult{
 					Index:       tc.paramValue,
 					LedgerIndex: 2,
 					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
-					Node:        []byte(`{"LedgerEntryType": "AccountRoot"}`),
+					Node:        []byte(`{"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`),
 					Validated:   true,
 				}
 				mock.ledgerEntryErr = nil
