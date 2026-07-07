@@ -27,6 +27,14 @@ var (
 	ErrNumberOverflow = errors.New("mantissa and exponent are too large")
 )
 
+// numberRangeLog is log10 of the normalized mantissa minimum. It drives
+// to_string's scientific-vs-decimal threshold and padding. STNumber serializes
+// and normalizes at the small scale (rangeLog 15) on the current chain; the
+// large scale (rangeLog 18) is threaded in when SingleAssetVault /
+// LendingProtocol activate (Number/codec Phase B). formatNumberText is faithful
+// for either value.
+const numberRangeLog = 15
+
 // numberRegex matches decimal/float/scientific number strings.
 // Pattern: optional sign, integer part, optional decimal, optional exponent
 var numberRegex = regexp.MustCompile(`^([-+]?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
@@ -67,24 +75,8 @@ func (n *Number) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	mantissa := bigMantissa.Int64()
 
-	// Special zero case
-	if mantissa == 0 && exponent == defaultZeroExp {
-		return "0", nil
-	}
-
-	if exponent == 0 {
-		return big.NewInt(mantissa).String(), nil
-	}
-
-	// Use scientific notation for very small/large exponents
-	if exponent < -25 || exponent > -5 {
-		return formatScientific(mantissa, exponent), nil
-	}
-
-	// Decimal rendering for -25 <= exp <= -5
-	return formatDecimal(mantissa, exponent), nil
+	return formatNumberText(bigMantissa, exponent, numberRangeLog), nil
 }
 
 // parseAndNormalize extracts mantissa, exponent from a string and normalizes them.
@@ -205,43 +197,57 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	return m, exponent, nil
 }
 
-// formatScientific formats mantissa and exponent as scientific notation string.
-func formatScientific(mantissa int64, exponent int32) string {
-	return strconv.FormatInt(mantissa, 10) + "e" + strconv.Itoa(int(exponent))
-}
+// formatNumberText renders a normalized (mantissa, exponent) as rippled's
+// to_string(Number) does, for a given rangeLog. It uses scientific notation
+// outside a threshold band and decimal within it; in the scientific branch the
+// mantissa's trailing zeros are shifted into the exponent (a live 3.1.0
+// formatting change), so e.g. 1000000000000000e-45 renders as 1e-30. The sign
+// is emitted separately.
+func formatNumberText(mantissa *big.Int, exponent int32, rangeLog int) string {
+	if mantissa.Sign() == 0 {
+		return "0"
+	}
+	negative := mantissa.Sign() < 0
+	m := new(big.Int).Abs(mantissa)
+	L := int32(rangeLog)
 
-// formatDecimal formats mantissa and exponent as a decimal string.
-func formatDecimal(mantissa int64, exponent int32) string {
-	isNegative := mantissa < 0
-	if isNegative {
-		mantissa = -mantissa
+	if exponent != 0 && (exponent < -(L+10) || exponent > -(L-10)) {
+		ten := big.NewInt(10)
+		q := new(big.Int)
+		r := new(big.Int)
+		for m.Sign() != 0 && exponent < maxExponent {
+			q.QuoRem(m, ten, r)
+			if r.Sign() != 0 {
+				break
+			}
+			m.Set(q)
+			exponent++
+		}
+		s := m.String() + "e" + strconv.Itoa(int(exponent))
+		if negative {
+			return "-" + s
+		}
+		return s
 	}
 
-	mantissaStr := big.NewInt(mantissa).String()
-
-	// Pad with zeros for proper decimal placement
-	const padPrefix = 27
-	const padSuffix = 23
-	rawValue := strings.Repeat("0", padPrefix) + mantissaStr + strings.Repeat("0", padSuffix)
-
-	offset := min(max(int(exponent)+43, 0), len(rawValue))
+	padPrefix := rangeLog + 12
+	padSuffix := rangeLog + 8
+	rawValue := strings.Repeat("0", padPrefix) + m.String() + strings.Repeat("0", padSuffix)
+	offset := int(exponent) + padPrefix + rangeLog + 1
 
 	integerPart := strings.TrimLeft(rawValue[:offset], "0")
 	if integerPart == "" {
 		integerPart = "0"
 	}
-
 	fractionPart := strings.TrimRight(rawValue[offset:], "0")
 
 	result := integerPart
 	if fractionPart != "" {
 		result += "." + fractionPart
 	}
-
-	if isNegative {
+	if negative {
 		result = "-" + result
 	}
-
 	return result
 }
 
