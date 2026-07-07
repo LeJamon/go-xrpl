@@ -79,6 +79,16 @@ const (
 	TypeVaultClawback                = protocol.TxTypeVaultClawback
 	TypeBatch                        = protocol.TxTypeBatch
 
+	TypeLoanBrokerSet           = protocol.TxTypeLoanBrokerSet
+	TypeLoanBrokerDelete        = protocol.TxTypeLoanBrokerDelete
+	TypeLoanBrokerCoverDeposit  = protocol.TxTypeLoanBrokerCoverDeposit
+	TypeLoanBrokerCoverWithdraw = protocol.TxTypeLoanBrokerCoverWithdraw
+	TypeLoanBrokerCoverClawback = protocol.TxTypeLoanBrokerCoverClawback
+	TypeLoanSet                 = protocol.TxTypeLoanSet
+	TypeLoanDelete              = protocol.TxTypeLoanDelete
+	TypeLoanManage              = protocol.TxTypeLoanManage
+	TypeLoanPay                 = protocol.TxTypeLoanPay
+
 	TypeAmendment = protocol.TxTypeAmendment
 	TypeFee       = protocol.TxTypeFee
 	TypeUNLModify = protocol.TxTypeUNLModify
