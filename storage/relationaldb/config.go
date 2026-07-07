@@ -3,6 +3,7 @@ package relationaldb
 import (
 	"fmt"
 	"net/url"
+	"regexp"
 	"time"
 )
 
@@ -230,12 +231,36 @@ func (c *Config) WithConnectionString(connStr string) *Config {
 
 // String returns a string representation of the config (with password redacted)
 func (c *Config) String() string {
-	clone := c.Clone()
-	if clone.Password != "" {
-		clone.Password = "***"
-	}
-
-	connStr, _ := clone.BuildConnectionString()
+	connStr, _ := c.BuildConnectionString()
 	return fmt.Sprintf("Config{Driver: %s, Host: %s, Port: %d, Database: %s, Connection: %s}",
-		clone.Driver, clone.Host, clone.Port, clone.Database, connStr)
+		c.Driver, c.Host, c.Port, c.Database, redactDSN(connStr))
+}
+
+// redactedPassword matches the placeholder net/url's URL.Redacted() uses; it
+// survives URL re-encoding unescaped.
+const redactedPassword = "xxxxx"
+
+var dsnPasswordRE = regexp.MustCompile(`(?i)(password\s*=\s*)(?:'[^']*'|[^\s&]+)`)
+
+// redactDSN masks any password embedded in a connection string: URL userinfo
+// (postgres://user:pass@host), a password query parameter, or key/value form
+// (password=...).
+func redactDSN(dsn string) string {
+	if u, err := url.Parse(dsn); err == nil && u.IsAbs() {
+		redacted := false
+		if _, ok := u.User.Password(); ok {
+			u.User = url.UserPassword(u.User.Username(), redactedPassword)
+			redacted = true
+		}
+		if q := u.Query(); q.Has("password") {
+			q.Set("password", redactedPassword)
+			u.RawQuery = q.Encode()
+			redacted = true
+		}
+		if redacted {
+			return u.String()
+		}
+		return dsn
+	}
+	return dsnPasswordRE.ReplaceAllString(dsn, "${1}"+redactedPassword)
 }
