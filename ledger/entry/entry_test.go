@@ -43,10 +43,12 @@ var ledgerTypes = []struct {
 	{TypePermissionedDomain, 0x0082, "PermissionedDomain"},
 	{TypeDelegate, 0x0083, "Delegate"},
 	{TypeVault, 0x0084, "Vault"},
+	{TypeLoanBroker, 0x0088, "LoanBroker"},
+	{TypeLoan, 0x0089, "Loan"},
 }
 
 func TestTypeCodes(t *testing.T) {
-	if got, want := len(ledgerTypes), 28; got != want {
+	if got, want := len(ledgerTypes), 30; got != want {
 		t.Fatalf("ledgerTypes covers %d types, want %d — update the golden table when ledger_entries.macro changes", got, want)
 	}
 
