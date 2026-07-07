@@ -254,10 +254,16 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// rippled emits "meta" (JSON) when binary=false and "meta_blob" (hex)
 	// when binary=true. Always emit when Metadata is present, mirroring
-	// rippled's `if (result.metadata)` guard (Simulate.cpp:264-276).
+	// rippled's `if (result.metadata)` guard (Simulate.cpp:264-276). The
+	// synthetic fields (delivered_amount / nftoken_id / nftoken_ids / offer_id /
+	// mpt_issuance_id) are a JSON-meta-only enrichment; meta_blob carries only
+	// the raw serialized metadata (Simulate.cpp:277-288).
 	if result.Metadata != nil {
 		if binaryOutput {
 			response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
+		} else if metaMap := metadataToMap(result.Metadata.JSON); metaMap != nil {
+			enrichSimulateMeta(metaMap, txJsonMap)
+			response["meta"] = metaMap
 		} else {
 			response["meta"] = result.Metadata.JSON
 		}

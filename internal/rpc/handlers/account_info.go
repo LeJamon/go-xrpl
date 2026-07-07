@@ -143,6 +143,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		"account_data":  accountData,
 		"account_flags": accountFlags,
 	}
+	addPseudoAccount(response, accountData)
 	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
 
 	// Add queue data if requested (only for current/open ledger — validated above)
@@ -167,6 +168,24 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	return response, nil
+}
+
+// pseudoAccountFields are the AccountRoot designator fields, in the SOTemplate
+// order rippled iterates (getPseudoAccountFields). A pseudo-account carries
+// exactly one; the RPC reports its type by stripping the trailing "ID".
+var pseudoAccountFields = [...]string{"AMMID", "VaultID", "LoanBrokerID"}
+
+// addPseudoAccount sets response["pseudo_account"] = {"type": <name>} when the
+// account root carries a pseudo-account designator, matching rippled
+// doAccountInfo. The designator's own hash stays in account_data; only the
+// derived type name (field name minus "ID") is surfaced here.
+func addPseudoAccount(response, accountData map[string]any) {
+	for _, field := range pseudoAccountFields {
+		if _, present := accountData[field]; present {
+			response["pseudo_account"] = map[string]any{"type": strings.TrimSuffix(field, "ID")}
+			return
+		}
+	}
 }
 
 // buildAccountData constructs account_data from the full SLE binary.
