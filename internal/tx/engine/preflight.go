@@ -289,6 +289,17 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	if result := e.verifyOuterSignature(tx); result != ter.TesSUCCESS {
 		return result
 	}
+	// After the top-level signature passes, verify a nested
+	// sfCounterpartySignature if present, mirroring the counterparty arm of
+	// rippled STTx::checkSign. A failure is a bad signature (checkValidity's
+	// Validity::SigBad), which rippled maps to temINVALID.
+	if cp := tx.GetCommon().CounterpartySignature; cp != nil {
+		mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
+			(tx.GetCommon().GetFlags()&txcore.TfFullyCanonicalSig) != 0
+		if err := sign.VerifyCounterpartySignature(tx, cp, e.rules(), mustBeFullyCanonical); err != nil {
+			return ter.TemINVALID
+		}
+	}
 	// Batch-signer signatures are verified over the batch signing digest, the same
 	// stage rippled runs STTx::checkBatchSign (always RequireFullyCanonicalSig::yes).
 	// The structural/coverage checks on BatchSigners run unconditionally in Validate;
