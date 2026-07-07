@@ -40,7 +40,6 @@ var (
 	FeatureBatch                         = registerFeature("Batch", SupportedYes, VoteDefaultNo)
 	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedNo, VoteDefaultNo)
 	FeatureSingleAssetVault              = registerFeature("SingleAssetVault", SupportedNo, VoteDefaultNo)
-	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedNo, VoteDefaultNo)
 	FeaturePermissionDelegation          = registerFeature("PermissionDelegation", SupportedNo, VoteDefaultNo)
 	FeatureFixPayChanCancelAfter         = registerFix("fixPayChanCancelAfter", SupportedYes, VoteDefaultNo)
 	FeatureFixInvalidTxFlags             = registerFix("fixInvalidTxFlags", SupportedYes, VoteDefaultNo)

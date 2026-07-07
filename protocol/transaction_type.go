@@ -86,18 +86,6 @@ const (
 	TxTypeLoanManage                   TxType = 82 // ttLOAN_MANAGE
 	TxTypeLoanPay                      TxType = 84 // ttLOAN_PAY
 
-	// Lending protocol transaction types. go-xrpl registers no transactor for
-	// these yet; the codes exist so Batch can reject them as inner transactions.
-	TxTypeLoanBrokerSet           TxType = 74 // ttLOAN_BROKER_SET
-	TxTypeLoanBrokerDelete        TxType = 75 // ttLOAN_BROKER_DELETE
-	TxTypeLoanBrokerCoverDeposit  TxType = 76 // ttLOAN_BROKER_COVER_DEPOSIT
-	TxTypeLoanBrokerCoverWithdraw TxType = 77 // ttLOAN_BROKER_COVER_WITHDRAW
-	TxTypeLoanBrokerCoverClawback TxType = 78 // ttLOAN_BROKER_COVER_CLAWBACK
-	TxTypeLoanSet                 TxType = 80 // ttLOAN_SET
-	TxTypeLoanDelete              TxType = 81 // ttLOAN_DELETE
-	TxTypeLoanManage              TxType = 82 // ttLOAN_MANAGE
-	TxTypeLoanPay                 TxType = 84 // ttLOAN_PAY
-
 	// System-generated transaction types (pseudo-transactions).
 	TxTypeAmendment TxType = 100 // ttAMENDMENT
 	TxTypeFee       TxType = 101 // ttFEE
