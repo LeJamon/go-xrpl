@@ -467,6 +467,46 @@ func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 	return ter.TesSUCCESS
 }
 
+// removeVaultAssetHolding deletes the pseudo-account's trust line for an IOU
+// vault asset (XRP needs no holding). Returns the owner-count delta to apply to
+// the pseudo-account.
+func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
+	if isNativeAsset(asset) {
+		return 0, ter.TesSUCCESS
+	}
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if accountID == issuerID {
+		return 0, ter.TesSUCCESS
+	}
+	lineKey := keylet.Line(accountID, issuerID, asset.Currency)
+	data, rerr := ctx.View.Read(lineKey)
+	if rerr != nil || data == nil {
+		return 0, ter.TesSUCCESS
+	}
+	rs, perr := state.ParseRippleState(data)
+	if perr != nil {
+		return 0, ter.TefINTERNAL
+	}
+
+	lowID, highID := accountID, issuerID
+	if bytes.Compare(accountID[:], issuerID[:]) > 0 {
+		lowID, highID = issuerID, accountID
+	}
+	if res, e := state.DirRemove(ctx.View, keylet.OwnerDir(lowID), rs.LowNode, lineKey.Key, false); e != nil || !res.Success {
+		return 0, ter.TefBAD_LEDGER
+	}
+	if res, e := state.DirRemove(ctx.View, keylet.OwnerDir(highID), rs.HighNode, lineKey.Key, false); e != nil || !res.Success {
+		return 0, ter.TefBAD_LEDGER
+	}
+	if e := ctx.View.Erase(lineKey); e != nil {
+		return 0, ter.TefINTERNAL
+	}
+	return -1, ter.TesSUCCESS
+}
+
 // removeEmptyShareMPToken deletes a holder's share MPToken when its balance is
 // zero, returning tecHAS_OBLIGATIONS when it still holds shares.
 func removeEmptyShareMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID [24]byte) ter.Result {
