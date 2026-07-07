@@ -198,6 +198,104 @@ func vaultAssetOf(vd *vaultData) tx.Asset {
 	return vd.Asset
 }
 
+// canWithdraw checks that a withdrawal of amount from `from` may be delivered to
+// `to`: the destination must exist, satisfy any RequireDestTag / DepositAuth
+// requirement, and (for an IOU delivered to a third party) not exceed its trust
+// limit. Reference: rippled View.cpp canWithdraw.
+func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool) ter.Result {
+	toAcct, err := readAccountRoot(view, to)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if toAcct == nil {
+		return ter.TecNO_DST
+	}
+	if toAcct.Flags&state.LsfRequireDestTag != 0 && !hasDestTag {
+		return ter.TecDST_TAG_NEEDED
+	}
+	if from == to {
+		return ter.TesSUCCESS
+	}
+	if toAcct.Flags&state.LsfDepositAuth != 0 {
+		if exists, _ := view.Exists(keylet.DepositPreauth(to, from)); !exists {
+			return ter.TecNO_PERMISSION
+		}
+	}
+	return withdrawToDestExceedsLimit(view, from, to, amount)
+}
+
+// withdrawToDestExceedsLimit rejects an IOU withdrawal that would push the
+// third-party destination past its trust limit. XRP and MPT are exempt.
+func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
+	if amount.IsNative() || amount.IsMPT() {
+		return ter.TesSUCCESS
+	}
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if from == to || to == issuerID {
+		return ter.TesSUCCESS
+	}
+	owed := lineBalanceInTerms(view, to, issuerID, amount.Currency)
+	if owed.Signum() <= 0 {
+		limit := lineLimit(view, to, issuerID, amount.Currency)
+		amountN, aerr := amountToNumber(amount)
+		if aerr != nil {
+			return ter.TefINTERNAL
+		}
+		negOwed := owed.Negate()
+		if negOwed.Cmp(limit) >= 0 || amountN.Cmp(limit.Add(owed)) > 0 {
+			return ter.TecNO_LINE
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// lineBalanceInTerms returns the trust-line balance between account and issuer
+// expressed in account's terms (positive means the account holds the asset).
+func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
+	data, err := view.Read(keylet.Line(account, issuer, currency))
+	if err != nil || data == nil {
+		return state.NewXRPLNumber(0, 0)
+	}
+	rs, perr := state.ParseRippleState(data)
+	if perr != nil {
+		return state.NewXRPLNumber(0, 0)
+	}
+	bal, berr := vaultNumber(rs.Balance.Value())
+	if berr != nil {
+		return state.NewXRPLNumber(0, 0)
+	}
+	if bytes.Compare(account[:], issuer[:]) > 0 {
+		bal = bal.Negate()
+	}
+	return bal
+}
+
+// lineLimit returns account's own trust limit toward issuer for currency.
+func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
+	data, err := view.Read(keylet.Line(account, issuer, currency))
+	if err != nil || data == nil {
+		return state.NewXRPLNumber(0, 0)
+	}
+	rs, perr := state.ParseRippleState(data)
+	if perr != nil {
+		return state.NewXRPLNumber(0, 0)
+	}
+	var lim state.Amount
+	if bytes.Compare(account[:], issuer[:]) < 0 {
+		lim = rs.LowLimit
+	} else {
+		lim = rs.HighLimit
+	}
+	n, nerr := vaultNumber(lim.Value())
+	if nerr != nil {
+		return state.NewXRPLNumber(0, 0)
+	}
+	return n
+}
+
 // assetMatches reports whether amount denominates the vault's asset.
 func assetMatches(amount tx.Amount, vd *vaultData) bool {
 	if vd.AssetIsMPT {
@@ -281,6 +379,122 @@ func sendAssetToVault(ctx *tx.ApplyContext, vaultAccountID [20]byte, orig tx.Amo
 
 	amt := state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), orig.Currency, orig.Issuer)
 	return tx.RippleCredit(ctx.View, ctx.AccountID, vaultAccountID, amt)
+}
+
+// sendAssetFromVault transfers assetsN of the vault asset from the vault
+// pseudo-account to dstID.
+func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, asset tx.Asset, assetsN state.XRPLNumber) ter.Result {
+	if isNativeAsset(asset) {
+		drops := uint64(assetsN.ToInt64WithMode(state.RoundTowardsZero))
+		vaultAcct, err := readAccountRoot(ctx.View, vaultAccountID)
+		if err != nil || vaultAcct == nil {
+			return ter.TefINTERNAL
+		}
+		if vaultAcct.Balance < drops {
+			return ter.TecINSUFFICIENT_FUNDS
+		}
+		vaultAcct.Balance -= drops
+		data, serr := state.SerializeAccountRoot(vaultAcct)
+		if serr != nil {
+			return ter.TefINTERNAL
+		}
+		if uerr := ctx.View.Update(keylet.Account(vaultAccountID), data); uerr != nil {
+			return ter.TefINTERNAL
+		}
+		if dstID == ctx.AccountID {
+			ctx.Account.Balance += drops
+		} else {
+			dst, derr := readAccountRoot(ctx.View, dstID)
+			if derr != nil || dst == nil {
+				return ter.TefINTERNAL
+			}
+			dst.Balance += drops
+			ddata, serr := state.SerializeAccountRoot(dst)
+			if serr != nil {
+				return ter.TefINTERNAL
+			}
+			if uerr := ctx.View.Update(keylet.Account(dstID), ddata); uerr != nil {
+				return ter.TefINTERNAL
+			}
+		}
+		return ter.TesSUCCESS
+	}
+
+	amt := state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), asset.Currency, asset.Issuer)
+	return tx.RippleCredit(ctx.View, vaultAccountID, dstID, amt)
+}
+
+// burnShares decreases the share issuance's OutstandingAmount and debits the
+// holder's share MPToken balance by shares.
+func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, shares uint64) ter.Result {
+	shareKey := keylet.MPTIssuance(shareMPTID)
+	issData, err := ctx.View.Read(shareKey)
+	if err != nil || issData == nil {
+		return ter.TefINTERNAL
+	}
+	issuance, perr := state.ParseMPTokenIssuance(issData)
+	if perr != nil {
+		return ter.TefINTERNAL
+	}
+	if issuance.OutstandingAmount < shares {
+		return ter.TefINTERNAL
+	}
+	issuance.OutstandingAmount -= shares
+	newIss, serr := state.SerializeMPTokenIssuance(issuance)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(shareKey, newIss); uerr != nil {
+		return ter.TefINTERNAL
+	}
+
+	tokenKey := keylet.MPTokenByID(shareMPTID, holderID)
+	token, terr := readMPToken(ctx.View, tokenKey)
+	if terr != nil || token == nil {
+		return ter.TefINTERNAL
+	}
+	if token.MPTAmount < shares {
+		return ter.TecINSUFFICIENT_FUNDS
+	}
+	token.MPTAmount -= shares
+	newTok, serr := state.SerializeMPToken(token)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(tokenKey, newTok); uerr != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
+}
+
+// removeEmptyShareMPToken deletes a holder's share MPToken when its balance is
+// zero, returning tecHAS_OBLIGATIONS when it still holds shares.
+func removeEmptyShareMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID [24]byte) ter.Result {
+	tokenKey := keylet.MPTokenByID(shareMPTID, holderID)
+	token, err := readMPToken(ctx.View, tokenKey)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if token == nil {
+		return ter.TesSUCCESS
+	}
+	if token.MPTAmount != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
+	if res, derr := state.DirRemove(ctx.View, keylet.OwnerDir(holderID), token.OwnerNode, tokenKey.Key, false); derr != nil || !res.Success {
+		return ter.TefINTERNAL
+	}
+	if eerr := ctx.View.Erase(tokenKey); eerr != nil {
+		return ter.TefINTERNAL
+	}
+	if holderID == ctx.AccountID {
+		if ctx.Account.OwnerCount > 0 {
+			ctx.Account.OwnerCount--
+		}
+	} else if derr := tx.AdjustOwnerCount(ctx.View, holderID, -1); derr != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
 }
 
 // mintShares increases the share issuance's OutstandingAmount and credits the
