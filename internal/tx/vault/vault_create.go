@@ -160,6 +160,13 @@ func (v *VaultCreate) RequiredAmendments() [][32]byte {
 	return amendments
 }
 
+// CalculateBaseFee returns one owner reserve increment: creating a vault also
+// creates a pseudo-account, so rippled charges the increment as the base fee.
+// Reference: rippled VaultCreate::calculateBaseFee.
+func (v *VaultCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
+	return config.ReserveIncrement
+}
+
 // Preclaim runs the stateful checks: the vault asset must be addable, must not
 // be issued by a pseudo-account, must not be frozen for the owner, a private
 // vault's DomainID must exist, and the derived pseudo-account must not collide.
