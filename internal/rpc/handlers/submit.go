@@ -18,16 +18,17 @@ type SubmitMethod struct{}
 
 func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		TxBlob     string          `json:"tx_blob,omitempty"`
-		TxJson     json.RawMessage `json:"tx_json,omitempty"`
-		Secret     string          `json:"secret,omitempty"`
-		Seed       string          `json:"seed,omitempty"`
-		SeedHex    string          `json:"seed_hex,omitempty"`
-		Passphrase string          `json:"passphrase,omitempty"`
-		KeyType    string          `json:"key_type,omitempty"`
-		FailHard   bool            `json:"fail_hard,omitempty"`
-		Offline    bool            `json:"offline,omitempty"`
-		BuildPath  bool            `json:"build_path,omitempty"`
+		TxBlob          string          `json:"tx_blob,omitempty"`
+		TxJson          json.RawMessage `json:"tx_json,omitempty"`
+		Secret          string          `json:"secret,omitempty"`
+		Seed            string          `json:"seed,omitempty"`
+		SeedHex         string          `json:"seed_hex,omitempty"`
+		Passphrase      string          `json:"passphrase,omitempty"`
+		KeyType         string          `json:"key_type,omitempty"`
+		FailHard        bool            `json:"fail_hard,omitempty"`
+		Offline         bool            `json:"offline,omitempty"`
+		BuildPath       bool            `json:"build_path,omitempty"`
+		SignatureTarget string          `json:"signature_target,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -72,7 +73,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 			SeedHex:    request.SeedHex,
 			Passphrase: request.Passphrase,
 			KeyType:    request.KeyType,
-		}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
+		}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params, request.SignatureTarget)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}

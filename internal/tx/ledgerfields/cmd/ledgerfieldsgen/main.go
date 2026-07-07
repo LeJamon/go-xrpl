@@ -282,6 +282,10 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 		fr.GoType = "any"
 		fr.Comparer = "Deep"
 		fr.DecodeKind = "number"
+	case "Int32":
+		fr.GoType = "int"
+		fr.Comparer = "Int"
+		fr.DecodeKind = "int32"
 	case "Currency":
 		// Used by sfAsset / similar — same shape as Hash160.
 		fr.GoType = "string"
@@ -483,6 +487,12 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			if err != nil {
 				return err
 			}
+{{- else if eq $first.XRPLType "Int32" }}
+			i32Val, err := sr.readInt32()
+			if err != nil {
+				return err
+			}
+			val := int(i32Val)
 {{- else if eq $first.XRPLType "Hash128" }}
 			val, err := sr.readHash(16)
 			if err != nil {

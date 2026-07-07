@@ -45,6 +45,8 @@ const (
 	spaceNegativeUNL    uint16 = 'N' // Negative UNL (singleton)
 	spaceVault          uint16 = 'V' // Vault
 	spaceDelegate       uint16 = 'E' // Delegate
+	spaceLoanBroker     uint16 = 'l' // Loan broker (lower-case L)
+	spaceLoan           uint16 = 'L' // Loan
 )
 
 // Keylet represents an addressable location in the ledger state.
@@ -549,6 +551,28 @@ func Vault(ownerID [20]byte, sequence uint32) Keylet {
 	return Keylet{
 		Type: entry.TypeVault,
 		Key:  indexHash(spaceVault, ownerID[:], seqBytes[:]),
+	}
+}
+
+// LoanBroker returns the keylet for a LoanBroker entry.
+// Reference: rippled Indexes.cpp loanbroker(AccountID const& owner, std::uint32_t seq)
+func LoanBroker(ownerID [20]byte, sequence uint32) Keylet {
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], sequence)
+	return Keylet{
+		Type: entry.TypeLoanBroker,
+		Key:  indexHash(spaceLoanBroker, ownerID[:], seqBytes[:]),
+	}
+}
+
+// Loan returns the keylet for a Loan entry.
+// Reference: rippled Indexes.cpp loan(uint256 const& loanBrokerID, std::uint32_t loanSeq)
+func Loan(loanBrokerID [32]byte, loanSeq uint32) Keylet {
+	var seqBytes [4]byte
+	binary.BigEndian.PutUint32(seqBytes[:], loanSeq)
+	return Keylet{
+		Type: entry.TypeLoan,
+		Key:  indexHash(spaceLoan, loanBrokerID[:], seqBytes[:]),
 	}
 }
 

@@ -388,10 +388,11 @@ func validateFrozenState(
 		return nil
 	}
 
-	// AMMClawback exception: if the trust line is NOT an AMM line, or if
-	// there's a global freeze, and the transaction is AMMClawback, allow it.
+	// overrideFreeze exception (AMMClawback): if the trust line is NOT an AMM
+	// line, or if there's a global freeze, an overrideFreeze transaction may
+	// move the funds.
 	// Reference: rippled lines 904-911
-	if (!isAMMLine || globalFreeze) && tx.TxType() == TypeAMMClawback {
+	if (!isAMMLine || globalFreeze) && hasPrivilege(tx.TxType(), overrideFreeze) {
 		return nil
 	}
 

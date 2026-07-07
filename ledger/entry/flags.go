@@ -67,6 +67,11 @@ const (
 
 	// ltVAULT
 	LsfVaultPrivate uint32 = 0x00010000
+
+	// ltLOAN
+	LsfLoanDefault     uint32 = 0x00010000
+	LsfLoanImpaired    uint32 = 0x00020000
+	LsfLoanOverpayment uint32 = 0x00040000
 )
 
 // MPToken constants
