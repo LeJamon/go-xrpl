@@ -30,7 +30,7 @@ var (
 var (
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedYes, VoteDefaultNo)
-	FeatureFixMPTDeliveredAmount         = registerFix("fixMPTDeliveredAmount", SupportedNo, VoteDefaultNo)
+	FeatureFixMPTDeliveredAmount         = registerFix("fixMPTDeliveredAmount", SupportedYes, VoteDefaultNo)
 	FeatureFixAMMClawbackRounding        = registerFix("fixAMMClawbackRounding", SupportedYes, VoteDefaultNo)
 	FeatureTokenEscrow                   = registerFeature("TokenEscrow", SupportedYes, VoteDefaultNo)
 	FeatureFixEnforceNFTokenTrustlineV2  = registerFix("fixEnforceNFTokenTrustlineV2", SupportedYes, VoteDefaultNo)
