@@ -19,7 +19,24 @@ import (
 //
 //	checkSeqProxy → checkPriorTxAndLastLedger → checkFee → checkPermission →
 //	checkSign (+ checkBatchSign) → tx-type preclaim.
-func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
+func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
+	// Any panic reachable from adversarial ledger state — most commonly an
+	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
+	// or amount — is recovered and surfaced as tefEXCEPTION so it can never
+	// terminate the node. The ledger-mutation invariant violations that rippled
+	// converted to catchable exceptions in 3.1.2 (ApplyStateTable / ApplyView
+	// directory ops) are reachable only from preclaim/doApply contexts; doApply
+	// is already covered by invokeApply. Mirrors rippled applySteps.cpp
+	// preclaim() wrapping invoke_preclaim in try{...}catch(std::exception){
+	// tefEXCEPTION }.
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("transaction preclaim panic recovered, returning tefEXCEPTION",
+				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+	}()
+
 	common := tx.GetCommon()
 
 	// Resolve and parse the source account; this is shared by all subsequent steps.

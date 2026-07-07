@@ -1,6 +1,10 @@
 package engine
 
-import txcore "github.com/LeJamon/go-xrpl/internal/tx"
+import (
+	"fmt"
+
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+)
 
 // BlockProcessor handles batch application of transactions to a ledger.
 // It wraps the Engine to provide higher-level functionality:
@@ -50,8 +54,25 @@ func NewBlockProcessor(engine *Engine) *BlockProcessor {
 // - Calling the engine to apply the transaction
 // - Creating the tx+meta blob
 // The engine assigns TransactionIndex in metadata for applied transactions.
-func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlob []byte) (BlockTxResult, error) {
-	result := BlockTxResult{
+func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlob []byte) (result BlockTxResult, err error) {
+	// Backstop for the consensus build loop: any panic escaping the engine's
+	// Apply-scoped recover — engine bookkeeping outside invokeApply, or the
+	// pseudo-tx apply path which runs outside it — is converted to an error so
+	// the caller (ApplyTxs / applyAndClassify) drops this one transaction and
+	// keeps building the ledger. Mirrors rippled applyTransactions'
+	// per-transaction catch(std::exception) that marks the tx failed and
+	// continues (BuildLedger.cpp), rather than letting the throw terminate the
+	// consensus goroutine.
+	defer func() {
+		if r := recover(); r != nil {
+			bp.engine.logger.Error("transaction apply panic recovered, dropping tx",
+				"panic", r)
+			result = BlockTxResult{Index: bp.txIndex, RawTxBlob: txBlob}
+			err = fmt.Errorf("apply panic: %v", r)
+		}
+	}()
+
+	result = BlockTxResult{
 		Index:     bp.txIndex,
 		RawTxBlob: txBlob,
 	}
