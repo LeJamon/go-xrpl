@@ -14,7 +14,7 @@ import (
 // account does not exist (view.Read reports a missing key via a nil payload).
 func readAccountRoot(view tx.LedgerView, id [20]byte) (*state.AccountRoot, error) {
 	data, err := view.Read(keylet.Account(id))
-	if err != nil || data == nil {
+	if err != nil || len(data) == 0 {
 		return nil, nil
 	}
 	return state.ParseAccountRoot(data)
@@ -110,7 +110,7 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 // (nil, nil) when the entry does not exist.
 func readVault(view tx.LedgerView, vaultKey keylet.Keylet) (*vaultData, error) {
 	data, err := view.Read(vaultKey)
-	if err != nil || data == nil {
+	if err != nil || len(data) == 0 {
 		return nil, nil
 	}
 	return parseVault(data)
@@ -119,7 +119,7 @@ func readVault(view tx.LedgerView, vaultKey keylet.Keylet) (*vaultData, error) {
 // readMPToken reads and parses an MPToken, returning (nil, nil) when absent.
 func readMPToken(view tx.LedgerView, tokenKey keylet.Keylet) (*state.MPTokenData, error) {
 	data, err := view.Read(tokenKey)
-	if err != nil || data == nil {
+	if err != nil || len(data) == 0 {
 		return nil, nil
 	}
 	return state.ParseMPToken(data)
@@ -256,7 +256,7 @@ func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx
 // expressed in account's terms (positive means the account holds the asset).
 func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
-	if err != nil || data == nil {
+	if err != nil || len(data) == 0 {
 		return state.NewXRPLNumber(0, 0)
 	}
 	rs, perr := state.ParseRippleState(data)
@@ -276,7 +276,7 @@ func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency s
 // lineLimit returns account's own trust limit toward issuer for currency.
 func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
-	if err != nil || data == nil {
+	if err != nil || len(data) == 0 {
 		return state.NewXRPLNumber(0, 0)
 	}
 	rs, perr := state.ParseRippleState(data)
