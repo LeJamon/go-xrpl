@@ -467,6 +467,16 @@ func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 	return ter.TesSUCCESS
 }
 
+// holderShareBalance returns how many shares holderID holds under the share
+// issuance (0 when the holder has no MPToken).
+func holderShareBalance(view tx.LedgerView, shareMPTID [24]byte, holderID [20]byte) uint64 {
+	token, err := readMPToken(view, keylet.MPTokenByID(shareMPTID, holderID))
+	if err != nil || token == nil {
+		return 0
+	}
+	return token.MPTAmount
+}
+
 // removeVaultAssetHolding deletes the pseudo-account's trust line for an IOU
 // vault asset (XRP needs no holding). Returns the owner-count delta to apply to
 // the pseudo-account.

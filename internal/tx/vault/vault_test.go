@@ -688,10 +688,11 @@ func TestVaultClawbackValidation(t *testing.T) {
 			errMsg:  "Holder is required",
 		},
 		{
-			name:    "invalid - Holder is same as issuer",
+			// Holder == Account is not a preflight error in 3.1.0; it is a
+			// preclaim tecNO_PERMISSION on the asset-clawback path.
+			name:    "valid - Holder is same as issuer (rejected in preclaim)",
 			tx:      NewVaultClawback("rIssuer", makeValidVaultID(), "rIssuer"),
-			wantErr: true,
-			errMsg:  "same as issuer",
+			wantErr: false,
 		},
 		{
 			name: "invalid - amount negative",
@@ -716,15 +717,16 @@ func TestVaultClawbackValidation(t *testing.T) {
 			errMsg:  "XRP",
 		},
 		{
-			name: "invalid - amount issuer mismatch",
+			// A mismatched Amount issuer is not a preflight error in 3.1.0; the
+			// Amount may denominate shares or the asset, resolved in preclaim.
+			name: "valid - amount issuer differs (resolved in preclaim)",
 			tx: func() *VaultClawback {
 				v := NewVaultClawback("rIssuer", makeValidVaultID(), "rHolder")
-				amt := tx.NewIssuedAmountFromFloat64(100, "USD", "rOtherIssuer") // Different issuer
+				amt := tx.NewIssuedAmountFromFloat64(100, "USD", "rOtherIssuer")
 				v.Amount = &amt
 				return v
 			}(),
-			wantErr: true,
-			errMsg:  "issuer can clawback",
+			wantErr: false,
 		},
 		{
 			name: "invalid - universal flags set",
