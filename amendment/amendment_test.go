@@ -402,6 +402,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"Batch",
 		"PermissionedDEX",
 		"TokenEscrow",
+		"fixTokenEscrowV1",
 		// Retired
 		"MultiSign",
 		"TrustSetAuth",

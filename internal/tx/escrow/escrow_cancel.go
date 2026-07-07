@@ -209,6 +209,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				ctx.View,
 				escrowEntry.Account, escrowEntry.Account, // sender == receiver (cancel returns to creator)
 				finalAmount,
+				finalAmount, // cancel applies parityRate: gross == net, no fee to burn
 				escrowAmount.MPTIssuanceID(),
 				createAsset,
 				ownerBalance,

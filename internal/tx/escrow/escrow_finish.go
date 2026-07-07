@@ -373,11 +373,19 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 				originalAmount,
 			)
 
+			// fixTokenEscrowV1 clears the gross (originally locked) amount and burns
+			// the fee from supply; before it, only the net amount was accounted.
+			grossAmount := finalAmount
+			if rules.Enabled(amendment.FeatureFixTokenEscrowV1) {
+				grossAmount = originalAmount
+			}
+
 			if result := escrowUnlockMPT(
 				ctx.View,
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				finalAmount,
+				grossAmount,
 				mptHexID,
 				createAsset,
 				destReserveBalance,
