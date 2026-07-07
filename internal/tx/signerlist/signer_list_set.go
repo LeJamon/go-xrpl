@@ -396,7 +396,13 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDIR_FULL
 	}
 
-	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, flags, expandedSignerList, dirResult.Page)
+	// fixIncludeKeyletFields: store sfOwner (a keylet input) on the list.
+	var owner *[20]byte
+	if ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		owner = &ctx.AccountID
+	}
+
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, flags, expandedSignerList, dirResult.Page, owner)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return ter.TefINTERNAL

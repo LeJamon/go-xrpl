@@ -50,7 +50,7 @@ func TestEscrowFinish_DeletedDestination_TecNO_DST(t *testing.T) {
 		FinishAfter: ptrUint32(finishAfter),
 	}
 	escrowBlob, err := serializeEscrow(create, ownerID, destID, 0,
-		0 /*ownerNode*/, 0 /*destNode*/, true /*hasDestNode*/, 0, false)
+		0 /*ownerNode*/, 0 /*destNode*/, true /*hasDestNode*/, 0, false, false /*includeSequence*/)
 	require.NoError(t, err)
 
 	escrowKey := keylet.Escrow(ownerID, offerSeq)

@@ -23,6 +23,7 @@ func init() {
 type Oracle struct {
 	present           uint64
 	Owner             string // AccountID (base58)
+	OracleDocumentID  uint32
 	Provider          string // Blob (uppercase hex)
 	PriceDataSeries   []any
 	AssetClass        string // Blob (uppercase hex)
@@ -36,6 +37,7 @@ type Oracle struct {
 
 const (
 	oracleBitOwner uint64 = 1 << iota
+	oracleBitOracleDocumentID
 	oracleBitProvider
 	oracleBitPriceDataSeries
 	oracleBitAssetClass
@@ -85,6 +87,9 @@ func (o *Oracle) Decode(data []byte) error {
 			case 15:
 				o.LastUpdateTime = val
 				o.present |= oracleBitLastUpdateTime
+			case 51:
+				o.OracleDocumentID = val
+				o.present |= oracleBitOracleDocumentID
 			default:
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
@@ -168,6 +173,9 @@ func (o *Oracle) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&oracleBitOwner != 0 && !(skipDefault && o.Owner == "") {
 		out["Owner"] = o.Owner
 	}
+	if o.present&oracleBitOracleDocumentID != 0 && !(skipDefault && o.OracleDocumentID == 0) {
+		out["OracleDocumentID"] = o.OracleDocumentID
+	}
 	if o.present&oracleBitProvider != 0 && !(skipDefault && o.Provider == "") {
 		out["Provider"] = o.Provider
 	}
@@ -211,6 +219,7 @@ func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
 		return
 	}
 	emitIfChangedString(out, "Owner", prv.Owner, o.Owner, prv.present&oracleBitOwner, o.present&oracleBitOwner)
+	emitIfChangedUint32(out, "OracleDocumentID", prv.OracleDocumentID, o.OracleDocumentID, prv.present&oracleBitOracleDocumentID, o.present&oracleBitOracleDocumentID)
 	emitIfChangedString(out, "Provider", prv.Provider, o.Provider, prv.present&oracleBitProvider, o.present&oracleBitProvider)
 	emitIfChangedDeep(out, "PriceDataSeries", prv.PriceDataSeries, o.PriceDataSeries, prv.present&oracleBitPriceDataSeries, o.present&oracleBitPriceDataSeries)
 	emitIfChangedString(out, "AssetClass", prv.AssetClass, o.AssetClass, prv.present&oracleBitAssetClass, o.present&oracleBitAssetClass)
@@ -228,6 +237,9 @@ func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
 func (o *Oracle) EmitChangeOrigFields(out map[string]any) {
 	if o.present&oracleBitOwner != 0 {
 		out["Owner"] = o.Owner
+	}
+	if o.present&oracleBitOracleDocumentID != 0 {
+		out["OracleDocumentID"] = o.OracleDocumentID
 	}
 	if o.present&oracleBitProvider != 0 {
 		out["Provider"] = o.Provider
@@ -293,6 +305,9 @@ func (o *Oracle) ToMap() map[string]any {
 	}
 	if o.present&oracleBitOwner != 0 {
 		out["Owner"] = o.Owner
+	}
+	if o.present&oracleBitOracleDocumentID != 0 {
+		out["OracleDocumentID"] = o.OracleDocumentID
 	}
 	if o.present&oracleBitProvider != 0 {
 		out["Provider"] = o.Provider

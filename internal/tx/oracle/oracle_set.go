@@ -438,6 +438,13 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		existingOracle.URI = o.URI
 	}
 
+	// fixIncludeKeyletFields: backfill sfOracleDocumentID on an entry created
+	// before the amendment; leave an already-present value untouched.
+	if ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) && !existingOracle.HasOracleDocumentID {
+		existingOracle.OracleDocumentID = o.OracleDocumentID
+		existingOracle.HasOracleDocumentID = true
+	}
+
 	// Adjust OwnerCount
 	newCount := 1
 	if len(updatedSeries) > 5 {
@@ -533,6 +540,12 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 	if o.isFieldPresent("URI") || o.URI != "" {
 		oracleData.URI = o.URI
+	}
+
+	// fixIncludeKeyletFields: store sfOracleDocumentID (a keylet input).
+	if rules.Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		oracleData.OracleDocumentID = o.OracleDocumentID
+		oracleData.HasOracleDocumentID = true
 	}
 
 	// DirInsert into owner directory

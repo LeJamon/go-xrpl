@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 103 amendments.
+Total: 104 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -88,6 +88,7 @@ Total: 103 amendments.
 | `fixEnforceNFTokenTrustlineV2` | yes | no |
 | `fixFillOrKill` | yes | no |
 | `fixFrozenLPTokenTransfer` | yes | no |
+| `fixIncludeKeyletFields` | yes | no |
 | `fixInnerObjTemplate` | yes | no |
 | `fixInnerObjTemplate2` | yes | no |
 | `fixInvalidTxFlags` | yes | no |
