@@ -310,6 +310,78 @@ func TestPreflight(t *testing.T) {
 		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
+	// A batch may not wrap a blocklisted inner transaction type (all Vault and
+	// Loan types). The rejection is unconditional and fires at preflight, before
+	// the inner's own amendment/flag/fee checks.
+	// Reference: rippled Batch::disabledTxTypes + Batch_test.cpp testLoan().
+	t.Run("temINVALID_INNER_BATCH - disabled inner type (VaultCreate)", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerVaultCreate(alice, seq+2)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+	})
+
+	// The blocklist check precedes the inner tfInnerBatchTxn-flag check: a
+	// blocklisted inner missing the flag is still temINVALID_INNER_BATCH, not
+	// temINVALID_FLAG.
+	t.Run("temINVALID_INNER_BATCH - disabled type precedes flag check", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+
+		badVault := MakeInnerVaultCreate(alice, seq+2)
+		badVault.GetCommon().Flags = nil // omit tfInnerBatchTxn
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(badVault).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+	})
+
+	// The blocklist check precedes the inner zero-fee check: a blocklisted inner
+	// with a non-zero fee is still temINVALID_INNER_BATCH, not temBAD_FEE.
+	t.Run("temINVALID_INNER_BATCH - disabled type precedes fee check", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+
+		badVault := MakeInnerVaultCreate(alice, seq+2)
+		badVault.Fee = fmt.Sprintf("%d", env.BaseFee())
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(badVault).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+	})
+
 	// Reference: rippled Batch_test.cpp:410-501 (per-inner rejection cases).
 
 	t.Run("temBAD_FEE - inner fee non-zero", func(t *testing.T) {
