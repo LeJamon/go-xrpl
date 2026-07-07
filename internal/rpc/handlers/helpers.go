@@ -414,34 +414,42 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	return st, nil
 }
 
-// InjectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.
-// If meta has a "DeliveredAmount" field already, it is left as-is.
-// If meta has a "delivered_amount" field, it is promoted to "DeliveredAmount".
-// Otherwise, for Payment transactions, the Amount field from the transaction
-// is used as a fallback for "DeliveredAmount".
-// Non-Payment transactions and nil meta are no-ops.
+// InjectDeliveredAmount adds the synthetic snake_case "delivered_amount" field
+// to a transaction's metadata, matching rippled's RPC::insertDeliveredAmount.
+// It is emitted only for a successful Payment, CheckCash, or AccountDelete
+// (rippled's canHaveDeliveredAmount: those three types plus tesSUCCESS; CheckCash
+// also requires fix1623, which is enabled on every ledger go-xrpl serves). The
+// value is the real serialized sfDeliveredAmount metadata field when present,
+// otherwise the transaction's Amount (rippled's ledger-index / close-time gate
+// always holds for served ledgers), otherwise the literal "unavailable". The
+// real PascalCase "DeliveredAmount" metadata field is left untouched — only the
+// synthetic snake_case field is written. nil meta is a no-op.
 func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
-	txType, _ := txJSON["TransactionType"].(string)
-	if txType != "Payment" {
-		return
-	}
 	if meta == nil {
 		return
 	}
 
-	// If DeliveredAmount already present in metadata, use it
-	if _, ok := meta["DeliveredAmount"]; ok {
+	switch txType, _ := txJSON["TransactionType"].(string); txType {
+	case "Payment", "CheckCash", "AccountDelete":
+	default:
+		return
+	}
+	if result, _ := meta["TransactionResult"].(string); result != "tesSUCCESS" {
 		return
 	}
 
-	// If delivered_amount is present, promote to DeliveredAmount
-	if da, ok := meta["delivered_amount"]; ok {
-		meta["DeliveredAmount"] = da
+	// Idempotent: a caller may already carry the real delivered amount under the
+	// snake_case key (e.g. a partial-payment value); keep it rather than
+	// clobbering it with the full Amount fallback.
+	if _, ok := meta["delivered_amount"]; ok {
 		return
 	}
 
-	// Fallback: use Amount from transaction as DeliveredAmount
-	if amount, ok := txJSON["Amount"]; ok {
-		meta["DeliveredAmount"] = amount
+	if da, ok := meta["DeliveredAmount"]; ok {
+		meta["delivered_amount"] = da
+	} else if amount, ok := txJSON["Amount"]; ok {
+		meta["delivered_amount"] = amount
+	} else {
+		meta["delivered_amount"] = "unavailable"
 	}
 }

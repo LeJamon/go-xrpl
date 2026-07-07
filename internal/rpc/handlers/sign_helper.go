@@ -17,6 +17,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
 
+// counterpartySignatureField is the only inner-object SField a signature_target
+// may name, matching rippled (the LoanSet sfCounterpartySignature).
+const counterpartySignatureField = "CounterpartySignature"
+
 // signCredentials holds the signing credential parameters common to both
 // the sign and submit RPC methods.
 type signCredentials struct {
@@ -154,7 +158,7 @@ type signResult struct {
 // read only when Fee is actually autofilled — rippled's checkFee returns
 // before inspecting them when Fee is present or offline. unlimited mirrors
 // rippled's isUnlimited(role) load-scaling carve-out.
-func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage) (*signResult, *types.RpcError) {
+func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage, signatureTarget string) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, types.RpcErrorInternal("Ledger service not available")
@@ -185,18 +189,42 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
-	// A supplied Account must be a parseable address before anything else
-	// (rippled checkTxJsonFields → rpcSRC_ACT_MALFORMED), then match the
-	// signing key.
-	if txAccount, ok := txMap["Account"].(string); ok {
+	// signature_target directs the signature into a nested inner object instead
+	// of the top level. Only CounterpartySignature is a valid target; any other
+	// field name is rejected with the field name as the message, matching
+	// rippled TransactionSign.cpp.
+	if signatureTarget != "" && signatureTarget != counterpartySignatureField {
+		return nil, types.RpcErrorInvalidParams(signatureTarget)
+	}
+
+	// srcAddress is the account whose Sequence/Fee are autofilled and whose
+	// existence is checked. Without a target it is the signing key's account,
+	// which must match a supplied Account (rippled checkTxJsonFields →
+	// rpcSRC_ACT_MALFORMED, then acctMatchesPubKey). With a target the signature
+	// belongs to the counterparty, so account and secret need not correspond:
+	// the caller's Account (the primary signer) is the source and its ownership
+	// is not checked.
+	srcAddress := address
+	if signatureTarget == "" {
+		if txAccount, ok := txMap["Account"].(string); ok {
+			if !types.IsValidClassicAddress(txAccount) {
+				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+			}
+			if txAccount != address {
+				return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
+			}
+		} else {
+			txMap["Account"] = address
+		}
+	} else {
+		txAccount, ok := txMap["Account"].(string)
+		if !ok || txAccount == "" {
+			return nil, types.RpcErrorMissingField("tx_json.Account")
+		}
 		if !types.IsValidClassicAddress(txAccount) {
 			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
 		}
-		if txAccount != address {
-			return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
-		}
-	} else {
-		txMap["Account"] = address
+		srcAddress = txAccount
 	}
 
 	// Fill in missing fields if not offline. Order matches rippled's
@@ -205,7 +233,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	if !offline {
 		// The source account must exist in the current ledger, whether or
 		// not Sequence is supplied (rpcSRC_ACT_NOT_FOUND).
-		if _, err := services.Ledger.GetAccountInfo(ctx, address, "current"); err != nil {
+		if _, err := services.Ledger.GetAccountInfo(ctx, srcAddress, "current"); err != nil {
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			}
@@ -216,7 +244,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		// TicketSequence supplies the sequence instead (Sequence = 0).
 		if _, ok := txMap["Sequence"]; !ok {
 			_, hasTicket := txMap["TicketSequence"]
-			seq, err := services.Ledger.GetAutofillSequence(address, hasTicket)
+			seq, err := services.Ledger.GetAutofillSequence(srcAddress, hasTicket)
 			if err != nil {
 				if errors.Is(err, svcerr.ErrAccountNotFound) {
 					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
@@ -278,7 +306,13 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		}
 	}
 
-	txMap["SigningPubKey"] = publicKey
+	// Without a target the signing key is the transaction's own key, placed at
+	// the top level. With a target the top-level SigningPubKey (the primary
+	// signer's) is left untouched so the counterparty covers the same signing
+	// payload; the counterparty's key goes into the nested object.
+	if signatureTarget == "" {
+		txMap["SigningPubKey"] = publicKey
+	}
 
 	txBytes, err := json.Marshal(txMap)
 	if err != nil {
@@ -290,15 +324,28 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Failed to parse transaction: %v", err))
 	}
 
-	txCommon := transaction.GetCommon()
-	txCommon.SigningPubKey = publicKey
+	if signatureTarget == "" {
+		transaction.GetCommon().SigningPubKey = publicKey
+	}
 
 	signature, err := sign.SignTransaction(transaction, privateKey)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
 
-	txMap["TxnSignature"] = signature
+	if signatureTarget == "" {
+		txMap["TxnSignature"] = signature
+	} else {
+		// Write SigningPubKey + TxnSignature into the nested target object,
+		// preserving any fields the caller already placed there.
+		targetObj, _ := txMap[signatureTarget].(map[string]any)
+		if targetObj == nil {
+			targetObj = map[string]any{}
+		}
+		targetObj["SigningPubKey"] = publicKey
+		targetObj["TxnSignature"] = signature
+		txMap[signatureTarget] = targetObj
+	}
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {

@@ -14,6 +14,15 @@ type PseudoPreclaim interface {
 	PreclaimPseudo(rules *amendment.Rules) ter.Result
 }
 
+// Change-transaction flag surface. tfGotMajority / tfLostMajority are the only
+// non-universal flags a pseudo-transaction may carry; tfChangeMask rejects
+// everything else. Reference: rippled TxFlags.h.
+const (
+	tfGotMajority  uint32 = 0x00010000
+	tfLostMajority uint32 = 0x00020000
+	tfChangeMask   uint32 = ^(txcore.TfUniversal | tfGotMajority | tfLostMajority)
+)
+
 // pseudoPreflight enforces the gates that rippled's Change::preflight runs on
 // every pseudo-transaction type before dispatching to type-specific logic.
 // It also mirrors the two preflight0 guards that fire for pseudo-tx —
@@ -41,6 +50,22 @@ func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) 
 		}
 		if *common.NetworkID != e.config.NetworkID {
 			return ter.TelWRONG_NETWORK
+		}
+	}
+
+	// preflight0 flag-mask check. rippled's Change::preflight passes tfChangeMask
+	// as the flag mask only when LendingProtocol is enabled (the amendment that
+	// introduced the parameter); before activation the mask is 0, so any flags
+	// are accepted. Position mirrors preflight0, which runs the mask check after
+	// the inner-batch and NetworkID gates.
+	// Reference: Change.cpp:40-46, Transactor.cpp preflight0.
+	if rules != nil && rules.Enabled(amendment.FeatureLendingProtocol) {
+		var flags uint32
+		if common.Flags != nil {
+			flags = *common.Flags
+		}
+		if flags&tfChangeMask != 0 {
+			return ter.TemINVALID_FLAG
 		}
 	}
 

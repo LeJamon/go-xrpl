@@ -148,6 +148,24 @@ func (b *Batch) InnerTransactions() []tx.Transaction {
 	return txns
 }
 
+// checkInnerSignatureFields rejects signature material on an inner batch object,
+// mirroring the checkSignatureFields lambda in rippled Batch::preflight: a
+// TxnSignature yields temBAD_SIGNATURE, a Signers array temBAD_SIGNER, and a
+// non-empty SigningPubKey temBAD_REGKEY. It is applied to every inner
+// transaction and to its nested CounterpartySignature.
+func checkInnerSignatureFields(signingPubKey, txnSignature string, hasSigners bool) error {
+	if txnSignature != "" {
+		return ErrBatchInnerHasTxnSignature
+	}
+	if hasSigners {
+		return ErrBatchInnerHasSigners
+	}
+	if signingPubKey != "" {
+		return ErrBatchInnerHasSigningPubKey
+	}
+	return nil
+}
+
 // validateInnerTransactions runs the per-inner checks and, as a side effect,
 // builds the set of inner-tx accounts other than the outer account — the
 // accounts that must each be covered by a BatchSigner.
@@ -188,14 +206,15 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 		if innerCommon.GetFlags()&tx.TfInnerBatchTxn == 0 {
 			return nil, ErrBatchInnerMissingFlag
 		}
-		if innerCommon.TxnSignature != "" {
-			return nil, ErrBatchInnerHasTxnSignature
+		if err := checkInnerSignatureFields(innerCommon.SigningPubKey, innerCommon.TxnSignature, len(innerCommon.Signers) > 0); err != nil {
+			return nil, err
 		}
-		if len(innerCommon.Signers) > 0 {
-			return nil, ErrBatchInnerHasSigners
-		}
-		if innerCommon.SigningPubKey != "" {
-			return nil, ErrBatchInnerHasSigningPubKey
+		// A CounterpartySignature is optional on an inner transaction and should
+		// not be present, but if it is it must not carry any signature material.
+		if cp := innerCommon.CounterpartySignature; cp != nil {
+			if err := checkInnerSignatureFields(cp.SigningPubKey, cp.TxnSignature, len(cp.Signers) > 0); err != nil {
+				return nil, err
+			}
 		}
 		if err := validateInnerFee(innerCommon.Fee); err != nil {
 			return nil, err

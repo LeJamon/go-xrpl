@@ -176,6 +176,43 @@ type SignerWrapper struct {
 	Signer Signer `json:"Signer"`
 }
 
+// CounterpartySignature is the nested signature object (sfCounterpartySignature).
+// It lets a second party attach a signature to a transaction without being the
+// signing Account. It carries a single signature (SigningPubKey + TxnSignature)
+// or a multi-signature (empty SigningPubKey + Signers). The field is excluded
+// from the transaction's signing data (notSigning), so neither the top-level
+// signer nor the counterparty covers it.
+type CounterpartySignature struct {
+	SigningPubKey string          `json:"SigningPubKey,omitempty"`
+	TxnSignature  string          `json:"TxnSignature,omitempty"`
+	Signers       []SignerWrapper `json:"Signers,omitempty"`
+}
+
+// ToMap serializes the counterparty object for the binary codec. SigningPubKey
+// is always emitted — a single-signed object carries the signer's key and a
+// multi-signed object carries an empty key — so a decode/encode round-trip
+// reproduces the original wire bytes.
+func (cs *CounterpartySignature) ToMap() map[string]any {
+	m := map[string]any{"SigningPubKey": cs.SigningPubKey}
+	if cs.TxnSignature != "" {
+		m["TxnSignature"] = cs.TxnSignature
+	}
+	if len(cs.Signers) > 0 {
+		signers := make([]map[string]any, len(cs.Signers))
+		for i, sw := range cs.Signers {
+			signers[i] = map[string]any{
+				"Signer": map[string]any{
+					"Account":       sw.Signer.Account,
+					"SigningPubKey": sw.Signer.SigningPubKey,
+					"TxnSignature":  sw.Signer.TxnSignature,
+				},
+			}
+		}
+		m["Signers"] = signers
+	}
+	return m
+}
+
 // Common contains fields common to all transaction types
 type Common struct {
 	// Required fields
@@ -199,6 +236,11 @@ type Common struct {
 	SigningPubKey      string          `json:"SigningPubKey,omitempty"`
 	TicketSequence     *uint32         `json:"TicketSequence,omitempty"`
 	TxnSignature       string          `json:"TxnSignature,omitempty"`
+
+	// CounterpartySignature is a nested signature attached by a second party.
+	// It is excluded from the transaction's signing data and verified
+	// separately after the top-level signature.
+	CounterpartySignature *CounterpartySignature `json:"CounterpartySignature,omitempty"`
 
 	// Delegate is the account delegating permission to execute this transaction.
 	// When present, the fee is charged to the delegate and signature is verified
@@ -413,6 +455,9 @@ func (c *Common) ToMap() map[string]any {
 	}
 	if c.TxnSignature != "" {
 		m["TxnSignature"] = c.TxnSignature
+	}
+	if c.CounterpartySignature != nil {
+		m["CounterpartySignature"] = c.CounterpartySignature.ToMap()
 	}
 	if c.Delegate != "" {
 		m["Delegate"] = c.Delegate

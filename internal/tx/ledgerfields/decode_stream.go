@@ -75,6 +75,15 @@ func (r *streamReader) readUint32() (uint32, error) {
 	return v, nil
 }
 
+func (r *streamReader) readInt32() (int32, error) {
+	if r.pos+4 > len(r.data) {
+		return 0, errors.New("ledgerfields: out of bounds reading Int32")
+	}
+	v := int32(binary.BigEndian.Uint32(r.data[r.pos:]))
+	r.pos += 4
+	return v, nil
+}
+
 func (r *streamReader) readUint8() (byte, error) {
 	if r.pos+1 > len(r.data) {
 		return 0, errors.New("ledgerfields: out of bounds reading UInt8")

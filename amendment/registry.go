@@ -30,6 +30,7 @@ var (
 var (
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixDelegateV1_1               = registerFix("fixDelegateV1_1", SupportedNo, VoteDefaultNo)
+	FeatureFixTokenEscrowV1              = registerFix("fixTokenEscrowV1", SupportedYes, VoteDefaultNo)
 	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedYes, VoteDefaultNo)
 	FeatureFixMPTDeliveredAmount         = registerFix("fixMPTDeliveredAmount", SupportedYes, VoteDefaultNo)
 	FeatureFixAMMClawbackRounding        = registerFix("fixAMMClawbackRounding", SupportedYes, VoteDefaultNo)
@@ -38,6 +39,7 @@ var (
 	FeatureFixAMMv1_3                    = registerFix("fixAMMv1_3", SupportedYes, VoteDefaultNo)
 	FeaturePermissionedDEX               = registerFeature("PermissionedDEX", SupportedYes, VoteDefaultNo)
 	FeatureBatch                         = registerFeature("Batch", SupportedYes, VoteDefaultNo)
+	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedNo, VoteDefaultNo)
 	FeatureSingleAssetVault              = registerFeature("SingleAssetVault", SupportedNo, VoteDefaultNo)
 	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedNo, VoteDefaultNo)
 	FeaturePermissionDelegation          = registerFeature("PermissionDelegation", SupportedNo, VoteDefaultNo)
