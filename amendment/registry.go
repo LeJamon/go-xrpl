@@ -37,6 +37,7 @@ var (
 	FeatureFixAMMv1_3                    = registerFix("fixAMMv1_3", SupportedYes, VoteDefaultNo)
 	FeaturePermissionedDEX               = registerFeature("PermissionedDEX", SupportedYes, VoteDefaultNo)
 	FeatureBatch                         = registerFeature("Batch", SupportedYes, VoteDefaultNo)
+	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedNo, VoteDefaultNo)
 	FeatureSingleAssetVault              = registerFeature("SingleAssetVault", SupportedNo, VoteDefaultNo)
 	FeaturePermissionDelegation          = registerFeature("PermissionDelegation", SupportedNo, VoteDefaultNo)
 	FeatureFixPayChanCancelAfter         = registerFix("fixPayChanCancelAfter", SupportedYes, VoteDefaultNo)

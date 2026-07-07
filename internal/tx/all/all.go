@@ -22,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/did"
 	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerstatefix"
+	"github.com/LeJamon/go-xrpl/internal/tx/lending"
 	"github.com/LeJamon/go-xrpl/internal/tx/mpt"
 	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
@@ -54,6 +55,7 @@ func RegisterAll() {
 		did.Register()
 		escrow.Register()
 		ledgerstatefix.Register()
+		lending.Register()
 		mpt.Register()
 		nftoken.Register()
 		offer.Register()

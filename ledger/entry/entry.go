@@ -63,6 +63,10 @@ const (
 
 	// Vault
 	TypeVault Type = 0x0084 // Asset vaults
+
+	// Lending protocol
+	TypeLoanBroker Type = 0x0088 // Loan brokers
+	TypeLoan       Type = 0x0089 // Loans
 )
 
 // String returns the string representation of the Type.
@@ -124,6 +128,10 @@ func (t Type) String() string {
 		return "Delegate"
 	case TypeVault:
 		return "Vault"
+	case TypeLoanBroker:
+		return "LoanBroker"
+	case TypeLoan:
+		return "Loan"
 	default:
 		return fmt.Sprintf("Unknown(%#x)", uint16(t))
 	}
