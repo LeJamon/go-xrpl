@@ -91,10 +91,15 @@ func MetadataToMap(meta *Metadata) map[string]any {
 	// build while its state mutation persists, yielding a ledger with advanced
 	// state but an empty/short tx tree → transaction_hash fork.
 	if meta.DeliveredAmount != nil {
-		// Check if it's an XRP amount (no Currency field)
-		if meta.DeliveredAmount.Currency == "" {
+		switch {
+		case meta.DeliveredAmount.IsMPT():
+			result["DeliveredAmount"] = map[string]any{
+				"value":           meta.DeliveredAmount.Value(),
+				"mpt_issuance_id": meta.DeliveredAmount.MPTIssuanceID(),
+			}
+		case meta.DeliveredAmount.Currency == "":
 			result["DeliveredAmount"] = meta.DeliveredAmount.Value()
-		} else {
+		default:
 			result["DeliveredAmount"] = map[string]any{
 				"value":    meta.DeliveredAmount.Value(),
 				"currency": meta.DeliveredAmount.Currency,

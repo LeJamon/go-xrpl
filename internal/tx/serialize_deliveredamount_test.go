@@ -55,4 +55,37 @@ func TestSerializeMetadata_DeliveredAmount(t *testing.T) {
 			t.Fatalf("SerializeMetadata with IOU DeliveredAmount must not error, got: %v", err)
 		}
 	})
+
+	// An MPT DeliveredAmount has an empty Currency, so before fixMPTDeliveredAmount
+	// wiring it fell into the "no Currency ⇒ XRP" branch and serialized as an
+	// 8-byte native drops amount instead of the 33-byte MPToken form — a silent
+	// binary/consensus metadata fork. It must round-trip as an MPT amount.
+	t.Run("MPT", func(t *testing.T) {
+		mptID := "0000000AB5F762798A53D543A014CAF8B297CFF8F2F937E8"
+		amt := state.NewMPTAmountWithIssuanceID(800, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", mptID)
+		meta := &Metadata{
+			TransactionResult: ter.TesSUCCESS,
+			TransactionIndex:  0,
+			AffectedNodes:     []AffectedNode{},
+			DeliveredAmount:   &amt,
+		}
+		blob, err := SerializeMetadata(meta)
+		if err != nil {
+			t.Fatalf("SerializeMetadata with MPT DeliveredAmount must not error, got: %v", err)
+		}
+		decoded, err := binarycodec.Decode(strings.ToUpper(hex.EncodeToString(blob)))
+		if err != nil {
+			t.Fatalf("decode round-trip: %v", err)
+		}
+		da, ok := decoded["DeliveredAmount"].(map[string]any)
+		if !ok {
+			t.Fatalf("DeliveredAmount must decode as an MPT amount map, got: %#v", decoded["DeliveredAmount"])
+		}
+		if da["value"] != "800" {
+			t.Fatalf("DeliveredAmount value = %v, want 800", da["value"])
+		}
+		if !strings.EqualFold(da["mpt_issuance_id"].(string), mptID) {
+			t.Fatalf("DeliveredAmount mpt_issuance_id = %v, want %s", da["mpt_issuance_id"], mptID)
+		}
+	})
 }
