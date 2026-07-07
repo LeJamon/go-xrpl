@@ -329,4 +329,6 @@ var ledgerEntryTypeNames = map[uint16]string{
 	0x0082: "PermissionedDomain",
 	0x0083: "Delegate",
 	0x0084: "Vault",
+	0x0088: "LoanBroker",
+	0x0089: "Loan",
 }

@@ -20,13 +20,14 @@ type SignForMethod struct{}
 
 func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		Account    string          `json:"account"`
-		TxJson     json.RawMessage `json:"tx_json"`
-		Secret     string          `json:"secret,omitempty"`
-		Seed       string          `json:"seed,omitempty"`
-		SeedHex    string          `json:"seed_hex,omitempty"`
-		Passphrase string          `json:"passphrase,omitempty"`
-		KeyType    string          `json:"key_type,omitempty"`
+		Account         string          `json:"account"`
+		TxJson          json.RawMessage `json:"tx_json"`
+		Secret          string          `json:"secret,omitempty"`
+		Seed            string          `json:"seed,omitempty"`
+		SeedHex         string          `json:"seed_hex,omitempty"`
+		Passphrase      string          `json:"passphrase,omitempty"`
+		KeyType         string          `json:"key_type,omitempty"`
+		SignatureTarget string          `json:"signature_target,omitempty"`
 	}
 
 	if params != nil {
@@ -47,6 +48,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	if len(request.TxJson) == 0 {
 		return nil, types.RpcErrorMissingField("tx_json")
+	}
+
+	// signature_target directs the multi-signer into a nested inner object.
+	// Only CounterpartySignature is a valid target; any other name is rejected
+	// with the field name as the message, matching rippled TransactionSign.cpp.
+	if request.SignatureTarget != "" && request.SignatureTarget != counterpartySignatureField {
+		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
 	}
 
 	// Parse credentials and derive keypair using the shared helper
@@ -79,12 +87,30 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, types.RpcErrorMissingField("Account")
 	}
 
-	// For multi-signing, SigningPubKey must be empty string
-	txMap["SigningPubKey"] = ""
+	// For multi-signing, the top-level SigningPubKey must be empty. With a
+	// signature_target the signature goes into a nested object, so an existing
+	// top-level SigningPubKey (the primary signer's) is preserved.
+	if request.SignatureTarget == "" {
+		txMap["SigningPubKey"] = ""
+	} else if _, ok := txMap["SigningPubKey"]; !ok {
+		txMap["SigningPubKey"] = ""
+	}
+
+	// sigContainer holds the Signers array the new signature is appended to:
+	// the transaction itself, or the nested CounterpartySignature object.
+	sigContainer := txMap
+	if request.SignatureTarget != "" {
+		nested, _ := txMap[request.SignatureTarget].(map[string]any)
+		if nested == nil {
+			nested = map[string]any{"SigningPubKey": ""}
+		}
+		txMap[request.SignatureTarget] = nested
+		sigContainer = nested
+	}
 
 	// Get existing signers array or create new one
 	var signers []map[string]any
-	if existingSigners, ok := txMap["Signers"].([]any); ok {
+	if existingSigners, ok := sigContainer["Signers"].([]any); ok {
 		for _, s := range existingSigners {
 			if signer, ok := s.(map[string]any); ok {
 				signers = append(signers, signer)
@@ -142,7 +168,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return iAccount < jAccount
 	})
 
-	txMap["Signers"] = signers
+	sigContainer["Signers"] = signers
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {

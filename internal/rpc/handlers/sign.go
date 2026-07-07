@@ -13,14 +13,15 @@ type SignMethod struct{}
 
 func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		TxJson     json.RawMessage `json:"tx_json"`
-		Secret     string          `json:"secret,omitempty"`
-		Seed       string          `json:"seed,omitempty"`
-		SeedHex    string          `json:"seed_hex,omitempty"`
-		Passphrase string          `json:"passphrase,omitempty"`
-		KeyType    string          `json:"key_type,omitempty"`
-		Offline    bool            `json:"offline,omitempty"`
-		BuildPath  bool            `json:"build_path,omitempty"`
+		TxJson          json.RawMessage `json:"tx_json"`
+		Secret          string          `json:"secret,omitempty"`
+		Seed            string          `json:"seed,omitempty"`
+		SeedHex         string          `json:"seed_hex,omitempty"`
+		Passphrase      string          `json:"passphrase,omitempty"`
+		KeyType         string          `json:"key_type,omitempty"`
+		Offline         bool            `json:"offline,omitempty"`
+		BuildPath       bool            `json:"build_path,omitempty"`
+		SignatureTarget string          `json:"signature_target,omitempty"`
 	}
 
 	if params != nil {
@@ -40,7 +41,7 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 		SeedHex:    request.SeedHex,
 		Passphrase: request.Passphrase,
 		KeyType:    request.KeyType,
-	}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
+	}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params, request.SignatureTarget)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}

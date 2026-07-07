@@ -1178,6 +1178,55 @@ func TestSimulateMethod_UnknownField(t *testing.T) {
 }
 
 // TestSimulateMethod_MissingRequiredField mirrors rippled
+// TestSimulateMethod_MetaSyntheticFields verifies the rippled 3.0.0 synthetic
+// metadata enrichment (Simulate.cpp:277-288): a simulated Payment's meta gains
+// a delivered_amount derived from the transaction Amount when the engine did
+// not record one. Mirrors Simulate_test.cpp testSuccessfulTransactionAdditionalMetadata.
+func TestSimulateMethod_MetaSyntheticFields(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+	mock := newMockLedgerServiceSimulate()
+	mock.simulateResult = &types.SubmitResult{
+		EngineResult:     "tesSUCCESS",
+		EngineResultCode: 0,
+		Applied:          false,
+		CurrentLedger:    3,
+		Metadata: &types.SubmitMetadata{
+			JSON: map[string]any{
+				"AffectedNodes":     []any{},
+				"TransactionIndex":  uint32(0),
+				"TransactionResult": "tesSUCCESS",
+			},
+			Blob: []byte{0xAB},
+		},
+	}
+
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	params := map[string]any{
+		"tx_json": map[string]any{
+			"TransactionType": "Payment",
+			"Account":         validAccountAddress,
+			"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+			"Amount":          "100",
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, rpcErr := method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	resp := result.(map[string]any)
+
+	meta, ok := resp["meta"].(map[string]any)
+	require.True(t, ok, "meta must be a JSON object")
+	assert.Equal(t, "100", meta["delivered_amount"],
+		"a Payment's simulated meta must carry delivered_amount")
+}
+
 // Simulate_test.cpp:300-312. A Payment without Destination must surface
 // as `error: "invalidTransaction"` + `error_exception: <reason>`, the
 // envelope rippled emits when STTx construction throws

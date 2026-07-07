@@ -662,6 +662,64 @@ func (m *MPTTester) IsTransferFeePresent() bool {
 	return m.issuance().TransferFee != 0
 }
 
+// HolderLockedAmount returns a holder's escrowed MPT balance (MPToken
+// sfLockedAmount). A missing entry or field reads as 0.
+func (m *MPTTester) HolderLockedAmount(holder *jtx.Account) uint64 {
+	m.t.Helper()
+	mptID := decodeMPTID(m.id)
+	issuanceKey := keylet.MPTIssuance(mptID)
+	tokenKey := keylet.MPToken(issuanceKey.Key, holder.ID)
+
+	data, err := m.env.Ledger().Read(tokenKey)
+	if err != nil || data == nil {
+		return 0
+	}
+	token, err := state.ParseMPToken(data)
+	if err != nil {
+		m.t.Fatalf("failed to parse MPToken entry: %v", err)
+	}
+	if token.LockedAmount == nil {
+		return 0
+	}
+	return *token.LockedAmount
+}
+
+// IssuanceLockedAmount returns the total escrowed amount on the issuance
+// (sfLockedAmount). A missing entry or field reads as 0.
+func (m *MPTTester) IssuanceLockedAmount() uint64 {
+	m.t.Helper()
+	issuance := m.readIssuance()
+	if issuance == nil || issuance.LockedAmount == nil {
+		return 0
+	}
+	return *issuance.LockedAmount
+}
+
+// IssuanceOutstandingAmount returns the issuance sfOutstandingAmount.
+func (m *MPTTester) IssuanceOutstandingAmount() uint64 {
+	m.t.Helper()
+	issuance := m.readIssuance()
+	if issuance == nil {
+		return 0
+	}
+	return issuance.OutstandingAmount
+}
+
+func (m *MPTTester) readIssuance() *state.MPTokenIssuanceData {
+	mptID := decodeMPTID(m.id)
+	issuanceKey := keylet.MPTIssuance(mptID)
+
+	data, err := m.env.Ledger().Read(issuanceKey)
+	if err != nil || data == nil {
+		return nil
+	}
+	issuance, err := state.ParseMPTokenIssuance(data)
+	if err != nil {
+		m.t.Fatalf("failed to parse MPTokenIssuance entry: %v", err)
+	}
+	return issuance
+}
+
 // --------------------------------------------------------------------------
 // Helper functions
 // --------------------------------------------------------------------------

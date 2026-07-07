@@ -533,24 +533,23 @@ func escrowUnlockIOU(
 	return ter.TesSUCCESS
 }
 
-// escrowUnlockMPT unlocks MPT tokens during EscrowFinish or EscrowCancel.
-// The caller (escrowUnlockApplyHelper<MPTIssue>) handles MPToken creation
-// and transfer fee calculation, then calls rippleUnlockEscrowMPT with the
-// final amount. In rippled, the finalAmount is used for ALL operations
-// (LockedAmount decrement, receiver credit, OutstandingAmount decrement).
-// The difference between originalAmount and finalAmount (the fee) stays
-// permanently locked on the issuance and sender's token.
+// escrowUnlockMPT unlocks MPT tokens during EscrowFinish or EscrowCancel. The
+// caller handles MPToken creation and transfer-fee calculation, passing the net
+// amount delivered to the receiver (finalAmount) and the gross amount that was
+// originally locked (grossAmount).
 //
-// This function combines the MPToken creation logic from
-// escrowUnlockApplyHelper<MPTIssue> with the actual unlock from
-// rippleUnlockEscrowMPT for convenience.
+// LockedAmount (on both the issuance and the sender's MPToken) is cleared by the
+// gross amount, the receiver is credited the net amount, and the fee portion
+// (gross - net) is burned from the issuance OutstandingAmount so that supply
+// accounting stays consistent.
 //
-// Reference: rippled Escrow.cpp escrowUnlockApplyHelper<MPTIssue> lines 944-1012
-// Reference: rippled View.cpp rippleUnlockEscrowMPT() lines 2950-3094
+// Without fixTokenEscrowV1 the caller passes grossAmount == finalAmount, so the
+// fee stays permanently locked and no supply is burned (legacy behaviour).
 func escrowUnlockMPT(
 	view tx.LedgerView,
 	senderID, receiverID [20]byte,
 	finalAmount uint64,
+	grossAmount uint64,
 	mptHexID string,
 	createAsset bool,
 	destBalance uint64,
@@ -608,36 +607,31 @@ func escrowUnlockMPT(
 	}
 
 	// --- rippleUnlockEscrowMPT logic below ---
-	// Re-read issuance (might have been modified by createMPTokenForEscrow if it
-	// is in the same view, but it shouldn't be — MPToken creation doesn't touch issuance)
 
-	// 1. Decrease the Issuance LockedAmount by finalAmount
-	// Reference: rippled lines 2968-2997
+	// 1. Decrease the Issuance LockedAmount by the gross (originally locked) amount.
 	if issuance.LockedAmount == nil {
 		return ter.TecINTERNAL
 	}
 	issuanceLocked := *issuance.LockedAmount
-	if issuanceLocked < finalAmount {
+	if issuanceLocked < grossAmount {
 		return ter.TecINTERNAL
 	}
-	newIssuanceLocked := issuanceLocked - finalAmount
+	newIssuanceLocked := issuanceLocked - grossAmount
 	if newIssuanceLocked == 0 {
 		issuance.LockedAmount = nil
 	} else {
 		issuance.LockedAmount = &newIssuanceLocked
 	}
 
-	// 2. Handle receiver
+	// 2. Handle receiver (credited the net amount, after transfer fee).
 	if receiverIsIssuer {
 		// Decrease OutstandingAmount by finalAmount (tokens are redeemed)
-		// Reference: rippled lines 3027-3044
 		if issuance.OutstandingAmount < finalAmount {
 			return ter.TecINTERNAL
 		}
 		issuance.OutstandingAmount -= finalAmount
 	} else {
-		// Increase receiver's MPTAmount by finalAmount
-		// Reference: rippled lines 2999-3025
+		// Increase receiver's MPTAmount by the net amount.
 		receiverTokenKey := keylet.MPToken(issuanceKey.Key, receiverID)
 		receiverTokenData, err := view.Read(receiverTokenKey)
 		if err != nil || receiverTokenData == nil {
@@ -664,6 +658,16 @@ func escrowUnlockMPT(
 		}
 	}
 
+	// 3. Burn the transfer fee (gross - net) from the issuance OutstandingAmount.
+	// The fee tokens were counted as outstanding while escrowed but are destroyed
+	// on delivery. Without fixTokenEscrowV1 gross == net, so this is a no-op.
+	if diff := grossAmount - finalAmount; diff != 0 {
+		if issuance.OutstandingAmount < diff {
+			return ter.TecINTERNAL
+		}
+		issuance.OutstandingAmount -= diff
+	}
+
 	// Write back issuance (with updated LockedAmount and possibly OutstandingAmount)
 	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
@@ -673,8 +677,7 @@ func escrowUnlockMPT(
 		return ter.TefINTERNAL
 	}
 
-	// 3. Decrease sender's MPToken LockedAmount by finalAmount
-	// Reference: rippled lines 3047-3092
+	// 4. Decrease sender's MPToken LockedAmount by the gross (originally locked) amount.
 	if issuerID == senderID {
 		return ter.TecINTERNAL
 	}
@@ -694,10 +697,10 @@ func escrowUnlockMPT(
 		return ter.TecINTERNAL
 	}
 	senderLocked := *senderToken.LockedAmount
-	if senderLocked < finalAmount {
+	if senderLocked < grossAmount {
 		return ter.TecINTERNAL
 	}
-	newSenderLocked := senderLocked - finalAmount
+	newSenderLocked := senderLocked - grossAmount
 	if newSenderLocked == 0 {
 		senderToken.LockedAmount = nil
 	} else {

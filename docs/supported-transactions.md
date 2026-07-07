@@ -6,7 +6,7 @@ Transaction types registered with the engine, generated from the `tx.Register`
 registry (`internal/tx`). Each runs the full Validate → Preflight → Preclaim →
 Apply pipeline. The numeric code is the XRPL `TransactionType` field value.
 
-Total: 66 transaction types.
+Total: 75 transaction types.
 
 | Transaction type | Type code |
 |------------------|-----------|
@@ -36,6 +36,15 @@ Total: 66 transaction types.
 | `EscrowCreate` | 1 |
 | `EscrowFinish` | 2 |
 | `LedgerStateFix` | 53 |
+| `LoanBrokerCoverClawback` | 78 |
+| `LoanBrokerCoverDeposit` | 76 |
+| `LoanBrokerCoverWithdraw` | 77 |
+| `LoanBrokerDelete` | 75 |
+| `LoanBrokerSet` | 74 |
+| `LoanDelete` | 81 |
+| `LoanManage` | 82 |
+| `LoanPay` | 84 |
+| `LoanSet` | 80 |
 | `MPTokenAuthorize` | 57 |
 | `MPTokenIssuanceCreate` | 54 |
 | `MPTokenIssuanceDestroy` | 55 |

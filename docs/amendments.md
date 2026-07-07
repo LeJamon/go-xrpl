@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 101 amendments.
+Total: 102 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -90,7 +90,7 @@ Total: 101 amendments.
 | `fixInnerObjTemplate` | yes | no |
 | `fixInnerObjTemplate2` | yes | no |
 | `fixInvalidTxFlags` | yes | no |
-| `fixMPTDeliveredAmount` | no | no |
+| `fixMPTDeliveredAmount` | yes | no |
 | `fixMasterKeyAsRegularKey` | yes | yes |
 | `fixNFTokenDirV1` | yes | no |
 | `fixNFTokenNegOffer` | yes | no |
@@ -109,6 +109,7 @@ Total: 101 amendments.
 | `fixRmSmallIncreasedQOffers` | yes | yes |
 | `fixSTAmountCanonicalize` | yes | yes |
 | `fixTakerDryOfferRemoval` | yes | yes |
+| `fixTokenEscrowV1` | yes | no |
 | `fixTrustLinesToSelf` | yes | no |
 | `fixUniversalNumber` | yes | no |
 | `fixXChainRewardRounding` | yes | no |
