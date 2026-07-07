@@ -29,6 +29,7 @@ var (
 // observing FeatureXxx never see a zero ID.
 var (
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
+	FeatureFixDelegateV1_1               = registerFix("fixDelegateV1_1", SupportedNo, VoteDefaultNo)
 	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedNo, VoteDefaultNo)
 	FeatureFixMPTDeliveredAmount         = registerFix("fixMPTDeliveredAmount", SupportedNo, VoteDefaultNo)
 	FeatureFixAMMClawbackRounding        = registerFix("fixAMMClawbackRounding", SupportedNo, VoteDefaultNo)
