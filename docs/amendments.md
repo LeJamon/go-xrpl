@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 99 amendments.
+Total: 100 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -26,6 +26,7 @@ Total: 99 amendments.
 | `DepositAuth` | yes | yes |
 | `DepositPreauth` | yes | yes |
 | `DisallowIncoming` | yes | no |
+| `DynamicMPT` | no | no |
 | `DynamicNFT` | yes | no |
 | `EnforceInvariants` | yes | no |
 | `Escrow` | yes | no |
