@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 99 amendments.
+Total: 100 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -107,6 +107,7 @@ Total: 99 amendments.
 | `fixRmSmallIncreasedQOffers` | yes | yes |
 | `fixSTAmountCanonicalize` | yes | yes |
 | `fixTakerDryOfferRemoval` | yes | yes |
+| `fixTokenEscrowV1` | yes | no |
 | `fixTrustLinesToSelf` | yes | no |
 | `fixUniversalNumber` | yes | no |
 | `fixXChainRewardRounding` | yes | no |
