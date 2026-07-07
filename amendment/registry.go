@@ -29,10 +29,10 @@ var (
 // observing FeatureXxx never see a zero ID.
 var (
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
-	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)
-	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedNo, VoteDefaultNo)
+	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)=======
+	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedYes, VoteDefaultNo)
 	FeatureFixMPTDeliveredAmount         = registerFix("fixMPTDeliveredAmount", SupportedNo, VoteDefaultNo)
-	FeatureFixAMMClawbackRounding        = registerFix("fixAMMClawbackRounding", SupportedNo, VoteDefaultNo)
+	FeatureFixAMMClawbackRounding        = registerFix("fixAMMClawbackRounding", SupportedYes, VoteDefaultNo)
 	FeatureTokenEscrow                   = registerFeature("TokenEscrow", SupportedYes, VoteDefaultNo)
 	FeatureFixEnforceNFTokenTrustlineV2  = registerFix("fixEnforceNFTokenTrustlineV2", SupportedYes, VoteDefaultNo)
 	FeatureFixAMMv1_3                    = registerFix("fixAMMv1_3", SupportedYes, VoteDefaultNo)

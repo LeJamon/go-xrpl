@@ -13,7 +13,7 @@ type VaultCreate struct {
 	tx.BaseTx
 
 	// Asset is the asset the vault holds (required)
-	Asset tx.Asset `json:"Asset" xrpl:"Asset"`
+	Asset tx.Asset `json:"Asset" xrpl:"Asset,asset"`
 
 	// Data is arbitrary data (optional)
 	Data string `json:"Data,omitempty" xrpl:"Data,omitempty"`
