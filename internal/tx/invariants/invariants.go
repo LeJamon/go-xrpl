@@ -212,6 +212,12 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		func() *InvariantViolation {
 			return checkValidAMM(tx, result, entries, view, rules)
 		},
+		func() *InvariantViolation {
+			return checkValidPseudoAccounts(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkNoModifiedUnmodifiableFields(entries, rules)
+		},
 	}
 	for _, check := range checks {
 		if v := check(); v != nil {

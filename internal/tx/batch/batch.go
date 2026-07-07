@@ -86,6 +86,7 @@ var (
 	ErrBatchNilInnerTx            = ter.Errorf(ter.TemMALFORMED, "inner transaction cannot be nil")
 	ErrBatchDuplicateInnerTx      = ter.Errorf(ter.TemREDUNDANT, "duplicate inner transaction")
 	ErrBatchInnerIsBatch          = ter.Errorf(ter.TemINVALID, "inner transaction cannot itself be a Batch")
+	ErrBatchInnerDisabledType     = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction type is not allowed in a batch")
 	ErrBatchInnerMissingFlag      = ter.Errorf(ter.TemINVALID_FLAG, "inner transaction missing tfInnerBatchTxn flag")
 	ErrBatchInnerHasTxnSignature  = ter.Errorf(ter.TemBAD_SIGNATURE, "inner transaction cannot include TxnSignature")
 	ErrBatchInnerHasSigners       = ter.Errorf(ter.TemBAD_SIGNER, "inner transaction cannot include Signers")
@@ -95,6 +96,29 @@ var (
 	ErrBatchInnerDupSeqOrTicket   = ter.Errorf(ter.TemREDUNDANT, "duplicate inner Sequence or TicketSequence for account")
 	ErrBatchInnerHashUncomputable = ter.Errorf(ter.TemINVALID, "failed to compute inner transaction hash")
 )
+
+// disabledInnerTxTypes are transaction types that may not appear as inner
+// transactions of a Batch. The check is unconditional — it is not gated on any
+// amendment — so a batch wrapping one of these is rejected at preflight
+// regardless of whether the wrapped feature is enabled.
+// Reference: rippled Batch::disabledTxTypes (Batch.h) / Batch::preflight.
+var disabledInnerTxTypes = map[tx.Type]struct{}{
+	tx.TypeVaultCreate:             {},
+	tx.TypeVaultSet:                {},
+	tx.TypeVaultDelete:             {},
+	tx.TypeVaultDeposit:            {},
+	tx.TypeVaultWithdraw:           {},
+	tx.TypeVaultClawback:           {},
+	tx.TypeLoanBrokerSet:           {},
+	tx.TypeLoanBrokerDelete:        {},
+	tx.TypeLoanBrokerCoverDeposit:  {},
+	tx.TypeLoanBrokerCoverWithdraw: {},
+	tx.TypeLoanBrokerCoverClawback: {},
+	tx.TypeLoanSet:                 {},
+	tx.TypeLoanDelete:              {},
+	tx.TypeLoanManage:              {},
+	tx.TypeLoanPay:                 {},
+}
 
 // NewBatch creates a new Batch transaction
 func NewBatch(account string) *Batch {
@@ -153,6 +177,10 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 
 		if inner.TxType() == tx.TypeBatch {
 			return nil, ErrBatchInnerIsBatch
+		}
+
+		if _, disabled := disabledInnerTxTypes[inner.TxType()]; disabled {
+			return nil, ErrBatchInnerDisabledType
 		}
 
 		innerCommon := inner.GetCommon()
