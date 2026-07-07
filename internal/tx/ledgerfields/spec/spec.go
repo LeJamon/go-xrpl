@@ -238,6 +238,9 @@ var Specs = []Entry{
 			// stored an owner Account on the blob, so a node reading such a
 			// legacy entry must still decode it (then re-encode without it).
 			{Name: "Account", DecodeOnly: true},
+			// sfOwner is written on creation once fixIncludeKeyletFields is
+			// active, recording the keylet input (the list is keyed by owner).
+			{Name: "Owner"},
 			{Name: "OwnerNode"},
 			{Name: "SignerQuorum"},
 			{Name: "SignerEntries"},
@@ -362,6 +365,9 @@ var Specs = []Entry{
 		Name: "Escrow",
 		Fields: []Field{
 			{Name: "Account"},
+			// sfSequence records the keylet input (owner + creating sequence)
+			// once fixIncludeKeyletFields is active.
+			{Name: "Sequence"},
 			{Name: "Destination"},
 			{Name: "Amount"},
 			{Name: "Condition"},
@@ -383,6 +389,9 @@ var Specs = []Entry{
 		Fields: []Field{
 			{Name: "Account"},
 			{Name: "Destination"},
+			// sfSequence records the keylet input (owner + destination +
+			// creating sequence) once fixIncludeKeyletFields is active.
+			{Name: "Sequence"},
 			{Name: "Amount"},
 			{Name: "Balance"},
 			{Name: "PublicKey"},
@@ -451,6 +460,9 @@ var Specs = []Entry{
 		Name: "Oracle",
 		Fields: []Field{
 			{Name: "Owner"},
+			// sfOracleDocumentID records the keylet input (owner + document id)
+			// once fixIncludeKeyletFields is active.
+			{Name: "OracleDocumentID"},
 			{Name: "Provider"},
 			{Name: "PriceDataSeries"},
 			{Name: "AssetClass"},

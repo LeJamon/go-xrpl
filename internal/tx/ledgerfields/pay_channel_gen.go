@@ -24,6 +24,7 @@ type PayChannel struct {
 	present           uint64
 	Account           string // AccountID (base58)
 	Destination       string // AccountID (base58)
+	Sequence          uint32
 	Amount            any    // Amount (XRP string | IOU map)
 	Balance           any    // Amount (XRP string | IOU map)
 	PublicKey         string // Blob (uppercase hex)
@@ -42,6 +43,7 @@ type PayChannel struct {
 const (
 	paychannelBitAccount uint64 = 1 << iota
 	paychannelBitDestination
+	paychannelBitSequence
 	paychannelBitAmount
 	paychannelBitBalance
 	paychannelBitPublicKey
@@ -92,6 +94,9 @@ func (p *PayChannel) Decode(data []byte) error {
 			case 3:
 				p.SourceTag = val
 				p.present |= paychannelBitSourceTag
+			case 4:
+				p.Sequence = val
+				p.present |= paychannelBitSequence
 			case 5:
 				p.PreviousTxnLgrSeq = val
 				p.present |= paychannelBitPreviousTxnLgrSeq
@@ -200,6 +205,9 @@ func (p *PayChannel) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&paychannelBitDestination != 0 && !(skipDefault && p.Destination == "") {
 		out["Destination"] = p.Destination
 	}
+	if p.present&paychannelBitSequence != 0 && !(skipDefault && p.Sequence == 0) {
+		out["Sequence"] = p.Sequence
+	}
 	if p.present&paychannelBitAmount != 0 && !(skipDefault && amountIsDefault(p.Amount)) {
 		out["Amount"] = p.Amount
 	}
@@ -256,6 +264,7 @@ func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
 	}
 	emitIfChangedString(out, "Account", prv.Account, p.Account, prv.present&paychannelBitAccount, p.present&paychannelBitAccount)
 	emitIfChangedString(out, "Destination", prv.Destination, p.Destination, prv.present&paychannelBitDestination, p.present&paychannelBitDestination)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, p.Sequence, prv.present&paychannelBitSequence, p.present&paychannelBitSequence)
 	emitIfChangedAmount(out, "Amount", prv.Amount, p.Amount, prv.present&paychannelBitAmount, p.present&paychannelBitAmount)
 	emitIfChangedAmount(out, "Balance", prv.Balance, p.Balance, prv.present&paychannelBitBalance, p.present&paychannelBitBalance)
 	emitIfChangedString(out, "PublicKey", prv.PublicKey, p.PublicKey, prv.present&paychannelBitPublicKey, p.present&paychannelBitPublicKey)
@@ -280,6 +289,9 @@ func (p *PayChannel) EmitChangeOrigFields(out map[string]any) {
 	}
 	if p.present&paychannelBitDestination != 0 {
 		out["Destination"] = p.Destination
+	}
+	if p.present&paychannelBitSequence != 0 {
+		out["Sequence"] = p.Sequence
 	}
 	if p.present&paychannelBitAmount != 0 {
 		out["Amount"] = p.Amount
@@ -360,6 +372,9 @@ func (p *PayChannel) ToMap() map[string]any {
 	}
 	if p.present&paychannelBitDestination != 0 {
 		out["Destination"] = p.Destination
+	}
+	if p.present&paychannelBitSequence != 0 {
+		out["Sequence"] = p.Sequence
 	}
 	if p.present&paychannelBitAmount != 0 {
 		out["Amount"] = p.Amount

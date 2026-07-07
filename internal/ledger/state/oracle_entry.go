@@ -20,6 +20,11 @@ type OracleData struct {
 	PriceDataSeries []OraclePriceData
 	URI             string // hex-encoded, optional
 	Flags           uint32
+	// OracleDocumentID records a keylet input, stored once
+	// fixIncludeKeyletFields is active. A zero id is valid, so presence is
+	// tracked separately.
+	OracleDocumentID    uint32
+	HasOracleDocumentID bool
 	// Round-trips so a no-op modify re-serializes byte-identically and the apply
 	// layer's unchanged-entry guard prunes it (ApplyStateTable.cpp:154-157).
 	PreviousTxnID     [32]byte
@@ -38,17 +43,18 @@ type OraclePriceData struct {
 
 // Field nth values for Oracle fields
 const (
-	fieldLastUpdateTime = 15 // UInt32, nth=15
-	fieldOwnerNode      = 4  // UInt64, nth=4
-	fieldAssetPrice     = 23 // UInt64, nth=23
-	fieldScale          = 4  // UInt8, nth=4
-	fieldOwner          = 2  // AccountID, nth=2
-	fieldProvider       = 29 // Blob, nth=29
-	fieldAssetClass     = 28 // Blob, nth=28
-	fieldURI            = 5  // Blob, nth=5
-	fieldBaseAsset      = 1  // Currency, nth=1
-	fieldQuoteAsset     = 2  // Currency, nth=2
-	fieldPriceDataSer   = 24 // STArray, nth=24
+	fieldLastUpdateTime   = 15 // UInt32, nth=15
+	fieldOracleDocumentID = 51 // UInt32, nth=51
+	fieldOwnerNode        = 4  // UInt64, nth=4
+	fieldAssetPrice       = 23 // UInt64, nth=23
+	fieldScale            = 4  // UInt8, nth=4
+	fieldOwner            = 2  // AccountID, nth=2
+	fieldProvider         = 29 // Blob, nth=29
+	fieldAssetClass       = 28 // Blob, nth=28
+	fieldURI              = 5  // Blob, nth=5
+	fieldBaseAsset        = 1  // Currency, nth=1
+	fieldQuoteAsset       = 2  // Currency, nth=2
+	fieldPriceDataSer     = 24 // STArray, nth=24
 )
 
 // ParseOracle parses an Oracle ledger entry from binary data.
@@ -65,6 +71,9 @@ func ParseOracle(data []byte) (*OracleData, error) {
 				oracle.PreviousTxnLgrSeq = f.UInt32()
 			case fieldLastUpdateTime: // 15
 				oracle.LastUpdateTime = f.UInt32()
+			case fieldOracleDocumentID: // 51
+				oracle.OracleDocumentID = f.UInt32()
+				oracle.HasOracleDocumentID = true
 			}
 
 		case stUInt64:
@@ -217,6 +226,11 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 
 	if o.URI != "" {
 		jsonObj["URI"] = o.URI
+	}
+
+	// A zero id is valid, so gate on presence rather than value.
+	if o.HasOracleDocumentID {
+		jsonObj["OracleDocumentID"] = o.OracleDocumentID
 	}
 
 	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.

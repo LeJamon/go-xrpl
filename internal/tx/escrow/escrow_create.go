@@ -445,7 +445,8 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	escrowData, err := serializeEscrow(e, accountID, destID, capturedTransferRate,
-		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode)
+		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode,
+		rules.Enabled(amendment.FeatureFixIncludeKeyletFields))
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return ter.TefINTERNAL
@@ -495,7 +496,8 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 // {value, mpt_issuance_id}. transferRate is stored when non-zero and not
 // equal to the parity rate (1_000_000_000).
 func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, transferRate uint32,
-	ownerNode uint64, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool) ([]byte, error) {
+	ownerNode uint64, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool,
+	includeSequence bool) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -573,6 +575,12 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, transferRate u
 
 	if transferRate > 0 && transferRate != 1_000_000_000 {
 		jsonObj["TransferRate"] = transferRate
+	}
+
+	// fixIncludeKeyletFields: store the creating sequence (tx or ticket) used
+	// to derive the escrow keylet.
+	if includeSequence {
+		jsonObj["Sequence"] = txn.GetCommon().SeqProxy()
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

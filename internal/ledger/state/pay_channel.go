@@ -26,6 +26,11 @@ type PayChannelData struct {
 	DestinationNode uint64
 	HasDestNode     bool
 
+	// Sequence records the creating tx/ticket sequence (a keylet input),
+	// stored once fixIncludeKeyletFields is active.
+	Sequence    uint32
+	HasSequence bool
+
 	// Transaction threading fields. PayChannel is an unconditionally threaded
 	// type, so these must survive a parse→serialize round-trip. Dropping them
 	// makes a write-back of unchanged logical state differ from the original
@@ -79,6 +84,9 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 	if channel.HasDestNode {
 		jsonObj["DestinationNode"] = fmt.Sprintf("%x", channel.DestinationNode)
 	}
+	if channel.HasSequence {
+		jsonObj["Sequence"] = channel.Sequence
+	}
 	// Preserve threading fields across the round-trip. PreviousTxnLgrSeq is
 	// only meaningful alongside PreviousTxnID, so gate both on the id.
 	if channel.PreviousTxnID != ([32]byte{}) {
@@ -111,6 +119,9 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			case 3: // SourceTag
 				channel.SourceTag = f.UInt32()
 				channel.HasSourceTag = true
+			case 4: // Sequence
+				channel.Sequence = f.UInt32()
+				channel.HasSequence = true
 			case 14: // DestinationTag
 				channel.DestinationTag = f.UInt32()
 				channel.HasDestTag = true

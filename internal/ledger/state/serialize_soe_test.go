@@ -87,7 +87,7 @@ func TestSerializeSignerList_FlagsAlwaysPresent(t *testing.T) {
 		{Account: addrB, SignerWeight: 1},
 	}
 
-	data0, err := SerializeSignerList(2, entries, 0, false, 0)
+	data0, err := SerializeSignerList(2, entries, 0, false, 0, nil)
 	if err != nil {
 		t.Fatalf("serialize flags=0: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestSerializeSignerList_FlagsAlwaysPresent(t *testing.T) {
 		t.Errorf("Flags = %v, want 0", v)
 	}
 
-	data1, err := SerializeSignerList(2, entries, LsfOneOwnerCount, false, 0)
+	data1, err := SerializeSignerList(2, entries, LsfOneOwnerCount, false, 0, nil)
 	if err != nil {
 		t.Fatalf("serialize flags=LsfOneOwnerCount: %v", err)
 	}
