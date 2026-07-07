@@ -29,6 +29,7 @@ type MPTokenIssuanceData struct {
 	MPTokenMetadata   string  // hex-encoded
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
 	Flags             uint32
+	MutableFlags      uint32 // soeDEFAULT: CanMutate permission bits, 0 when absent
 
 	// Threading fields. MPTokenIssuance is a threaded type, so these must
 	// survive a parse→serialize round-trip — otherwise a re-serialize during
@@ -81,6 +82,8 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 				issuance.Sequence = f.UInt32()
 			case 5: // PreviousTxnLgrSeq
 				issuance.PreviousTxnLgrSeq = f.UInt32()
+			case 53: // MutableFlags
+				issuance.MutableFlags = f.UInt32()
 			}
 
 		case stUInt64:
@@ -165,6 +168,12 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 
 	if issuance.DomainID != nil && *issuance.DomainID != "" {
 		jsonObj["DomainID"] = strings.ToUpper(*issuance.DomainID)
+	}
+
+	// sfMutableFlags is soeDEFAULT; emitting it when zero would fork account_hash
+	// against rippled, which omits default-valued fields.
+	if issuance.MutableFlags != 0 {
+		jsonObj["MutableFlags"] = issuance.MutableFlags
 	}
 
 	var zeroHash [32]byte

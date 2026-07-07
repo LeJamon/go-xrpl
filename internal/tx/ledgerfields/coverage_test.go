@@ -311,6 +311,7 @@ var coverageFixtures = map[string]map[string]any{
 		"LockedAmount":      "0",
 		"MPTokenMetadata":   fxBlob,
 		"DomainID":          fxHash256,
+		"MutableFlags":      uint32(0x00030000),
 		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
