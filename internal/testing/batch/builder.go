@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/check"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -354,6 +355,18 @@ func MakeInnerPaymentXRPWithDelegate(from, to *testing.Account, xrp int64, seq u
 // MakeInnerPaymentXRP creates an inner Payment for an XRP amount in whole XRP units.
 func MakeInnerPaymentXRP(from, to *testing.Account, xrp int64, seq uint32) *payment.Payment {
 	return MakeInnerPayment(from, to, testing.XRP(xrp), seq)
+}
+
+// MakeInnerVaultCreate creates a well-formed inner VaultCreate. VaultCreate is on
+// the Batch inner-type blocklist, so a batch containing it is rejected with
+// temINVALID_INNER_BATCH regardless of the inner's other fields.
+func MakeInnerVaultCreate(account *testing.Account, seq uint32) *vault.VaultCreate {
+	v := vault.NewVaultCreate(account.Address, tx.Asset{Currency: "XRP"})
+	v.Fee = "0"
+	v.SigningPubKey = ""
+	v.SetSequence(seq)
+	v.SetFlags(tx.TfInnerBatchTxn)
+	return v
 }
 
 // NewBatchBuilderWithTicket creates a new BatchBuilder where the outer batch uses a TicketSequence.
