@@ -41,9 +41,9 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 	txType := tx.TxType()
 
 	if result == TesSUCCESS {
-		switch txType {
-		case TypeMPTokenIssuanceCreate, TypeVaultCreate:
-			// Must create exactly 1 issuance, delete 0.
+		// A createMPTIssuance transaction (MPTokenIssuanceCreate/VaultCreate)
+		// must create exactly 1 issuance and delete 0.
+		if hasPrivilege(txType, createMPTIssuance) {
 			if mptIssuancesCreated != 1 || mptIssuancesDeleted != 0 {
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
@@ -51,9 +51,11 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				}
 			}
 			return nil
+		}
 
-		case TypeMPTokenIssuanceDestroy, TypeVaultDelete:
-			// Must delete exactly 1 issuance, create 0.
+		// A destroyMPTIssuance transaction (MPTokenIssuanceDestroy/VaultDelete)
+		// must delete exactly 1 issuance and create 0.
+		if hasPrivilege(txType, destroyMPTIssuance) {
 			if mptIssuancesCreated != 0 || mptIssuancesDeleted != 1 {
 				return &InvariantViolation{
 					Name:    "ValidMPTIssuance",
@@ -61,7 +63,9 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 				}
 			}
 			return nil
+		}
 
+		switch txType {
 		case TypeMPTokenAuthorize, TypeVaultDeposit:
 			// No issuance changes allowed.
 			if mptIssuancesCreated > 0 {

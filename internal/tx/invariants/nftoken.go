@@ -126,8 +126,9 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 		}
 	}
 
-	// For non-mint/burn transactions, counts must not change.
-	if txType != "NFTokenMint" && txType != "NFTokenBurn" {
+	// Only a changeNFTCounts transaction (NFTokenMint/NFTokenBurn) may change
+	// the minted/burned counts.
+	if !hasPrivilegeName(txType, changeNFTCounts) {
 		if beforeMintedTotal != afterMintedTotal {
 			return &InvariantViolation{
 				Name:    "NFTokenCountTracking",
