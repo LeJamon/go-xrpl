@@ -306,13 +306,22 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 	if parseErr != nil {
 		return ter.TecNO_DELEGATE_PERMISSION
 	}
-	// Check if the delegate SLE grants permission for this tx type.
-	// In rippled: permissionValue == tx.getTxnType() + 1
-	txTypeValue := uint32(tx.TxType())
-	if !delegateEntry.HasTxPermission(txTypeValue) {
-		return ter.TecNO_DELEGATE_PERMISSION
+	// A transaction-level grant (permissionValue == txType + 1) authorizes
+	// every action of this transaction type.
+	if delegateEntry.HasTxPermission(uint32(tx.TxType())) {
+		return ter.TesSUCCESS
 	}
-	return ter.TesSUCCESS
+	// Otherwise a granular permission may still authorize a specific slice of
+	// the transaction's behaviour. Transaction types that support granular
+	// delegation evaluate their own rules here.
+	if checker, ok := tx.(txcore.DelegatePermissionChecker); ok {
+		return checker.CheckDelegatePermission(txcore.DelegatePermissionContext{
+			View:        e.view,
+			Rules:       e.config.GetRules(),
+			Permissions: delegateEntry.Permissions,
+		})
+	}
+	return ter.TecNO_DELEGATE_PERMISSION
 }
 
 // checkSign performs signature authorization for both single-signed and
