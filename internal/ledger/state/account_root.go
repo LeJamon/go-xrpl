@@ -64,6 +64,8 @@ type AccountRoot struct {
 	WalletLocator        string   // Arbitrary hex data (deprecated)
 	TicketCount          uint32   // Number of outstanding tickets owned by this account
 	AMMID                [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
+	VaultID              [32]byte // Links Vault pseudo-account to its Vault ledger entry (sfVaultID, fieldCode 35)
+	LoanBrokerID         [32]byte // Links LoanBroker pseudo-account to its LoanBroker ledger entry (sfLoanBrokerID, fieldCode 37)
 	PreviousTxnID        [32]byte
 	PreviousTxnLgrSeq    uint32
 }
@@ -76,12 +78,42 @@ func (a *AccountRoot) HasAMMID() bool {
 	return a != nil && a.AMMID != [32]byte{}
 }
 
+// HasVaultID reports whether the sfVaultID pseudo-account designator is present.
+func (a *AccountRoot) HasVaultID() bool {
+	return a != nil && a.VaultID != [32]byte{}
+}
+
+// HasLoanBrokerID reports whether the sfLoanBrokerID pseudo-account designator is present.
+func (a *AccountRoot) HasLoanBrokerID() bool {
+	return a != nil && a.LoanBrokerID != [32]byte{}
+}
+
+// PseudoAccountFieldCount returns how many pseudo-account designator fields
+// (sfAMMID, sfVaultID, sfLoanBrokerID) are present. rippled's ValidPseudoAccounts
+// invariant requires exactly one to be set. Reference: rippled sfields.macro —
+// fields flagged SField::sMD_PseudoAccount.
+func (a *AccountRoot) PseudoAccountFieldCount() int {
+	if a == nil {
+		return 0
+	}
+	n := 0
+	if a.HasAMMID() {
+		n++
+	}
+	if a.HasVaultID() {
+		n++
+	}
+	if a.HasLoanBrokerID() {
+		n++
+	}
+	return n
+}
+
 // IsPseudoAccount reports whether this AccountRoot is a pseudo-account, mirroring
-// rippled's isPseudoAccount (View.cpp:1138) which tests whether any of the
-// pseudo-account owner fields (sfAMMID, sfVaultID) is present. go-xrpl currently
-// surfaces only AMMID on AccountRoot; VaultID will land alongside featureSingleAssetVault.
+// rippled's isPseudoAccount (View.cpp) which tests whether any of the
+// pseudo-account owner fields (sfAMMID, sfVaultID, sfLoanBrokerID) is present.
 func (a *AccountRoot) IsPseudoAccount() bool {
-	return a.HasAMMID()
+	return a.PseudoAccountFieldCount() > 0
 }
 
 // Field type codes (exported for use by parent tx/ package)
@@ -125,6 +157,8 @@ const (
 	fieldCodeAccountTxnID         = 9  // Hash256 - last transaction ID
 	fieldCodeWalletLocator        = 7  // Hash256 - wallet locator (deprecated)
 	fieldCodeAMMID                = 14 // Hash256 - links AMM pseudo-account to AMM entry (sfAMMID)
+	fieldCodeVaultID              = 35 // Hash256 - links Vault pseudo-account to Vault entry (sfVaultID)
+	fieldCodeLoanBrokerID         = 37 // Hash256 - links LoanBroker pseudo-account to LoanBroker entry (sfLoanBrokerID)
 )
 
 // Ledger entry type code for AccountRoot (unexported)
@@ -241,6 +275,10 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 				account.WalletLocator = hex.EncodeToString(f.Value)
 			case fieldCodeAMMID:
 				account.AMMID = f.Hash256()
+			case fieldCodeVaultID:
+				account.VaultID = f.Hash256()
+			case fieldCodeLoanBrokerID:
+				account.LoanBrokerID = f.Hash256()
 			}
 
 		case stUInt8:
@@ -340,6 +378,14 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Add AMMID if set (non-zero) — links AMM pseudo-account to AMM entry
 	if account.AMMID != zeroHash {
 		jsonObj["AMMID"] = strings.ToUpper(hex.EncodeToString(account.AMMID[:]))
+	}
+
+	// Add VaultID / LoanBrokerID if set (non-zero) — pseudo-account designators
+	if account.VaultID != zeroHash {
+		jsonObj["VaultID"] = strings.ToUpper(hex.EncodeToString(account.VaultID[:]))
+	}
+	if account.LoanBrokerID != zeroHash {
+		jsonObj["LoanBrokerID"] = strings.ToUpper(hex.EncodeToString(account.LoanBrokerID[:]))
 	}
 
 	// PreviousTxnID and PreviousTxnLgrSeq are soeREQUIRED on AccountRoot, so
