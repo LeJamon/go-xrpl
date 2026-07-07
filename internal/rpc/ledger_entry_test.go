@@ -3061,3 +3061,96 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 		assert.Contains(t, rpcErr.Message, "asset and asset2 required")
 	})
 }
+
+// TestLedgerEntryAccountSelector covers rippled's canonical AccountRoot
+// selector `account` (the ledger_entries.macro rpcName; `account_root` is the
+// appended alias). Both parse an address to keylet::account and must resolve to
+// the same key.
+func TestLedgerEntryAccountSelector(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+	addr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	t.Run("account selector succeeds", func(t *testing.T) {
+		params := map[string]any{"account": addr, "ledger_index": "validated"}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("account and account_root resolve to the same key", func(t *testing.T) {
+		canonical, err := json.Marshal(map[string]any{"account": addr, "ledger_index": "validated"})
+		require.NoError(t, err)
+		alias, err := json.Marshal(map[string]any{"account_root": addr, "ledger_index": "validated"})
+		require.NoError(t, err)
+
+		rc, e1 := method.Handle(ctx, canonical)
+		ra, e2 := method.Handle(ctx, alias)
+		require.Nil(t, e1)
+		require.Nil(t, e2)
+		require.Equal(t, rc.(map[string]any)["index"], ra.(map[string]any)["index"])
+	})
+
+	t.Run("account with malformed address is rejected", func(t *testing.T) {
+		params := map[string]any{"account": "not-an-address", "ledger_index": "validated"}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Contains(t, rpcErr.Message, "Invalid account")
+	})
+}
+
+// TestLedgerEntryLoanSelectors covers the rippled 3.0.0 `loan`/`loan_broker`
+// selectors. rippled's parseLoan/parseLoanBroker fall back to a direct
+// hex-index lookup when the param is not an object; go-xrpl has no lending
+// subsystem, so it supports only that hex form (like bridge/xchain). Each field
+// must be recognized and resolve to a lookup rather than being rejected as an
+// unknown option.
+func TestLedgerEntryLoanSelectors(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+	index := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+
+	for _, field := range []string{"loan", "loan_broker"} {
+		t.Run(field+" by hex string", func(t *testing.T) {
+			params := map[string]any{field: index, "ledger_index": "validated"}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+		})
+
+		t.Run(field+" invalid hex", func(t *testing.T) {
+			params := map[string]any{field: "TOOSHORT", "ledger_index": "validated"}
+			paramsJSON, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.NotNil(t, rpcErr)
+			assert.Contains(t, rpcErr.Message, "Invalid "+field)
+		})
+	}
+}

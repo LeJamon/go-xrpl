@@ -85,19 +85,27 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// account_root: string (account address) — rippled only accepts address, no hex fallback
+	// account / account_root: string (account address) — rippled only accepts an
+	// address, no hex fallback. `account` is rippled's canonical AccountRoot
+	// selector (the ledger_entries.macro rpcName); `account_root` is the
+	// appended alias. Both resolve to keylet::account.
 	if !keySet {
-		if raw, ok := rawParams["account_root"]; ok {
+		for _, field := range []string{"account", "account_root"} {
+			raw, ok := rawParams[field]
+			if !ok {
+				continue
+			}
 			var addr string
 			if err := json.Unmarshal(raw, &addr); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid account_root")
+				return nil, types.RpcErrorInvalidParams("Invalid " + field)
 			}
 			accountID, err := decodeAccountID(addr)
 			if err != nil {
-				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid account_root address: %v", err))
+				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid %s address: %v", field, err))
 			}
 			entryKey = keylet.Account(accountID).Key
 			keySet = true
+			break
 		}
 	}
 
@@ -198,6 +206,31 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if !keySet {
 		if raw, ok := rawParams["escrow"]; ok {
 			entryKey, rpcErr = parseEscrowKeylet(raw)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			keySet = true
+		}
+	}
+
+	// loan / loan_broker: string (hex ID). rippled's parseLoan/parseLoanBroker
+	// resolve a keylet from an object form (loan_broker_id+loan_seq / owner+seq),
+	// but fall back to a direct hex-index lookup when the param is not an object.
+	// go-xrpl has no lending subsystem (no keylet::loan), so only that hex-index
+	// form is supported — the same pragmatic handling as bridge/xchain.
+	if !keySet {
+		if raw, ok := rawParams["loan"]; ok {
+			entryKey, rpcErr = parseHex256(raw, "loan")
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
+			keySet = true
+		}
+	}
+
+	if !keySet {
+		if raw, ok := rawParams["loan_broker"]; ok {
+			entryKey, rpcErr = parseHex256(raw, "loan_broker")
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
