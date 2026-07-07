@@ -28,6 +28,7 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureFixBatchInnerSigs             = registerFix("fixBatchInnerSigs", SupportedNo, VoteDefaultNo)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)
 	FeatureFixDelegateV1_1               = registerFix("fixDelegateV1_1", SupportedNo, VoteDefaultNo)
@@ -39,7 +40,7 @@ var (
 	FeatureFixEnforceNFTokenTrustlineV2  = registerFix("fixEnforceNFTokenTrustlineV2", SupportedYes, VoteDefaultNo)
 	FeatureFixAMMv1_3                    = registerFix("fixAMMv1_3", SupportedYes, VoteDefaultNo)
 	FeaturePermissionedDEX               = registerFeature("PermissionedDEX", SupportedYes, VoteDefaultNo)
-	FeatureBatch                         = registerFeature("Batch", SupportedYes, VoteDefaultNo)
+	FeatureBatch                         = registerFeature("Batch", SupportedNo, VoteDefaultNo)
 	FeatureLendingProtocol               = registerFeature("LendingProtocol", SupportedNo, VoteDefaultNo)
 	FeatureSingleAssetVault              = registerFeature("SingleAssetVault", SupportedNo, VoteDefaultNo)
 	FeaturePermissionDelegation          = registerFeature("PermissionDelegation", SupportedNo, VoteDefaultNo)

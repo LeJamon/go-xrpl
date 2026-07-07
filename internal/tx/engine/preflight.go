@@ -131,13 +131,39 @@ func (e *Engine) preflightCommonFields(tx txcore.Transaction, common *txcore.Com
 		return result
 	}
 
-	// tfInnerBatchTxn must never appear on a directly-submitted transaction.
-	// Reference: rippled Transactor.cpp preflight0().
-	if common.Flags != nil && *common.Flags&txcore.TfInnerBatchTxn != 0 {
-		return ter.TemINVALID_FLAG
+	if result := e.preflightInnerBatchFlag(common); result != ter.TesSUCCESS {
+		return result
 	}
 
 	return ter.TesSUCCESS
+}
+
+// preflightInnerBatchFlag rejects a directly-submitted transaction that carries
+// tfInnerBatchTxn. That flag is only ever set by the Batch transactor on the
+// inner transactions it applies (which flow through preflightInner, not here),
+// so on a top-level submission it is always illegitimate.
+//
+// The rejection code mirrors rippled across the two amendment gates:
+//   - Batch disabled: the flag itself is undefined → temINVALID_FLAG
+//     (rippled Transactor::preflight1, unchanged by fixBatchInnerSigs).
+//   - Batch enabled: such a transaction still has no valid signature (its
+//     SigningPubKey is empty). With fixBatchInnerSigs it is rejected as a bad
+//     signature before reaching the engine (rippled apply.cpp checkValidity
+//     falls through to checkSign → SigBad → temINVALID). Before the fix it
+//     reached the transaction engine and failed with temINVALID_FLAG. Either
+//     way it can never apply.
+func (e *Engine) preflightInnerBatchFlag(common *txcore.Common) ter.Result {
+	if common.Flags == nil || *common.Flags&txcore.TfInnerBatchTxn == 0 {
+		return ter.TesSUCCESS
+	}
+	rules := e.rules()
+	if !rules.Enabled(amendment.FeatureBatch) {
+		return ter.TemINVALID_FLAG
+	}
+	if rules.Enabled(amendment.FeatureFixBatchInnerSigs) {
+		return ter.TemINVALID
+	}
+	return ter.TemINVALID_FLAG
 }
 
 // Shared between outer (preflightCommonFields) and inner (preflightInner).

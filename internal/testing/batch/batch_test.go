@@ -18,6 +18,18 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/txq"
 )
 
+// newBatchEnv builds a test environment with the Batch amendment active.
+// Batch is Supported::no upstream (rippled 3.1.1 withdrew support pending
+// fixBatchInnerSigs), so the all-supported preset no longer activates it and
+// every Batch test must opt in. EnableFeatureNow enables it from genesis,
+// matching the behaviour these tests relied on when the preset carried Batch.
+func newBatchEnv(t *testing.T) *xtesting.TestEnv {
+	t.Helper()
+	env := xtesting.NewTestEnv(t)
+	env.EnableFeatureNow("Batch")
+	return env
+}
+
 // =============================================================================
 // Test 1: testEnable
 // Reference: rippled Batch_test.cpp testEnable()
@@ -25,7 +37,7 @@ import (
 
 func TestEnabled(t *testing.T) {
 	t.Run("batch enabled", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -47,7 +59,6 @@ func TestEnabled(t *testing.T) {
 
 	t.Run("batch disabled", func(t *testing.T) {
 		env := xtesting.NewTestEnv(t)
-		env.DisableFeature("Batch")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -67,29 +78,47 @@ func TestEnabled(t *testing.T) {
 	})
 
 	t.Run("tfInnerBatchTxn on non-batch tx - feature enabled", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
-		// A regular payment with tfInnerBatchTxn should fail
-		// Reference: rippled returns telENV_RPC_FAILED (checkValidity)
-		// Our implementation returns temINVALID_FLAG from engine validation
+		// A directly-submitted inner-flagged transaction (no signature) reaches
+		// the engine and fails with temINVALID_FLAG. Reference: rippled
+		// checkValidity short-circuits it to Valid before fixBatchInnerSigs, so
+		// it reaches the engine (Batch_test.cpp doTestInnerSubmitRPC).
 		p := MakeInnerPayment(alice, bob, xtesting.XRP(1), env.Seq(alice))
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = "" // inner batch format, but submitted directly
 
 		result := env.Submit(p)
-		// Should fail - the exact code may be temINVALID_FLAG or telENV_RPC_FAILED
-		require.False(t, result.Success,
-			"Payment with tfInnerBatchTxn flag should not succeed when submitted directly")
+		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+	})
+
+	t.Run("tfInnerBatchTxn on non-batch tx - fixBatchInnerSigs enabled", func(t *testing.T) {
+		env := newBatchEnv(t)
+		env.EnableFeatureNow("fixBatchInnerSigs")
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		// With fixBatchInnerSigs an inner-flagged transaction never has a valid
+		// signature, so it is rejected as invalid rather than reaching the
+		// engine. Reference: rippled apply.cpp checkValidity (PR #6069).
+		p := MakeInnerPayment(alice, bob, xtesting.XRP(1), env.Seq(alice))
+		p.Fee = fmt.Sprintf("%d", env.BaseFee())
+		p.SigningPubKey = ""
+
+		result := env.Submit(p)
+		xtesting.RequireTxFail(t, result, "temINVALID")
 	})
 
 	t.Run("tfInnerBatchTxn on non-batch tx - feature disabled", func(t *testing.T) {
 		env := xtesting.NewTestEnv(t)
-		env.DisableFeature("Batch")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -113,7 +142,7 @@ func TestEnabled(t *testing.T) {
 
 func TestPreflight(t *testing.T) {
 	t.Run("temBAD_FEE - negative fee", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -133,7 +162,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temINVALID_FLAG - invalid batch flags", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -152,7 +181,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temINVALID_FLAG - too many mode flags", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -172,7 +201,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temARRAY_EMPTY - no transactions", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		env.Fund(alice)
 		env.Close()
@@ -188,7 +217,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temARRAY_EMPTY - only 1 transaction", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -206,7 +235,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temARRAY_TOO_LARGE - more than 8 transactions", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -225,7 +254,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temREDUNDANT - duplicate batch signer", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -245,7 +274,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temBAD_SIGNER - signer is outer account", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -264,7 +293,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temARRAY_TOO_LARGE - too many signers", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		env.Fund(alice)
 		env.Close()
@@ -286,7 +315,7 @@ func TestPreflight(t *testing.T) {
 
 	// Reference: rippled Batch_test.cpp:398-406.
 	t.Run("temINVALID_INNER_BATCH - malformed inner tx", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -315,7 +344,7 @@ func TestPreflight(t *testing.T) {
 	// the inner's own amendment/flag/fee checks.
 	// Reference: rippled Batch::disabledTxTypes + Batch_test.cpp testLoan().
 	t.Run("temINVALID_INNER_BATCH - disabled inner type (VaultCreate)", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -337,7 +366,7 @@ func TestPreflight(t *testing.T) {
 	// blocklisted inner missing the flag is still temINVALID_INNER_BATCH, not
 	// temINVALID_FLAG.
 	t.Run("temINVALID_INNER_BATCH - disabled type precedes flag check", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -361,7 +390,7 @@ func TestPreflight(t *testing.T) {
 	// The blocklist check precedes the inner zero-fee check: a blocklisted inner
 	// with a non-zero fee is still temINVALID_INNER_BATCH, not temBAD_FEE.
 	t.Run("temINVALID_INNER_BATCH - disabled type precedes fee check", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -385,7 +414,7 @@ func TestPreflight(t *testing.T) {
 	// Reference: rippled Batch_test.cpp:410-501 (per-inner rejection cases).
 
 	t.Run("temBAD_FEE - inner fee non-zero", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -406,7 +435,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temSEQ_AND_TICKET - inner has both Sequence and TicketSequence", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -428,7 +457,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temSEQ_AND_TICKET - inner has neither Sequence nor TicketSequence", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -448,7 +477,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temBAD_SIGNATURE - inner has TxnSignature", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -469,7 +498,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temBAD_SIGNER - inner has Signers", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -492,7 +521,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temBAD_REGKEY - inner has SigningPubKey", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -513,7 +542,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temINVALID - inner is itself a Batch", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -537,7 +566,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temINVALID_FLAG - inner missing tfInnerBatchTxn", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -559,7 +588,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temREDUNDANT - duplicate inner transactions", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -578,7 +607,7 @@ func TestPreflight(t *testing.T) {
 	})
 
 	t.Run("temREDUNDANT - duplicate sequence per account under tfAllOrNothing", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -603,7 +632,7 @@ func TestPreflight(t *testing.T) {
 			batchtx.BatchFlagUntilFailure,
 			batchtx.BatchFlagIndependent,
 		} {
-			env := xtesting.NewTestEnv(t)
+			env := newBatchEnv(t)
 			alice := xtesting.NewAccount("alice")
 			bob := xtesting.NewAccount("bob")
 			env.Fund(alice, bob)
@@ -647,7 +676,7 @@ func TestCalculateBaseFee(t *testing.T) {
 	})
 
 	t.Run("calculateBaseFee from env", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		// Default base fee is 10
 		require.Equal(t, uint64(40), CalcBatchFeeFromEnv(env, 0, 2))
 		require.Equal(t, uint64(50), CalcBatchFeeFromEnv(env, 1, 2))
@@ -661,7 +690,7 @@ func TestCalculateBaseFee(t *testing.T) {
 
 func TestAllOrNothing(t *testing.T) {
 	t.Run("all succeed", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -690,7 +719,7 @@ func TestAllOrNothing(t *testing.T) {
 	})
 
 	t.Run("tec failure - all rolled back", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -720,7 +749,7 @@ func TestAllOrNothing(t *testing.T) {
 	})
 
 	t.Run("tef failure - all rolled back", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -761,7 +790,7 @@ func TestAllOrNothing(t *testing.T) {
 
 func TestOnlyOne(t *testing.T) {
 	t.Run("all transactions fail", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -792,7 +821,7 @@ func TestOnlyOne(t *testing.T) {
 	})
 
 	t.Run("first fails then succeeds - stops after success", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -822,7 +851,7 @@ func TestOnlyOne(t *testing.T) {
 	})
 
 	t.Run("succeeds first - stops immediately", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -859,7 +888,7 @@ func TestOnlyOne(t *testing.T) {
 
 func TestUntilFailure(t *testing.T) {
 	t.Run("first transaction fails - stops immediately", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -890,7 +919,7 @@ func TestUntilFailure(t *testing.T) {
 	})
 
 	t.Run("all transactions succeed", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -921,7 +950,7 @@ func TestUntilFailure(t *testing.T) {
 	})
 
 	t.Run("tec error in middle - stops at failure", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -959,7 +988,7 @@ func TestUntilFailure(t *testing.T) {
 
 func TestIndependent(t *testing.T) {
 	t.Run("multiple transactions fail - all execute", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -990,7 +1019,7 @@ func TestIndependent(t *testing.T) {
 	})
 
 	t.Run("tec error in middle - continues executing", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -1027,7 +1056,7 @@ func TestIndependent(t *testing.T) {
 // =============================================================================
 
 func TestAccountActivation(t *testing.T) {
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 	alice := xtesting.NewAccount("alice")
 	bob := xtesting.NewAccount("bob")
 	env.FundAmount(alice, uint64(xtesting.XRP(10000))) // rippled funds with XRP(10000)
@@ -1070,7 +1099,7 @@ func TestAccountActivation(t *testing.T) {
 // outer delta (createdCount=2) and wrongly returned tecINVARIANT_FAILED.
 // Reference: rippled apply.cpp:189-207, InvariantCheck.cpp:964-967.
 func TestActivateTwoAccounts(t *testing.T) {
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 	alice := xtesting.NewAccount("alice")
 	bob := xtesting.NewAccount("bob")
 	carol := xtesting.NewAccount("carol")
@@ -1113,7 +1142,7 @@ func TestActivateTwoAccounts(t *testing.T) {
 // =============================================================================
 
 func TestAccountSet(t *testing.T) {
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 	alice := xtesting.NewAccount("alice")
 	bob := xtesting.NewAccount("bob")
 	env.Fund(alice, bob)
@@ -1158,7 +1187,7 @@ func TestAccountSet(t *testing.T) {
 
 func TestBadSequence(t *testing.T) {
 	t.Run("past sequence - inner tx with past seq", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -1186,7 +1215,7 @@ func TestBadSequence(t *testing.T) {
 	})
 
 	t.Run("future sequence - inner tx with far future seq", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -1214,7 +1243,7 @@ func TestBadSequence(t *testing.T) {
 	})
 
 	t.Run("same sequence as outer - inner tx uses outer's seq", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -1249,7 +1278,7 @@ func TestBadSequence(t *testing.T) {
 
 func TestBadOuterFee(t *testing.T) {
 	t.Run("insufficient fee without signers", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -1268,7 +1297,7 @@ func TestBadOuterFee(t *testing.T) {
 	})
 
 	t.Run("insufficient fee with batch signers", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -1302,7 +1331,7 @@ func TestBatchDelegate(t *testing.T) {
 		// Inner tx[0] is a payment from alice to bob with Delegate=bob.
 		// Inner tx[1] is a regular payment from alice to bob.
 		// Reference: rippled Batch_test.cpp testBatchDelegate() - "delegated non atomic inner"
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableFeature("PermissionDelegation")
 
 		alice := xtesting.NewAccount("alice")
@@ -1347,7 +1376,7 @@ func TestBatchDelegate(t *testing.T) {
 		// Bob delegates "Payment" permission to carol.
 		// Carol submits batch: inner tx[0] is payment bob->alice with Delegate=carol, inner tx[1] is payment alice->bob.
 		// Reference: rippled Batch_test.cpp testBatchDelegate() - "delegated atomic inner"
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableFeature("PermissionDelegation")
 
 		alice := xtesting.NewAccount("alice")
@@ -1408,7 +1437,7 @@ func TestTickets(t *testing.T) {
 	t.Run("tickets outer", func(t *testing.T) {
 		// Outer batch uses a ticket; inner transactions use regular sequences.
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer"
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1450,7 +1479,7 @@ func TestTickets(t *testing.T) {
 	t.Run("tickets inner", func(t *testing.T) {
 		// Outer batch uses regular sequence; inner transactions use tickets.
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets inner"
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1492,7 +1521,7 @@ func TestTickets(t *testing.T) {
 	t.Run("tickets outer inner", func(t *testing.T) {
 		// Outer batch uses a ticket; one inner tx uses a ticket, the other uses a sequence.
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer inner"
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1545,7 +1574,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 		// The batch is applied first (canonical order), consuming the ticket
 		// used by the inner tx. The noop that also uses that ticket is
 		// overwritten.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -1591,7 +1620,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 
 	t.Run("after batch txn with same ticket", func(t *testing.T) {
 		// Reference: rippled testTicketsOpenLedger() "After Batch Txn w/ same ticket"
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -1647,6 +1676,7 @@ func TestBatchTxQueue(t *testing.T) {
 		// "only outer batch transactions are counter towards the queue size"
 		cfg := makeSmallQueueConfig(2)
 		env := xtesting.NewTestEnvWithTxQ(t, cfg)
+		env.EnableFeatureNow("Batch")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1710,6 +1740,7 @@ func TestBatchTxQueue(t *testing.T) {
 		// "inner batch transactions are counter towards the ledger tx count"
 		cfg := makeSmallQueueConfig(2)
 		env := xtesting.NewTestEnvWithTxQ(t, cfg)
+		env.EnableFeatureNow("Batch")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1832,7 +1863,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		// A noop at aliceSeq+2 gets terPRE_SEQ. Then a batch with carol as
 		// outer submitter and alice as inner signer advances alice's seq.
 		// After close: batch succeeds, noop retried in next ledger.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -1892,7 +1923,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		// A noop at aliceSeq+1 gets terPRE_SEQ. Then a batch with alice as
 		// outer submitter has inner payments consuming aliceSeq+1 and aliceSeq+2.
 		// After close: batch wins (canonical order), noop overwritten.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -1943,7 +1974,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		// Reference: rippled testSequenceOpenLedger() "After Batch Txn w/ same sequence"
 		// Batch submitted first, then noop at aliceSeq+1.
 		// After close: batch wins (applied first), noop at same seq overwritten.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -1994,7 +2025,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		// Reference: rippled testSequenceOpenLedger() "Outer Batch terPRE_SEQ"
 		// Batch outer has a future sequence (carolSeq+1) -> terPRE_SEQ.
 		// A noop advances carol's seq. After close: batch succeeds.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -2066,7 +2097,7 @@ func TestObjectsOpenLedger(t *testing.T) {
 		// In our Go code, the batch inner txns are applied immediately, so
 		// the CheckCash may succeed or fail depending on submission order.
 		// After replay-on-close, the final state is the same.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -2127,7 +2158,7 @@ func TestObjectsOpenLedger(t *testing.T) {
 		// CheckCreate submitted before the batch. The batch's inner CheckCash
 		// consumes the check. The standalone CheckCreate runs first in the
 		// open view.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -2181,7 +2212,7 @@ func TestObjectsOpenLedger(t *testing.T) {
 		// Batch creates a check (inner), then standalone CheckCash tries to cash it.
 		// In rippled, the CheckCash gets tecNO_ENTRY because batch inner txns
 		// are deferred. During replay, batch applies first, then CheckCash succeeds.
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
 		alice := xtesting.NewAccount("alice")
@@ -2251,7 +2282,7 @@ func TestOpenLedger(t *testing.T) {
 	// In our implementation, since inner batch txns are applied immediately,
 	// bob's payment at bobSeq+1 may or may not get terPRE_SEQ depending on
 	// whether the batch has already been applied. We verify final state.
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 	env.EnableOpenLedgerReplay()
 
 	alice := xtesting.NewAccount("alice")
@@ -2336,7 +2367,7 @@ func TestOpenLedger(t *testing.T) {
 
 func TestBadRawTxn(t *testing.T) {
 	t.Run("nil inner transaction", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -2372,7 +2403,7 @@ func TestPreclaim(t *testing.T) {
 	// Tests checkSign.checkSingleSign, checkBatchSign.checkMultiSign, and checkBatchSign.checkSingleSign.
 	// Uses a shared environment because state accumulates (signer lists, regular keys, disabled masters).
 
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 
 	alice := xtesting.NewAccount("alice")
 	bob := xtesting.NewAccount("bob")
@@ -2651,7 +2682,7 @@ func TestPreclaim(t *testing.T) {
 func TestAccountDelete(t *testing.T) {
 	t.Run("tfIndependent - account delete success", func(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testAccountDelete() - tfIndependent success
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -2689,7 +2720,7 @@ func TestAccountDelete(t *testing.T) {
 
 	t.Run("tfIndependent - account delete fails", func(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testAccountDelete() - tfIndependent fails
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -2729,7 +2760,7 @@ func TestAccountDelete(t *testing.T) {
 
 	t.Run("tfAllOrNothing - account delete fails", func(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testAccountDelete() - tfAllOrNothing fails
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -2773,7 +2804,7 @@ func TestObjectCreateSequence(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		// Create a CheckCreate from bob to alice, then CheckCash from alice, all in a batch.
 		// Reference: rippled Batch_test.cpp testObjectCreateSequence() - success
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -2836,7 +2867,7 @@ func TestObjectCreateSequence(t *testing.T) {
 		// Alice enables asfRequireDest, so CheckCreate to alice fails with tecDST_TAG_NEEDED.
 		// In Independent mode, CheckCash then fails with tecNO_ENTRY.
 		// Reference: rippled Batch_test.cpp testObjectCreateSequence() - failure
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -2905,7 +2936,7 @@ func TestObjectCreateSequence(t *testing.T) {
 func TestObjectCreateTicket(t *testing.T) {
 	// Create tickets inside a batch, then use a ticket for CheckCreate, then CheckCash.
 	// Reference: rippled Batch_test.cpp testObjectCreateTicket()
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 
 	alice := xtesting.NewAccount("alice")
 	bob := xtesting.NewAccount("bob")
@@ -2984,7 +3015,7 @@ func TestObjectCreate3rdParty(t *testing.T) {
 	// bob creates a check for alice, alice cashes it.
 	// batch::sig(alice, bob) provides authorization.
 
-	env := xtesting.NewTestEnv(t)
+	env := newBatchEnv(t)
 
 	alice := xtesting.NewAccount("alice")
 	bob := xtesting.NewAccount("bob")
@@ -3052,7 +3083,7 @@ func TestObjectCreate3rdParty(t *testing.T) {
 
 func TestBatchCalculateBaseFee(t *testing.T) {
 	t.Run("too many txns returns error fee", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3074,7 +3105,7 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 	})
 
 	t.Run("too many signers returns error fee", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		env.Fund(alice)
 		env.Close()
@@ -3097,7 +3128,7 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 	})
 
 	t.Run("valid batch fee calculation", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3129,7 +3160,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// temBAD_SIGNER: bob's inner makes bob a required signer, but no BatchSigners
 	// are provided at all, so the required set is never emptied (Batch.cpp:448-453).
 	t.Run("temBAD_SIGNER - foreign inner with no batch signers", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3149,7 +3180,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// temBAD_SIGNER: a presented signer is not required because both inner txns
 	// belong to the outer account, so requiredSigners is empty (Batch.cpp:530-541).
 	t.Run("temBAD_SIGNER - stray signer, no inner requires it", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3170,7 +3201,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// temBAD_SIGNER: bob's inner requires bob, but the presented signer is carol
 	// (Batch.cpp:543-552).
 	t.Run("temBAD_SIGNER - wrong signer for required inner account", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		carol := xtesting.NewAccount("carol")
@@ -3192,7 +3223,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// temBAD_SIGNER: a required inner account (carol) is left uncovered after all
 	// presented signers are consumed (Batch.cpp:581-592).
 	t.Run("temBAD_SIGNER - required inner account uncovered", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		carol := xtesting.NewAccount("carol")
@@ -3220,7 +3251,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// alice). This mirrors rippled, where checkBatchSign rejects in preflight before
 	// the preclaim authorization check is reached.
 	t.Run("temBAD_SIGNATURE - signature key mismatched to signing pubkey", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.VerifySignatures = true
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -3242,7 +3273,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// temBAD_SIGNATURE: bob is the required signer with his own public key but a
 	// corrupted signature that does not verify over the batch digest.
 	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.VerifySignatures = true
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -3264,7 +3295,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// tesSUCCESS: a single required signer (bob) signs the batch digest with his
 	// master key — a valid single-signed BatchSigner.
 	t.Run("tesSUCCESS - valid single-signed batch signer", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3286,7 +3317,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// verification enabled so bob's BatchTxnSignature is checked cryptographically
 	// over the batch digest, exercising the engine's batch single-sign crypto path.
 	t.Run("tesSUCCESS - valid single-signed batch signer (verified)", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.VerifySignatures = true
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -3309,7 +3340,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// BatchSigner (carol + dave on bob's signer list) — a valid multi-signed
 	// BatchSigner.
 	t.Run("tesSUCCESS - valid multi-signed batch signer", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		carol := xtesting.NewAccount("carol")
@@ -3340,7 +3371,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// cryptographically over the digest-plus-accountID message, exercising the
 	// engine's batch multi-sign crypto path end-to-end.
 	t.Run("tesSUCCESS - valid multi-signed batch signer (verified)", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		carol := xtesting.NewAccount("carol")
@@ -3372,7 +3403,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// tesSUCCESS: a single-account batch (both inners from the outer account)
 	// needs no BatchSigners at all.
 	t.Run("tesSUCCESS - single-account batch needs no signers", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3423,7 +3454,7 @@ func TestBatchSignerArrayBound(t *testing.T) {
 	// Amendment enabled (mainnet): the bound is 32. 33 nested signers is rejected
 	// in preflight before any SignerList lookup.
 	t.Run("ExpandedSignerList enabled - 33 nested signers rejected", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		require.True(t, env.FeatureEnabled("ExpandedSignerList"))
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -3441,7 +3472,7 @@ func TestBatchSignerArrayBound(t *testing.T) {
 	// Amendment disabled: the bound drops to 8. 9 nested signers is rejected in
 	// preflight regardless of the SignerList.
 	t.Run("ExpandedSignerList disabled - 9 nested signers rejected", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.DisableFeature("ExpandedSignerList")
 		env.Close()
 		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
@@ -3462,7 +3493,7 @@ func TestBatchSignerArrayBound(t *testing.T) {
 	// Amendment disabled: 8 nested signers is exactly the bound and passes the
 	// full pipeline when bob authorizes all eight with a met quorum.
 	t.Run("ExpandedSignerList disabled - 8 nested signers accepted", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := newBatchEnv(t)
 		env.DisableFeature("ExpandedSignerList")
 		env.Close()
 		require.False(t, env.FeatureEnabled("ExpandedSignerList"))

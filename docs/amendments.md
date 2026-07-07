@@ -7,13 +7,13 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 103 amendments.
+Total: 104 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
 | `AMM` | yes | no |
 | `AMMClawback` | yes | no |
-| `Batch` | yes | no |
+| `Batch` | no | no |
 | `CheckCashMakesTrustLine` | yes | no |
 | `Checks` | yes | yes |
 | `Clawback` | yes | no |
@@ -78,6 +78,7 @@ Total: 103 amendments.
 | `fixAMMv1_2` | yes | no |
 | `fixAMMv1_3` | yes | no |
 | `fixAmendmentMajorityCalc` | yes | yes |
+| `fixBatchInnerSigs` | no | no |
 | `fixCheckThreading` | yes | yes |
 | `fixDelegateV1_1` | no | no |
 | `fixDirectoryLimit` | yes | no |
