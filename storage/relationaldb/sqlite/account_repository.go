@@ -182,10 +182,12 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 
 	if len(transactions) > int(options.Limit) {
 		transactions = transactions[:options.Limit]
-		lastTx := transactions[len(transactions)-1]
-		result.Marker = &relationaldb.AccountTxMarker{
-			LedgerSeq: lastTx.LedgerSeq,
-			TxnSeq:    lastTx.TxnSeq,
+		if len(transactions) > 0 {
+			lastTx := transactions[len(transactions)-1]
+			result.Marker = &relationaldb.AccountTxMarker{
+				LedgerSeq: lastTx.LedgerSeq,
+				TxnSeq:    lastTx.TxnSeq,
+			}
 		}
 	}
 
