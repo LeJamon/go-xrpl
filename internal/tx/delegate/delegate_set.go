@@ -137,6 +137,24 @@ func (d *DelegateSet) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePermissionDelegation}
 }
 
+// PreflightRules performs the amendment-gated preflight checks. Under
+// fixDelegateV1_1 every requested permission must be delegatable, and a
+// violation is rejected at preflight with temMALFORMED (before the amendment
+// the same check runs in preclaim and yields tecNO_PERMISSION).
+// Reference: rippled DelegateSet.cpp preflight().
+func (d *DelegateSet) PreflightRules(rules *amendment.Rules) error {
+	if rules == nil || !rules.Enabled(amendment.FeatureFixDelegateV1_1) {
+		return nil
+	}
+	for _, p := range d.Permissions {
+		pv := state.LookupPermissionValue(p.Permission.PermissionValue)
+		if !isDelegatable(pv, rules) {
+			return ter.Errorf(ter.TemMALFORMED, "permission %q is not delegatable", p.Permission.PermissionValue)
+		}
+	}
+	return nil
+}
+
 // Reference: rippled DelegateSet.cpp preclaim() + doApply()
 func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("delegate set apply",
@@ -155,12 +173,16 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_TARGET
 	}
 
-	// Preclaim: check that all permissions are delegatable.
-	// Reference: rippled DelegateSet.cpp preclaim() — Permission::isDelegatable()
+	// Check that all permissions are delegatable. Under fixDelegateV1_1 this
+	// runs in preflight (see PreflightRules, returning temMALFORMED); before the
+	// amendment it stays here and returns tecNO_PERMISSION.
+	rules := ctx.Rules()
 	permValues := d.permissionValues()
-	for _, pv := range permValues {
-		if !isDelegatable(pv) {
-			return ter.TecNO_PERMISSION
+	if rules == nil || !rules.Enabled(amendment.FeatureFixDelegateV1_1) {
+		for _, pv := range permValues {
+			if !isDelegatable(pv, rules) {
+				return ter.TecNO_PERMISSION
+			}
 		}
 	}
 
@@ -287,23 +309,60 @@ func (d *DelegateSet) permissionValues() []uint32 {
 	return values
 }
 
-// isDelegatable checks whether a permission value represents a delegatable permission.
-// Granular permissions (values > UINT16_MAX) are always delegatable.
-// Transaction-level permissions use permissionValue = txType + 1, and are delegatable
-// unless the tx type is explicitly marked as notDelegatable.
-// Reference: rippled Permissions.cpp isDelegatable()
-func isDelegatable(permissionValue uint32) bool {
+// isDelegatable reports whether a permission value may be delegated under the
+// given amendment rules.
+//
+// Granular permissions are always delegatable. A transaction-level permission
+// (value == txType + 1) is delegatable unless the type is explicitly
+// non-delegatable. Under fixDelegateV1_1 the check is stricter: the value must
+// map to a registered transaction type, and that type's introducing amendment
+// (if any) must be enabled.
+func isDelegatable(permissionValue uint32, rules *amendment.Rules) bool {
 	// Granular permissions are always delegatable.
 	if permissionValue >= granularPermissionMin {
 		return true
 	}
 
-	// Transaction-level: txType = permissionValue - 1
-	txType := uint16(permissionValue - 1)
-	if notDelegatableTxTypes[txType] {
-		return false
+	txType, known := permissionTxType(permissionValue)
+
+	if rules != nil && rules.Enabled(amendment.FeatureFixDelegateV1_1) {
+		if !known {
+			return false
+		}
+		if feature, gated := txIntroducingAmendment(txType); gated && !rules.Enabled(feature) {
+			return false
+		}
 	}
 
-	// Default: delegatable (permissive, matching rippled's behavior for unknown types)
+	if known && notDelegatableTxTypes[txType] {
+		return false
+	}
 	return true
+}
+
+// permissionTxType maps a transaction-level permission value to its tx type
+// (value - 1), reporting whether that type is registered.
+func permissionTxType(permissionValue uint32) (uint16, bool) {
+	if permissionValue == 0 {
+		return 0, false
+	}
+	txType := uint16(permissionValue - 1)
+	if _, err := tx.NewFromType(tx.Type(txType)); err != nil {
+		return txType, false
+	}
+	return txType, true
+}
+
+// txIntroducingAmendment returns the amendment that gates a transaction type,
+// if one exists. Types available without an amendment report gated=false.
+func txIntroducingAmendment(txType uint16) (feature [32]byte, gated bool) {
+	txn, err := tx.NewFromType(tx.Type(txType))
+	if err != nil {
+		return [32]byte{}, false
+	}
+	required := txn.RequiredAmendments()
+	if len(required) == 0 {
+		return [32]byte{}, false
+	}
+	return required[0], true
 }
