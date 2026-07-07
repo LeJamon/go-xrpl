@@ -184,6 +184,49 @@ func (n XRPLNumber) IsZero() bool {
 	return n.mantissa == 0
 }
 
+// Mantissa returns the normalized signed mantissa.
+func (n XRPLNumber) Mantissa() int64 { return n.mantissa }
+
+// Exponent returns the normalized exponent.
+func (n XRPLNumber) Exponent() int { return n.exponent }
+
+// Signum returns -1, 0, or +1 as n is negative, zero, or positive.
+func (n XRPLNumber) Signum() int {
+	switch {
+	case n.mantissa < 0:
+		return -1
+	case n.mantissa > 0:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Cmp compares n and y, returning -1, 0, or +1.
+func (n XRPLNumber) Cmp(y XRPLNumber) int {
+	return n.Sub(y).Signum()
+}
+
+// Truncate drops the fractional part of n toward zero, mirroring rippled's
+// Number::truncate().
+func (n XRPLNumber) Truncate() XRPLNumber {
+	if n.mantissa == 0 || n.exponent >= 0 {
+		return n
+	}
+	m := n.mantissa
+	neg := m < 0
+	if neg {
+		m = -m
+	}
+	q := new(big.Int).SetInt64(m)
+	div := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-n.exponent)), nil)
+	q.Quo(q, div)
+	if neg {
+		q.Neg(q)
+	}
+	return NewXRPLNumber(q.Int64(), 0)
+}
+
 // Equal returns true if two Numbers are identical.
 func (n XRPLNumber) Equal(other XRPLNumber) bool {
 	return n.mantissa == other.mantissa && n.exponent == other.exponent

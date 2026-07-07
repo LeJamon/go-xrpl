@@ -3,11 +3,13 @@ package vault
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // vaultData is the parsed form of an ltVAULT ledger entry.
@@ -105,4 +107,67 @@ func serializeVault(v *vaultData) ([]byte, error) {
 		return nil, fmt.Errorf("encode vault: %w", err)
 	}
 	return hex.DecodeString(hexStr)
+}
+
+// parseVault decodes a vault ledger entry via the canonical ledgerfields
+// decoder and maps it onto vaultData.
+func parseVault(data []byte) (*vaultData, error) {
+	lv := &ledgerfields.Vault{}
+	if err := lv.Decode(data); err != nil {
+		return nil, err
+	}
+
+	vd := &vaultData{
+		Sequence:         lv.Sequence,
+		WithdrawalPolicy: uint8(lv.WithdrawalPolicy),
+		Scale:            uint8(lv.Scale),
+		Flags:            lv.Flags,
+		Data:             lv.Data,
+		AssetsTotal:      normalizeNumberString(lv.AssetsTotal),
+		AssetsAvailable:  normalizeNumberString(lv.AssetsAvailable),
+		AssetsMaximum:    normalizeNumberString(lv.AssetsMaximum),
+		LossUnrealized:   normalizeNumberString(lv.LossUnrealized),
+	}
+
+	if id, err := state.DecodeAccountID(lv.Owner); err == nil {
+		vd.Owner = id
+	}
+	if id, err := state.DecodeAccountID(lv.Account); err == nil {
+		vd.Account = id
+	}
+	if n, err := strconv.ParseUint(lv.OwnerNode, 16, 64); err == nil {
+		vd.OwnerNode = n
+	}
+	if b, err := hex.DecodeString(lv.ShareMPTID); err == nil && len(b) == 24 {
+		copy(vd.ShareMPTID[:], b)
+	}
+	if b, err := hex.DecodeString(lv.PreviousTxnID); err == nil && len(b) == 32 {
+		copy(vd.PreviousTxnID[:], b)
+	}
+	vd.PreviousTxnLgrSeq = lv.PreviousTxnLgrSeq
+
+	if m, ok := lv.Asset.(map[string]any); ok {
+		if mptID, ok := m["mpt_issuance_id"].(string); ok {
+			vd.AssetIsMPT = true
+			if b, err := hex.DecodeString(mptID); err == nil && len(b) == 24 {
+				copy(vd.AssetMPTID[:], b)
+			}
+		} else {
+			cur, _ := m["currency"].(string)
+			iss, _ := m["issuer"].(string)
+			vd.Asset = tx.Asset{Currency: cur, Issuer: iss}
+		}
+	}
+
+	return vd, nil
+}
+
+// normalizeNumberString coerces a decoded NUMBER value ("0" or a decimal /
+// scientific string) into vaultData's convention: "" for zero, else the string.
+func normalizeNumberString(v any) string {
+	s, ok := v.(string)
+	if !ok || s == "" || s == "0" {
+		return ""
+	}
+	return s
 }

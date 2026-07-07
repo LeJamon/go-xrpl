@@ -9,11 +9,12 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// readAccountRoot reads and parses an AccountRoot, returning nil when absent.
+// readAccountRoot reads and parses an AccountRoot, returning (nil, nil) when the
+// account does not exist (view.Read reports a missing key via a nil payload).
 func readAccountRoot(view tx.LedgerView, id [20]byte) (*state.AccountRoot, error) {
 	data, err := view.Read(keylet.Account(id))
 	if err != nil || data == nil {
-		return nil, err
+		return nil, nil
 	}
 	return state.ParseAccountRoot(data)
 }
@@ -102,4 +103,14 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 		return 0, res
 	}
 	return 1, ter.TesSUCCESS
+}
+
+// readVault reads and parses the vault ledger entry at vaultKey, returning
+// (nil, nil) when the entry does not exist.
+func readVault(view tx.LedgerView, vaultKey keylet.Keylet) (*vaultData, error) {
+	data, err := view.Read(vaultKey)
+	if err != nil || data == nil {
+		return nil, nil
+	}
+	return parseVault(data)
 }
