@@ -108,6 +108,7 @@ Total: 100 amendments.
 | `fixRmSmallIncreasedQOffers` | yes | yes |
 | `fixSTAmountCanonicalize` | yes | yes |
 | `fixTakerDryOfferRemoval` | yes | yes |
+| `fixTokenEscrowV1` | yes | no |
 | `fixTrustLinesToSelf` | yes | no |
 | `fixUniversalNumber` | yes | no |
 | `fixXChainRewardRounding` | yes | no |
