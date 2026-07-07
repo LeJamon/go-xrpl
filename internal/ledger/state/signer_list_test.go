@@ -22,7 +22,7 @@ func TestSerializeSignerList_MacroFieldSet(t *testing.T) {
 		{Account: addrB, SignerWeight: 2},
 	}
 
-	data, err := SerializeSignerList(3, entries, 0, false, 0)
+	data, err := SerializeSignerList(3, entries, 0, false, 0, nil)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}

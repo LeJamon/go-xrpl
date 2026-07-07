@@ -240,6 +240,13 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	channelSLE.OwnerNode = ownerResult.Page
 
+	// fixIncludeKeyletFields: store the creating sequence (tx or ticket) used
+	// to derive the channel keylet.
+	if ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		channelSLE.Sequence = sequence
+		channelSLE.HasSequence = true
+	}
+
 	// DirInsert into destination directory (if fixPayChanRecipientOwnerDir enabled)
 	// Reference: rippled PayChan.cpp doApply() fixPayChanRecipientOwnerDir
 	if ctx.Rules().Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {

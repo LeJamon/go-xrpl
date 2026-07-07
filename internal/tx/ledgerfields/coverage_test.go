@@ -173,6 +173,7 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"SignerList": {
+		"Owner":        fxAccount,
 		"OwnerNode":    "0",
 		"SignerQuorum": uint32(3),
 		"SignerEntries": []any{map[string]any{
@@ -247,6 +248,7 @@ var coverageFixtures = map[string]map[string]any{
 	},
 	"Escrow": {
 		"Account":           fxAccount,
+		"Sequence":          uint32(7),
 		"Destination":       fxIssuer,
 		"Amount":            fxXRP,
 		"Condition":         fxBlob,
@@ -265,6 +267,7 @@ var coverageFixtures = map[string]map[string]any{
 	"PayChannel": {
 		"Account":           fxAccount,
 		"Destination":       fxIssuer,
+		"Sequence":          uint32(7),
 		"Amount":            fxXRP,
 		"Balance":           fxXRP,
 		"PublicKey":         fxBlob,
@@ -326,8 +329,9 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"Oracle": {
-		"Owner":    fxAccount,
-		"Provider": fxBlob,
+		"Owner":            fxAccount,
+		"OracleDocumentID": uint32(13),
+		"Provider":         fxBlob,
 		"PriceDataSeries": []any{map[string]any{
 			"PriceData": map[string]any{"BaseAsset": fxCurrUSD, "QuoteAsset": fxCurrEUR, "AssetPrice": "64", "Scale": uint32(2)},
 		}},

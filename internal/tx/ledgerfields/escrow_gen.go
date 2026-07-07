@@ -23,6 +23,7 @@ func init() {
 type Escrow struct {
 	present           uint64
 	Account           string // AccountID (base58)
+	Sequence          uint32
 	Destination       string // AccountID (base58)
 	Amount            any    // Amount (XRP string | IOU map)
 	Condition         string // Blob (uppercase hex)
@@ -41,6 +42,7 @@ type Escrow struct {
 
 const (
 	escrowBitAccount uint64 = 1 << iota
+	escrowBitSequence
 	escrowBitDestination
 	escrowBitAmount
 	escrowBitCondition
@@ -92,6 +94,9 @@ func (e *Escrow) Decode(data []byte) error {
 			case 3:
 				e.SourceTag = val
 				e.present |= escrowBitSourceTag
+			case 4:
+				e.Sequence = val
+				e.present |= escrowBitSequence
 			case 5:
 				e.PreviousTxnLgrSeq = val
 				e.present |= escrowBitPreviousTxnLgrSeq
@@ -201,6 +206,9 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	if e.present&escrowBitAccount != 0 && !(skipDefault && e.Account == "") {
 		out["Account"] = e.Account
 	}
+	if e.present&escrowBitSequence != 0 && !(skipDefault && e.Sequence == 0) {
+		out["Sequence"] = e.Sequence
+	}
 	if e.present&escrowBitDestination != 0 && !(skipDefault && e.Destination == "") {
 		out["Destination"] = e.Destination
 	}
@@ -259,6 +267,7 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 		return
 	}
 	emitIfChangedString(out, "Account", prv.Account, e.Account, prv.present&escrowBitAccount, e.present&escrowBitAccount)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, e.Sequence, prv.present&escrowBitSequence, e.present&escrowBitSequence)
 	emitIfChangedString(out, "Destination", prv.Destination, e.Destination, prv.present&escrowBitDestination, e.present&escrowBitDestination)
 	emitIfChangedAmount(out, "Amount", prv.Amount, e.Amount, prv.present&escrowBitAmount, e.present&escrowBitAmount)
 	emitIfChangedString(out, "Condition", prv.Condition, e.Condition, prv.present&escrowBitCondition, e.present&escrowBitCondition)
@@ -281,6 +290,9 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
 	if e.present&escrowBitAccount != 0 {
 		out["Account"] = e.Account
+	}
+	if e.present&escrowBitSequence != 0 {
+		out["Sequence"] = e.Sequence
 	}
 	if e.present&escrowBitDestination != 0 {
 		out["Destination"] = e.Destination
@@ -361,6 +373,9 @@ func (e *Escrow) ToMap() map[string]any {
 	}
 	if e.present&escrowBitAccount != 0 {
 		out["Account"] = e.Account
+	}
+	if e.present&escrowBitSequence != 0 {
+		out["Sequence"] = e.Sequence
 	}
 	if e.present&escrowBitDestination != 0 {
 		out["Destination"] = e.Destination
