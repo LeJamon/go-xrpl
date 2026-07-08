@@ -341,7 +341,7 @@ func (l *LoanSet) Validate() error {
 		return ter.Errorf(ter.TemINVALID, "PaymentInterval too small")
 	}
 	if l.GracePeriod != nil {
-		maxGrace := uint32(minPaymentInterval)
+		maxGrace := minPaymentInterval
 		if l.PaymentInterval != nil {
 			maxGrace = *l.PaymentInterval
 		}
