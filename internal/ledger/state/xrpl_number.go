@@ -262,6 +262,35 @@ func xrplNumberZero() XRPLNumber {
 // IsZero reports whether the number is zero.
 func (n XRPLNumber) IsZero() bool { return n.mantissa == 0 }
 
+// Signum returns -1, 0, or +1 as n is negative, zero, or positive.
+func (n XRPLNumber) Signum() int {
+	switch {
+	case n.mantissa == 0:
+		return 0
+	case n.negative:
+		return -1
+	default:
+		return 1
+	}
+}
+
+// Cmp compares n and y, returning -1, 0, or +1.
+func (n XRPLNumber) Cmp(y XRPLNumber) int {
+	return n.Sub(y).Signum()
+}
+
+// Truncate drops the fractional part of n toward zero, mirroring rippled's
+// Number::truncate().
+func (n XRPLNumber) Truncate() XRPLNumber {
+	if n.mantissa == 0 || n.exponent >= 0 {
+		return n
+	}
+	q := new(big.Int).SetUint64(n.mantissa)
+	div := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-n.exponent)), nil)
+	q.Quo(q, div)
+	return normalizeFromBig(n.negative, q, 0, n.scale, RoundToNearest)
+}
+
 // Equal reports whether two Numbers have identical value. Matching rippled's
 // operator==, the scale is not part of identity.
 func (n XRPLNumber) Equal(other XRPLNumber) bool {

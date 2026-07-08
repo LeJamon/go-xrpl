@@ -82,7 +82,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "valid - vault create with AssetsMaximum",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				max := int64(1000000)
+				max := "1000000"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -177,7 +177,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "invalid - AssetsMaximum negative",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				max := int64(-100)
+				max := "-100"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -261,7 +261,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "valid - update AssetsMaximum",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				max := int64(2000000)
+				max := "2000000"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -310,7 +310,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "invalid - AssetsMaximum negative",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				max := int64(-100)
+				max := "-100"
 				v.AssetsMaximum = &max
 				return v
 			}(),
@@ -688,10 +688,11 @@ func TestVaultClawbackValidation(t *testing.T) {
 			errMsg:  "Holder is required",
 		},
 		{
-			name:    "invalid - Holder is same as issuer",
+			// Holder == Account is not a preflight error in 3.1.0; it is a
+			// preclaim tecNO_PERMISSION on the asset-clawback path.
+			name:    "valid - Holder is same as issuer (rejected in preclaim)",
 			tx:      NewVaultClawback("rIssuer", makeValidVaultID(), "rIssuer"),
-			wantErr: true,
-			errMsg:  "same as issuer",
+			wantErr: false,
 		},
 		{
 			name: "invalid - amount negative",
@@ -716,15 +717,16 @@ func TestVaultClawbackValidation(t *testing.T) {
 			errMsg:  "XRP",
 		},
 		{
-			name: "invalid - amount issuer mismatch",
+			// A mismatched Amount issuer is not a preflight error in 3.1.0; the
+			// Amount may denominate shares or the asset, resolved in preclaim.
+			name: "valid - amount issuer differs (resolved in preclaim)",
 			tx: func() *VaultClawback {
 				v := NewVaultClawback("rIssuer", makeValidVaultID(), "rHolder")
-				amt := tx.NewIssuedAmountFromFloat64(100, "USD", "rOtherIssuer") // Different issuer
+				amt := tx.NewIssuedAmountFromFloat64(100, "USD", "rOtherIssuer")
 				v.Amount = &amt
 				return v
 			}(),
-			wantErr: true,
-			errMsg:  "issuer can clawback",
+			wantErr: false,
 		},
 		{
 			name: "invalid - universal flags set",
@@ -764,7 +766,7 @@ func TestVaultFlatten(t *testing.T) {
 	t.Run("VaultCreate", func(t *testing.T) {
 		v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
 		v.Data = "test data"
-		max := int64(1000000)
+		max := "1000000"
 		v.AssetsMaximum = &max
 
 		flat, err := v.Flatten()
@@ -773,13 +775,13 @@ func TestVaultFlatten(t *testing.T) {
 		assert.Equal(t, "rOwner", flat["Account"])
 		assert.Equal(t, "VaultCreate", flat["TransactionType"])
 		assert.Equal(t, "test data", flat["Data"])
-		assert.Equal(t, int64(1000000), flat["AssetsMaximum"])
+		assert.Equal(t, "1000000", flat["AssetsMaximum"])
 	})
 
 	t.Run("VaultSet", func(t *testing.T) {
 		v := NewVaultSet("rOwner", makeValidVaultID())
 		v.Data = "updated data"
-		max := int64(2000000)
+		max := "2000000"
 		v.AssetsMaximum = &max
 
 		flat, err := v.Flatten()
@@ -787,7 +789,7 @@ func TestVaultFlatten(t *testing.T) {
 
 		assert.Equal(t, makeValidVaultID(), flat["VaultID"])
 		assert.Equal(t, "updated data", flat["Data"])
-		assert.Equal(t, int64(2000000), flat["AssetsMaximum"])
+		assert.Equal(t, "2000000", flat["AssetsMaximum"])
 	})
 
 	t.Run("VaultDelete", func(t *testing.T) {
@@ -943,16 +945,14 @@ func TestVaultConstants(t *testing.T) {
 	assert.Equal(t, 256, MaxVaultDataLength)
 	assert.Equal(t, 1024, MaxMPTokenMetadataLength)
 	assert.Equal(t, uint8(1), VaultStrategyFirstComeFirstServe)
-	assert.Equal(t, uint32(0x00000001), VaultFlagPrivate)
-	assert.Equal(t, uint32(0x00000002), VaultFlagShareNonTransferable)
+	assert.Equal(t, uint32(0x00010000), VaultFlagPrivate)
+	assert.Equal(t, uint32(0x00020000), VaultFlagShareNonTransferable)
 }
 
-// TestVaultAmendmentRemainsUnsupported guards the stubbed Apply implementations.
-// The Apply methods in this package return a hard error and mutate no state
-// because the real vault semantics are not implemented. SingleAssetVault MUST
-// stay SupportedNo so the engine rejects these transactions at preflight
-// (temDISABLED) and Apply is never reached. Do not flip this to SupportedYes
-// until the Apply methods are fully implemented.
+// TestVaultAmendmentRemainsUnsupported keeps SingleAssetVault SupportedNo. The
+// vault transactors are implemented here, but flipping the amendment to
+// SupportedYes (so nodes vote for and default-enable it) is a later phase.
+// Conformance fixtures enable it per-fixture, so the flag can stay SupportedNo.
 func TestVaultAmendmentRemainsUnsupported(t *testing.T) {
 	f := amendment.GetFeature(amendment.FeatureSingleAssetVault)
 	require.NotNil(t, f, "SingleAssetVault must be registered")

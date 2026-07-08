@@ -532,6 +532,14 @@ func AMMByID(ammID [32]byte) Keylet {
 	}
 }
 
+// VaultByID returns a Vault keylet for a known Vault ID.
+func VaultByID(vaultID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeVault,
+		Key:  vaultID,
+	}
+}
+
 // Oracle returns the keylet for an Oracle entry.
 // Reference: rippled Indexes.cpp oracle(AccountID const& account, std::uint32_t const& documentID)
 func Oracle(accountID [20]byte, documentID uint32) Keylet {
