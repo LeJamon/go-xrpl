@@ -150,6 +150,8 @@ var validLedgerEntryTypes = map[string]bool{
 	"Credential":                      true,
 	"PermissionedDomain":              true,
 	"Vault":                           true,
+	"LoanBroker":                      true,
+	"Loan":                            true,
 }
 
 // maxPermissionedDomainCredentials is the maximum number of credentials in a

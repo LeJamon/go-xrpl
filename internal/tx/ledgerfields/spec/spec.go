@@ -92,6 +92,7 @@ var Specs = []Entry{
 			{Name: "TicketCount"},
 			{Name: "AMMID"},
 			{Name: "VaultID"},
+			{Name: "LoanBrokerID"},
 			{Name: "WalletSize"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},

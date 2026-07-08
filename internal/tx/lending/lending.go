@@ -305,7 +305,10 @@ func (l *LoanSet) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "PrincipalRequested is required")
 	}
 	// A LoanSet must carry a CounterpartySignature, except as a batch inner tx.
-	if l.GetFlags()&tx.TfInnerBatchTxn == 0 && len(l.CounterpartySignature) == 0 {
+	// The signature may be attached via the struct field (JSON) or the parsed
+	// Common.CounterpartySignature (wire / programmatic).
+	hasCounterSig := len(l.CounterpartySignature) != 0 || l.GetCommon().CounterpartySignature != nil
+	if l.GetFlags()&tx.TfInnerBatchTxn == 0 && !hasCounterSig {
 		return ter.Errorf(ter.TemBAD_SIGNER, "LoanSet requires a CounterpartySignature")
 	}
 	if l.Data != nil && !validDataLength(*l.Data, maxDataPayloadLength) {

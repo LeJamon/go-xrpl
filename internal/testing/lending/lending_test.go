@@ -52,15 +52,18 @@ func TestLoanTransactionsDisabled(t *testing.T) {
 	}
 }
 
-// TestLoanTransactionsEnabledStillStubbed asserts that once LendingProtocol is
-// force-enabled the transactions parse and pass preflight but fail at the
-// stubbed Apply with tefINTERNAL, guarding against the amendment being switched
-// on before the real semantics (issue #1245) land.
-func TestLoanTransactionsEnabledStillStubbed(t *testing.T) {
+// TestLoanTransactionsEnabledAreLive asserts that once the lending amendment
+// stack is force-enabled the transactions parse and reach their live transactor
+// (a stateful result), rather than the pre-activation temDISABLED or the old
+// tefINTERNAL stub. Against an empty ledger the LoanBroker/Loan lookups miss, so
+// each returns a stateful rejection.
+func TestLoanTransactionsEnabledAreLive(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
-	env.Fund(alice)
+	env.EnableFeature("SingleAssetVault")
+	env.EnableFeature("MPTokensV1")
 	env.EnableFeature("LendingProtocol")
+	env.Fund(alice)
 	env.Close()
 
 	if !env.FeatureEnabled("LendingProtocol") {
@@ -70,8 +73,8 @@ func TestLoanTransactionsEnabledStillStubbed(t *testing.T) {
 	for name, txn := range loanTxBuilders(alice.Address) {
 		t.Run(name, func(t *testing.T) {
 			result := env.Submit(txn)
-			if result.Code != "tefINTERNAL" {
-				t.Errorf("%s: expected tefINTERNAL from stubbed Apply, got %s", name, result.Code)
+			if result.Code == jtx.TemDISABLED || result.Code == "tefINTERNAL" {
+				t.Errorf("%s: transactor not live, got %s", name, result.Code)
 			}
 		})
 	}

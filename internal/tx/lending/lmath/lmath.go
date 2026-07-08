@@ -94,6 +94,21 @@ func RoundAssetNearest(asset Asset, value N, scale int) N {
 	return roundToAssetNearest(asset, value, scale)
 }
 
+// RoundAssetTowardsZero rounds value to the asset scale toward zero.
+func RoundAssetTowardsZero(asset Asset, value N, scale int) N {
+	return value.RoundToAssetScale(asset.Integral, scale, state.RoundTowardsZero)
+}
+
+// AdjustImprecise re-rounds value+adjustment to the vault scale and floors it at
+// zero, avoiding accumulated dust (rippled adjustImpreciseNumber).
+func AdjustImprecise(asset Asset, value, adjustment N, vaultScale int) N {
+	v := roundToAssetNearest(asset, value.Add(adjustment), vaultScale)
+	if v.Signum() < 0 {
+		return zeroN()
+	}
+	return v
+}
+
 // IsRounded reports whether value already sits at the asset's precision for
 // scale: rounding down and up agree (rippled isRounded). The Loan* transactors
 // use it for the tecPRECISION_LOSS field checks.

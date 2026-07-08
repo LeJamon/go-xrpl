@@ -140,3 +140,55 @@ func ReadVaultInfo(view tx.LedgerView, vaultKey keylet.Keylet) (*VaultInfo, erro
 		OwnerNode:  vd.OwnerNode,
 	}, nil
 }
+
+// VaultLending exposes the mutable NUMBER totals the lending transactors read and
+// write (loan disbursement, impairment loss tracking). The NUMBER fields are the
+// codec's decimal-string form ("" = zero).
+type VaultLending struct {
+	VaultInfo
+	AssetsTotal     string
+	AssetsAvailable string
+	AssetsMaximum   string
+	LossUnrealized  string
+	Scale           uint8
+}
+
+// ReadVaultLending reads the vault's full lending view, (nil, nil) when absent.
+func ReadVaultLending(view tx.LedgerView, vaultKey keylet.Keylet) (*VaultLending, error) {
+	vd, err := readVault(view, vaultKey)
+	if err != nil || vd == nil {
+		return nil, err
+	}
+	return &VaultLending{
+		VaultInfo: VaultInfo{
+			Account: vd.Account, Owner: vd.Owner, ShareMPTID: vd.ShareMPTID,
+			Asset: vaultAssetOf(vd), OwnerNode: vd.OwnerNode,
+		},
+		AssetsTotal:     vd.AssetsTotal,
+		AssetsAvailable: vd.AssetsAvailable,
+		AssetsMaximum:   vd.AssetsMaximum,
+		LossUnrealized:  vd.LossUnrealized,
+		Scale:           vd.Scale,
+	}, nil
+}
+
+// UpdateVaultTotals reads the vault and rewrites its three NUMBER totals
+// (AssetsTotal, AssetsAvailable, LossUnrealized) in place. Values are the codec's
+// decimal-string form ("" = zero).
+func UpdateVaultTotals(ctx *tx.ApplyContext, vaultKey keylet.Keylet, assetsTotal, assetsAvailable, lossUnrealized string) ter.Result {
+	vd, err := readVault(ctx.View, vaultKey)
+	if err != nil || vd == nil {
+		return ter.TefBAD_LEDGER
+	}
+	vd.AssetsTotal = assetsTotal
+	vd.AssetsAvailable = assetsAvailable
+	vd.LossUnrealized = lossUnrealized
+	data, serr := serializeVault(vd)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(vaultKey, data); uerr != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
+}
