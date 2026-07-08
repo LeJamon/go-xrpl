@@ -104,6 +104,18 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 			CurrentLedger: s.openLedgerView.Current().Sequence(),
 		}, nil
 	}
+	// Local submission checks (rippled STTx::passesLocalChecks via NetworkOPs):
+	// memo size/charset limits are enforced only here, on the local ingress, not
+	// in the consensus-critical engine preflight. A relayed or consensus-applied
+	// transaction carrying an oversized/invalid memo still applies, so this
+	// refusal cannot fork the ledger.
+	if localResult := tx.PassesLocalChecks(ptx.Parsed.GetCommon()); localResult != ter.TesSUCCESS {
+		return &SubmitResult{
+			Result:        localResult,
+			Message:       localResult.Message(),
+			CurrentLedger: s.openLedgerView.Current().Sequence(),
+		}, nil
+	}
 	// Verify the signature before SubmitDetailed acquires the apply mutex so the
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.

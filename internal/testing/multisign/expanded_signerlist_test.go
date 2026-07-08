@@ -170,8 +170,9 @@ func signerAccounts(env *jtx.TestEnv, n int) []*jtx.Account {
 
 // TestMultiSign_ArrayBound_WithExpandedAmendment asserts the rules-gated cap on
 // a transaction's Signers array: with featureExpandedSignerList enabled a 33-entry
-// array is rejected (cap is 32). The bound is checked in preflight, before the
-// SignerList lookup, so it surfaces as temBAD_SIGNATURE regardless of authorization.
+// array is rejected (cap is 32). The bound is a structural multi-sign check, so
+// it surfaces as temINVALID (rippled multiSignHelper's Unexpected → SigBad →
+// temINVALID in preflight2), regardless of the SignerList/authorization.
 // Reference: rippled STTx::checkMultiSign -> multiSignHelper size check.
 func TestMultiSign_ArrayBound_WithExpandedAmendment(t *testing.T) {
 	env := jtx.NewTestEnv(t)
@@ -188,7 +189,7 @@ func TestMultiSign_ArrayBound_WithExpandedAmendment(t *testing.T) {
 
 	payTx := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
 	result := env.SubmitMultiSigned(payTx, signers)
-	jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+	jtx.RequireTxFail(t, result, "temINVALID")
 }
 
 // TestMultiSign_ArrayBound_WithoutExpandedAmendment asserts the cap drops to 8
@@ -209,10 +210,11 @@ func TestMultiSign_ArrayBound_WithoutExpandedAmendment(t *testing.T) {
 	signers := signerAccounts(env, 9)
 	env.Close()
 
-	// Nine signers exceed the pre-amendment maximum of 8 — rejected in preflight.
+	// Nine signers exceed the pre-amendment maximum of 8 — a structural
+	// multi-sign violation rejected temINVALID in preflight.
 	payTx := payment.Pay(alice, becky, uint64(jtx.XRP(10))).Build()
 	result := env.SubmitMultiSigned(payTx, signers[:9])
-	jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
+	jtx.RequireTxFail(t, result, "temINVALID")
 
 	// Eight signers are the boundary; with a matching 8-entry signer list and a
 	// met quorum the multi-signed payment succeeds.
