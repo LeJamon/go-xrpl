@@ -18,7 +18,9 @@ import (
 // remain in the view (account root, owner directory, signer list, NFT pages,
 // DID). If the account had sfAMMID, verify the AMM object is also gone.
 //
-// Gating: Only enforced when featureInvariantsV1_1 is enabled.
+// Gating: enforced when fixCleanup3_2_0, SingleAssetVault, or LendingProtocol is
+// enabled. The never-activatable InvariantsV1_1 placeholder that previously gated
+// this check was removed in rippled 3.2.0.
 
 // deletedAccount holds info about a deleted AccountRoot entry.
 type deletedAccount struct {
@@ -28,9 +30,11 @@ type deletedAccount struct {
 }
 
 func checkAccountRootsDeletedClean(entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
-	// Only enforce when InvariantsV1_1 is enabled.
-	// Reference: rippled lines 438-439
-	enforce := rules != nil && rules.Enabled(amendment.FeatureInvariantsV1_1)
+	// Always scan, but to keep transaction processing deterministic only fail
+	// when one of the gating amendments is enabled.
+	enforce := rules != nil && (rules.Enabled(amendment.FeatureFixCleanup3_2_0) ||
+		rules.Enabled(amendment.FeatureSingleAssetVault) ||
+		rules.Enabled(amendment.FeatureLendingProtocol))
 	if !enforce {
 		return nil
 	}

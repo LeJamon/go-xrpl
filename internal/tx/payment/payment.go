@@ -103,6 +103,18 @@ func (p *Payment) TxType() tx.Type {
 	return tx.TypePayment
 }
 
+// GetDomainID exposes the payment's DomainID to the ValidPermissionedDEX invariant.
+func (p *Payment) GetDomainID() (*[32]byte, bool) {
+	if p.DomainID == nil {
+		return nil, false
+	}
+	id, err := permissioneddomain.ParseDomainID(*p.DomainID)
+	if err != nil {
+		return nil, false
+	}
+	return &id, true
+}
+
 // RequiredAmendments returns amendments required for this transaction. These
 // mirror rippled's checkExtraFeatures gates (sfCredentialIDs → featureCredentials,
 // sfDomainID → featurePermissionedDEX), which the engine evaluates before the
