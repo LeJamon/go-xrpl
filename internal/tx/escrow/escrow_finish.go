@@ -55,15 +55,11 @@ func (e *EscrowFinish) Validate() error {
 		return err
 	}
 
-	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
-	// where the amendment rules are available.
-
 	if e.Owner == "" {
 		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
 
-	// Both Condition and Fulfillment must be present or absent together
-	// Reference: rippled Escrow.cpp:644-646
+	// Both Condition and Fulfillment must be present or absent together.
 	// "Present" means the field exists in the transaction (even if empty value).
 	hasCondition := e.Condition != nil
 	hasFulfillment := e.Fulfillment != nil
@@ -71,20 +67,45 @@ func (e *EscrowFinish) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Condition and Fulfillment must be provided together")
 	}
 
-	// Validate CredentialIDs field
-	// Reference: rippled Escrow.cpp preflight() calls credentials::checkFields()
-	// Use HasField to detect empty arrays from binary parsing where omitempty
-	// causes the Go struct field to be nil even though the field was present.
-	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
-	if err := credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID"); err != nil {
-		return err
-	}
-
 	return nil
 }
 
 func (e *EscrowFinish) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
+}
+
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0. fix1543
+// rejects any stray (non-universal) flag; before it, any flags are allowed.
+// Reference: rippled Escrow.cpp EscrowFinish::getFlagsMask.
+func (e *EscrowFinish) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.Enabled(amendment.FeatureFix1543) {
+		return tx.TfUniversalMask
+	}
+	return 0
+}
+
+// CheckExtraFeatures gates the CredentialIDs field on the Credentials amendment.
+// rippled evaluates this in checkExtraFeatures — before preflight1's common
+// checks and before the tx-type preflight body — so a CredentialIDs-bearing
+// EscrowFinish on a network without Credentials is temDISABLED ahead of every
+// other TER, keyed on field presence (not element count).
+// Reference: rippled Escrow.cpp EscrowFinish::checkExtraFeatures.
+func (e *EscrowFinish) CheckExtraFeatures(rules *amendment.Rules) error {
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	if present && !rules.Enabled(amendment.FeatureCredentials) {
+		return ter.Errorf(ter.TemDISABLED, "Credentials amendment not enabled")
+	}
+	return nil
+}
+
+// PreflightSigValidated runs the CredentialIDs shape check (empty / >8 /
+// duplicate → temMALFORMED). rippled runs credentials::checkFields in
+// preflightSigValidated, AFTER the signature is verified, so a mis-signed
+// EscrowFinish surfaces temINVALID rather than this temMALFORMED.
+// Reference: rippled Escrow.cpp EscrowFinish::preflightSigValidated.
+func (e *EscrowFinish) PreflightSigValidated() error {
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	return credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID")
 }
 
 // CalculateBaseFee mirrors rippled's EscrowFinish::calculateBaseFee: the
@@ -116,20 +137,6 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 	return fee
 }
 
-// Preclaim performs the rules-aware fix1543 flag check.
-// Reference: rippled Escrow.cpp:630 — stray (non-universal) flags are rejected
-// only once fix1543 is active. rippled runs this check first in preflight; the
-// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
-// after the common preflight/preclaim steps. For a tx malformed in two ways this
-// can surface a different tem code than rippled; the result is tem-only (never
-// enters a ledger) so there is no consensus divergence.
-func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
-	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
-		return ter.TemINVALID_FLAG
-	}
-	return ter.TesSUCCESS
-}
-
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
 // credential expiration deletion against the engine's view so the side-effects
 // (credential deletion, owner count adjustment) persist even though the tx
@@ -150,11 +157,8 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	rules := ctx.Rules()
 
-	// Amendment-gated check: CredentialIDs requires Credentials amendment
-	// Reference: rippled Escrow.cpp preflight() credential check
-	if len(e.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return ter.TemDISABLED
-	}
+	// The CredentialIDs amendment gate (temDISABLED, keyed on field presence) runs
+	// in CheckExtraFeatures, and the shape check in PreflightSigValidated.
 
 	// --- Preclaim: credential validation (before time checks) ---
 	// Reference: rippled EscrowFinish::preclaim() calls credentials::valid()

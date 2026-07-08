@@ -574,53 +574,50 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 // Flag-gate (Preclaim) Tests
 //
 // The tfUniversalMask / tfPayChanClaimMask stray-flag check is rules-aware and
-// runs in Preclaim (gated on fix1543), not Validate. With the default rules
+// runs at preflight0 via GetFlagsMask (gated on fix1543). With the default rules
 // (all supported amendments, fix1543 included) a stray flag is rejected with
-// temINVALID_FLAG; universal flags are accepted.
-// Reference: rippled PayChan.cpp:177 (Create), :443 (Claim) and the Fund mirror.
+// temINVALID_FLAG; universal flags (and tfRenew for a claim) are accepted.
+// Reference: rippled PayChan.cpp getFlagsMask (Create/Fund/Claim).
 
 func TestPaymentChannelFlagGate(t *testing.T) {
-	cfg := tx.EngineConfig{Rules: amendment.AllSupportedRules()} // all supported amendments (fix1543 on)
+	rules := amendment.AllSupportedRules() // all supported amendments (fix1543 on)
+
+	// maskResult mirrors the engine's preflight0 flag check:
+	// flags & GetFlagsMask(rules) != 0 → temINVALID_FLAG.
+	maskResult := func(m tx.FlagsMasker, flags uint32) ter.Result {
+		if flags&m.GetFlagsMask(rules) != 0 {
+			return ter.TemINVALID_FLAG
+		}
+		return ter.TesSUCCESS
+	}
 
 	t.Run("create rejects stray flag", func(t *testing.T) {
 		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}
-		flags := strayFlag
-		pcc.Common.Flags = &flags
-		assert.Equal(t, ter.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TemINVALID_FLAG, maskResult(pcc, strayFlag))
 	})
 
 	t.Run("create accepts universal flags", func(t *testing.T) {
 		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}
-		flags := tx.TfUniversal
-		pcc.Common.Flags = &flags
-		assert.Equal(t, ter.TesSUCCESS, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TesSUCCESS, maskResult(pcc, tx.TfUniversal))
 	})
 
 	t.Run("fund rejects stray flag", func(t *testing.T) {
 		pcf := &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner")}
-		flags := strayFlag
-		pcf.Common.Flags = &flags
-		assert.Equal(t, ter.TemINVALID_FLAG, pcf.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TemINVALID_FLAG, maskResult(pcf, strayFlag))
 	})
 
 	t.Run("fund accepts universal flags", func(t *testing.T) {
 		pcf := &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner")}
-		flags := tx.TfUniversal
-		pcf.Common.Flags = &flags
-		assert.Equal(t, ter.TesSUCCESS, pcf.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TesSUCCESS, maskResult(pcf, tx.TfUniversal))
 	})
 
 	t.Run("claim rejects stray flag", func(t *testing.T) {
 		pcc := &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner")}
-		flags := strayFlag
-		pcc.Common.Flags = &flags
-		assert.Equal(t, ter.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TemINVALID_FLAG, maskResult(pcc, strayFlag))
 	})
 
 	t.Run("claim accepts tfRenew", func(t *testing.T) {
-		pcc := &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner")}
-		pcc.SetRenew()
-		assert.Equal(t, ter.TesSUCCESS, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TesSUCCESS, maskResult(&PaymentChannelClaim{}, tfPayChanRenew))
 	})
 }
 
