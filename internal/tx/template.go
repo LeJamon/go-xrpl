@@ -309,6 +309,7 @@ var txTemplates = map[Type]map[string]fieldStyle{
 	TypeLedgerStateFix: {
 		"LedgerFixType": soeREQUIRED,
 		"Owner":         soeOPTIONAL,
+		"BookDirectory": soeOPTIONAL,
 	},
 	TypeMPTokenIssuanceCreate: {
 		"AssetScale":      soeOPTIONAL,
