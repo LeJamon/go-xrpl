@@ -168,10 +168,11 @@ func TestPreflight(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// Use an invalid flag (e.g., tfDisallowXRP = 0x00010000 for batch)
+		// Use a bit that is outside tfBatchMask (not a mode flag, not universal),
+		// so the flag mask at preflight0 rejects it before any inner check.
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
-		batch := NewBatchBuilder(alice, seq, batchFee, 0x00010000). // invalid flag
+		batch := NewBatchBuilder(alice, seq, batchFee, 0x00100000). // invalid flag
 										AddInnerTx(MakeFakeInnerTx()).
 										AddInnerTx(MakeFakeInnerTx()).
 										Build()
@@ -563,6 +564,30 @@ func TestPreflight(t *testing.T) {
 
 		result := env.Submit(batch)
 		xtesting.RequireTxFail(t, result, "temINVALID")
+	})
+
+	t.Run("temINVALID_INNER_BATCH - inner ticket with AccountTxnID", func(t *testing.T) {
+		// Pins finding Batch-inner-ticket-AccountTxnID: an inner tx that uses a
+		// ticket may not also carry AccountTxnID (rippled inner preflight1 ->
+		// temINVALID, surfaced on the outer as temINVALID_INNER_BATCH).
+		env := newBatchEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		badInner := MakeInnerPaymentXRPWithTicket(alice, bob, 1, seq+5)
+		badInner.GetCommon().AccountTxnID = "00000000000000000000000000000000000000000000000000000000000000AA"
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(badInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	t.Run("temINVALID_FLAG - inner missing tfInnerBatchTxn", func(t *testing.T) {
