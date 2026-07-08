@@ -86,7 +86,7 @@ func TestSign_SignatureTarget_HappyPath(t *testing.T) {
 	require.NoError(t, sign.VerifySignature(parsed, false), "top-level signature must verify")
 	cp := parsed.GetCommon().CounterpartySignature
 	require.NotNil(t, cp)
-	require.NoError(t, sign.VerifyCounterpartySignature(parsed, cp, nil, false), "counterparty signature must verify")
+	require.NoError(t, sign.VerifyCounterpartySignature(parsed, cp, false), "counterparty signature must verify")
 }
 
 // TestSign_SignatureTarget_Invalid rejects a signature_target that does not name
