@@ -26,7 +26,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		LedgerIndex    string           `json:"ledger_index,omitempty"`
 		Binary         bool             `json:"binary,omitempty"`
 		Forward        bool             `json:"forward,omitempty"`
-		types.PaginationParams
+		Marker         any              `json:"marker,omitempty"`
 	}
 
 	// notEnabled takes precedence over any parameter validation, matching
@@ -123,12 +123,20 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
+	// account_tx routes through readLimitField in 3.1.3 (Tuning::accountTx):
+	// absent -> 200, explicit 0 -> invalidParams, malformed -> expected_field,
+	// non-admin clamped to [10, 400]. Reference: AccountTx.cpp:435.
+	limit, limitErr := ReadLimitField(params, LimitAccountTx, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
+
 	result, err := ctx.Services.Ledger.GetAccountTransactions(
 		ctx.Context,
 		request.Account,
 		int64(ledgerIndexMin),
 		int64(ledgerIndexMax),
-		request.Limit,
+		limit,
 		marker,
 		request.Forward,
 	)

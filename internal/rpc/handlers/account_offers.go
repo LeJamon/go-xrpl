@@ -42,7 +42,10 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, mErr
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.Unlimited)
+	limit, limitErr := ReadLimitField(params, LimitAccountOffers, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {

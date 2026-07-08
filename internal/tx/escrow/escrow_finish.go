@@ -136,7 +136,7 @@ func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Res
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentials(ctx, e.CredentialIDs)
+	credential.RemoveExpiredCredentialsOnTec(ctx, e.CredentialIDs)
 }
 
 // Apply applies an EscrowFinish transaction

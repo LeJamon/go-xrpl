@@ -124,7 +124,10 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, selErr
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
+	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 
 	// Determine effective type filter based on deletion_blockers_only and type params.
 	// Matches rippled's doAccountObjects logic in AccountObjects.cpp.

@@ -65,7 +65,10 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Apply limit clamping matching rippled's readLimitField with noRippleCheck tuning
-	limit := ClampLimit(request.Limit, LimitNoRippleCheck, ctx.Unlimited)
+	limit, limitErr := ReadLimitField(params, LimitNoRippleCheck, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 
 	result, err := ctx.Services.Ledger.GetNoRippleCheck(
 		ctx.Context,

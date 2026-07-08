@@ -329,7 +329,8 @@ var (
 	LimitAccountChannels = LimitRange{10, 200, 400}
 	LimitAccountObjects  = LimitRange{10, 200, 400}
 	LimitAccountOffers   = LimitRange{10, 200, 400}
-	LimitBookOffers      = LimitRange{0, 60, 100}
+	LimitAccountTx       = LimitRange{10, 200, 400}
+	LimitBookOffers      = LimitRange{1, 60, 100}
 	LimitNoRippleCheck   = LimitRange{10, 300, 400}
 	LimitAccountNFTokens = LimitRange{20, 100, 400}
 	LimitNFTOffers       = LimitRange{50, 250, 500}
@@ -341,11 +342,15 @@ var (
 	LimitLedgerDataBinary = LimitRange{16, 2048, 2048}
 )
 
-// ClampLimit applies rippled's readLimitField logic: if the user provides
+// ClampLimit applies rippled's pre-3.1.3 clamp logic: if the user provides
 // a limit, clamp it to [range.Min, range.Max] when unlimited is false;
 // otherwise return the user value unchanged. unlimited is true for both
 // admin and identified roles (matches rippled isUnlimited in Role.cpp).
 // If the user does not provide a limit (0), use the default.
+//
+// Prefer ReadLimitField for commands that route through rippled's readLimitField
+// (which rejects an explicit limit=0). ClampLimit is retained for ledger_data,
+// whose rippled handler does not use readLimitField and still maps 0 to default.
 func ClampLimit(userLimit uint32, r LimitRange, unlimited bool) uint32 {
 	if userLimit == 0 {
 		return r.Default
@@ -360,6 +365,58 @@ func ClampLimit(userLimit uint32, r LimitRange, unlimited bool) uint32 {
 		return r.Max
 	}
 	return userLimit
+}
+
+// ReadLimitField mirrors rippled's readLimitField (RPCHelpers.cpp): it reads the
+// "limit" field from the raw request params. An absent or null limit yields the
+// range default; a non-integer or negative value is expected_field_error; an
+// explicit 0 is invalid_field_error — rejected for every role, before clamping;
+// otherwise the value is clamped to [Min, Max] for non-unlimited roles.
+func ReadLimitField(params json.RawMessage, r LimitRange, unlimited bool) (uint32, *types.RpcError) {
+	raw, present := rawLimitField(params)
+	if !present || isJSONNull(raw) {
+		return r.Default, nil
+	}
+	var v uint32
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return 0, types.RpcErrorExpectedField("limit", "unsigned integer")
+	}
+	if v == 0 {
+		return 0, types.RpcErrorInvalidField("limit")
+	}
+	if !unlimited {
+		if v < r.Min {
+			v = r.Min
+		}
+		if v > r.Max {
+			v = r.Max
+		}
+	}
+	return v, nil
+}
+
+// rawLimitField extracts the raw "limit" value from a params object, reporting
+// whether it was present.
+func rawLimitField(params json.RawMessage) (json.RawMessage, bool) {
+	if len(params) == 0 {
+		return nil, false
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(params, &probe); err != nil {
+		return nil, false
+	}
+	raw, ok := probe["limit"]
+	return raw, ok
+}
+
+// arraySizeRPCError maps a binarycodec.Encode failure that is a JSON array-size
+// overflow to invalidParams (matching rippled's STParsedJSON cap), returning nil
+// for any other error so the caller keeps its existing mapping.
+func arraySizeRPCError(err error) *types.RpcError {
+	if msg, ok := binarycodec.AsArrayTooLargeError(err); ok {
+		return types.RpcErrorInvalidParams(msg)
+	}
+	return nil
 }
 
 // BaseHandler provides default implementations of RequiredRole (RoleGuest),

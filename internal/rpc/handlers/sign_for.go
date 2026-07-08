@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -87,6 +88,23 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, types.RpcErrorMissingField("Account")
 	}
 
+	// On networks with ID > 1024, sign_for requires tx_json to carry a matching
+	// integral NetworkID, else invalidParams. Unlike sign/submit — which autofill
+	// a missing NetworkID — sign_for rejects, so a multisigner cannot sign for the
+	// wrong network. Mirrors rippled checkNetworkID in transactionSignFor.
+	if ctx.Services != nil && ctx.Services.Ledger != nil {
+		if networkID := ctx.Services.Ledger.GetServerInfo().NetworkID; networkID > 1024 {
+			v, ok := txMap["NetworkID"]
+			if !ok {
+				return nil, types.RpcErrorMissingField("tx_json.NetworkID")
+			}
+			n, ok := v.(float64)
+			if !ok || n != math.Trunc(n) || n < 0 || uint32(n) != networkID {
+				return nil, types.RpcErrorInvalidField("tx_json.NetworkID")
+			}
+		}
+	}
+
 	// For multi-signing, the top-level SigningPubKey must be empty. With a
 	// signature_target the signature goes into a nested object, so an existing
 	// top-level SigningPubKey (the primary signer's) is preserved.
@@ -136,6 +154,9 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// Encode for multisigning (adds the signer's account as suffix)
 	signingPayload, err := binarycodec.EncodeForMultisigning(txMapForSigning, request.Account)
 	if err != nil {
+		if e := arraySizeRPCError(err); e != nil {
+			return nil, e
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode for multisigning: %v", err))
 	}
 
@@ -172,6 +193,9 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
+		if e := arraySizeRPCError(err); e != nil {
+			return nil, e
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 

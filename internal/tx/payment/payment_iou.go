@@ -391,5 +391,5 @@ func deliveredWithDstIssue(actualOut EitherAmount, dstAmount tx.Amount) tx.Amoun
 // credential expiration deletion against the engine's view so the side-effects persist.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (p *Payment) ApplyOnTec(ctx *tx.ApplyContext) {
-	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
+	credential.RemoveExpiredCredentialsOnTec(ctx, p.CredentialIDs)
 }

@@ -33,6 +33,17 @@ var (
 	ErrUnknownField = errors.New("unknown field")
 )
 
+// AsArrayTooLargeError reports whether err is a JSON array-size-cap violation
+// raised during JSON->binary encoding and, if so, returns rippled's error
+// message. RPC entry points map it to invalidParams.
+func AsArrayTooLargeError(err error) (string, bool) {
+	var e *types.JSONArrayTooLargeError
+	if errors.As(err, &e) {
+		return e.Error(), true
+	}
+	return "", false
+}
+
 const (
 	txMultiSigPrefix          = "534D5400"
 	paymentChannelClaimPrefix = "434C4D00"
