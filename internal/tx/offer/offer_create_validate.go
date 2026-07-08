@@ -136,8 +136,6 @@ func (o *OfferCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 // Runs through the engine's Preclaimer dispatch, before fee deduction.
 // Reference: rippled CreateOffer.cpp preclaim() lines 142-225
 func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
-	rules := config.GetRules()
-
 	accountID, err := state.DecodeAccountID(o.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -189,10 +187,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 
 	// Reference: lines 189-200
 	if tx.HasExpired(o.Expiration, config.ParentCloseTime) {
-		if rules.DepositPreauthEnabled() {
-			return ter.TecEXPIRED
-		}
-		return ter.TesSUCCESS
+		return ter.TecEXPIRED
 	}
 
 	// Check we can accept what the taker will pay us (for non-native)
@@ -202,7 +197,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		if err != nil {
 			return ter.TecNO_ISSUER
 		}
-		result := checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency, rules)
+		result := checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency)
 		if result != ter.TesSUCCESS {
 			return result
 		}
@@ -221,16 +216,17 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 
 // checkAcceptAsset validates that an account can receive an asset.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, rules *amendment.Rules) ter.Result {
+func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string) ter.Result {
 	// Read issuer account
 	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
 		return ter.TecNO_ISSUER
 	}
 
-	// If account is the issuer, always allowed
+	// An issuer can always accept its own issuance, and no self-trustline exists
+	// to be frozen. This early return precedes the RequireAuth check.
 	// Reference: lines 254-256
-	if rules.DepositPreauthEnabled() && accountID == issuerID {
+	if accountID == issuerID {
 		return ter.TesSUCCESS
 	}
 
@@ -259,12 +255,6 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		if !isAuthorized {
 			return ter.TecNO_AUTH
 		}
-	}
-
-	// If account is issuer, always allowed (redundant check but matches rippled)
-	// Reference: lines 288-291
-	if accountID == issuerID {
-		return ter.TesSUCCESS
 	}
 
 	// Reference: lines 293-309

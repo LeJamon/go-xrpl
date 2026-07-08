@@ -333,29 +333,6 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 
 	srcDebtDir := s.DebtDirection(v, StrandDirectionForward)
 
-	// A nil-rules sandbox (rules-free contexts such as pathfinding liquidity
-	// estimation) defaults to the active-network post-fix computation, the
-	// behaviour fixQualityUpperBound has enforced on mainnet since activation.
-	rules := v.Rules()
-	if rules != nil && !rules.Enabled(amendment.FeatureFixQualityUpperBound) {
-		// Legacy (pre-fixQualityUpperBound) computation. Reference: rippled
-		// DirectStep.cpp:847-863.
-		var srcQOut uint32 = QualityOne
-		if Redeems(prevStepDir) && Issues(srcDebtDir) {
-			srcQOut = s.transferRate(v)
-		}
-		dstQIn := s.quality(v, true) // QualityDirection::in
-		if s.isLast && dstQIn > QualityOne {
-			dstQIn = QualityOne
-		}
-		// rippled getRate(STAmount(srcQOut), STAmount(dstQIn)) = dstQIn / srcQOut.
-		// Note the argument order is the inverse of the post-fix branch below.
-		srcQOutAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(srcQOut), 0, "", ""))
-		dstQInAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(dstQIn), 0, "", ""))
-		q := QualityFromAmounts(dstQInAmt, srcQOutAmt)
-		return &q, srcDebtDir
-	}
-
 	// Use the PROPAGATED prevStepDir from the quality-upper-bound walk rather
 	// than re-querying the previous step's direction. When this step redeems,
 	// the previous direction is irrelevant; otherwise it gates the input

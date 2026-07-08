@@ -776,10 +776,6 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 //
 // Reference: rippled OfferStream.cpp shouldRmSmallIncreasedQOffer() lines 141-222
 func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state.LedgerOffer, ownerFunds EitherAmount) bool {
-	if !s.fixRmSmallIncreasedQOffers {
-		return false
-	}
-
 	inIsXRP := s.book.In.IsXRP()
 	outIsXRP := s.book.Out.IsXRP()
 
@@ -808,23 +804,17 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 	effectiveIn := ofrIn
 	effectiveOut := ofrOut
 	if offerOwner != s.book.Out.Issuer && ownerFunds.Compare(ofrOut) < 0 {
-		// Adjust amounts by owner funds using ceil_out or ceil_out_strict
+		// Adjust amounts by owner funds using ceil_out_strict.
 		// Reference: rippled OfferStream.cpp lines 192-207
 		offerQ := s.offerQuality(offer)
-		if s.fixReducedOffersV1 {
-			effectiveIn, effectiveOut = offerQ.CeilOutStrict(ofrIn, ofrOut, ownerFunds, false)
-		} else {
-			effectiveIn, effectiveOut = offerQ.CeilOut(ofrIn, ofrOut, ownerFunds)
-		}
+		effectiveIn, effectiveOut = offerQ.CeilOutStrict(ofrIn, ofrOut, ownerFunds, false)
 	}
 
 	// If either effective amount is zero, remove the offer.
-	// This can happen with fixReducedOffersV1 since it rounds down.
-	if s.fixReducedOffersV1 {
-		if effectiveIn.IsZero() || effectiveIn.IsNegative() ||
-			effectiveOut.IsZero() || effectiveOut.IsNegative() {
-			return true
-		}
+	// CeilOutStrict rounds down, so an amount can be driven to zero.
+	if effectiveIn.IsZero() || effectiveIn.IsNegative() ||
+		effectiveOut.IsZero() || effectiveOut.IsNegative() {
+		return true
 	}
 
 	// Check if the effective input is at or below the minimum positive amount.

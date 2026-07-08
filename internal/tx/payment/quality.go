@@ -205,56 +205,6 @@ func (q Quality) Rate() tx.Amount {
 	return result
 }
 
-// CeilOut limits the output amount and recalculates input using mulRound (non-strict).
-// This is the legacy version with "slop" used when fixReducedOffersV1 is NOT enabled.
-// Uses mulRound with hardcoded roundUp=true (matching rippled's ceil_out behavior).
-// Reference: rippled Quality.cpp ceil_out (non-strict) — uses mulRound, always roundUp=true
-func (q Quality) CeilOut(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherAmount, EitherAmount) {
-	if amtOut.Compare(limit) <= 0 {
-		return amtIn, amtOut
-	}
-
-	qRate := q.Rate()
-
-	var limitAmt tx.Amount
-	if limit.IsNative {
-		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
-	} else {
-		limitAmt = limit.IOU
-	}
-
-	var inCurrency, inIssuer string
-	if amtIn.IsNative {
-		inCurrency = ""
-		inIssuer = ""
-	} else {
-		inCurrency = amtIn.IOU.Currency
-		inIssuer = amtIn.IOU.Issuer
-	}
-
-	var resultInEither EitherAmount
-	if amtIn.IsNative {
-		// Native output: use MulRoundNative which applies canonicalizeRound(native=true)
-		// directly, matching rippled's mulRoundImpl when the output asset is XRP.
-		// The non-native MulRound path applies IOU canonicalization first, which
-		// uses different rounding than the native path and causes off-by-one errors.
-		// Reference: rippled STAmount.cpp mulRoundImpl + canonicalizeRound(native=true)
-		resultInEither = NewXRPEitherAmount(state.MulRoundNative(limitAmt, qRate, true))
-	} else {
-		// Non-strict: mulRound with roundUp=true (always)
-		resultIn := state.MulRound(limitAmt, qRate, inCurrency, inIssuer, true)
-		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
-			resultIn.Mantissa(), resultIn.Exponent(), inCurrency, inIssuer))
-	}
-
-	// Clamp: result.in must not exceed amount.in
-	if resultInEither.Compare(amtIn) > 0 {
-		resultInEither = amtIn
-	}
-
-	return resultInEither, limit
-}
-
 // CeilOutStrict limits the output amount and recalculates input using mulRoundStrict.
 // If amount.out > limit, compute result.in = mulRoundStrict(limit, quality.rate(), ...)
 // and clamp result.in to amount.in.
