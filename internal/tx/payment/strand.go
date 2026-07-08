@@ -328,11 +328,53 @@ func ToStrandWithContext(
 	path []PathStep,
 	isDefaultPath bool,
 ) (Strand, ter.Result) {
+	// Path-element shape validation runs here, at strand-construction time (during
+	// doApply), not in Payment preflight — mirroring rippled toStrand. This lets
+	// preclaim codes (tecNO_DST, tecDST_TAG_NEEDED, …) win over a malformed path,
+	// exactly as rippled orders them.
+	if r := validatePathElementShapes(path); r != ter.TesSUCCESS {
+		return nil, r
+	}
 	normPath := buildNormalizedPath(ctx, src, dst, dstIssue, srcIssue, path)
 	if len(normPath) < 2 {
 		return nil, ter.TemBAD_PATH
 	}
 	return ctx.buildStrandSteps(src, dst, dstIssue, srcIssue, normPath)
+}
+
+// validatePathElementShapes rejects malformed path elements with temBAD_PATH,
+// mirroring rippled toStrand(): an element must set at least one of
+// account/currency/issuer; an account element may not also carry
+// currency or issuer; the XRP pseudo-account may not appear as account or issuer;
+// and a currency+issuer pair must agree on XRP-ness.
+func validatePathElementShapes(path []PathStep) ter.Result {
+	const xrpPseudoAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+	for _, elem := range path {
+		hasAccount := elem.Account != ""
+		hasCurrency := elem.Currency != ""
+		hasIssuer := elem.Issuer != ""
+
+		if !hasAccount && !hasCurrency && !hasIssuer {
+			return ter.TemBAD_PATH
+		}
+		if hasAccount && (hasCurrency || hasIssuer) {
+			return ter.TemBAD_PATH
+		}
+		if hasIssuer && elem.Issuer == xrpPseudoAccount {
+			return ter.TemBAD_PATH
+		}
+		if hasAccount && elem.Account == xrpPseudoAccount {
+			return ter.TemBAD_PATH
+		}
+		if hasCurrency && hasIssuer {
+			isXRPCurrency := elem.Currency == "XRP"
+			isXRPIssuer := elem.Issuer == xrpPseudoAccount
+			if isXRPCurrency != isXRPIssuer {
+				return ter.TemBAD_PATH
+			}
+		}
+	}
+	return ter.TesSUCCESS
 }
 
 // buildNormalizedPath expands an explicit path into the normalized node list
