@@ -376,10 +376,10 @@ func TestFeeVote_EmptyConfigUsesRippledDefaults(t *testing.T) {
 	})
 	assert.EqualValues(t, 10, a.feeVote.BaseFee,
 		"empty BaseFee → rippled FeeSetup default reference_fee=10")
-	assert.EqualValues(t, 10_000_000, a.feeVote.ReserveBase,
-		"empty ReserveBase → rippled FeeSetup default account_reserve=10*DROPS_PER_XRP")
-	assert.EqualValues(t, 2_000_000, a.feeVote.ReserveIncrement,
-		"empty ReserveIncrement → rippled FeeSetup default owner_reserve=2*DROPS_PER_XRP")
+	assert.EqualValues(t, 1_000_000, a.feeVote.ReserveBase,
+		"empty ReserveBase → rippled 3.2.0 default account_reserve=1 XRP (#6382)")
+	assert.EqualValues(t, 200_000, a.feeVote.ReserveIncrement,
+		"empty ReserveIncrement → rippled 3.2.0 default owner_reserve=0.2 XRP (#6382)")
 }
 
 // TestFeeVote_PartialConfigKeepsExplicitFields verifies the
@@ -396,10 +396,10 @@ func TestFeeVote_PartialConfigKeepsExplicitFields(t *testing.T) {
 		FeeVote:       FeeVoteStance{BaseFee: 25}, // reserves left zero
 	})
 	assert.EqualValues(t, 25, a.feeVote.BaseFee, "explicit BaseFee preserved")
-	assert.EqualValues(t, 10_000_000, a.feeVote.ReserveBase,
-		"unset ReserveBase → rippled default")
-	assert.EqualValues(t, 2_000_000, a.feeVote.ReserveIncrement,
-		"unset ReserveIncrement → rippled default")
+	assert.EqualValues(t, 1_000_000, a.feeVote.ReserveBase,
+		"unset ReserveBase → rippled 3.2.0 default")
+	assert.EqualValues(t, 200_000, a.feeVote.ReserveIncrement,
+		"unset ReserveIncrement → rippled 3.2.0 default")
 }
 
 // TestParseAmendmentsSLEBytes_FailsClosedOnGarbage pins Item 2:
