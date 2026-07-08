@@ -581,7 +581,7 @@ var Specs = []Entry{
 			{Name: "StartDate"},
 			{Name: "PaymentInterval"},
 			{Name: "GracePeriod"},
-			{Name: "PreviousPaymentDate"},
+			{Name: "PreviousPaymentDueDate"},
 			{Name: "NextPaymentDueDate"},
 			{Name: "PaymentRemaining"},
 			{Name: "PeriodicPayment"},

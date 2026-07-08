@@ -430,7 +430,7 @@ var coverageFixtures = map[string]map[string]any{
 		"StartDate":                uint32(700000000),
 		"PaymentInterval":          uint32(2592000),
 		"GracePeriod":              uint32(86400),
-		"PreviousPaymentDate":      uint32(700100000),
+		"PreviousPaymentDueDate":      uint32(700100000),
 		"NextPaymentDueDate":       uint32(702692000),
 		"PaymentRemaining":         uint32(11),
 		"PeriodicPayment":          "100",
