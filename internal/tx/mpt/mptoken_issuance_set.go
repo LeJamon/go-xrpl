@@ -435,6 +435,11 @@ func (m *MPTokenIssuanceSet) checkMutablePermissions(issuance *state.MPTokenIssu
 				return ter.TecNO_PERMISSION
 			}
 		}
+		// A DomainID requires RequireAuth to stay active, so clearing RequireAuth
+		// while the issuance already carries a DomainID is disallowed.
+		if mf&TmfMPTClearRequireAuth != 0 && issuance.DomainID != nil {
+			return ter.TecNO_PERMISSION
+		}
 	}
 
 	if m.MPTokenMetadata != nil && issuance.MutableFlags&entry.LsmfMPTCanMutateMetadata == 0 {
