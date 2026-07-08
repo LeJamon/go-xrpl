@@ -109,29 +109,11 @@ func (o *OracleSet) Validate() error {
 		}
 	}
 
-	// Validate each price data entry and check for duplicates
-	// Reference: rippled SetOracle.cpp checkArray()
-	seenPairs := make(map[string]bool)
-	for _, pd := range o.PriceDataSeries {
-		entry := pd.PriceData
-
-		// BaseAsset and QuoteAsset must be different
-		if entry.BaseAsset == entry.QuoteAsset {
-			return ter.Errorf(ter.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
-		}
-
-		// Scale cannot exceed MaxPriceScale
-		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return ter.Errorf(ter.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
-		}
-
-		pairKey := entry.TokenPairKey()
-		if seenPairs[pairKey] {
-			return ter.Errorf(ter.TemMALFORMED, "duplicate token pair in PriceDataSeries")
-		}
-		seenPairs[pairKey] = true
-	}
-
+	// The per-entry base==quote, scale, and duplicate-pair checks are stateful
+	// preclaim checks in rippled (SetOracle::preclaim), ordered AFTER the
+	// tecINVALID_UPDATE_TIME time-window check. Keeping them here in preflight
+	// would surface a tem* code before the tec* time check ever runs, forking
+	// ledger inclusion in a mixed network — so they live only in Apply().
 	return nil
 }
 
