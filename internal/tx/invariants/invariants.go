@@ -218,6 +218,12 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidPseudoAccounts(entries, rules)
 		},
 		func() *InvariantViolation {
+			return checkValidLoan(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidLoanBroker(entries, view, rules)
+		},
+		func() *InvariantViolation {
 			return checkNoModifiedUnmodifiableFields(entries, rules)
 		},
 	}
