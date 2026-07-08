@@ -18,7 +18,21 @@ import (
 // Mirrors rippled Transactor::preflight() which composes preflight0/preflight1/preflight2
 // and the per-tx-type preflight. The blocks below are extracted helpers so this
 // top-level function reads as a high-level pipeline.
-func (e *Engine) preflight(tx txcore.Transaction) ter.Result {
+func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
+	// Any panic reachable from crafted transaction fields — most commonly an
+	// IOUAmount / XRPLNumber arithmetic overflow on adversarial data — is
+	// recovered and surfaced as tefEXCEPTION so it can never terminate the node.
+	// A tef* result is never included in a ledger, so there is no consensus
+	// impact. Mirrors rippled applySteps.cpp preflight() wrapping
+	// invoke_preflight in try{...}catch(std::exception){ {tefEXCEPTION} }.
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("transaction preflight panic recovered, returning tefEXCEPTION",
+				"txType", tx.TxType().String(), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+	}()
+
 	common := tx.GetCommon()
 	rules := e.rules()
 
