@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 104 amendments.
+Total: 105 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
