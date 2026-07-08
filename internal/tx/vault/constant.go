@@ -22,6 +22,10 @@ const (
 	// vaultDefaultIOUScale is the Scale applied to IOU/XRP vault shares when the
 	// transaction omits sfScale.
 	vaultDefaultIOUScale uint8 = 6
+
+	// maxMPTokenAmount is the largest amount an MPT issuance may put into
+	// circulation (2^63-1), the default cap when an issuance omits MaximumAmount.
+	maxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
 )
 
 // VaultCreate flags (tf*) and the vault SLE flag (lsf*). tfVaultPrivate mirrors
