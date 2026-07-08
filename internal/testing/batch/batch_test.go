@@ -1357,7 +1357,7 @@ func TestBatchDelegate(t *testing.T) {
 		// Inner tx[1] is a regular payment from alice to bob.
 		// Reference: rippled Batch_test.cpp testBatchDelegate() - "delegated non atomic inner"
 		env := newBatchEnv(t)
-		env.EnableFeature("PermissionDelegation")
+		env.EnableFeature("PermissionDelegationV1_1")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1402,7 +1402,7 @@ func TestBatchDelegate(t *testing.T) {
 		// Carol submits batch: inner tx[0] is payment bob->alice with Delegate=carol, inner tx[1] is payment alice->bob.
 		// Reference: rippled Batch_test.cpp testBatchDelegate() - "delegated atomic inner"
 		env := newBatchEnv(t)
-		env.EnableFeature("PermissionDelegation")
+		env.EnableFeature("PermissionDelegationV1_1")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")

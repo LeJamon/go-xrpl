@@ -1,8 +1,8 @@
 // Preflight TER-precedence pins for DelegateSet, covering the flags mask
-// (preflight0), the unknown-granular delegatability rule (preflight body under
-// fixDelegateV1_1), and the round-trip of an unregistered sfPermissionValue.
+// (preflight0), the unknown-granular delegatability rule (preflight body), and
+// the round-trip of an unregistered sfPermissionValue.
 //
-// Reference: rippled DelegateSet.cpp / Permissions.cpp isDelegatable().
+// Reference: rippled DelegateSet.cpp / Permissions.cpp isDelegable().
 package delegate_test
 
 import (
@@ -22,7 +22,7 @@ import (
 // ledger-state TER.
 func TestDelegateSet_FlagsMaskPrecedence(t *testing.T) {
 	env := jtx.NewTestEnv(t)
-	env.EnableFeature("PermissionDelegation")
+	env.EnableFeature("PermissionDelegationV1_1")
 	gw := jtx.NewAccount("gw")
 	alice := jtx.NewAccount("alice")
 	env.Fund(gw, alice)
@@ -39,13 +39,12 @@ func TestDelegateSet_FlagsMaskPrecedence(t *testing.T) {
 
 // TestDelegateSet_UnknownGranularNotDelegatable pins DelegateSet finding-3: a
 // value in the granular range (>= 65536) that is NOT a registered granular
-// permission is not delegatable. Under fixDelegateV1_1 the check runs in
-// preflight and rejects with temMALFORMED (rippled isDelegatable falls through
-// getGranularName to the tx-type path).
+// permission is not delegatable. The check runs in preflight and rejects with
+// temMALFORMED (rippled isDelegable falls through getGranularName to the
+// tx-type path).
 func TestDelegateSet_UnknownGranularNotDelegatable(t *testing.T) {
 	env := jtx.NewTestEnv(t)
-	env.EnableFeature("PermissionDelegation")
-	env.EnableFeature("fixDelegateV1_1")
+	env.EnableFeature("PermissionDelegationV1_1")
 	gw := jtx.NewAccount("gw")
 	alice := jtx.NewAccount("alice")
 	env.Fund(gw, alice)
@@ -61,9 +60,8 @@ func TestDelegateSet_UnknownGranularNotDelegatable(t *testing.T) {
 
 // TestDelegateSet_UnknownPermissionValueRoundTrips pins DelegateSet finding-2:
 // sfPermissionValue is a plain UINT32, so a value with no registered name must
-// still decode (rippled includes such DelegateSets before fixDelegateV1_1). A
-// binary blob carrying value 60000 round-trips through the string-typed field as
-// its decimal form rather than failing to parse.
+// still decode. A binary blob carrying value 60000 round-trips through the
+// string-typed field as its decimal form rather than failing to parse.
 func TestDelegateSet_UnknownPermissionValueRoundTrips(t *testing.T) {
 	gw := jtx.NewAccount("gw")
 	alice := jtx.NewAccount("alice")

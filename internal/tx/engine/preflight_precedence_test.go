@@ -67,7 +67,7 @@ func newAccountSet(account string) *txcore.BaseTx {
 // wins over telNETWORK_ID_MAKES_TX_NON_CANONICAL.
 func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 	t.Run("delegate==account beats NetworkID", func(t *testing.T) {
-		e := preflightEngine(batchRules("PermissionDelegation"))
+		e := preflightEngine(batchRules("PermissionDelegationV1_1"))
 		tx := newAccountSet(precedenceSourceAddr)
 		tx.Delegate = precedenceSourceAddr // == Account → temBAD_SIGNER
 		tx.NetworkID = u32(99)             // legacy node (ID 0) forbids the field
@@ -77,9 +77,9 @@ func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 	})
 
 	t.Run("delegate-disabled beats NetworkID", func(t *testing.T) {
-		e := preflightEngine(allRules()) // PermissionDelegation is Supported::no → disabled
+		e := preflightEngine(allRules()) // PermissionDelegationV1_1 is Supported::no → disabled
 		tx := newAccountSet(precedenceSourceAddr)
-		tx.Delegate = precedenceGenesisAddr // present, PermissionDelegation off → temDISABLED
+		tx.Delegate = precedenceGenesisAddr // present, PermissionDelegationV1_1 off → temDISABLED
 		tx.NetworkID = u32(99)
 		if got := e.preflight(tx); got != ter.TemDISABLED {
 			t.Fatalf("preflight = %v, want TemDISABLED", got)
