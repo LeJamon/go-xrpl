@@ -55,6 +55,14 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 		return nil, ErrInvalidPathSet
 	}
 
+	// rippled caps each inner path (STI_PATHSET) at maxSTParsedJSONArraySize as
+	// well as the outer array; the outer array is capped by checkJSONArraySize.
+	for i, path := range outer {
+		if inner, ok := path.([]any); ok && len(inner) > MaxJSONArrayElements {
+			return nil, &JSONArrayTooLargeError{Field: fmt.Sprintf("Paths[%d]", i)}
+		}
+	}
+
 	if !isPathSet(outer) {
 		return nil, ErrInvalidPathSet
 	}

@@ -52,7 +52,10 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, mErr
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.Unlimited)
+	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {

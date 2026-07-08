@@ -1090,9 +1090,9 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		assert.Equal(t, float64(10), resp["limit"])
 	})
 
-	t.Run("Default limit (0) when not specified", func(t *testing.T) {
+	t.Run("Absent limit defaults to accountTx rdefault (200)", func(t *testing.T) {
 		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-			assert.Equal(t, uint32(0), limit, "Limit should default to 0 when not specified")
+			assert.Equal(t, uint32(200), limit, "absent limit routes through readLimitField -> accountTx default 200")
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
@@ -1112,6 +1112,34 @@ func TestAccountTxLimitParameter(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
+	})
+
+	t.Run("explicit limit 0 is rejected (3.1.3 readLimitField)", func(t *testing.T) {
+		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":0}`)
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
+	})
+
+	t.Run("malformed limit is expected_field_error", func(t *testing.T) {
+		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":"abc"}`)
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit', not unsigned integer.", rpcErr.Message)
+	})
+
+	t.Run("below-min limit clamps to 10 for non-admin", func(t *testing.T) {
+		var captured uint32
+		mock.getAccountTransactionsFn = func(_ context.Context, account string, _, _ int64, limit uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			captured = limit
+			return &types.AccountTxResult{Account: account, Limit: limit, Transactions: []types.AccountTransaction{}, Validated: true}, nil
+		}
+		paramsJSON := []byte(`{"account":"` + validAccount + `","limit":5}`)
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, uint32(10), captured, "non-admin limit below rmin clamps to 10")
 	})
 }
 

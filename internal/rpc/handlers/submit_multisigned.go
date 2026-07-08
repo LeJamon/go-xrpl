@@ -183,6 +183,9 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Encode the transaction to binary
 	txBlob, encErr := binarycodec.Encode(txMap)
 	if encErr != nil {
+		if e := arraySizeRPCError(encErr); e != nil {
+			return nil, e
+		}
 		return nil, types.RpcErrorInternal("Failed to encode transaction: " + encErr.Error())
 	}
 

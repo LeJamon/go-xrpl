@@ -423,6 +423,12 @@ func parseIssue(raw json.RawMessage) ([20]byte, [20]byte, error) {
 	}
 	copy(issuer[:], issuerBytes)
 
+	// rippled issueFromJson (Issue.cpp) rejects the two reserved AccountIDs —
+	// xrpAccount() (ACCOUNT_ZERO) and noAccount() (ACCOUNT_ONE) — as an issuer.
+	if issuer == noAccountID || issuer == xrpAccountID {
+		return issuer, currency, errors.New("issuer must be a valid account")
+	}
+
 	return issuer, currency, nil
 }
 

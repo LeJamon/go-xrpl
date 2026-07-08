@@ -37,7 +37,10 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, selErr
 	}
 
-	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.Unlimited)
+	limit, limitErr := ReadLimitField(params, LimitAccountNFTokens, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
 		ctx.Context,
 		request.Account,

@@ -1012,14 +1012,6 @@ func TestBookOffersLimitParameter(t *testing.T) {
 			limit:         nil,
 			expectedLimit: 60, // rippled rdefault (60) when user omits limit
 		},
-		{
-			// rippled readLimitField (RPCHelpers.cpp:703-712) clamps to
-			// [rmin, rmax] = [0, 100] for bookOffers; explicit 0 is valid
-			// and yields zero offers.
-			name:          "Explicit limit 0",
-			limit:         0,
-			expectedLimit: 0,
-		},
 	}
 
 	for _, tc := range tests {
@@ -1057,6 +1049,23 @@ func TestBookOffersLimitParameter(t *testing.T) {
 			assert.NotContains(t, resp, "limit", "limit must not be echoed when no marker is returned")
 		})
 	}
+
+	// rippled 3.1.3 readLimitField rejects an explicit limit=0 for every role
+	// (bookOffers rmin also bumped 0->1). Reference: RPCHelpers.cpp readLimitField.
+	t.Run("Explicit limit 0 is rejected", func(t *testing.T) {
+		params := map[string]any{
+			"taker_pays": map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			"limit":      0,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr, "limit=0 must be rejected")
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
+	})
 }
 
 // TestBookOffersResponseStructure tests the response structure
@@ -1678,14 +1687,6 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 		expectedLimit uint32
 	}{
 		{
-			// Book_test.cpp:1713-1716 — explicit 0 stays 0 for either role.
-			name:          "limit 0 (admin)",
-			role:          types.RoleAdmin,
-			unlimited:     true,
-			limit:         0,
-			expectedLimit: 0,
-		},
-		{
 			// Book_test.cpp:1718-1723 — limit rmax+1 (101) clamps to rmax (100)
 			// for non-admin callers (asAdmin=false branch).
 			name:          "rmax+1 clamps to rmax for guest",
@@ -1753,6 +1754,30 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 				"Limit passed to service should match clamp/passthrough rule")
 		})
 	}
+
+	// rippled 3.1.3: limit=0 is rejected before the isUnlimited clamp, so admin
+	// (unlimited) callers are rejected too. Reference: RPCHelpers.cpp readLimitField.
+	t.Run("limit 0 rejected even for admin", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			Unlimited:  true,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		params := map[string]any{
+			"taker_pays": map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			"limit":      0,
+		}
+		paramsJSON, err := json.Marshal(params)
+		require.NoError(t, err)
+
+		_, rpcErr := method.Handle(ctx, paramsJSON)
+		require.NotNil(t, rpcErr, "admin limit=0 must be rejected")
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'limit'.", rpcErr.Message)
+	})
 }
 
 // TestBookOffersTakerXAddressRejected nails down that the `taker` field rejects

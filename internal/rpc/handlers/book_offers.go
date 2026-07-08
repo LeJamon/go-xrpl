@@ -154,6 +154,10 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if err := json.Unmarshal(rawLimit, &v); err != nil {
 			return nil, types.RpcErrorExpectedField("limit", "unsigned integer")
 		}
+		// rippled readLimitField rejects an explicit limit=0 for every role.
+		if v == 0 {
+			return nil, types.RpcErrorInvalidField("limit")
+		}
 		limit = v
 		if !ctx.Unlimited {
 			if limit < LimitBookOffers.Min {
