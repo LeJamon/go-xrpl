@@ -52,14 +52,24 @@ func TestLoanTxTypeAndAmendment(t *testing.T) {
 		{lending.NewLoanManage(testAccount, testHash), tx.TypeLoanManage},
 		{lending.NewLoanPay(testAccount, testHash, amt), tx.TypeLoanPay},
 	}
-	lendingID := amendment.FeatureLendingProtocol
+	want := map[[32]byte]bool{
+		amendment.FeatureLendingProtocol:  true,
+		amendment.FeatureSingleAssetVault: true,
+		amendment.FeatureMPTokensV1:       true,
+	}
 	for _, c := range cases {
 		if got := c.txn.TxType(); got != c.want {
 			t.Errorf("TxType() = %d, want %d", got, c.want)
 		}
 		req := c.txn.RequiredAmendments()
-		if len(req) != 1 || req[0] != lendingID {
-			t.Errorf("%s RequiredAmendments() = %v, want [LendingProtocol]", c.want, req)
+		if len(req) != len(want) {
+			t.Errorf("%s RequiredAmendments() = %v, want the lending dependency chain", c.want, req)
+			continue
+		}
+		for _, a := range req {
+			if !want[a] {
+				t.Errorf("%s RequiredAmendments() unexpected amendment %v", c.want, a)
+			}
 		}
 	}
 }

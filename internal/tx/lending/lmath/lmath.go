@@ -31,6 +31,19 @@ func num(mantissa int64, exponent int) N {
 	return state.NewXRPLNumberScaled(mantissa, exponent, state.MantissaScaleLarge, state.RoundToNearest)
 }
 
+// Num builds a large-scale lending Number from mantissa/exponent (exported for
+// the transactor SLE seam).
+func Num(mantissa int64, exponent int) N { return num(mantissa, exponent) }
+
+// Zero returns the large-scale lending zero.
+func Zero() N { return zeroN() }
+
+// FromInt builds a large-scale Number from a plain integer.
+func FromInt(v int64) N { return num(v, 0) }
+
+// FromDrops builds a large-scale Number from an XRP drops / MPT unit count.
+func FromDrops(v int64) N { return num(v, 0) }
+
 // numU builds a large-scale Number from an unsigned integer.
 func numU(v uint32) N { return num(int64(v), 0) }
 
@@ -61,6 +74,24 @@ func tenthBipsOfValue(value N, tenthBips uint32) N {
 		return zeroN()
 	}
 	return value.Mul(numU(tenthBips)).Div(numU(protocol.TenthBipsPerUnity))
+}
+
+// TenthBipsOfValue returns value * tenthBips / 100000 (exported for the cover /
+// debt rate computations in the transactors).
+func TenthBipsOfValue(value N, tenthBips uint32) N { return tenthBipsOfValue(value, tenthBips) }
+
+// RoundAssetUpward / RoundAssetDownward / RoundAssetNearest expose roundToAsset
+// at a decimal scale under a fixed mode for the transactor cover/debt math.
+func RoundAssetUpward(asset Asset, value N, scale int) N {
+	return roundToAsset(asset, value, scale, state.RoundUpward)
+}
+
+func RoundAssetDownward(asset Asset, value N, scale int) N {
+	return roundToAsset(asset, value, scale, state.RoundDownward)
+}
+
+func RoundAssetNearest(asset Asset, value N, scale int) N {
+	return roundToAssetNearest(asset, value, scale)
 }
 
 // IsRounded reports whether value already sits at the asset's precision for

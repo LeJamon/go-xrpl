@@ -1,22 +1,15 @@
-// Package lending implements the pre-activation surface for the XLS-66
-// LendingProtocol feature (LoanBroker* and Loan* transaction types).
-//
-// The transactors are registered so a LendingProtocol-aware node parses these
-// transactions (matching a rippled 3.0.0 node) and rejects them with
-// temDISABLED at preflight while FeatureLendingProtocol is off, rather than
-// failing with temUNKNOWN or a parse error. The full lending semantics —
-// LoanBroker/Loan ledger objects, fee/interest math, delinquency handling —
-// are 3.1.0 work tracked separately, so Apply is intentionally a hard-error
-// stub guarding against the amendment being enabled before that lands.
+// Package lending implements the XLS-66 LendingProtocol transaction types
+// (LoanBroker* and Loan*), porting rippled 3.1.0's transactor semantics onto the
+// XRPLNumber amortization math in the lmath subpackage. A LoanBroker is a
+// pseudo-account sitting on a SingleAssetVault; loans draw principal from the
+// vault and repay it with amortized interest and fees.
 package lending
 
 import (
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-func requiredLending() [][32]byte { return [][32]byte{amendment.FeatureLendingProtocol} }
 
 // LoanBrokerSet creates or updates a Loan Broker.
 type LoanBrokerSet struct {
@@ -45,8 +38,42 @@ func (l *LoanBrokerSet) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := checkUniversalFlags(l); err != nil {
+		return err
+	}
 	if l.VaultID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "VaultID is required")
+	}
+	if l.Data != nil && !validDataLength(*l.Data, maxDataPayloadLength) {
+		return ter.Errorf(ter.TemINVALID, "Data too long")
+	}
+	if !validRangeU16(l.ManagementFeeRate, protocol.MaxManagementFeeRate) {
+		return ter.Errorf(ter.TemINVALID, "ManagementFeeRate out of range")
+	}
+	if !validRangeU32(l.CoverRateMinimum, protocol.MaxCoverRate) {
+		return ter.Errorf(ter.TemINVALID, "CoverRateMinimum out of range")
+	}
+	if !validRangeU32(l.CoverRateLiquidation, protocol.MaxCoverRate) {
+		return ter.Errorf(ter.TemINVALID, "CoverRateLiquidation out of range")
+	}
+	if !validNumberRange(l.DebtMaximum, 0, maxMPTokenAmount) {
+		return ter.Errorf(ter.TemINVALID, "DebtMaximum out of range")
+	}
+	if l.LoanBrokerID != nil {
+		if l.ManagementFeeRate != nil || l.CoverRateMinimum != nil || l.CoverRateLiquidation != nil {
+			return ter.Errorf(ter.TemINVALID, "fixed fields cannot be changed on an existing LoanBroker")
+		}
+		if isZeroHashStr(*l.LoanBrokerID) {
+			return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
+		}
+	}
+	if isZeroHashStr(l.VaultID) {
+		return ter.Errorf(ter.TemINVALID, "VaultID cannot be zero")
+	}
+	minZero := l.CoverRateMinimum == nil || *l.CoverRateMinimum == 0
+	liqZero := l.CoverRateLiquidation == nil || *l.CoverRateLiquidation == 0
+	if minZero != liqZero {
+		return ter.Errorf(ter.TemINVALID, "CoverRateMinimum and CoverRateLiquidation must both be zero or non-zero")
 	}
 	return nil
 }
@@ -75,8 +102,14 @@ func (l *LoanBrokerDelete) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := checkUniversalFlags(l); err != nil {
+		return err
+	}
 	if l.LoanBrokerID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanBrokerID is required")
+	}
+	if isZeroHashStr(l.LoanBrokerID) {
+		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
 	}
 	return nil
 }
@@ -107,11 +140,17 @@ func (l *LoanBrokerCoverDeposit) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := checkUniversalFlags(l); err != nil {
+		return err
+	}
 	if l.LoanBrokerID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanBrokerID is required")
 	}
-	if l.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	if isZeroHashStr(l.LoanBrokerID) {
+		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
+	}
+	if l.Amount.Signum() <= 0 {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	}
 	return nil
 }
@@ -144,11 +183,20 @@ func (l *LoanBrokerCoverWithdraw) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := checkUniversalFlags(l); err != nil {
+		return err
+	}
 	if l.LoanBrokerID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanBrokerID is required")
 	}
-	if l.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	if isZeroHashStr(l.LoanBrokerID) {
+		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
+	}
+	if l.Amount.Signum() <= 0 {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
+	}
+	if l.Destination != "" && isZeroAccount(l.Destination) {
+		return ter.Errorf(ter.TemMALFORMED, "Destination cannot be zero")
 	}
 	return nil
 }
@@ -173,7 +221,38 @@ func NewLoanBrokerCoverClawback(account string) *LoanBrokerCoverClawback {
 
 func (l *LoanBrokerCoverClawback) TxType() tx.Type { return tx.TypeLoanBrokerCoverClawback }
 
-func (l *LoanBrokerCoverClawback) Validate() error { return l.BaseTx.Validate() }
+func (l *LoanBrokerCoverClawback) Validate() error {
+	if err := l.BaseTx.Validate(); err != nil {
+		return err
+	}
+	if err := checkUniversalFlags(l); err != nil {
+		return err
+	}
+	if l.LoanBrokerID == nil && l.Amount == nil {
+		return ter.Errorf(ter.TemINVALID, "LoanBrokerID or Amount is required")
+	}
+	if l.LoanBrokerID != nil && isZeroHashStr(*l.LoanBrokerID) {
+		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
+	}
+	if l.Amount != nil {
+		if l.Amount.IsNative() {
+			return ter.Errorf(ter.TemBAD_AMOUNT, "cannot clawback native asset")
+		}
+		if l.Amount.Signum() < 0 {
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount cannot be negative")
+		}
+		if l.LoanBrokerID == nil {
+			if l.Amount.IsMPT() {
+				return ter.Errorf(ter.TemINVALID, "cannot derive LoanBroker from an MPT amount")
+			}
+			issuer := l.Amount.Issuer
+			if issuer == "" || issuer == l.Account {
+				return ter.Errorf(ter.TemINVALID, "invalid Amount issuer")
+			}
+		}
+	}
+	return nil
+}
 
 func (l *LoanBrokerCoverClawback) Flatten() (map[string]any, error) { return tx.ReflectFlatten(l) }
 func (l *LoanBrokerCoverClawback) RequiredAmendments() [][32]byte   { return requiredLending() }
@@ -216,11 +295,59 @@ func (l *LoanSet) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := tx.CheckFlags(l.GetFlags(), TfLoanSetMask); err != nil {
+		return err
+	}
 	if l.LoanBrokerID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanBrokerID is required")
 	}
 	if l.PrincipalRequested == "" {
 		return ter.Errorf(ter.TemMALFORMED, "PrincipalRequested is required")
+	}
+	// A LoanSet must carry a CounterpartySignature, except as a batch inner tx.
+	if l.GetFlags()&tx.TfInnerBatchTxn == 0 && len(l.CounterpartySignature) == 0 {
+		return ter.Errorf(ter.TemBAD_SIGNER, "LoanSet requires a CounterpartySignature")
+	}
+	if l.Data != nil && !validDataLength(*l.Data, maxDataPayloadLength) {
+		return ter.Errorf(ter.TemINVALID, "Data too long")
+	}
+	if !validNumberMinimum(l.LoanServiceFee, 0) || !validNumberMinimum(l.LatePaymentFee, 0) || !validNumberMinimum(l.ClosePaymentFee, 0) {
+		return ter.Errorf(ter.TemINVALID, "fee cannot be negative")
+	}
+	principal := lendNum(l.PrincipalRequested)
+	if principal.Signum() <= 0 {
+		return ter.Errorf(ter.TemINVALID, "PrincipalRequested must be positive")
+	}
+	if l.LoanOriginationFee != nil {
+		fee := lendNum(*l.LoanOriginationFee)
+		if fee.Signum() < 0 || fee.Cmp(principal) > 0 {
+			return ter.Errorf(ter.TemINVALID, "LoanOriginationFee out of range")
+		}
+	}
+	if !validRangeU32(l.InterestRate, protocol.MaxInterestRate) ||
+		!validRangeU32(l.OverpaymentFee, protocol.MaxOverpaymentFee) ||
+		!validRangeU32(l.LateInterestRate, protocol.MaxLateInterestRate) ||
+		!validRangeU32(l.CloseInterestRate, protocol.MaxCloseInterestRate) ||
+		!validRangeU32(l.OverpaymentInterestRate, protocol.MaxOverpaymentInterestRate) {
+		return ter.Errorf(ter.TemINVALID, "rate out of range")
+	}
+	if l.PaymentTotal != nil && *l.PaymentTotal == 0 {
+		return ter.Errorf(ter.TemINVALID, "PaymentTotal must be positive")
+	}
+	if l.PaymentInterval != nil && *l.PaymentInterval < minPaymentInterval {
+		return ter.Errorf(ter.TemINVALID, "PaymentInterval too small")
+	}
+	if l.GracePeriod != nil {
+		maxGrace := uint32(minPaymentInterval)
+		if l.PaymentInterval != nil {
+			maxGrace = *l.PaymentInterval
+		}
+		if *l.GracePeriod < defaultGracePeriod || *l.GracePeriod > maxGrace {
+			return ter.Errorf(ter.TemINVALID, "GracePeriod out of range")
+		}
+	}
+	if isZeroHashStr(l.LoanBrokerID) {
+		return ter.Errorf(ter.TemINVALID, "LoanBrokerID cannot be zero")
 	}
 	return nil
 }
@@ -249,8 +376,14 @@ func (l *LoanDelete) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := checkUniversalFlags(l); err != nil {
+		return err
+	}
 	if l.LoanID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanID is required")
+	}
+	if isZeroHashStr(l.LoanID) {
+		return ter.Errorf(ter.TemINVALID, "LoanID cannot be zero")
 	}
 	return nil
 }
@@ -279,8 +412,17 @@ func (l *LoanManage) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := tx.CheckFlags(l.GetFlags(), TfLoanManageMask); err != nil {
+		return err
+	}
 	if l.LoanID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanID is required")
+	}
+	if isZeroHashStr(l.LoanID) {
+		return ter.Errorf(ter.TemINVALID, "LoanID cannot be zero")
+	}
+	if f := l.GetFlags() & (TfLoanDefault | TfLoanImpair | TfLoanUnimpair); f&(f-1) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "at most one LoanManage flag may be set")
 	}
 	return nil
 }
@@ -311,65 +453,23 @@ func (l *LoanPay) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
 		return err
 	}
+	if err := tx.CheckFlags(l.GetFlags(), TfLoanPayMask); err != nil {
+		return err
+	}
 	if l.LoanID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "LoanID is required")
 	}
-	if l.Amount.IsZero() {
-		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	if isZeroHashStr(l.LoanID) {
+		return ter.Errorf(ter.TemINVALID, "LoanID cannot be zero")
+	}
+	if l.Amount.Signum() <= 0 {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
+	}
+	if f := l.GetFlags() & (TfLoanOverpayment | TfLoanFullPayment | TfLoanLatePayment); f&(f-1) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "LoanPay flags are mutually exclusive")
 	}
 	return nil
 }
 
 func (l *LoanPay) Flatten() (map[string]any, error) { return tx.ReflectFlatten(l) }
 func (l *LoanPay) RequiredAmendments() [][32]byte   { return requiredLending() }
-
-// The Apply methods are intentionally unimplemented. LendingProtocol is
-// SupportedNo, so the engine rejects these transactions at preflight with
-// temDISABLED and Apply is unreachable. Each returns a hard error that mutates
-// no state, guarding against the amendment being enabled before the real
-// lending semantics (issue #1245) are implemented.
-
-func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan broker set apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan broker delete apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanBrokerCoverDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan broker cover deposit apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan broker cover withdraw apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanBrokerCoverClawback) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan broker cover clawback apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan set apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanDelete) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan delete apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanManage) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan manage apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
-
-func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
-	ctx.Log.Trace("loan pay apply: not implemented", "account", l.Account)
-	return ter.TefINTERNAL
-}
