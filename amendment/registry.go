@@ -28,6 +28,7 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureFixCleanup3_2_0               = registerFix("fixCleanup3_2_0", SupportedYes, VoteDefaultNo)
 	FeatureFixCleanup3_1_3               = registerFix("fixCleanup3_1_3", SupportedYes, VoteDefaultYes)
 	FeatureFixBatchInnerSigs             = registerFix("fixBatchInnerSigs", SupportedNo, VoteDefaultNo)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)

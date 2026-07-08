@@ -236,3 +236,8 @@ func (r *Rules) DeepFreezeEnabled() bool {
 func (r *Rules) PermissionedDEXEnabled() bool {
 	return r.Enabled(FeaturePermissionedDEX)
 }
+
+// FixCleanup3_2_0Enabled returns true if the fixCleanup3_2_0 amendment is enabled.
+func (r *Rules) FixCleanup3_2_0Enabled() bool {
+	return r.Enabled(FeatureFixCleanup3_2_0)
+}
