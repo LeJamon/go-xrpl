@@ -238,8 +238,9 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDUPLICATE
 	}
 
-	// Reserve for the vault object charged to the owner.
-	newOwnerCount := owner.OwnerCount + 1
+	// Creating a vault also creates its pseudo-account, so the owner is charged
+	// for two objects up front (rippled adjustOwnerCount(+2)).
+	newOwnerCount := owner.OwnerCount + 2
 	if ctx.PriorBalance() < ctx.AccountReserve(newOwnerCount) {
 		return ter.TecINSUFFICIENT_RESERVE
 	}
@@ -379,7 +380,21 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
+	// Charge the owner for the vault + pseudo-account before creating the owner's
+	// own share MPToken (which bumps the owner count once more).
 	owner.OwnerCount = newOwnerCount
+
+	// Explicitly create the vault owner's share MPToken.
+	if res := ensureHolderMPToken(ctx, accountID, shareMPTID); res != ter.TesSUCCESS {
+		return res
+	}
+	// A private vault authorizes its owner's shares up front.
+	if txFlags&VaultFlagPrivate != 0 {
+		if res := authorizeHolderMPToken(ctx, accountID, shareMPTID); res != ter.TesSUCCESS {
+			return res
+		}
+	}
+
 	return ter.TesSUCCESS
 }
 

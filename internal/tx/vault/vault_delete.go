@@ -173,12 +173,16 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Remove the vault from the owner's directory and erase it.
+	// Remove the vault from the owner's directory and erase it. The owner is
+	// credited back the vault + pseudo-account it was charged for at create
+	// (rippled adjustOwnerCount(owner, -2)).
 	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(ctx.AccountID), vd.OwnerNode, vaultKey.Key, false); e != nil || !r.Success {
 		return ter.TefBAD_LEDGER
 	}
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	if ctx.Account.OwnerCount >= 2 {
+		ctx.Account.OwnerCount -= 2
+	} else {
+		ctx.Account.OwnerCount = 0
 	}
 	if e := ctx.View.Erase(vaultKey); e != nil {
 		return ter.TefINTERNAL
