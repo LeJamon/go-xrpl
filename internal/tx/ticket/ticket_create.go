@@ -34,15 +34,16 @@ func (t *TicketCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureTicketBatch}
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. CreateTicket defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+// Reference: rippled Transactor.cpp getFlagsMask() = tfUniversalMask.
+func (t *TicketCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Reference: rippled CreateTicket.cpp preflight()
 func (t *TicketCreate) Validate() error {
 	if err := t.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Check for invalid flags (tfUniversalMask)
-	// Reference: rippled CreateTicket.cpp:36 — if (ctx.tx.getFlags() & tfUniversalMask)
-	if err := tx.CheckFlags(t.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
