@@ -33,11 +33,11 @@ func TestBuilderSortsNestedSignersByBinaryAccountID(t *testing.T) {
 		signers = []*xtesting.Account{b, a}
 	}
 
-	batch := NewBatchBuilder(master, 1, 100, 0x00000001).
-		AddInnerTx(MakeFakeInnerTx()).
-		AddInnerTx(MakeFakeInnerTx()).
-		AddMultiSignBatchSigner(master, signers).
-		Build()
+	batch := NewBatchBuilder(master, 1, 100, 0x00010000). // tfAllOrNothing
+								AddInnerTx(MakeFakeInnerTx()).
+								AddInnerTx(MakeFakeInnerTx()).
+								AddMultiSignBatchSigner(master, signers).
+								Build()
 
 	require.Len(t, batch.BatchSigners, 1)
 	nested := batch.BatchSigners[0].BatchSigner.Signers

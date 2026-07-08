@@ -61,16 +61,17 @@ func TestLedgerStateFixValidation(t *testing.T) {
 			errMsg:  "INVALID_LEDGER_FIX_TYPE",
 		},
 		{
-			name: "invalid - universal flags set",
-			tx: func() *LedgerStateFix {
-				l := NewNFTokenPageLinkFix("rAdmin", "rOwner")
-				flags := tx.TfUniversalMask
-				l.Common.Flags = &flags
-				return l
-			}(),
+			// Pins finding LedgerStateFix-uint16: sfLedgerFixType is a UINT16, so a
+			// wire value above 255 must decode and reach the default preflight arm
+			// (tefINVALID_LEDGER_FIX_TYPE) rather than overflow a uint8 at parse.
+			name:    "invalid - unknown fix type (256, needs uint16)",
+			tx:      NewLedgerStateFix("rAdmin", 256),
 			wantErr: true,
-			errMsg:  "invalid flags",
+			errMsg:  "INVALID_LEDGER_FIX_TYPE",
 		},
+		// The universal-flags rejection moved from Validate() to the engine
+		// FlagsMasker seam (preflight0), so it is covered by the engine precedence
+		// pin-test rather than this Validate()-only table.
 	}
 
 	for _, tt := range tests {
@@ -126,7 +127,7 @@ func TestLedgerStateFixConstructors(t *testing.T) {
 		lsf := NewLedgerStateFix("rAdmin", LedgerFixTypeNFTokenPageLink)
 		require.NotNil(t, lsf)
 		assert.Equal(t, "rAdmin", lsf.Account)
-		assert.Equal(t, uint8(1), lsf.LedgerFixType)
+		assert.Equal(t, uint16(1), lsf.LedgerFixType)
 		assert.Equal(t, "", lsf.Owner)
 		assert.Equal(t, tx.TypeLedgerStateFix, lsf.TxType())
 	})
@@ -152,5 +153,5 @@ func TestLedgerStateFixRequiredAmendments(t *testing.T) {
 // Constants Tests
 
 func TestLedgerStateFixConstants(t *testing.T) {
-	assert.Equal(t, uint8(1), LedgerFixTypeNFTokenPageLink)
+	assert.Equal(t, uint16(1), LedgerFixTypeNFTokenPageLink)
 }

@@ -52,19 +52,24 @@ type BatchSignerData struct {
 	Signers           []tx.SignerWrapper `json:"Signers,omitempty"`
 }
 
-// Batch flags
+// Batch flags. The mode-flag bit positions match rippled TxFlags.h exactly so
+// that cross-implementation batches share one canonical flag word (and one
+// signing digest); the low-nibble values previously used here were wire- and
+// signature-incompatible with rippled.
 const (
 	// tfAllOrNothing fails the batch if any transaction fails
-	BatchFlagAllOrNothing uint32 = 0x00000001
+	BatchFlagAllOrNothing uint32 = 0x00010000
 	// tfOnlyOne succeeds if exactly one transaction succeeds
-	BatchFlagOnlyOne uint32 = 0x00000002
+	BatchFlagOnlyOne uint32 = 0x00020000
 	// tfUntilFailure processes until the first failure
-	BatchFlagUntilFailure uint32 = 0x00000004
+	BatchFlagUntilFailure uint32 = 0x00040000
 	// tfIndependent processes all transactions independently
-	BatchFlagIndependent uint32 = 0x00000008
+	BatchFlagIndependent uint32 = 0x00080000
 
-	// tfBatchMask is the mask for invalid batch flags
-	tfBatchMask uint32 = ^(BatchFlagAllOrNothing | BatchFlagOnlyOne | BatchFlagUntilFailure | BatchFlagIndependent)
+	// tfBatchMask is the mask of invalid outer Batch flags. It permits the four
+	// mode bits plus tfFullyCanonicalSig, and rejects tfInnerBatchTxn on the
+	// outer (nested batches are not supported), matching rippled TxFlags.h.
+	tfBatchMask uint32 = ^(tx.TfUniversal | BatchFlagAllOrNothing | BatchFlagOnlyOne | BatchFlagUntilFailure | BatchFlagIndependent) | tx.TfInnerBatchTxn
 
 	// MaxBatchTransactions is the maximum number of inner transactions
 	MaxBatchTransactions = 8
@@ -75,7 +80,6 @@ const (
 var (
 	ErrBatchTooFewTxns            = ter.Errorf(ter.TemARRAY_EMPTY, "batch must have at least 2 transactions")
 	ErrBatchTooManyTxns           = ter.Errorf(ter.TemARRAY_TOO_LARGE, "batch exceeds 8 transactions")
-	ErrBatchInvalidFlags          = ter.Errorf(ter.TemINVALID_FLAG, "invalid batch flags")
 	ErrBatchMustHaveOneFlag       = ter.Errorf(ter.TemINVALID_FLAG, "exactly one batch mode flag required")
 	ErrBatchTooManySigners        = ter.Errorf(ter.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
 	ErrBatchDuplicateSigner       = ter.Errorf(ter.TemREDUNDANT, "duplicate batch signer")
@@ -93,6 +97,7 @@ var (
 	ErrBatchInnerHasSigningPubKey = ter.Errorf(ter.TemBAD_REGKEY, "inner transaction SigningPubKey must be empty")
 	ErrBatchInnerBadFee           = ter.Errorf(ter.TemBAD_FEE, "inner transaction must have a fee of 0")
 	ErrBatchInnerSeqAndTicket     = ter.Errorf(ter.TemSEQ_AND_TICKET, "inner transaction must have exactly one of Sequence and TicketSequence")
+	ErrBatchInnerTicketAndTxnID   = ter.Errorf(ter.TemINVALID_INNER_BATCH, "inner transaction must not carry AccountTxnID when using a ticket")
 	ErrBatchInnerDupSeqOrTicket   = ter.Errorf(ter.TemREDUNDANT, "duplicate inner Sequence or TicketSequence for account")
 	ErrBatchInnerHashUncomputable = ter.Errorf(ter.TemINVALID, "failed to compute inner transaction hash")
 )
@@ -129,6 +134,13 @@ func NewBatch(account string) *Batch {
 
 func (b *Batch) TxType() tx.Type {
 	return tx.TypeBatch
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam, checking tfBatchMask at
+// preflight0 — before the popcount mode check in Validate — mirroring rippled
+// Batch::getFlagsMask.
+func (b *Batch) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfBatchMask
 }
 
 // InnerTxCount returns the number of inner transactions in the batch.
@@ -220,6 +232,17 @@ func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 			return nil, err
 		}
 
+		// The inner's own preflight1 rejects a ticket combined with AccountTxnID
+		// (getSeqProxy().isTicket() && sfAccountTxnID present -> temINVALID, surfaced
+		// on the outer as temINVALID_INNER_BATCH). rippled runs the full inner
+		// preflight here, after the fee check; go-xrpl folds this specific rule into
+		// the inner loop since it never reaches the deferred engine inner-preflight
+		// otherwise. Reference: rippled Batch.cpp inner preflight -> Transactor.cpp preflight1.
+		usesTicket := innerCommon.TicketSequence != nil && (innerCommon.Sequence == nil || *innerCommon.Sequence == 0)
+		if usesTicket && innerCommon.AccountTxnID != "" {
+			return nil, ErrBatchInnerTicketAndTxnID
+		}
+
 		// rippled treats sfSequence absent and sfSequence==0 identically via
 		// getFieldU32; Go's *uint32 nil and *0 collapse the same way here.
 		seqVal := uint32(0)
@@ -283,11 +306,8 @@ func (b *Batch) Validate() error {
 		return err
 	}
 
-	// Check for invalid flags
-	// Reference: rippled Batch.cpp:213-217
-	if b.Common.Flags != nil && *b.Common.Flags&tfBatchMask != 0 {
-		return ErrBatchInvalidFlags
-	}
+	// The tfBatchMask flag check runs at preflight0 via GetFlagsMask (before this
+	// body), matching rippled where getFlagsMask precedes Batch::preflight.
 
 	// Must have exactly one of the mutually exclusive flags
 	// Reference: rippled Batch.cpp:220-227

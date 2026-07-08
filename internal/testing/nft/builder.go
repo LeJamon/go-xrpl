@@ -553,7 +553,7 @@ func (b *NFTokenModifyBuilder) BuildNFTokenModify() *nftoken.NFTokenModify {
 type LedgerStateFixBuilder struct {
 	account  *testing.Account
 	owner    *testing.Account
-	fixType  *uint8
+	fixType  *uint16
 	fee      uint64
 	sequence *uint32
 	flags    uint32
@@ -562,7 +562,7 @@ type LedgerStateFixBuilder struct {
 // LedgerStateFixNFTPageLinks creates a new LedgerStateFixBuilder for NFToken page link repair.
 // account submits the fix; owner is the account whose pages are repaired.
 func LedgerStateFixNFTPageLinks(account, owner *testing.Account) *LedgerStateFixBuilder {
-	fixType := uint8(1) // LedgerFixTypeNFTokenPageLink
+	fixType := uint16(1) // LedgerFixTypeNFTokenPageLink
 	return &LedgerStateFixBuilder{
 		account: account,
 		owner:   owner,
@@ -590,7 +590,7 @@ func (b *LedgerStateFixBuilder) Flags(flags uint32) *LedgerStateFixBuilder {
 }
 
 // FixType overrides the LedgerFixType field.
-func (b *LedgerStateFixBuilder) FixType(ft uint8) *LedgerStateFixBuilder {
+func (b *LedgerStateFixBuilder) FixType(ft uint16) *LedgerStateFixBuilder {
 	b.fixType = &ft
 	return b
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -150,13 +151,31 @@ func (d *DelegateData) HasTxPermission(txType uint32) bool {
 	return slices.Contains(d.Permissions, txPermission)
 }
 
-// LookupPermissionValue converts a permission name (e.g., "Payment") to its
-// numeric delegatable permission value using the definitions package.
-// Returns 0 if the name is not found.
+// LookupPermissionValue converts a permission value to its numeric form. It
+// accepts a permission name (e.g. "Payment") and, for values that have no
+// registered name, a plain decimal string. rippled's sfPermissionValue is a
+// plain UINT32, so a wire value with no known name decodes to its decimal form
+// (see the codec's enumToStr); accepting it here lets those values round-trip
+// and reach the delegatability check. Returns 0 when neither form resolves.
 func LookupPermissionValue(name string) uint32 {
-	pv, err := definitions.Get().GetDelegatablePermissionValueByName(name)
-	if err != nil {
-		return 0
+	if pv, err := definitions.Get().GetDelegatablePermissionValueByName(name); err == nil {
+		return uint32(pv)
 	}
-	return uint32(pv)
+	if n, err := strconv.ParseUint(name, 10, 32); err == nil {
+		return uint32(n)
+	}
+	return 0
+}
+
+// IsGranularPermissionValue reports whether the numeric permission value is a
+// registered granular permission (rippled getGranularName != nullopt). Unknown
+// values in the granular range are not granular and must fall through to the
+// transaction-type delegatability path.
+func IsGranularPermissionValue(value uint32) bool {
+	for _, v := range definitions.Get().GranularPermissions {
+		if uint32(v) == value {
+			return true
+		}
+	}
+	return false
 }
