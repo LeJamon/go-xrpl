@@ -69,6 +69,32 @@ func (s *SignerListSet) Validate() error {
 	}
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. rippled uses an
+// amendment-conditional mask: with fixInvalidTxFlags any non-universal flag is
+// rejected at preflight0; without it any flags are allowed.
+// Reference: rippled SetSignerList.cpp getFlagsMask().
+func (s *SignerListSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.Enabled(amendment.FeatureFixInvalidTxFlags) {
+		return tx.TfUniversalMask
+	}
+	return 0
+}
+
+// PreflightRules runs the amendment-aware signer-entry validation for a set
+// operation. rippled runs validateQuorumAndSignerEntries in the preflight body;
+// Validate() only classifies set vs destroy, so a non-zero quorum reaching here
+// is a set (the malformed combinations are already rejected).
+// Reference: rippled SetSignerList.cpp preflight() → validateQuorumAndSignerEntries.
+func (s *SignerListSet) PreflightRules(rules *amendment.Rules) error {
+	if s.SignerQuorum == 0 {
+		return nil
+	}
+	if r := s.validateQuorumAndSignerEntries(rules.Enabled(amendment.FeatureExpandedSignerList)); r != ter.TesSUCCESS {
+		return ter.Errorf(r, "invalid signer entries")
+	}
+	return nil
+}
+
 // validateQuorumAndSignerEntries performs the amendment-aware validation rippled
 // runs in preflight: entry-count bounds (8 without featureExpandedSignerList, 32
 // with), no duplicates, positive weights, no self-reference, WalletLocator only
@@ -145,14 +171,25 @@ func (s *SetRegularKey) TxType() tx.Type {
 	return tx.TypeRegularKeySet
 }
 
-// Reference: rippled SetRegularKey.cpp preflight() — no type-specific flags allowed
 func (s *SetRegularKey) Validate() error {
-	if err := s.BaseTx.Validate(); err != nil {
-		return err
-	}
-	// SetRegularKey has no type-specific flags.
-	if s.GetFlags()&tx.TfUniversalMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for SetRegularKey")
+	return s.BaseTx.Validate()
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. SetRegularKey defines no
+// type-specific flags, so it uses the base universal mask (rippled does not
+// override getFlagsMask for SetRegularKey).
+// Reference: rippled Transactor.cpp getFlagsMask() = tfUniversalMask.
+func (s *SetRegularKey) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// PreflightRules rejects setting the regular key to the account's own address
+// once fixMasterKeyAsRegularKey is active, before any ledger-state check.
+// Reference: rippled SetRegularKey.cpp preflight().
+func (s *SetRegularKey) PreflightRules(rules *amendment.Rules) error {
+	if rules.Enabled(amendment.FeatureFixMasterKeyAsRegularKey) &&
+		s.RegularKey != "" && s.RegularKey == s.Account {
+		return ter.Errorf(ter.TemBAD_REGKEY, "regular key cannot be the master key")
 	}
 	return nil
 }
@@ -171,16 +208,8 @@ func (s *SetRegularKey) ClearKey() {
 	s.RegularKey = ""
 }
 
-// Reference: rippled SetRegularKey.cpp preflight + doApply()
+// Reference: rippled SetRegularKey.cpp doApply()
 func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Amendment-gated preflight check: reject setting RegularKey to own account.
-	// Reference: rippled SetRegularKey.cpp preflight lines 66-71
-	if ctx.Rules().Enabled(amendment.FeatureFixMasterKeyAsRegularKey) {
-		if s.RegularKey != "" && s.RegularKey == s.Account {
-			return ter.TemBAD_REGKEY
-		}
-	}
-
 	if s.RegularKey != "" {
 		ctx.Log.Trace("set regular key apply",
 			"account", s.Account,
@@ -287,14 +316,6 @@ func signerCountBasedOwnerCountDelta(entryCount int) int {
 
 // Reference: rippled SetSignerList.cpp preflight() + doApply(), replaceSignerList(), destroySignerList()
 func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Check for invalid flags, gated behind fixInvalidTxFlags.
-	// Reference: rippled SetSignerList.cpp preflight() lines 86-91
-	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
-		if s.GetFlags()&tx.TfUniversalMask != 0 {
-			return ter.TemINVALID_FLAG
-		}
-	}
-
 	ctx.Log.Trace("signer list set apply",
 		"account", s.Account,
 		"signerQuorum", s.SignerQuorum,
@@ -325,14 +346,10 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	// --- Replace (or create) signer list ---
 	// Reference: rippled SetSignerList.cpp replaceSignerList()
 
-	// Validate the signer entries now that amendment rules are available.
-	// rippled does this in preflight; go-xrpl's Validate() has no rules, so it
-	// runs here — which also covers batch inner transactions, since they reach
-	// Apply but not Preclaim.
+	// Signer-entry validity (counts, weights, duplicates, quorum, WalletLocator)
+	// is enforced in PreflightRules — the outer path and preflightInner both run
+	// it, so by the time Apply runs the entries are known valid.
 	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)
-	if r := s.validateQuorumAndSignerEntries(expandedSignerList); r != ter.TesSUCCESS {
-		return r
-	}
 
 	// Preemptively remove any old signer list. May reduce the reserve,
 	// so this is done before checking the reserve.

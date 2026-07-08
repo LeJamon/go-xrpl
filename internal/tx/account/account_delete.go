@@ -28,11 +28,27 @@ func (a *AccountDelete) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureDeletableAccounts}
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. AccountDelete defines no
+// type-specific flags, so it uses the base universal mask.
+// Reference: rippled Transactor.cpp getFlagsMask() = tfUniversalMask.
+func (a *AccountDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// CheckExtraFeatures gates CredentialIDs behind featureCredentials. rippled runs
+// this in checkExtraFeatures — before preflight1 and DeleteAccount::preflight —
+// so the temDISABLED wins over temDST_IS_SRC, the credential shape check, and
+// every ledger-state TER.
+// Reference: rippled DeleteAccount.cpp checkExtraFeatures().
+func (a *AccountDelete) CheckExtraFeatures(rules *amendment.Rules) error {
+	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
+		return ter.Errorf(ter.TemDISABLED, "CredentialIDs requires the Credentials amendment")
+	}
+	return nil
+}
+
 func (a *AccountDelete) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := tx.CheckFlags(a.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 	if a.Destination == "" {
@@ -78,9 +94,6 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	rules := ctx.Rules()
-	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return ter.TemDISABLED
-	}
 	destAccount, destID, result := ctx.LookupAccount(a.Destination)
 	if result != ter.TesSUCCESS {
 		return result

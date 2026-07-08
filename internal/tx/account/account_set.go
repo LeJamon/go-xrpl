@@ -150,12 +150,6 @@ func (a *AccountSet) Validate() error {
 
 	txFlags := a.GetFlags()
 
-	// Check for invalid transaction flags
-	// Reference: rippled SetAccount.cpp:71-75
-	if txFlags&AccountSetTxFlagMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid transaction flags")
-	}
-
 	// Cannot set and clear the same non-zero flag. SetFlag/ClearFlag of 0
 	// (or both absent, which reads as 0) is a valid no-op.
 	// Reference: rippled SetAccount.cpp:80-84
@@ -241,6 +235,25 @@ func (a *AccountSet) Validate() error {
 	return nil
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the AccountSet-specific
+// invalid-flags mask, checked at preflight0 (rippled SetAccount::getFlagsMask =
+// tfAccountSetMask).
+func (a *AccountSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return AccountSetTxFlagMask
+}
+
+// PreflightRules runs the amendment-gated NFTokenMinter field-pairing check as
+// part of the preflight body, before any ledger-state check.
+// Reference: rippled SetAccount.cpp:174-184.
+func (a *AccountSet) PreflightRules(rules *amendment.Rules) error {
+	if rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
+		if r := a.validateNFTokenMinter(); r != ter.TesSUCCESS {
+			return ter.Errorf(r, "invalid NFTokenMinter field pairing")
+		}
+	}
+	return nil
+}
+
 // validateNFTokenMinter enforces the NFTokenMinter field-presence rules for the
 // asfAuthorizedNFTokenMinter flag: the minter must be present when setting the
 // flag and absent when clearing it. rippled gates these checks on
@@ -296,14 +309,6 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	if a.ClearFlag != nil {
 		uClearFlag = *a.ClearFlag
-	}
-
-	// NFTokenMinter field presence is validated only once NonFungibleTokensV1 is
-	// enabled, mirroring rippled's amendment-gated preflight check.
-	if ctx.Rules().Enabled(amendment.FeatureNonFungibleTokensV1) {
-		if r := a.validateNFTokenMinter(); r != ter.TesSUCCESS {
-			return r
-		}
 	}
 
 	// Legacy AccountSet flags: RequireAuth, RequireDestTag and DisallowXRP can be
