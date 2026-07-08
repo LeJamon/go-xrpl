@@ -527,6 +527,24 @@ var txqLoadFeeLookup = map[string]map[int]loadFeeEvent{
 }
 
 // RunFixture loads and executes a single fixture file.
+// disabledRetiredAmendments returns the retired amendments absent from a
+// fixture's enabled set, in name order. A non-empty result means the fixture
+// records a retired amendment as disabled and can no longer be reproduced.
+func disabledRetiredAmendments(enabled []string) []string {
+	on := make(map[string]bool, len(enabled))
+	for _, n := range enabled {
+		on[n] = true
+	}
+	var missing []string
+	for _, f := range amendment.AllFeatures() {
+		if f.Retired && !on[f.Name] {
+			missing = append(missing, f.Name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
 func RunFixture(t *testing.T, fixturePath string) {
 	t.Helper()
 
@@ -538,6 +556,17 @@ func RunFixture(t *testing.T, fixturePath string) {
 	var fixture Fixture
 	if err := json.Unmarshal(data, &fixture); err != nil {
 		t.Fatalf("Failed to parse fixture %s: %v", fixturePath, err)
+	}
+
+	// A fixture that records a retired amendment as disabled tests a protocol
+	// configuration that no longer exists — retired amendments are permanently
+	// enabled, so the engine forces them on and the recording cannot be
+	// reproduced. Mirrors rippled 3.2.0 deleting these FeatureBitset variations;
+	// the fixtures should be re-recorded from a 3.2.0 corpus.
+	if fixture.Env != nil && len(fixture.Env.AmendmentsEnabled) > 0 {
+		if missing := disabledRetiredAmendments(fixture.Env.AmendmentsEnabled); len(missing) > 0 {
+			t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable post-3.2.0 retirement; re-record from rippled 3.2.0", strings.Join(missing, ", "))
+		}
 	}
 
 	// Detect TxQ suites by fixture path.
