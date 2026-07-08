@@ -79,6 +79,18 @@ func (e *EscrowCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return 0
 }
 
+// CheckExtraFeatures enforces the MPT-escrow featureMPTokensV1 requirement ahead
+// of the preflight body when fixCleanup3_2_0 is active, so a disabled MPTokensV1
+// surfaces temDISABLED from the common framework. Pre-amendment the requirement
+// is enforced by the per-asset preflight helper instead.
+// Reference: rippled Escrow.cpp EscrowCreate::checkExtraFeatures.
+func (e *EscrowCreate) CheckExtraFeatures(rules *amendment.Rules) error {
+	if rules.FixCleanup3_2_0Enabled() && e.Amount.IsMPT() && !rules.Enabled(amendment.FeatureMPTokensV1) {
+		return ter.Errorf(ter.TemDISABLED, "MPT escrow requires MPTokensV1")
+	}
+	return nil
+}
+
 // PreflightRules is the amendment-aware body of rippled's EscrowCreate::preflight.
 // The whole sequence lives here (rather than split across Validate) so that a
 // transaction malformed in two ways surfaces the same tem* code rippled reports:
@@ -234,7 +246,10 @@ func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.Accou
 // Reference: rippled Escrow.cpp escrowCreatePreflightHelper<Issue>/<MPTIssue>.
 func escrowCreateNonXRPPreflight(rules *amendment.Rules, amount tx.Amount) error {
 	if amount.IsMPT() {
-		if !rules.Enabled(amendment.FeatureMPTokensV1) {
+		// Post-fixCleanup3_2_0 the MPTokensV1 requirement is enforced earlier by
+		// CheckExtraFeatures (temDISABLED from the common framework); here it
+		// only guards the pre-amendment path.
+		if !rules.FixCleanup3_2_0Enabled() && !rules.Enabled(amendment.FeatureMPTokensV1) {
 			return ter.Errorf(ter.TemDISABLED, "MPT escrow requires MPTokensV1")
 		}
 		if amount.IsZero() || amount.IsNegative() {
