@@ -36,18 +36,20 @@ func (n *NFTokenAcceptOffer) TxType() tx.Type {
 	return tx.TypeNFTokenAcceptOffer
 }
 
+// GetFlagsMask matches rippled tfNFTokenAcceptOfferMask = ~tfUniversal (no
+// type-specific flags). The engine enforces it at preflight0, ahead of the
+// account/fee/signing-key checks.
+func (n *NFTokenAcceptOffer) GetFlagsMask(*amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Reference: rippled NFTokenAcceptOffer.cpp preflight
 func (n *NFTokenAcceptOffer) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// NFTokenAcceptOffer defines no transaction-specific flags, but the universal
-	// flags (e.g. tfFullyCanonicalSig) are always permitted.
-	// Reference: rippled TxFlags.h tfNFTokenAcceptOfferMask = ~tfUniversal.
-	if n.GetFlags()&^tx.TfUniversal != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "NFTokenAcceptOffer: invalid flags")
-	}
+	// Flag mask is enforced by the engine at preflight0 via GetFlagsMask.
 
 	// Must have at least one offer
 	if n.NFTokenSellOffer == "" && n.NFTokenBuyOffer == "" {
@@ -59,9 +61,11 @@ func (n *NFTokenAcceptOffer) Validate() error {
 		if n.NFTokenSellOffer == "" || n.NFTokenBuyOffer == "" {
 			return ter.Errorf(ter.TemMALFORMED, "NFTokenBrokerFee requires both sell and buy offers")
 		}
-		// BrokerFee must be positive (greater than zero)
-		// Reference: rippled NFTokenAcceptOffer.cpp:56 - if (*bf <= beast::zero)
-		if n.NFTokenBrokerFee.IsZero() {
+		// BrokerFee must be strictly positive: rippled rejects both zero and
+		// negative fees (*bf <= beast::zero → temMALFORMED). A negative IOU fee
+		// is wire-representable, so the sign check is not redundant.
+		// Reference: rippled NFTokenAcceptOffer.cpp preflight.
+		if n.NFTokenBrokerFee.IsZero() || n.NFTokenBrokerFee.IsNegative() {
 			return ter.Errorf(ter.TemMALFORMED, "NFTokenBrokerFee must be greater than zero")
 		}
 	}
