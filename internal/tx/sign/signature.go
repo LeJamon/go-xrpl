@@ -328,6 +328,53 @@ func VerifyMultiSignature(tx txcore.Transaction, lookup SignerListLookup, mustBe
 	return nil
 }
 
+// VerifyMultiSignatureCrypto verifies only the per-signer cryptographic
+// signatures of a multi-signed transaction. Unlike VerifyMultiSignature it does
+// NOT consult the ledger signer list, quorum, or per-signer key authorization —
+// those are view-dependent preclaim checks (rippled Transactor::checkMultiSign).
+// It mirrors rippled STTx::checkMultiSign, which is reached from preflight2 and
+// is crypto-only. The structural rules (bounds, sorted, unique, no self-sign)
+// are enforced separately before this runs, so any error here is preflight2's
+// Validity::SigBad, which the caller maps to temINVALID.
+func VerifyMultiSignatureCrypto(tx txcore.Transaction, mustBeFullyCanonical bool) error {
+	common := tx.GetCommon()
+
+	if !IsMultiSigned(tx) {
+		if common.TxnSignature != "" {
+			return VerifySignature(tx, mustBeFullyCanonical)
+		}
+		return ErrMissingSignature
+	}
+	if len(common.Signers) == 0 {
+		return ErrNoSigners
+	}
+
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return fmt.Errorf("failed to flatten transaction: %w", err)
+	}
+
+	for _, signerWrapper := range common.Signers {
+		signer := signerWrapper.Signer
+		if signer.SigningPubKey == "" {
+			return ErrBadSignature
+		}
+		pubKeyBytes, decErr := hex.DecodeString(signer.SigningPubKey)
+		if decErr != nil || len(pubKeyBytes) == 0 {
+			return ErrBadSignature
+		}
+		signingPayload, encErr := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		if encErr != nil {
+			return fmt.Errorf("failed to encode for multi-signing: %w", encErr)
+		}
+		if !verifySignatureForKey(signingPayload, signer.SigningPubKey, signer.TxnSignature, mustBeFullyCanonical) {
+			return ErrBadSignature
+		}
+	}
+
+	return nil
+}
+
 // counterpartyPrefix labels every error surfaced from the nested
 // CounterpartySignature check, matching rippled's "Counterparty: " prefix.
 const counterpartyPrefix = "Counterparty: "

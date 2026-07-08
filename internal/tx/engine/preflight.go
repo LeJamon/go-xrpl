@@ -72,27 +72,55 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 	return ter.TesSUCCESS
 }
 
-// preflightStructure runs the ledger-state-independent preflight checks
-// (preflight0/1 minus signature verification, plus the per-type Validate and
-// rules-gated checks). It is a pure function of the transaction fields and the
-// active rules, which is what makes its verdict safe to memoise (see
-// Common.PreflightVerified).
+// preflightStructure runs the ledger-state-independent preflight checks in
+// rippled's invokePreflight order: the amendment gate and T::checkExtraFeatures,
+// then preflight1 (which invokes preflight0), then the per-type Validate body,
+// then the preflight2 structural (multi-sign) checks. Signature verification
+// itself runs separately in verifySignatures. This is a pure function of the
+// transaction fields and the active rules, which is what makes its verdict safe
+// to memoise (see Common.PreflightVerified).
+// Reference: rippled Transactor.h Transactor::invokePreflight<T>.
 func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	// preflight0: trivial common-field presence + amendment + flag checks.
-	if result := e.preflightCommonFields(tx, common); result != ter.TesSUCCESS {
+	rules := e.rules()
+
+	// The transactions.macro amendment gate (rippled Permission::getTxFeature →
+	// temDISABLED) is the FIRST check, before checkExtraFeatures and preflight1,
+	// so a disabled tx type is rejected before any NetworkID/account/fee TER.
+	for _, featureID := range tx.RequiredAmendments() {
+		if !rules.Enabled(featureID) {
+			return ter.TemDISABLED
+		}
+	}
+
+	// T::checkExtraFeatures runs before preflight1's common checks (see
+	// ExtraFeaturesChecker). No tx type adopts this hook yet.
+	if efc, ok := tx.(txcore.ExtraFeaturesChecker); ok {
+		if err := efc.CheckExtraFeatures(rules); err != nil {
+			return parseValidationError(err)
+		}
+	}
+
+	// preflight1 (which itself runs preflight0).
+	if result := e.preflight1(tx, common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 
-	// preflight1 — fee, sequence, memos, structural multi-sign checks.
-	if result := e.validateFee(common); result != ter.TesSUCCESS {
-		return result
+	// T::preflight — the tx-type-specific body: the rules-free Validate() plus
+	// any amendment-gated tem* checks that genuinely belong in the per-type
+	// preflight body (RulesPreflighter).
+	if err := tx.Validate(); err != nil {
+		return parseValidationError(err)
 	}
-	if result := e.preflightSequence(common); result != ter.TesSUCCESS {
-		return result
+	if rp, ok := tx.(txcore.RulesPreflighter); ok {
+		if err := rp.PreflightRules(rules); err != nil {
+			return parseValidationError(err)
+		}
 	}
-	if result := e.validateMemos(common); result != ter.TesSUCCESS {
-		return result
-	}
+
+	// preflight2 structural stage — the multi-sign structural rules run after
+	// T::preflight (rippled STTx::multiSignHelper reached via checkValidity) and
+	// a violation is Validity::SigBad → temINVALID. The per-signer cryptographic
+	// verification runs later in verifySignatures.
 	if result := e.preflightMultiSignStructure(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -100,19 +128,69 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 		return result
 	}
 
-	// tx-type-specific validation (the per-type preflight body).
-	if err := tx.Validate(); err != nil {
-		return parseValidationError(err)
-	}
+	return ter.TesSUCCESS
+}
 
-	// Rules-dependent preflight checks for tx types that need amendment-gated
-	// tem* validation alongside their rules-free Validate() body.
-	if rp, ok := tx.(txcore.RulesPreflighter); ok {
-		if err := rp.PreflightRules(e.rules()); err != nil {
-			return parseValidationError(err)
+// preflight1 runs rippled Transactor::preflight1 (which invokes preflight0) in
+// its exact order: ticket-amendment → delegate → preflight0 (NetworkID, flags
+// mask) → account → fee → signing-key shape → ticket+AccountTxnID → the
+// outer-only tfInnerBatchTxn rejection (last).
+// Reference: rippled Transactor.cpp preflight1/preflight0.
+func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
+	// A TicketSequence without featureTicketBatch is the first preflight1 check.
+	if result := checkTicketAmendment(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	// The delegate check precedes preflight0 (and thus the NetworkID checks).
+	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	// preflight0: NetworkID canonicality then the flags mask.
+	if result := e.preflight0(tx, common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	// Zero/empty source account.
+	if result := checkAccountPresent(common); result != ter.TesSUCCESS {
+		return result
+	}
+	// Malformed fee — before the signing-key shape check.
+	if result := e.validateFee(common); result != ter.TesSUCCESS {
+		return result
+	}
+	// A non-empty SigningPubKey of an invalid key type.
+	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
+		return result
+	}
+	// Sequence presence (go-xrpl defensive) and the ticket+AccountTxnID rule.
+	if result := e.preflightSequence(common); result != ter.TesSUCCESS {
+		return result
+	}
+	// The outer tfInnerBatchTxn rejection is the last preflight1 check.
+	if result := preflightInnerBatchFlag(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	return ter.TesSUCCESS
+}
+
+// preflight0 mirrors rippled preflight0 for the regular (non-pseudo) path: the
+// NetworkID canonicality check followed by the flags mask. The pseudo path, the
+// pseudo/tfInnerBatchTxn guard, and the zero-txID guard live elsewhere
+// (pseudoPreflight and ApplyWithContext respectively).
+// Reference: rippled Transactor.cpp preflight0.
+func (e *Engine) preflight0(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
+	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
+		return result
+	}
+	// Flags mask: a transaction whose flags intersect its type's invalid-flags
+	// mask is temINVALID_FLAG. rippled evaluates this with T::getFlagsMask(ctx).
+	// A type opts in via FlagsMasker; until it does, the per-type flag check in
+	// Validate() is the backstop and the engine applies no mask here (the
+	// universal mask would reject every valid type-specific flag).
+	if fm, ok := tx.(txcore.FlagsMasker); ok {
+		if common.GetFlags()&fm.GetFlagsMask(rules) != 0 {
+			return ter.TemINVALID_FLAG
 		}
 	}
-
 	return ter.TesSUCCESS
 }
 
@@ -124,12 +202,32 @@ type BatchOuter interface {
 	InnerTransactions() []txcore.Transaction
 }
 
+// preflightInner runs the common structural checks for an inner batch tx.
 // Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
-// Fee/signature/multi-sign/inner-flag rejections are skipped here because
-// inner txs have Fee=0, no signature, no multi-signers, and tfInnerBatchTxn
-// set; the corresponding presence checks live in Batch.Validate().
+// Fee/signature/multi-sign/inner-flag rejections are skipped here because inner
+// txs carry Fee=0, no signature, no multi-signers, and tfInnerBatchTxn set (all
+// validated by Batch.Validate()).
 func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
-	if result := e.preflightCommon(innerTx, innerTx.GetCommon()); result != ter.TesSUCCESS {
+	common := innerTx.GetCommon()
+	rules := e.rules()
+	if result := checkAccountPresent(common); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
+		return result
+	}
+	for _, featureID := range innerTx.RequiredAmendments() {
+		if !rules.Enabled(featureID) {
+			return ter.TemDISABLED
+		}
+	}
+	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := checkTicketAmendment(common, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
 	if err := innerTx.Validate(); err != nil {
@@ -138,24 +236,13 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// Reference: rippled Transactor.cpp preflight0/early preflight1, plus the
-// outer-only tfInnerBatchTxn rejection on directly-submitted transactions.
-func (e *Engine) preflightCommonFields(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	if result := e.preflightCommon(tx, common); result != ter.TesSUCCESS {
-		return result
-	}
-
-	if result := e.preflightInnerBatchFlag(common); result != ter.TesSUCCESS {
-		return result
-	}
-
-	return ter.TesSUCCESS
-}
-
-// preflightInnerBatchFlag rejects a directly-submitted transaction that carries
-// tfInnerBatchTxn. That flag is only ever set by the Batch transactor on the
-// inner transactions it applies (which flow through preflightInner, not here),
-// so on a top-level submission it is always illegitimate.
+// preflightInnerBatchFlag rejects a transaction reaching the outer preflight
+// that carries tfInnerBatchTxn. That flag is only ever set by the Batch
+// transactor on the inner transactions it applies (which flow through
+// preflightInner, not here), so on the outer path it is always illegitimate. It
+// is the last preflight1 check, so a transaction that is both inner-flagged and
+// malformed in fee/sequence surfaces the earlier code (matching rippled, where
+// this rejection is the final preflight1 check).
 //
 // The rejection code mirrors rippled across the two amendment gates:
 //   - Batch disabled: the flag itself is undefined → temINVALID_FLAG
@@ -166,11 +253,10 @@ func (e *Engine) preflightCommonFields(tx txcore.Transaction, common *txcore.Com
 //     falls through to checkSign → SigBad → temINVALID). Before the fix it
 //     reached the transaction engine and failed with temINVALID_FLAG. Either
 //     way it can never apply.
-func (e *Engine) preflightInnerBatchFlag(common *txcore.Common) ter.Result {
+func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Flags == nil || *common.Flags&txcore.TfInnerBatchTxn == 0 {
 		return ter.TesSUCCESS
 	}
-	rules := e.rules()
 	if !rules.Enabled(amendment.FeatureBatch) {
 		return ter.TemINVALID_FLAG
 	}
@@ -180,90 +266,95 @@ func (e *Engine) preflightInnerBatchFlag(common *txcore.Common) ter.Result {
 	return ter.TemINVALID_FLAG
 }
 
-// Shared between outer (preflightCommonFields) and inner (preflightInner).
-// The tfInnerBatchTxn rejection lives only in the outer path because inner
-// txs are required to carry that flag.
-func (e *Engine) preflightCommon(tx txcore.Transaction, common *txcore.Common) ter.Result {
+// checkTicketAmendment rejects a TicketSequence field when featureTicketBatch is
+// not enabled. Reference: rippled Transactor.cpp preflight1 (first check).
+func checkTicketAmendment(common *txcore.Common, rules *amendment.Rules) ter.Result {
+	if common.TicketSequence != nil && !rules.Enabled(amendment.FeatureTicketBatch) {
+		return ter.TemMALFORMED
+	}
+	return ter.TesSUCCESS
+}
+
+// checkDelegate validates the sfDelegate field.
+// Reference: rippled Transactor.cpp preflight1 (delegate block, before preflight0).
+func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
+	if common.Delegate == "" {
+		return ter.TesSUCCESS
+	}
+	if !rules.Enabled(amendment.FeaturePermissionDelegation) {
+		return ter.TemDISABLED
+	}
+	if common.Delegate == common.Account {
+		return ter.TemBAD_SIGNER
+	}
+	return ter.TesSUCCESS
+}
+
+// checkAccountPresent rejects a zero/empty source account.
+// Reference: rippled Transactor.cpp preflight1 (id == beast::zero → temBAD_SRC_ACCOUNT).
+func checkAccountPresent(common *txcore.Common) ter.Result {
 	if common.Account == "" {
 		return ter.TemBAD_SRC_ACCOUNT
 	}
 	if common.TransactionType == "" {
 		return ter.TemINVALID
 	}
-
-	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
-		return result
-	}
-
-	for _, featureID := range tx.RequiredAmendments() {
-		if !e.rules().Enabled(featureID) {
-			return ter.TemDISABLED
-		}
-	}
-
-	// Reject a non-empty SigningPubKey whose key type is invalid, regardless of
-	// whether crypto verification runs. rippled preflight1 does this
-	// unconditionally (Transactor.cpp:129-135 — `!spk.empty() &&
-	// !publicKeyType(makeSlice(spk))` → temBAD_SIGNATURE), so even paths that
-	// skip signature verification (the standalone RPC ingress sets
-	// SkipSignatureVerification) must still bounce a malformed key here.
-	if common.SigningPubKey != "" {
-		spk, decErr := hex.DecodeString(common.SigningPubKey)
-		if decErr != nil || !txcore.IsValidPublicKey(spk) {
-			return ter.TemBAD_SIGNATURE
-		}
-	}
-
-	// Reference: rippled Transactor.cpp preflight1() line 92.
-	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
-		return ter.TemMALFORMED
-	}
-
-	// Reference: rippled Transactor.cpp preflight1() lines 101-108.
-	if common.Delegate != "" {
-		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
-			return ter.TemDISABLED
-		}
-		if common.Delegate == common.Account {
-			return ter.TemBAD_SIGNER
-		}
-	}
-
 	return ter.TesSUCCESS
 }
 
-// preflightSequence enforces the Sequence/TicketSequence/AccountTxnID rules
-// from rippled Transactor::preflight1() lines 142-153.
+// checkSigningKeyShape rejects a non-empty SigningPubKey whose key type is
+// invalid, regardless of whether crypto verification runs. rippled preflight1
+// does this unconditionally (preflightCheckSigningKey → temBAD_SIGNATURE), so
+// even paths that skip signature verification must still bounce a malformed key.
+func checkSigningKeyShape(common *txcore.Common) ter.Result {
+	if common.SigningPubKey == "" {
+		return ter.TesSUCCESS
+	}
+	spk, decErr := hex.DecodeString(common.SigningPubKey)
+	if decErr != nil || !txcore.IsValidPublicKey(spk) {
+		return ter.TemBAD_SIGNATURE
+	}
+	return ter.TesSUCCESS
+}
+
+// preflightSequence enforces the ticket+AccountTxnID rule from rippled
+// Transactor::preflight1, plus a go-xrpl-only defensive check that Sequence or
+// TicketSequence is present (rippled relies on the soeREQUIRED sfSequence
+// template field, which cannot be absent from a canonically-serialized tx).
 func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
-	// Sequence must be present (unless using tickets)
 	if common.Sequence == nil && common.TicketSequence == nil {
 		return ter.TemBAD_SEQUENCE
 	}
 
-	// TicketSequence + AccountTxnID is invalid
-	// Reference: rippled Transactor.cpp preflight1() line 153
-	if common.TicketSequence != nil && common.AccountTxnID != "" {
+	// An AccountTxnID constrains transaction ordering more than Sequence, while
+	// Tickets relax it, so the combination is unsupported — but only when the
+	// transaction actually uses a ticket. rippled gates this on
+	// getSeqProxy().isTicket(), which is true iff the Sequence field is zero (or
+	// absent) AND a TicketSequence is present; a tx with a non-zero Sequence
+	// ignores its TicketSequence entirely, so AccountTxnID is fine.
+	// Reference: rippled Transactor.cpp preflight1() + STTx::getSeqProxy.
+	usesTicket := (common.Sequence == nil || *common.Sequence == 0) && common.TicketSequence != nil
+	if usesTicket && common.AccountTxnID != "" {
 		return ter.TemINVALID
 	}
 
-	// SourceTag validation - if present, it's already a uint32 via JSON parsing
-	// No additional validation needed as the type system ensures it's valid
 	return ter.TesSUCCESS
 }
 
 // preflightMultiSignStructure performs the structural multi-sign validation
-// (sort, uniqueness, self-sign rejection) that runs regardless of
-// SkipSignatureVerification.
-// Reference: rippled STTx.cpp multiSignHelper() lines 468-485
+// (bounds, sort, uniqueness, self-sign rejection). rippled runs these inside
+// STTx::multiSignHelper, reached via checkValidity in preflight2 — AFTER the
+// per-type preflight body — and a violation is Validity::SigBad → temINVALID
+// (NOT temBAD_SIGNATURE, which the submission layer reports separately). It runs
+// regardless of SkipSignatureVerification.
+// Reference: rippled STTx.cpp multiSignHelper() + Transactor::preflight2.
 func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	if !sign.IsMultiSigned(tx) {
 		return ter.TesSUCCESS
 	}
-	// The signer array must lie within the rules-gated bounds. An out-of-range
-	// array is "Invalid Signers array size" in rippled's multiSignHelper, which
-	// surfaces as temBAD_SIGNATURE at the verification call site.
+	// The signer array must lie within the rules-gated bounds.
 	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners(e.rules()) {
-		return ter.TemBAD_SIGNATURE
+		return ter.TemINVALID
 	}
 	txAccountID, acctErr := state.DecodeAccountID(common.Account)
 	if acctErr != nil {
@@ -273,19 +364,19 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 	for _, sw := range common.Signers {
 		signerID, decErr := state.DecodeAccountID(sw.Signer.Account)
 		if decErr != nil {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 		// The account owner may not multisign for themselves.
 		if signerID == txAccountID {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 		// No duplicate signers allowed.
 		if signerID == lastAccountID {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 		// Accounts must be in order by binary AccountID.
 		if bytes.Compare(lastAccountID[:], signerID[:]) > 0 {
-			return ter.TemBAD_SIGNATURE
+			return ter.TemINVALID
 		}
 		lastAccountID = signerID
 	}
@@ -364,23 +455,18 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
 		(tx.GetCommon().GetFlags()&txcore.TfFullyCanonicalSig) != 0
 	if sign.IsMultiSigned(tx) {
-		// Multi-signed transactions require signer list lookup
-		lookup := &sign.EngineSignerListLookup{View: e.view}
-		if err := sign.VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
-			// The typed signer-verification errors carry their own Result code
-			// (ErrNotMultiSigning, ErrBadQuorum, ErrBadSignature, ErrMasterDisabled,
-			// and ErrInternalLookup for a storage/parse failure); honour it.
-			if re, ok := ter.AsResultError(err); ok {
-				return re.Code
-			}
-			// The malformed-signers sentinels are plain errors, all temBAD_SIGNATURE.
-			if errors.Is(err, sign.ErrNoSigners) ||
-				errors.Is(err, sign.ErrDuplicateSigner) ||
-				errors.Is(err, sign.ErrSignersNotSorted) {
-				return ter.TemBAD_SIGNATURE
-			}
-			// Anything else (e.g. a wrapped serialization failure) is a bad sig.
-			return ter.TefBAD_SIGNATURE
+		// Preflight verifies only the multi-sign structure (already checked in
+		// preflightMultiSignStructure) and the per-signer cryptographic
+		// signatures. The view-dependent signer-list authorization — quorum,
+		// master/regular key, and list membership — is a preclaim check
+		// (checkMultiSign), so that an under-quorum multi-signed tx whose
+		// LastLedgerSequence has passed reports tefMAX_LEDGER (from preclaim's
+		// checkPriorTxAndLastLedger) rather than tefBAD_QUORUM. This mirrors
+		// rippled, where STTx::checkMultiSign (preflight2) is crypto-only and
+		// Transactor::checkMultiSign (preclaim) does authorization. A crypto
+		// failure is preflight2's Validity::SigBad → temINVALID.
+		if err := sign.VerifyMultiSignatureCrypto(tx, mustBeFullyCanonical); err != nil {
+			return ter.TemINVALID
 		}
 		return ter.TesSUCCESS
 	}
@@ -533,97 +619,3 @@ func (e *Engine) validateFee(common *txcore.Common) ter.Result {
 	return ter.TesSUCCESS
 }
 
-// validateMemos validates the Memos array according to rippled rules
-func (e *Engine) validateMemos(common *txcore.Common) ter.Result {
-	if len(common.Memos) == 0 {
-		return ter.TesSUCCESS
-	}
-
-	// Calculate total serialized size of memos
-	totalSize := 0
-
-	for _, memoWrapper := range common.Memos {
-		memo := memoWrapper.Memo
-
-		// Validate MemoType if present
-		if memo.MemoType != "" {
-			// MemoType must be a valid hex string
-			memoTypeBytes, err := hex.DecodeString(memo.MemoType)
-			if err != nil {
-				return ter.TemINVALID
-			}
-			// MemoType max size is 256 bytes (decoded)
-			if len(memoTypeBytes) > txcore.MaxMemoTypeSize {
-				return ter.TemINVALID
-			}
-			totalSize += len(memoTypeBytes)
-
-			// MemoType characters (when decoded) must be valid URL characters per RFC 3986
-			if !isValidURLBytes(memoTypeBytes) {
-				return ter.TemINVALID
-			}
-		}
-
-		// Validate MemoData if present
-		if memo.MemoData != "" {
-			// MemoData must be a valid hex string
-			memoDataBytes, err := hex.DecodeString(memo.MemoData)
-			if err != nil {
-				return ter.TemINVALID
-			}
-			// MemoData max size is 1024 bytes (decoded)
-			if len(memoDataBytes) > txcore.MaxMemoDataSize {
-				return ter.TemINVALID
-			}
-			totalSize += len(memoDataBytes)
-			// Note: MemoData can contain any data, no character restrictions
-		}
-
-		// Validate MemoFormat if present
-		if memo.MemoFormat != "" {
-			// MemoFormat must be a valid hex string
-			memoFormatBytes, err := hex.DecodeString(memo.MemoFormat)
-			if err != nil {
-				return ter.TemINVALID
-			}
-			totalSize += len(memoFormatBytes)
-
-			// MemoFormat characters (when decoded) must be valid URL characters per RFC 3986
-			if !isValidURLBytes(memoFormatBytes) {
-				return ter.TemINVALID
-			}
-		}
-	}
-
-	// Total memo size check
-	if totalSize > txcore.MaxMemoSize {
-		return ter.TemINVALID
-	}
-
-	return ter.TesSUCCESS
-}
-
-// isValidURLBytes checks if the bytes contain only characters allowed in URLs per RFC 3986
-// Allowed: alphanumerics and -._~:/?#[]@!$&'()*+,;=%
-func isValidURLBytes(data []byte) bool {
-	for _, b := range data {
-		if !isURLChar(b) {
-			return false
-		}
-	}
-	return true
-}
-
-// isURLChar returns true if the byte is a valid URL character per RFC 3986
-func isURLChar(c byte) bool {
-	// Alphanumerics
-	if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
-		return true
-	}
-	// Special characters allowed in URLs: -._~:/?#[]@!$&'()*+,;=%
-	switch c {
-	case '-', '.', '_', '~', ':', '/', '?', '#', '[', ']', '@', '!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', '%':
-		return true
-	}
-	return false
-}

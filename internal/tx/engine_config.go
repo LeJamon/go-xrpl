@@ -15,15 +15,6 @@ import (
 
 // Validation constants matching rippled
 const (
-	// MaxMemoSize is the maximum total serialized size of memos (in bytes)
-	MaxMemoSize = 1024
-
-	// MaxMemoTypeSize is the maximum size of MemoType field (in bytes)
-	MaxMemoTypeSize = 256
-
-	// MaxMemoDataSize is the maximum size of MemoData field (in bytes)
-	MaxMemoDataSize = 1024
-
 	// LegacyNetworkIDThreshold is the threshold for legacy network IDs
 	// Networks with ID <= this value are legacy networks
 	LegacyNetworkIDThreshold = 1024
