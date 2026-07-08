@@ -7,9 +7,11 @@ import (
 	"strings"
 	"testing"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +21,7 @@ type mockLedgerEntryService struct {
 	mockLedgerService
 	ledgerEntryResult *types.LedgerEntryResult
 	ledgerEntryErr    error
+	lastRequestedKey  [32]byte
 }
 
 func newMockLedgerEntryService() *mockLedgerEntryService {
@@ -40,6 +43,7 @@ func newMockLedgerEntryService() *mockLedgerEntryService {
 }
 
 func (m *mockLedgerEntryService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
+	m.lastRequestedKey = entryKey
 	if m.ledgerEntryErr != nil {
 		return nil, m.ledgerEntryErr
 	}
@@ -1504,6 +1508,230 @@ func TestLedgerEntryEscrow(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Loan / LoanBroker Entry Tests
+
+// TestLedgerEntryLoan covers the object-form loan selector
+// { loan_broker_id, loan_seq }, its hex-index equivalent, and the malformed
+// field responses (including the 3.1.0 malformedBroker token).
+func TestLedgerEntryLoan(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	brokerIDHex := "5233D68B4D44388F98559DE42903767803EFA7C1F8D01413FC16EE6B01403D6D"
+	var brokerID [32]byte
+	decoded, err := hex.DecodeString(brokerIDHex)
+	require.NoError(t, err)
+	copy(brokerID[:], decoded)
+	const loanSeq = uint32(7)
+	expectedKey := keylet.Loan(brokerID, loanSeq).Key
+	expectedKeyHex := hex.EncodeToString(expectedKey[:])
+
+	t.Run("object form resolves to keylet.Loan and returns the node", func(t *testing.T) {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:       expectedKeyHex,
+			LedgerIndex: 4,
+			LedgerHash:  [32]byte{0x4B, 0xC5},
+			Node:        []byte(`{"LedgerEntryType": "Loan", "Sequence": 7}`),
+			Validated:   true,
+		}
+		params := map[string]any{
+			"loan": map[string]any{
+				"loan_broker_id": brokerIDHex,
+				"loan_seq":       loanSeq,
+			},
+			"ledger_index": "validated",
+		}
+		result, rpcErr := handleLedgerEntry(t, method, ctx, params)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+		assert.Equal(t, expectedKey, mock.lastRequestedKey)
+	})
+
+	t.Run("hex form resolves to the same key as the object form", func(t *testing.T) {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:     expectedKeyHex,
+			Node:      []byte(`{"LedgerEntryType": "Loan"}`),
+			Validated: true,
+		}
+		params := map[string]any{"loan": expectedKeyHex, "ledger_index": "validated"}
+		_, rpcErr := handleLedgerEntry(t, method, ctx, params)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, expectedKey, mock.lastRequestedKey,
+			"hex and object forms must resolve to the same key")
+	})
+
+	malformedCases := []struct {
+		name    string
+		loan    map[string]any
+		token   string
+		message string
+	}{
+		{
+			name:    "loan_broker_id not hex yields malformedBroker",
+			loan:    map[string]any{"loan_broker_id": "not-a-hash", "loan_seq": loanSeq},
+			token:   "malformedBroker",
+			message: "Invalid field 'loan_broker_id', not Hash256.",
+		},
+		{
+			name:    "loan_broker_id missing yields malformedRequest",
+			loan:    map[string]any{"loan_seq": loanSeq},
+			token:   "malformedRequest",
+			message: "Missing field 'loan_broker_id'.",
+		},
+		{
+			name:    "loan_seq non-numeric yields malformedSeq",
+			loan:    map[string]any{"loan_broker_id": brokerIDHex, "loan_seq": "abc"},
+			token:   "malformedSeq",
+			message: "Invalid field 'loan_seq', not number.",
+		},
+		{
+			name:    "loan_seq negative yields malformedSeq",
+			loan:    map[string]any{"loan_broker_id": brokerIDHex, "loan_seq": -1},
+			token:   "malformedSeq",
+			message: "Invalid field 'loan_seq', not number.",
+		},
+		{
+			name:    "loan_seq missing yields malformedRequest",
+			loan:    map[string]any{"loan_broker_id": brokerIDHex},
+			token:   "malformedRequest",
+			message: "Missing field 'loan_seq'.",
+		},
+	}
+	for _, tc := range malformedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.ledgerEntryResult = nil
+			params := map[string]any{"loan": tc.loan, "ledger_index": "validated"}
+			result, rpcErr := handleLedgerEntry(t, method, ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.token, rpcErr.ErrorString)
+			assert.Equal(t, tc.message, rpcErr.Message)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		})
+	}
+
+	t.Run("non-object non-hex loan yields malformedRequest", func(t *testing.T) {
+		mock.ledgerEntryResult = nil
+		params := map[string]any{"loan": "not-hex", "ledger_index": "validated"}
+		result, rpcErr := handleLedgerEntry(t, method, ctx, params)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid field 'loan', not hex string.", rpcErr.Message)
+	})
+}
+
+// TestLedgerEntryLoanBroker covers the object-form loan_broker selector
+// { owner, seq }, its hex-index equivalent, and the malformed field responses.
+func TestLedgerEntryLoanBroker(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	const owner = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(owner)
+	require.NoError(t, err)
+	var ownerID [20]byte
+	copy(ownerID[:], ownerBytes)
+	const seq = uint32(3)
+	expectedKey := keylet.LoanBroker(ownerID, seq).Key
+	expectedKeyHex := hex.EncodeToString(expectedKey[:])
+
+	t.Run("object form resolves to keylet.LoanBroker and returns the node", func(t *testing.T) {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:     expectedKeyHex,
+			Node:      []byte(`{"LedgerEntryType": "LoanBroker", "Sequence": 3}`),
+			Validated: true,
+		}
+		params := map[string]any{
+			"loan_broker":  map[string]any{"owner": owner, "seq": seq},
+			"ledger_index": "validated",
+		}
+		result, rpcErr := handleLedgerEntry(t, method, ctx, params)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+		assert.Equal(t, expectedKey, mock.lastRequestedKey)
+	})
+
+	t.Run("hex form resolves to the same key as the object form", func(t *testing.T) {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:     expectedKeyHex,
+			Node:      []byte(`{"LedgerEntryType": "LoanBroker"}`),
+			Validated: true,
+		}
+		params := map[string]any{"loan_broker": expectedKeyHex, "ledger_index": "validated"}
+		_, rpcErr := handleLedgerEntry(t, method, ctx, params)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, expectedKey, mock.lastRequestedKey,
+			"hex and object forms must resolve to the same key")
+	})
+
+	malformedCases := []struct {
+		name    string
+		broker  map[string]any
+		token   string
+		message string
+	}{
+		{
+			name:    "owner not an account yields malformedOwner",
+			broker:  map[string]any{"owner": "not-an-account", "seq": seq},
+			token:   "malformedOwner",
+			message: "Invalid field 'owner', not AccountID.",
+		},
+		{
+			name:    "owner missing yields malformedRequest",
+			broker:  map[string]any{"seq": seq},
+			token:   "malformedRequest",
+			message: "Missing field 'owner'.",
+		},
+		{
+			name:    "seq non-numeric yields malformedSeq",
+			broker:  map[string]any{"owner": owner, "seq": "abc"},
+			token:   "malformedSeq",
+			message: "Invalid field 'seq', not number.",
+		},
+		{
+			name:    "seq missing yields malformedRequest",
+			broker:  map[string]any{"owner": owner},
+			token:   "malformedRequest",
+			message: "Missing field 'seq'.",
+		},
+	}
+	for _, tc := range malformedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.ledgerEntryResult = nil
+			params := map[string]any{"loan_broker": tc.broker, "ledger_index": "validated"}
+			result, rpcErr := handleLedgerEntry(t, method, ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.token, rpcErr.ErrorString)
+			assert.Equal(t, tc.message, rpcErr.Message)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		})
+	}
+}
+
+// handleLedgerEntry marshals params and dispatches them through the handler.
+func handleLedgerEntry(t *testing.T, method *handlers.LedgerEntryMethod, ctx *types.RpcContext, params map[string]any) (any, *types.RpcError) {
+	t.Helper()
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+	return method.Handle(ctx, paramsJSON)
 }
 
 // Offer Entry Tests
@@ -3113,12 +3341,11 @@ func TestLedgerEntryAccountSelector(t *testing.T) {
 	})
 }
 
-// TestLedgerEntryLoanSelectors covers the rippled 3.0.0 `loan`/`loan_broker`
-// selectors. rippled's parseLoan/parseLoanBroker fall back to a direct
-// hex-index lookup when the param is not an object; go-xrpl has no lending
-// subsystem, so it supports only that hex form (like bridge/xchain). Each field
-// must be recognized and resolve to a lookup rather than being rejected as an
-// unknown option.
+// TestLedgerEntryLoanSelectors covers the hex-index (non-object) form of the
+// `loan`/`loan_broker` selectors. A string param is treated as a direct object
+// index; an unparseable string yields rippled's parseObjectID error (the
+// "malformedRequest" token with an expected-hex-string message). The object
+// forms are covered by TestLedgerEntryLoan / TestLedgerEntryLoanBroker.
 func TestLedgerEntryLoanSelectors(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
@@ -3150,7 +3377,8 @@ func TestLedgerEntryLoanSelectors(t *testing.T) {
 
 			_, rpcErr := method.Handle(ctx, paramsJSON)
 			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.Message, "Invalid "+field)
+			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+			assert.Equal(t, "Invalid field '"+field+"', not hex string.", rpcErr.Message)
 		})
 	}
 }

@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -213,14 +215,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
-	// loan / loan_broker: string (hex ID). rippled's parseLoan/parseLoanBroker
-	// resolve a keylet from an object form (loan_broker_id+loan_seq / owner+seq),
-	// but fall back to a direct hex-index lookup when the param is not an object.
-	// go-xrpl has no lending subsystem (no keylet::loan), so only that hex-index
-	// form is supported — the same pragmatic handling as bridge/xchain.
+	// loan: string (hex object index) or { loan_broker_id, loan_seq }
 	if !keySet {
 		if raw, ok := rawParams["loan"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "loan")
+			entryKey, rpcErr = parseLoanKeylet(raw)
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -228,9 +226,10 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		}
 	}
 
+	// loan_broker: string (hex object index) or { owner, seq }
 	if !keySet {
 		if raw, ok := rawParams["loan_broker"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "loan_broker")
+			entryKey, rpcErr = parseLoanBrokerKeylet(raw)
 			if rpcErr != nil {
 				return nil, rpcErr
 			}
@@ -513,6 +512,8 @@ var ledgerEntryFilterTypes = []struct {
 	{"did", "DID"},
 	{"directory", "DirectoryNode"},
 	{"escrow", "Escrow"},
+	{"loan", "Loan"},
+	{"loan_broker", "LoanBroker"},
 	{"mpt_issuance", "MPTokenIssuance"},
 	{"mptoken", "MPToken"},
 	{"nft_page", "NFTokenPage"},
@@ -782,6 +783,128 @@ func parseEscrowKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid escrow owner: %v", err))
 	}
 	return keylet.Escrow(accountID, req.Seq).Key, nil
+}
+
+// parseLoanKeylet parses a loan specifier: a hex object index or
+// { loan_broker_id, loan_seq }, mirroring rippled LedgerEntry.cpp parseLoan().
+func parseLoanKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	obj, ok := asJSONObject(raw)
+	if !ok {
+		return parseSelectorHexID(raw, "loan")
+	}
+	brokerID, rpcErr := requiredHash256Field(obj, "loan_broker_id", "malformedBroker")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	loanSeq, rpcErr := requiredUInt32Field(obj, "loan_seq", "malformedSeq")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	return keylet.Loan(brokerID, loanSeq).Key, nil
+}
+
+// parseLoanBrokerKeylet parses a loan_broker specifier: a hex object index or
+// { owner, seq }, mirroring rippled LedgerEntry.cpp parseLoanBroker().
+func parseLoanBrokerKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	obj, ok := asJSONObject(raw)
+	if !ok {
+		return parseSelectorHexID(raw, "loan_broker")
+	}
+	owner, rpcErr := requiredAccountIDField(obj, "owner", "malformedOwner")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	seq, rpcErr := requiredUInt32Field(obj, "seq", "malformedSeq")
+	if rpcErr != nil {
+		return [32]byte{}, rpcErr
+	}
+	return keylet.LoanBroker(owner, seq).Key, nil
+}
+
+// asJSONObject reports whether raw is a JSON object and, if so, unmarshals it.
+// It mirrors rippled's params.isObject() branch: only objects take the field
+// path; strings/arrays/numbers/null fall through to the hex-index form.
+func asJSONObject(raw json.RawMessage) (map[string]json.RawMessage, bool) {
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil, false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, false
+	}
+	return obj, true
+}
+
+// parseSelectorHexID resolves a non-object selector as a 64-char hex object
+// index, mirroring rippled's parseObjectID: an unparseable value yields the
+// "malformedRequest" token with an expected-hex-string message.
+func parseSelectorHexID(raw json.RawMessage, field string) ([32]byte, *types.RpcError) {
+	if key, ok := tryParseHex256(raw); ok {
+		return key, nil
+	}
+	return [32]byte{}, types.RpcErrorMalformedField("malformedRequest", field, "hex string")
+}
+
+// isJSONFieldAbsent reports whether a required subfield is missing or explicitly
+// null, which rippled treats identically.
+func isJSONFieldAbsent(obj map[string]json.RawMessage, field string) bool {
+	raw, ok := obj[field]
+	return !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+}
+
+// requiredHash256Field mirrors rippled requiredUInt256: a required 64-char hex
+// field. Absent → malformedRequest; present but unparseable → field token.
+func requiredHash256Field(obj map[string]json.RawMessage, field, token string) ([32]byte, *types.RpcError) {
+	if isJSONFieldAbsent(obj, field) {
+		return [32]byte{}, types.RpcErrorMalformedRequestMissingField(field)
+	}
+	if key, ok := tryParseHex256(obj[field]); ok {
+		return key, nil
+	}
+	return [32]byte{}, types.RpcErrorMalformedField(token, field, "Hash256")
+}
+
+// requiredAccountIDField mirrors rippled requiredAccountID: a required, non-zero
+// base58 account. Absent → malformedRequest; present but unparseable → token.
+func requiredAccountIDField(obj map[string]json.RawMessage, field, token string) ([20]byte, *types.RpcError) {
+	if isJSONFieldAbsent(obj, field) {
+		return [20]byte{}, types.RpcErrorMalformedRequestMissingField(field)
+	}
+	var s string
+	if err := json.Unmarshal(obj[field], &s); err == nil {
+		if id, err := decodeAccountID(s); err == nil && id != [20]byte{} {
+			return id, nil
+		}
+	}
+	return [20]byte{}, types.RpcErrorMalformedField(token, field, "AccountID")
+}
+
+// requiredUInt32Field mirrors rippled requiredUInt32: a required uint32 accepted
+// as a non-negative JSON integer that fits 32 bits, or a numeric string.
+func requiredUInt32Field(obj map[string]json.RawMessage, field, token string) (uint32, *types.RpcError) {
+	if isJSONFieldAbsent(obj, field) {
+		return 0, types.RpcErrorMalformedRequestMissingField(field)
+	}
+	if v, ok := parseUInt32(obj[field]); ok {
+		return v, nil
+	}
+	return 0, types.RpcErrorMalformedField(token, field, "number")
+}
+
+// parseUInt32 accepts a JSON number (non-negative, fits uint32) or a numeric
+// string, rejecting fractional, negative, out-of-range, and non-numeric values.
+func parseUInt32(raw json.RawMessage) (uint32, bool) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		n, err := strconv.ParseUint(s, 10, 32)
+		return uint32(n), err == nil
+	}
+	var num json.Number
+	if err := json.Unmarshal(raw, &num); err == nil {
+		n, err := strconv.ParseUint(num.String(), 10, 32)
+		return uint32(n), err == nil
+	}
+	return 0, false
 }
 
 // parseMPTokenKeylet parses an mptoken specifier: string (hex) or { mpt_issuance_id, account }
