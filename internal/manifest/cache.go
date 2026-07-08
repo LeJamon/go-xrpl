@@ -79,16 +79,14 @@ type Cache struct {
 	// (entry removed so lookups no longer resolve).
 	signingToMaster map[[33]byte][33]byte
 
-	// seq advances every time an existing master's entry is replaced
-	// with a higher-sequence manifest. Mirrors rippled's
-	// ManifestCache::seq_ at Manifest.cpp:538: the counter is the
-	// "something has changed" signal a downstream emitter (here, the
-	// Router's TMManifests frame cache) consults to decide whether the
-	// previously-encoded frame is still current. Like rippled, first-
-	// inserts do NOT advance seq — first-insert paths are reachable
-	// without an existing entry to "update" so the counter stays put;
-	// the manifest is still in byMaster and will be picked up the next
-	// time the cache is fully walked.
+	// seq advances on every accepted manifest — both a first-insert for
+	// a newly-seen master key and a replacement with a higher-sequence
+	// manifest. Mirrors rippled 3.2.0's ManifestCache::seq_ (#6059): the
+	// counter is the "something has changed" signal a downstream emitter
+	// (here, the Router's TMManifests frame cache) consults to decide
+	// whether the previously-encoded frame is still current. Before #6059
+	// first-inserts did not bump the counter, so a freshly-seen
+	// validator's manifest could fail to trigger list publication/relay.
 	seq uint64
 
 	// onAccepted is invoked from ApplyManifest after a manifest has
@@ -194,9 +192,11 @@ func (c *Cache) applyLocked(m *Manifest) (Disposition, func(*Manifest)) {
 	if !m.Revoked() {
 		c.signingToMaster[m.SigningKey] = m.MasterKey
 	}
-	if isUpdate {
-		c.seq++
-	}
+	// Something has changed. Advance the counter so downstream emitters
+	// re-encode. rippled 3.2.0 (#6059) bumps on first-insert too, not
+	// just replacement (isUpdate), so a freshly-seen validator's manifest
+	// triggers list publication/relay.
+	c.seq++
 	return Accepted, c.onAccepted
 }
 
