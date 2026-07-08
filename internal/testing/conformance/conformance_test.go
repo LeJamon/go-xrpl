@@ -121,6 +121,29 @@ var skipTests = map[string]string{
 	"app/Vault/MPT_fail_to_withdraw_to_3rd_party_lsfDepositAuth":    "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
 	"app/Vault/MPT_fail_to_withdraw_to_3rd_party_lsfRequireDestTag": "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
 	"app/Vault/MPT_fail_to_withdraw_to_3rd_party_no_authorization":  "fixture predates rippled #5954 owner-count model; re-record from rippled 3.1.x",
+	// These Delegate fixtures were recorded under the deleted PermissionDelegation
+	// / fixDelegateV1_1 amendments. rippled 3.2.0 replaced them with
+	// PermissionDelegationV1_1, which folds the fix behaviours in unconditionally
+	// and changes the delegate-permission denial code from tecNO_DELEGATE_PERMISSION
+	// (removed) to the retriable terNO_DELEGATE_PERMISSION, and the non-delegatable
+	// rejection from tecNO_PERMISSION (preclaim) to temMALFORMED (preflight). The
+	// fixtures encode the pre-V1_1 results and cannot be satisfied; the V1_1
+	// behaviour is covered by internal/testing/delegate. Re-record from rippled 3.2.0.
+	"app/Delegate/test_delegate_transaction":                                   "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_invalid_DelegateSet":                                    "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_valid_request_creating,_updating,_deleting_permissions": "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_payment_granular":                                       "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_AccountSet_granular_permissions":                        "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_TrustSet_granular_permissions":                          "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_MPTokenIssuanceSet_granular":                            "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_single_sign":                                            "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_single_sign_with_bad_secret":                            "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_multi_sign":                                             "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_multi_sign_which_does_not_meet_quorum":                  "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_reserve":                                                "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_fee":                                                    "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_sequence":                                               "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
+	"app/Delegate/test_deleting_account":                                       "fixture predates PermissionDelegationV1_1; re-record from rippled 3.2.0",
 }
 
 func TestConformance(t *testing.T) {
