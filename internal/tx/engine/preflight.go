@@ -618,4 +618,3 @@ func (e *Engine) validateFee(common *txcore.Common) ter.Result {
 
 	return ter.TesSUCCESS
 }
-

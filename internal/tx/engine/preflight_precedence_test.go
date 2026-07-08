@@ -146,7 +146,7 @@ func TestPreflightPrecedence_AccountBeforeFee(t *testing.T) {
 func TestPreflightPrecedence_FeeBeforeSigningKey(t *testing.T) {
 	e := preflightEngine(allRules())
 	tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-	tx.Fee = "-10"          // malformed fee → temBAD_FEE
+	tx.Fee = "-10" // malformed fee → temBAD_FEE
 	tx.Sequence = u32(5)
 	tx.SigningPubKey = "00" // invalid key type → temBAD_SIGNATURE if reached
 	if got := e.preflight(tx); got != ter.TemBAD_FEE {
