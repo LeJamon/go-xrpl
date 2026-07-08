@@ -1,6 +1,7 @@
 package offer
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -100,10 +101,17 @@ func (o *OfferCreate) placeRemainingOffer(
 		ledgerOffer.DomainID = *o.DomainID
 	}
 
-	// Handle hybrid offers
-	// Reference: lines 912-919
+	// Handle hybrid offers. Post-fixCleanup3_2_0 the open-book directory uses the
+	// original placement rate (the same uRate as the domain-book directory) so the
+	// two book pages agree; pre-amendment it was recomputed from the post-crossing
+	// amounts and could land on a differently-keyed page due to rounding.
+	// Reference: lines 912-919, 944-954.
 	if bHybrid {
-		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets); result != ter.TesSUCCESS {
+		openRate := state.GetRate(saTakerGets, saTakerPays)
+		if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_2_0) {
+			openRate = uRate
+		}
+		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets, openRate); result != ter.TesSUCCESS {
 			return result, false
 		}
 	}
