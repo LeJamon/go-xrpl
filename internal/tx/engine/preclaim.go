@@ -58,8 +58,8 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 	// The signature is verified before the fee and permission checks so that a
 	// transaction that fails both signature verification and a fee/permission
 	// check reports the signature failure. No fee-charging TER (terINSUF_FEE_B,
-	// tecNO_DELEGATE_PERMISSION, ...) may precede the signature check, which
-	// would risk charging a fee on an unauthorized transaction.
+	// ...) may precede the signature check, which would risk charging a fee on
+	// an unauthorized transaction.
 	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
 	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
 		return result
@@ -328,11 +328,11 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 	delegateKeylet := keylet.Delegate(accountID, delegateID)
 	delegateData, readErr := e.view.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	delegateEntry, parseErr := state.ParseDelegate(delegateData)
 	if parseErr != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	// A transaction-level grant (permissionValue == txType + 1) authorizes
 	// every action of this transaction type.
@@ -349,7 +349,7 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 			Permissions: delegateEntry.Permissions,
 		})
 	}
-	return ter.TecNO_DELEGATE_PERMISSION
+	return ter.TerNO_DELEGATE_PERMISSION
 }
 
 // checkSign performs signature authorization for both single-signed and

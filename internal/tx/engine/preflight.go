@@ -338,7 +338,7 @@ func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Delegate == "" {
 		return ter.TesSUCCESS
 	}
-	if !rules.Enabled(amendment.FeaturePermissionDelegation) {
+	if !rules.Enabled(amendment.FeaturePermissionDelegationV1_1) {
 		return ter.TemDISABLED
 	}
 	if common.Delegate == common.Account {

@@ -17,13 +17,13 @@ func (m *MPTokenIssuanceSet) CheckDelegatePermission(pc tx.DelegatePermissionCon
 	txFlags := m.GetFlags()
 
 	if txFlags&mptokenIssuanceSetPermissionMask != 0 {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if txFlags&MPTokenIssuanceSetFlagLock != 0 && !pc.HasGranular(tx.GranularMPTokenIssuanceLock) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if txFlags&MPTokenIssuanceSetFlagUnlock != 0 && !pc.HasGranular(tx.GranularMPTokenIssuanceUnlock) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	return ter.TesSUCCESS
 }

@@ -46,7 +46,7 @@ func TestDelegate_ThreadingPointersRoundTrip(t *testing.T) {
 	id := threadTestTxnID()
 	const seq = uint32(99240960)
 
-	data, err := SerializeDelegate([20]byte{0x01}, [20]byte{0x02}, []uint32{1}, 7, id, seq)
+	data, err := SerializeDelegate([20]byte{0x01}, [20]byte{0x02}, []uint32{1}, 7, nil, id, seq)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestDelegate_ThreadingPointersRoundTrip(t *testing.T) {
 }
 
 func TestDelegate_FreshEntryOmitsThreadingPointers(t *testing.T) {
-	data, err := SerializeDelegate([20]byte{0x01}, [20]byte{0x02}, []uint32{1}, 7, [32]byte{}, 0)
+	data, err := SerializeDelegate([20]byte{0x01}, [20]byte{0x02}, []uint32{1}, 7, nil, [32]byte{}, 0)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}

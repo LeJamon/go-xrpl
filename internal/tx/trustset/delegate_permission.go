@@ -21,39 +21,39 @@ const trustSetPermissionMask = ^(tx.TfUniversal | TrustSetFlagSetfAuth | TrustSe
 func (t *TrustSet) CheckDelegatePermission(pc tx.DelegatePermissionContext) ter.Result {
 	txFlags := t.GetFlags()
 	if txFlags&trustSetPermissionMask != 0 {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if t.QualityIn != nil || t.QualityOut != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 
 	accountID, err := state.DecodeAccountID(t.Account)
 	if err != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	issuerID, err := state.DecodeAccountID(t.LimitAmount.Issuer)
 	if err != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 
 	lineData, readErr := pc.View.Read(keylet.Line(accountID, issuerID, t.LimitAmount.Currency))
 	if readErr != nil || lineData == nil {
 		// Granular permissions cannot create a trust line.
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	rs, parseErr := state.ParseRippleState(lineData)
 	if parseErr != nil {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 
 	if txFlags&TrustSetFlagSetfAuth != 0 && !pc.HasGranular(tx.GranularTrustlineAuthorize) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if txFlags&TrustSetFlagSetFreeze != 0 && !pc.HasGranular(tx.GranularTrustlineFreeze) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if txFlags&TrustSetFlagClearFreeze != 0 && !pc.HasGranular(tx.GranularTrustlineUnfreeze) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 
 	// Granular permissions may not change the account's own trust limit.
@@ -62,7 +62,7 @@ func (t *TrustSet) CheckDelegatePermission(pc tx.DelegatePermissionContext) ter.
 		curLimit = rs.LowLimit
 	}
 	if curLimit.Compare(t.LimitAmount) != 0 {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	return ter.TesSUCCESS
 }
