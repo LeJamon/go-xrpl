@@ -2,6 +2,8 @@ package vault
 
 import (
 	"bytes"
+	"encoding/hex"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -9,6 +11,182 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+// assetMPTID decodes an MPT asset's 24-byte issuance ID.
+func assetMPTID(a tx.Asset) ([24]byte, bool) {
+	var id [24]byte
+	b, err := hex.DecodeString(a.MPTIssuanceID)
+	if err != nil || len(b) != 24 {
+		return id, false
+	}
+	copy(id[:], b)
+	return id, true
+}
+
+// mptIDIssuer returns the 20-byte issuer embedded in a 24-byte MPT issuance ID.
+func mptIDIssuer(id [24]byte) [20]byte {
+	var issuer [20]byte
+	copy(issuer[:], id[4:])
+	return issuer
+}
+
+// readMPTIssuance reads and parses an MPT issuance, returning (nil, nil) when
+// absent.
+func readMPTIssuance(view tx.LedgerView, id [24]byte) (*state.MPTokenIssuanceData, error) {
+	data, err := view.Read(keylet.MPTIssuance(id))
+	if err != nil || len(data) == 0 {
+		return nil, nil
+	}
+	return state.ParseMPTokenIssuance(data)
+}
+
+// canAddHolding checks whether accountID could hold asset: XRP/IOU via
+// canAddHoldingIssue, MPT via issuance existence + lsfMPTCanTransfer.
+func canAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
+	if !asset.IsMPT() {
+		return canAddHoldingIssue(view, asset)
+	}
+	id, ok := assetMPTID(asset)
+	if !ok {
+		return ter.TemMALFORMED
+	}
+	iss, err := readMPTIssuance(view, id)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if iss == nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	if iss.Flags&entry.LsfMPTCanTransfer == 0 {
+		return ter.TecNO_AUTH
+	}
+	return ter.TesSUCCESS
+}
+
+// addEmptyMPTHolding creates a zero-balance MPToken for accountID under the MPT
+// asset (nothing when the account is the issuer). Returns the owner-count delta.
+func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
+	id, ok := assetMPTID(asset)
+	if !ok {
+		return 0, ter.TefINTERNAL
+	}
+	if mptIDIssuer(id) == accountID {
+		return 0, ter.TesSUCCESS
+	}
+	tokenKey := keylet.MPTokenByID(id, accountID)
+	if exists, _ := ctx.View.Exists(tokenKey); exists {
+		return 0, ter.TecDUPLICATE
+	}
+	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
+	dir, err := state.DirInsert(ctx.View, keylet.OwnerDir(accountID), tokenKey.Key, false, func(d *state.DirectoryNode) {
+		d.Owner = accountID
+	})
+	if err != nil {
+		return 0, ter.TecDIR_FULL
+	}
+	token.OwnerNode = dir.Page
+	data, serr := state.SerializeMPToken(token)
+	if serr != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if ierr := ctx.View.Insert(tokenKey, data); ierr != nil {
+		return 0, ter.TefINTERNAL
+	}
+	return 1, ter.TesSUCCESS
+}
+
+// mptFrozen reports whether the MPT asset is globally locked or locked for the
+// given account.
+func mptFrozen(view tx.LedgerView, mptID [24]byte, accountID [20]byte) bool {
+	if iss, _ := readMPTIssuance(view, mptID); iss != nil && iss.Flags&entry.LsfMPTLocked != 0 {
+		return true
+	}
+	if token, _ := readMPToken(view, keylet.MPTokenByID(mptID, accountID)); token != nil && token.Flags&entry.LsfMPTLocked != 0 {
+		return true
+	}
+	return false
+}
+
+// assetFrozen reports whether asset is frozen/locked for accountID, returning the
+// matching TER (tecFROZEN for IOU, tecLOCKED for MPT) or tesSUCCESS.
+func assetFrozen(view tx.LedgerView, accountID [20]byte, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		if id, ok := assetMPTID(asset); ok && mptFrozen(view, id, accountID) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	if tx.IsFrozen(view, accountID, asset) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+// sendMPTAsset moves amount of the MPT asset from `from` to `to`, crediting or
+// debiting OutstandingAmount when either party is the issuer.
+func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amount uint64) ter.Result {
+	issuanceKey := keylet.MPTIssuance(mptID)
+	issData, err := ctx.View.Read(issuanceKey)
+	if err != nil || len(issData) == 0 {
+		return ter.TefINTERNAL
+	}
+	issuance, perr := state.ParseMPTokenIssuance(issData)
+	if perr != nil {
+		return ter.TefINTERNAL
+	}
+	issuerID := mptIDIssuer(mptID)
+
+	if from == issuerID {
+		issuance.OutstandingAmount += amount
+	} else {
+		tokenKey := keylet.MPTokenByID(mptID, from)
+		token, terr := readMPToken(ctx.View, tokenKey)
+		if terr != nil || token == nil {
+			return ter.TecNO_AUTH
+		}
+		if token.MPTAmount < amount {
+			return ter.TecINSUFFICIENT_FUNDS
+		}
+		token.MPTAmount -= amount
+		data, serr := state.SerializeMPToken(token)
+		if serr != nil {
+			return ter.TefINTERNAL
+		}
+		if uerr := ctx.View.Update(tokenKey, data); uerr != nil {
+			return ter.TefINTERNAL
+		}
+	}
+
+	if to == issuerID {
+		if issuance.OutstandingAmount < amount {
+			return ter.TefINTERNAL
+		}
+		issuance.OutstandingAmount -= amount
+	} else {
+		tokenKey := keylet.MPTokenByID(mptID, to)
+		token, terr := readMPToken(ctx.View, tokenKey)
+		if terr != nil || token == nil {
+			return ter.TecNO_AUTH
+		}
+		token.MPTAmount += amount
+		data, serr := state.SerializeMPToken(token)
+		if serr != nil {
+			return ter.TefINTERNAL
+		}
+		if uerr := ctx.View.Update(tokenKey, data); uerr != nil {
+			return ter.TefINTERNAL
+		}
+	}
+
+	updated, serr := state.SerializeMPTokenIssuance(issuance)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if uerr := ctx.View.Update(issuanceKey, updated); uerr != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
+}
 
 // readAccountRoot reads and parses an AccountRoot, returning (nil, nil) when the
 // account does not exist (view.Read reports a missing key via a nil payload).
@@ -60,6 +238,9 @@ func canAddHoldingIssue(view tx.LedgerView, asset tx.Asset) ter.Result {
 func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
 	if isNativeAsset(asset) {
 		return 0, ter.TesSUCCESS
+	}
+	if asset.IsMPT() {
+		return addEmptyMPTHolding(ctx, accountID, asset)
 	}
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
@@ -193,8 +374,11 @@ func authorizeHolderMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID 
 	return ter.TesSUCCESS
 }
 
-// vaultAssetOf returns the vault's asset as a tx.Asset (XRP or IOU).
+// vaultAssetOf returns the vault's asset as a tx.Asset (XRP, IOU, or MPT).
 func vaultAssetOf(vd *vaultData) tx.Asset {
+	if vd.AssetIsMPT {
+		return tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.AssetMPTID[:])}
+	}
 	return vd.Asset
 }
 
@@ -299,7 +483,8 @@ func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) st
 // assetMatches reports whether amount denominates the vault's asset.
 func assetMatches(amount tx.Amount, vd *vaultData) bool {
 	if vd.AssetIsMPT {
-		return amount.IsMPT()
+		return amount.IsMPT() &&
+			strings.EqualFold(amount.MPTIssuanceID(), hex.EncodeToString(vd.AssetMPTID[:]))
 	}
 	if isNativeAsset(vd.Asset) {
 		return amount.IsNative()
@@ -323,6 +508,25 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 			liquid = 0
 		}
 		return state.NewXRPLNumber(liquid, 0), nil
+	}
+
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return state.NewXRPLNumber(0, 0), nil
+		}
+		if mptIDIssuer(id) == accountID {
+			iss, _ := readMPTIssuance(view, id)
+			if iss == nil {
+				return state.NewXRPLNumber(0, 0), nil
+			}
+			maxAmt := uint64(entry.MaxMPTokenAmount)
+			if iss.MaximumAmount != nil {
+				maxAmt = *iss.MaximumAmount
+			}
+			return state.NewXRPLNumber(int64(maxAmt-iss.OutstandingAmount), 0), nil
+		}
+		return state.NewXRPLNumber(int64(holderMPTBalance(view, id, accountID)), 0), nil
 	}
 
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
@@ -377,8 +581,28 @@ func sendAssetToVault(ctx *tx.ApplyContext, vaultAccountID [20]byte, orig tx.Amo
 		return ter.TesSUCCESS
 	}
 
+	if orig.IsMPT() {
+		id, ok := decodeMPTID(orig.MPTIssuanceID())
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		amount := uint64(assetsN.ToInt64WithMode(state.RoundTowardsZero))
+		return sendMPTAsset(ctx, id, ctx.AccountID, vaultAccountID, amount)
+	}
+
 	amt := state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), orig.Currency, orig.Issuer)
 	return tx.RippleCredit(ctx.View, ctx.AccountID, vaultAccountID, amt)
+}
+
+// decodeMPTID decodes a 48-char hex MPT issuance ID.
+func decodeMPTID(s string) ([24]byte, bool) {
+	var id [24]byte
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 24 {
+		return id, false
+	}
+	copy(id[:], b)
+	return id, true
 }
 
 // sendAssetFromVault transfers assetsN of the vault asset from the vault
@@ -418,6 +642,15 @@ func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, as
 			}
 		}
 		return ter.TesSUCCESS
+	}
+
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		amount := uint64(assetsN.ToInt64WithMode(state.RoundTowardsZero))
+		return sendMPTAsset(ctx, id, vaultAccountID, dstID, amount)
 	}
 
 	amt := state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), asset.Currency, asset.Issuer)
@@ -467,9 +700,9 @@ func burnShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 	return ter.TesSUCCESS
 }
 
-// holderShareBalance returns how many shares holderID holds under the share
+// holderMPTBalance returns how many shares holderID holds under the share
 // issuance (0 when the holder has no MPToken).
-func holderShareBalance(view tx.LedgerView, shareMPTID [24]byte, holderID [20]byte) uint64 {
+func holderMPTBalance(view tx.LedgerView, shareMPTID [24]byte, holderID [20]byte) uint64 {
 	token, err := readMPToken(view, keylet.MPTokenByID(shareMPTID, holderID))
 	if err != nil || token == nil {
 		return 0

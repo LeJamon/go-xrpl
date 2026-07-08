@@ -120,11 +120,8 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	}
 
 	asset := vaultAssetOf(vd)
-	if tx.IsFrozen(view, accountID, asset) {
-		if vd.AssetIsMPT {
-			return ter.TecLOCKED
-		}
-		return ter.TecFROZEN
+	if res := assetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+		return res
 	}
 
 	// Private vault: a non-owner needs domain authorization.

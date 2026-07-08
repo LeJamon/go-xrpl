@@ -156,7 +156,7 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 			return ter.TecNO_PERMISSION
 		}
 		if v.Amount != nil && v.Amount.Signum() != 0 {
-			held := holderShareBalance(view, vd.ShareMPTID, holderID)
+			held := holderMPTBalance(view, vd.ShareMPTID, holderID)
 			want, aerr := amountToNumber(*v.Amount)
 			if aerr != nil {
 				return ter.TefINTERNAL
@@ -227,7 +227,7 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	lossN, _ := vaultNumber(vd.LossUnrealized)
 	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
 
-	held := holderShareBalance(ctx.View, vd.ShareMPTID, holderID)
+	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
 	var sharesDestroyed uint64
 	assetsRecoveredN := state.NewXRPLNumber(0, 0)
 

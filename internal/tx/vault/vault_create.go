@@ -62,8 +62,8 @@ func (v *VaultCreate) Validate() error {
 		return err
 	}
 
-	// Asset is required
-	if v.Asset.Currency == "" {
+	// Asset is required (an issued currency, XRP, or an MPT issuance).
+	if v.Asset.Currency == "" && !v.Asset.IsMPT() {
 		return ErrVaultAssetRequired
 	}
 
@@ -125,7 +125,7 @@ func (v *VaultCreate) Validate() error {
 
 	// Scale is only valid for an IOU asset and must not exceed the max IOU scale.
 	if v.Scale != nil {
-		if isNativeAsset(v.Asset) {
+		if isNativeAsset(v.Asset) || v.Asset.IsMPT() {
 			return ErrVaultScaleForbidden
 		}
 		if *v.Scale > vaultMaximumIOUScale {
@@ -138,7 +138,7 @@ func (v *VaultCreate) Validate() error {
 
 // isNativeAsset reports whether a is the native XRP asset.
 func isNativeAsset(a tx.Asset) bool {
-	return a.Currency == "XRP" && a.Issuer == ""
+	return a.IsNative()
 }
 
 // isNegativeNumberString reports whether a NUMBER field's string form is
@@ -178,13 +178,17 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	}
 	asset := v.Asset
 
-	if res := canAddHoldingIssue(view, asset); res != ter.TesSUCCESS {
+	if res := canAddHolding(view, asset); res != ter.TesSUCCESS {
 		return res
 	}
 
 	// A vault must not hold an asset issued by a pseudo-account (e.g. AMM LP
 	// tokens or other vault shares) — such an asset could never be clawed back.
-	if !isNativeAsset(asset) && asset.Issuer != "" {
+	if asset.IsMPT() {
+		if id, ok := assetMPTID(asset); ok && isPseudoAccountID(view, mptIDIssuer(id)) {
+			return ter.TecWRONG_ASSET
+		}
+	} else if !isNativeAsset(asset) && asset.Issuer != "" {
 		if issuerID, derr := state.DecodeAccountID(asset.Issuer); derr == nil {
 			if isPseudoAccountID(view, issuerID) {
 				return ter.TecWRONG_ASSET
@@ -192,8 +196,8 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		}
 	}
 
-	if tx.IsFrozen(view, accountID, asset) {
-		return ter.TecFROZEN
+	if res := assetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+		return res
 	}
 
 	if v.DomainID != "" {
@@ -254,9 +258,10 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDIR_FULL
 	}
 
-	// Compute the share issuance scale and flags.
+	// Compute the share issuance scale and flags. Scale applies to IOU assets
+	// only; XRP and MPT vaults use scale 0.
 	scale := uint8(0)
-	if !isNativeAsset(asset) {
+	if !isNativeAsset(asset) && !asset.IsMPT() {
 		if v.Scale != nil {
 			scale = *v.Scale
 		} else {
@@ -351,6 +356,12 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		Scale:            scale,
 		Flags:            txFlags & VaultFlagPrivate,
 		Data:             v.Data,
+	}
+	if asset.IsMPT() {
+		vd.AssetIsMPT = true
+		if id, ok := assetMPTID(asset); ok {
+			vd.AssetMPTID = id
+		}
 	}
 	if v.AssetsMaximum != nil {
 		vd.AssetsMaximum = *v.AssetsMaximum
