@@ -98,13 +98,16 @@ func TestRemoveExpiredCredentials_DeletionFailure(t *testing.T) {
 		}
 	}
 
-	// fixCleanup3_1_3 is registered by a sibling PR; enable it here by ID so the
-	// gate can be exercised before that registration lands.
+	// fixCleanup3_1_3 is supported-by-default, so the off arm must disable it
+	// explicitly rather than rely on the preset lacking it.
 	fix313On := amendment.NewRulesBuilder().
 		FromPreset(amendment.PresetAllSupported).
 		Enable(amendment.FeatureID("fixCleanup3_1_3")).
 		Build()
-	fix313Off := amendment.AllSupportedRules()
+	fix313Off := amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Disable(amendment.FeatureID("fixCleanup3_1_3")).
+		Build()
 
 	t.Run("before fix: deletion failure swallowed, tecEXPIRED", func(t *testing.T) {
 		ctx := buildCtx(fix313Off)
