@@ -57,6 +57,17 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 		return result
 	}
 
+	// preflightSigValidated — a per-type stage rippled runs AFTER preflight2's
+	// signature verification (Transactor::invokePreflight). A check placed here
+	// (EscrowFinish's CredentialIDs shape check) is therefore trumped by a
+	// bad-signature temINVALID, not the reverse. Reached only once verifySignatures
+	// succeeds, exactly as rippled reaches it only once preflight2 passes.
+	if svp, ok := tx.(txcore.SigValidatedPreflighter); ok {
+		if err := svp.PreflightSigValidated(); err != nil {
+			return parseValidationError(err)
+		}
+	}
+
 	// Reference: rippled Batch.cpp:303-312.
 	if outer, ok := tx.(BatchOuter); ok {
 		for _, inner := range outer.InnerTransactions() {
