@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 )
 
 // assetIntegral reports whether asset counts indivisible units (native XRP or an
@@ -52,6 +53,15 @@ func associateBrokerAsset(b *loanBrokerData, integral bool) {
 	b.DebtTotal = associateNum(b.DebtTotal, integral, true)
 	b.DebtMaximum = associateNum(b.DebtMaximum, integral, true)
 	b.CoverAvailable = associateNum(b.CoverAvailable, integral, true)
+}
+
+// associateVaultAsset rounds the Vault's NUMBER accounting fields to the asset's
+// precision. AssetsTotal, AssetsAvailable, and LossUnrealized are soeDEFAULT;
+// AssetsMaximum is left untouched (LoanManage never changes it).
+func associateVaultAsset(v *vault.VaultLending, integral bool) {
+	v.AssetsTotal = associateNum(v.AssetsTotal, integral, true)
+	v.AssetsAvailable = associateNum(v.AssetsAvailable, integral, true)
+	v.LossUnrealized = associateNum(v.LossUnrealized, integral, true)
 }
 
 // associateLoanAsset rounds the Loan's NUMBER fields to the vault asset's

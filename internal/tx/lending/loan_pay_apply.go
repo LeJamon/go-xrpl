@@ -1,6 +1,7 @@
 package lending
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
@@ -61,8 +62,10 @@ func accountToLoan(loan *loanData, acc *lmath.LoanAccount) {
 }
 
 // CalculateBaseFee estimates the number of combined payments and charges one base
-// fee per loanPaymentsPerFeeIncrement (5). There is intentionally no 100-payment
-// cap here (rippled documents that a LoanPay may be over-charged).
+// fee per loanPaymentsPerFeeIncrement (5). With fixCleanup3_1_3 the estimate is
+// capped: the payment handler never processes more than
+// loanMaximumPaymentsPerTransaction payments, so the fee never exceeds
+// loanMaximumPaymentsPerTransaction / loanPaymentsPerFeeIncrement increments.
 func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
 	normal := config.BaseFee
 	if l.GetFlags()&(TfLoanFullPayment|TfLoanLatePayment) != 0 {
@@ -99,6 +102,15 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) u
 	if regular.Signum() <= 0 {
 		return normal
 	}
+	// Post-fixCleanup3_1_3: cap the estimate at the maximum number of payments the
+	// handler will process, so a large Amount does not inflate the fee unboundedly.
+	if config.GetRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
+		threshold := regular.Mul(lmath.FromInt(int64(protocol.LoanMaximumPaymentsPerTransaction)))
+		if amountToLendNum(l.Amount).Cmp(threshold) >= 0 {
+			maxFeeIncrements := protocol.LoanMaximumPaymentsPerTransaction / protocol.LoanPaymentsPerFeeIncrement
+			return uint64(maxFeeIncrements) * normal
+		}
+	}
 	mode := state.RoundDownward
 	if l.GetFlags()&TfLoanOverpayment != 0 {
 		mode = state.RoundUpward
@@ -134,6 +146,9 @@ func (l *LoanPay) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		return ter.TecNO_PERMISSION
 	}
 	if l.GetFlags()&TfLoanOverpayment != 0 && loan.Flags&LsfLoanOverpayment == 0 {
+		if config.GetRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
+			return ter.TecNO_PERMISSION
+		}
 		return ter.TemINVALID_FLAG
 	}
 	if loan.PaymentRemaining == 0 || lendNum(loan.PrincipalOutstanding).IsZero() {
@@ -217,7 +232,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	acc := loanToAccount(loan)
-	parts, t := lmath.LoanMakePayment(mAsset, ctx.Config.ParentCloseTime, acc, uint32(b.ManagementFeeRate), amountToLendNum(l.Amount), l.paymentType())
+	parts, t := lmath.LoanMakePayment(mAsset, ctx.Config.ParentCloseTime, acc, uint32(b.ManagementFeeRate), amountToLendNum(l.Amount), l.paymentType(), ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3))
 	if t != ter.TesSUCCESS {
 		return t
 	}
