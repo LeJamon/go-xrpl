@@ -93,11 +93,9 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	}
 
 	// T::checkExtraFeatures runs before preflight1's common checks (see
-	// ExtraFeaturesChecker). No tx type adopts this hook yet.
-	if efc, ok := tx.(txcore.ExtraFeaturesChecker); ok {
-		if err := efc.CheckExtraFeatures(rules); err != nil {
-			return parseValidationError(err)
-		}
+	// ExtraFeaturesChecker).
+	if result := checkExtraFeatures(tx, rules); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// preflight1 (which itself runs preflight0).
@@ -111,10 +109,8 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	if err := tx.Validate(); err != nil {
 		return parseValidationError(err)
 	}
-	if rp, ok := tx.(txcore.RulesPreflighter); ok {
-		if err := rp.PreflightRules(rules); err != nil {
-			return parseValidationError(err)
-		}
+	if result := checkPreflightRules(tx, rules); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// preflight2 structural stage — the multi-sign structural rules run after
@@ -181,14 +177,45 @@ func (e *Engine) preflight0(tx txcore.Transaction, common *txcore.Common, rules 
 	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
 		return result
 	}
-	// Flags mask: a transaction whose flags intersect its type's invalid-flags
-	// mask is temINVALID_FLAG. rippled evaluates this with T::getFlagsMask(ctx).
-	// A type opts in via FlagsMasker; until it does, the per-type flag check in
-	// Validate() is the backstop and the engine applies no mask here (the
-	// universal mask would reject every valid type-specific flag).
+	return checkFlagsMask(tx, common, rules)
+}
+
+// checkFlagsMask rejects a transaction whose flags intersect its type's
+// invalid-flags mask with temINVALID_FLAG, mirroring rippled preflight0's
+// `tx.getFlags() & T::getFlagsMask(ctx)`. A type opts in via FlagsMasker; a type
+// that does not implement it gets no engine-level flag rejection (the universal
+// mask would reject every valid type-specific flag). Reused by preflight0 and
+// preflightInner so inner batch transactions get the same mask rippled applies
+// via the per-inner invokePreflight.
+func checkFlagsMask(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if fm, ok := tx.(txcore.FlagsMasker); ok {
 		if common.GetFlags()&fm.GetFlagsMask(rules) != 0 {
 			return ter.TemINVALID_FLAG
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// checkExtraFeatures runs a type's ExtraFeaturesChecker (rippled
+// T::checkExtraFeatures), which gates amendment-dependent tem*/temDISABLED
+// rejections ahead of preflight1's common checks. Reused by the outer structure
+// preflight and preflightInner.
+func checkExtraFeatures(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
+	if efc, ok := tx.(txcore.ExtraFeaturesChecker); ok {
+		if err := efc.CheckExtraFeatures(rules); err != nil {
+			return parseValidationError(err)
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// checkPreflightRules runs a type's RulesPreflighter (the amendment-gated tem*
+// checks of rippled's T::preflight body) after Validate(). Reused by the outer
+// structure preflight and preflightInner.
+func checkPreflightRules(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
+	if rp, ok := tx.(txcore.RulesPreflighter); ok {
+		if err := rp.PreflightRules(rules); err != nil {
+			return parseValidationError(err)
 		}
 	}
 	return ter.TesSUCCESS
@@ -213,13 +240,24 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkAccountPresent(common); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
-		return result
-	}
 	for _, featureID := range innerTx.RequiredAmendments() {
 		if !rules.Enabled(featureID) {
 			return ter.TemDISABLED
 		}
+	}
+	// The per-type seams (checkExtraFeatures, flags mask, PreflightRules) run for
+	// inner transactions exactly as they do on the outer path, mirroring rippled
+	// which preflights each inner via the full invokePreflight<T>. Without them an
+	// inner tx that adopts a seam would skip that validation, since inner txs
+	// reach Apply directly and never run preclaim.
+	if result := checkExtraFeatures(innerTx, rules); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.validateNetworkID(common); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := checkFlagsMask(innerTx, common, rules); result != ter.TesSUCCESS {
+		return result
 	}
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
@@ -233,7 +271,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if err := innerTx.Validate(); err != nil {
 		return parseValidationError(err)
 	}
-	return ter.TesSUCCESS
+	return checkPreflightRules(innerTx, rules)
 }
 
 // preflightInnerBatchFlag rejects a transaction reaching the outer preflight
