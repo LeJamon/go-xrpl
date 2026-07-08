@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // AccountInDomain checks if an account is a member of a permissioned domain.
@@ -66,6 +67,18 @@ func OfferInDomain(view tx.LedgerView, offer *state.LedgerOffer, domainID [32]by
 	}
 	if offer.DomainID != domainID {
 		return false
+	}
+
+	// A hybrid offer must carry its AdditionalBooks entry to be in-domain.
+	// rippled requires the field present (3.1.2) and, post-fixCleanup3_1_3,
+	// exactly one entry. The parsed offer collapses AdditionalBooks to a single
+	// book directory, so an on-ledger hybrid offer either has it (non-zero) or
+	// is malformed; the presence check covers both amendment eras.
+	if offer.Flags&entry.LsfHybrid != 0 {
+		var zeroDir [32]byte
+		if offer.AdditionalBookDirectory == zeroDir {
+			return false
+		}
 	}
 
 	ownerID, err := state.DecodeAccountID(offer.Account)

@@ -526,17 +526,17 @@ func TestValidPermissionedDEX_DomainExistence(t *testing.T) {
 	withDomain := domainTx{stubTx: stubTx{txType: TypeOfferCreate}, domain: &d}
 	noDomain := domainTx{stubTx: stubTx{txType: TypeOfferCreate}}
 
-	if v := checkValidPermissionedDEX(withDomain, TesSUCCESS, nil, existsView{exists: false}); v == nil {
+	if v := checkValidPermissionedDEX(withDomain, TesSUCCESS, nil, existsView{exists: false}, nil); v == nil {
 		t.Fatal("expected ValidPermissionedDEX violation: domain doesn't exist")
 	} else if v.Name != "ValidPermissionedDEX" {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
 
-	if v := checkValidPermissionedDEX(noDomain, TesSUCCESS, nil, existsView{exists: false}); v != nil {
+	if v := checkValidPermissionedDEX(noDomain, TesSUCCESS, nil, existsView{exists: false}, nil); v != nil {
 		t.Fatalf("no DomainID on tx: unexpected violation %v", v)
 	}
 
-	if v := checkValidPermissionedDEX(withDomain, TesSUCCESS, nil, existsView{exists: true}); v != nil {
+	if v := checkValidPermissionedDEX(withDomain, TesSUCCESS, nil, existsView{exists: true}, nil); v != nil {
 		t.Fatalf("existing domain: unexpected violation %v", v)
 	}
 }
@@ -550,12 +550,12 @@ func TestValidPermissionedDEX_WrongDomain(t *testing.T) {
 	view := existsView{exists: true}
 
 	matching := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, d1)}}
-	if v := checkValidPermissionedDEX(tx, TesSUCCESS, matching, view); v != nil {
+	if v := checkValidPermissionedDEX(tx, TesSUCCESS, matching, view, nil); v != nil {
 		t.Fatalf("matching domain directory: unexpected violation %v", v)
 	}
 
 	wrong := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, d2)}}
-	if v := checkValidPermissionedDEX(tx, TesSUCCESS, wrong, view); v == nil {
+	if v := checkValidPermissionedDEX(tx, TesSUCCESS, wrong, view, nil); v == nil {
 		t.Fatal("expected ValidPermissionedDEX violation: consumed wrong domains")
 	} else if v.Name != "ValidPermissionedDEX" {
 		t.Fatalf("unexpected violation name %q", v.Name)
@@ -574,7 +574,7 @@ func TestValidPermissionedDEX_PresentZeroDomain(t *testing.T) {
 
 	var zero [32]byte
 	dir := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, zero)}}
-	if v := checkValidPermissionedDEX(tx, TesSUCCESS, dir, view); v == nil {
+	if v := checkValidPermissionedDEX(tx, TesSUCCESS, dir, view, nil); v == nil {
 		t.Fatal("expected ValidPermissionedDEX violation: present-but-zero domain differs from tx domain")
 	} else if v.Name != "ValidPermissionedDEX" {
 		t.Fatalf("unexpected violation name %q", v.Name)

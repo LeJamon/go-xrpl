@@ -316,7 +316,7 @@ func TestParseError_HardFails(t *testing.T) {
 	t.Run("ValidPermissionedDomain", func(t *testing.T) {
 		pdBad := append(mustEncode(t, map[string]any{"LedgerEntryType": "PermissionedDomain"}), 0xFF)
 		entries := []InvariantEntry{{EntryType: "PermissionedDomain", After: pdBad}}
-		if v := checkValidPermissionedDomain(stubTx{txType: TypePermissionedDomainSet}, TesSUCCESS, entries); v == nil {
+		if v := checkValidPermissionedDomain(stubTx{txType: TypePermissionedDomainSet}, TesSUCCESS, entries, nil); v == nil {
 			t.Fatal("expected ValidPermissionedDomain violation for unparseable PermissionedDomain")
 		}
 	})
@@ -325,7 +325,7 @@ func TestParseError_HardFails(t *testing.T) {
 		offerBad := append(mustEncode(t, map[string]any{"LedgerEntryType": "Offer"}), 0xFF)
 		entries := []InvariantEntry{{EntryType: "Offer", After: offerBad}}
 		tx := domainTx{stubTx: stubTx{txType: TypeOfferCreate}}
-		if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, existsView{exists: true}); v == nil {
+		if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, existsView{exists: true}, nil); v == nil {
 			t.Fatal("expected ValidPermissionedDEX violation for unparseable Offer")
 		}
 	})
