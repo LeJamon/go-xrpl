@@ -360,6 +360,22 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 //
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	// Under LendingProtocol a pseudo-account (AMM / Vault / LoanBroker) can never
+	// authorize a transaction: rippled Transactor::checkSign returns tefBAD_AUTH
+	// for any tx signed by a pseudo-account, at the top of the signature stage.
+	if e.rules().Enabled(amendment.FeatureLendingProtocol) {
+		idAccount := common.Account
+		if common.Delegate != "" {
+			idAccount = common.Delegate
+		}
+		if idAccountID, err := state.DecodeAccountID(idAccount); err == nil {
+			if data, rerr := e.view.Read(keylet.Account(idAccountID)); rerr == nil && data != nil {
+				if ar, perr := state.ParseAccountRoot(data); perr == nil && ar.IsPseudoAccount() {
+					return ter.TefBAD_AUTH
+				}
+			}
+		}
+	}
 	if sign.IsMultiSigned(tx) {
 		return e.checkMultiSign(common)
 	}
