@@ -12,11 +12,16 @@ import (
 //   - ip_limit 0 means auto-configure
 //   - max_unknown_time / max_diverged_time 0 means use the built-in
 //     defaults (rippled: 600s and 300s respectively)
+//   - verify_endpoints (0|1) validates addresses received in TMEndpoints
+//     gossip; nil (absent) means the built-in default (1 = verify on),
+//     0 skips validation for local dev networks — a security risk on a
+//     public network
 type OverlayConfig struct {
 	PublicIP        string `toml:"public_ip" mapstructure:"public_ip"`
 	IPLimit         int    `toml:"ip_limit" mapstructure:"ip_limit"`
 	MaxUnknownTime  int    `toml:"max_unknown_time" mapstructure:"max_unknown_time"`
 	MaxDivergedTime int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
+	VerifyEndpoints *int   `toml:"verify_endpoints" mapstructure:"verify_endpoints"`
 }
 
 // TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL).
@@ -57,6 +62,12 @@ func (o *OverlayConfig) Validate() error {
 
 	if o.MaxDivergedTime != 0 && (o.MaxDivergedTime < 60 || o.MaxDivergedTime > 900) {
 		return fmt.Errorf("max_diverged_time must be between 60 and 900 seconds, got %d", o.MaxDivergedTime)
+	}
+
+	if o.VerifyEndpoints != nil {
+		if err := validateZeroOrOne("verify_endpoints", *o.VerifyEndpoints); err != nil {
+			return err
+		}
 	}
 
 	return nil
