@@ -176,3 +176,19 @@ func TestComputeFullPaymentInterest(t *testing.T) {
 		eq(t, tc.name, got, tc.want)
 	}
 }
+
+func TestComputeOverpaymentComponents(t *testing.T) {
+	iou := Asset{Integral: false}
+	const scale = 1
+	c := computeOverpaymentComponents(iou, scale, num(1000, 0), 10_000, 50_000, 10_000)
+	eq(t, "untrackedManagementFee", c.UntrackedManagementFee, num(500, 0))
+	eq(t, "untrackedInterest", c.UntrackedInterest, num(90, 0))
+	eq(t, "trackedInterestPart", c.TrackedInterestPart(), num(90, 0))
+	eq(t, "trackedManagementFeeDelta", c.TrackedManagementFeeDelta, num(10, 0))
+	eq(t, "trackedPrincipalDelta", c.TrackedPrincipalDelta, num(400, 0))
+	// gross interest = tracked fee + untracked interest = 100
+	eq(t, "grossInterest", c.TrackedManagementFeeDelta.Add(c.UntrackedInterest), num(100, 0))
+	// all parts sum to the overpayment
+	sum := c.TrackedManagementFeeDelta.Add(c.UntrackedInterest).Add(c.TrackedPrincipalDelta).Add(c.UntrackedManagementFee)
+	eq(t, "sum", sum, num(1000, 0))
+}
