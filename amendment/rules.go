@@ -187,44 +187,9 @@ func (b *RulesBuilder) Build() *Rules {
 	return NewRules(enabledIDs)
 }
 
-// DepositPreauthEnabled returns true if the DepositPreauth amendment is enabled.
-func (r *Rules) DepositPreauthEnabled() bool {
-	return r.Enabled(FeatureDepositPreauth)
-}
-
-// NFTsEnabled returns true if the NonFungibleTokensV1_1 amendment is enabled.
-func (r *Rules) NFTsEnabled() bool {
-	return r.Enabled(FeatureNonFungibleTokensV1_1)
-}
-
-// ExpandedSignerListEnabled returns true if the ExpandedSignerList amendment is enabled.
-func (r *Rules) ExpandedSignerListEnabled() bool {
-	return r.Enabled(FeatureExpandedSignerList)
-}
-
-// DeletableAccountsEnabled returns true if the DeletableAccounts amendment is enabled.
-func (r *Rules) DeletableAccountsEnabled() bool {
-	return r.Enabled(FeatureDeletableAccounts)
-}
-
 // XRPFeesEnabled returns true if the XRPFees amendment is enabled.
 func (r *Rules) XRPFeesEnabled() bool {
 	return r.Enabled(FeatureXRPFees)
-}
-
-// NegativeUNLEnabled returns true if the NegativeUNL amendment is enabled.
-func (r *Rules) NegativeUNLEnabled() bool {
-	return r.Enabled(FeatureNegativeUNL)
-}
-
-// DisallowIncomingEnabled returns true if the DisallowIncoming amendment is enabled.
-func (r *Rules) DisallowIncomingEnabled() bool {
-	return r.Enabled(FeatureDisallowIncoming)
-}
-
-// RequireFullyCanonicalSigEnabled returns true if the RequireFullyCanonicalSig amendment is enabled.
-func (r *Rules) RequireFullyCanonicalSigEnabled() bool {
-	return r.Enabled(FeatureRequireFullyCanonicalSig)
 }
 
 // DeepFreezeEnabled returns true if the DeepFreeze amendment is enabled.
