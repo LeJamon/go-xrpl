@@ -27,11 +27,6 @@ var notDelegatableTxTypes = map[uint16]bool{
 	102: true, // ttUNL_MODIFY (UNLModify)
 }
 
-// granularPermissionMin is the threshold above which a permission value is granular.
-// Granular permissions have values > UINT16_MAX (65535) and are always delegatable.
-// Reference: rippled Permissions.h — GranularPermissionType values start at 65537
-const granularPermissionMin = 65536
-
 // DelegateSet sets up delegation for an account.
 // Reference: rippled DelegateSet.cpp
 type DelegateSet struct {
@@ -67,6 +62,14 @@ func NewDelegateSet(account string) *DelegateSet {
 
 func (d *DelegateSet) TxType() tx.Type {
 	return tx.TypeDelegateSet
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. DelegateSet defines no
+// type-specific flags (rippled does not override getFlagsMask), so the base
+// universal mask is checked at preflight0 — before the account/fee/NetworkID
+// checks — matching rippled's Transactor::getFlagsMask default.
+func (d *DelegateSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 // Reference: rippled DelegateSet.cpp preflight()
@@ -318,8 +321,13 @@ func (d *DelegateSet) permissionValues() []uint32 {
 // map to a registered transaction type, and that type's introducing amendment
 // (if any) must be enabled.
 func isDelegatable(permissionValue uint32, rules *amendment.Rules) bool {
-	// Granular permissions are always delegatable.
-	if permissionValue >= granularPermissionMin {
+	// Granular permissions are always delegatable — but only KNOWN granular
+	// permissions. rippled short-circuits on getGranularName(value) != nullopt,
+	// so an unknown value in the granular range (>= 65536) is NOT treated as
+	// granular; it falls through to the transaction-type path below (where it is
+	// not a registered type and, under fixDelegateV1_1, is rejected).
+	// Reference: rippled Permissions.cpp isDelegatable().
+	if state.IsGranularPermissionValue(permissionValue) {
 		return true
 	}
 

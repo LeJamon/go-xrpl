@@ -321,11 +321,17 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 func parseSpecialFields(k string, v any) (any, error) {
 	if k == "PermissionValue" {
 		if strValue, ok := v.(string); ok {
-			permissionValue, err := definitions.Get().GetDelegatablePermissionValueByName(strValue)
-			if err != nil {
-				return nil, err
+			if permissionValue, err := definitions.Get().GetDelegatablePermissionValueByName(strValue); err == nil {
+				return uint32(permissionValue), nil
 			}
-			return uint32(permissionValue), nil
+			// A value with no registered name may be supplied in its decimal form
+			// (the round-trip of an unknown sfPermissionValue). Parse it as a plain
+			// UINT32 so it re-encodes rather than erroring.
+			n, err := strconv.ParseUint(strValue, 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("PermissionValue: unknown permission %q", strValue)
+			}
+			return uint32(n), nil
 		}
 	}
 
@@ -400,11 +406,16 @@ func enumToStr(fieldName string, value any) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("PermissionValue: expected uint32 but got %T", value)
 		}
-		// Convert permission value to permission name if available, otherwise return numeric value
+		// Convert the permission value to its name when one is registered.
 		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(code)); err == nil {
 			return name, nil
 		}
-		return value, nil
+		// sfPermissionValue is a plain UINT32; a value with no registered name is
+		// still valid on the wire (rippled includes such DelegateSets before
+		// fixDelegateV1_1). Emit its decimal form so it round-trips through the
+		// string-typed struct field and reaches the delegatability check rather
+		// than failing to decode.
+		return strconv.FormatUint(uint64(code), 10), nil
 	default:
 		return value, nil
 	}
