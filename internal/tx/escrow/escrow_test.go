@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -62,12 +63,10 @@ func TestEscrowCreateValidation(t *testing.T) {
 			errorMsg:    "temDST_NEEDED: Destination is required",
 		},
 		{
-			// A zero-value Amount is a non-native (IOU) zero with an empty
-			// currency code, which the binary codec cannot serialize. It is
-			// rejected in Validate with temBAD_CURRENCY (see L1). The amendment-
-			// gated zero/negative checks for serializable currencies are deferred
-			// to Preclaim.
-			name: "empty (non-XRP zero) amount - temBAD_CURRENCY",
+			// A zero-value Amount is a non-native (IOU) zero. rippled's Issue
+			// helper checks the zero/negative amount BEFORE the reserved-currency
+			// check, so this surfaces temBAD_AMOUNT (not temBAD_CURRENCY).
+			name: "empty (non-XRP zero) amount - temBAD_AMOUNT",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.Amount{},
@@ -75,12 +74,11 @@ func TestEscrowCreateValidation(t *testing.T) {
 				FinishAfter: ptrUint32(700000000),
 			},
 			expectError: true,
-			errorMsg:    "temBAD_CURRENCY: cannot escrow XRP as IOU",
+			errorMsg:    "temBAD_AMOUNT: Amount must be positive",
 		},
 		{
-			// With featureTokenEscrow, IOU amounts are valid in Validate().
-			// The amendment check is deferred to Apply() where rules are available.
-			name: "non-XRP amount - passes Validate (amendment checked in Apply)",
+			// With featureTokenEscrow, a well-formed IOU amount passes preflight.
+			name: "non-XRP amount - passes preflight (amendment checked in Apply)",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.NewIssuedAmountFromFloat64(100.0, "USD", "rGateway"),
@@ -159,9 +157,9 @@ func TestEscrowCreateValidation(t *testing.T) {
 			errorMsg:    "temBAD_EXPIRATION: must specify CancelAfter or FinishAfter",
 		},
 		{
-			// fix1571 check is amendment-gated and deferred to Apply().
-			// Validate() only checks stateless invariants.
-			name: "cancel only without condition - passes Validate (fix1571 checked in Apply)",
+			// fix1571 (on in the default rules) requires a FinishAfter or a
+			// Condition, so a CancelAfter-only escrow is temMALFORMED in preflight.
+			name: "cancel only without condition - temMALFORMED (fix1571)",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.NewXRPAmount(1000000000),
@@ -169,7 +167,8 @@ func TestEscrowCreateValidation(t *testing.T) {
 				CancelAfter: ptrUint32(700000100),
 				// No FinishAfter and no Condition
 			},
-			expectError: false,
+			expectError: true,
+			errorMsg:    "temMALFORMED: escrow must specify FinishAfter or Condition",
 		},
 		{
 			name: "cancel time equals finish time - temBAD_EXPIRATION equivalent",
@@ -219,9 +218,16 @@ func TestEscrowCreateValidation(t *testing.T) {
 		},
 	}
 
+	// The amount / expiration / condition checks now live in PreflightRules
+	// (rippled's per-type preflight body); run the full preflight body under the
+	// default mainnet-like rules (fix1543 / fix1571 / TokenEscrow / MPTokensV1 on).
+	rules := amendment.AllSupportedRules()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.escrow.Validate()
+			if err == nil {
+				err = tt.escrow.PreflightRules(rules)
+			}
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
