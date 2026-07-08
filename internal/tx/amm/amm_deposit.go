@@ -30,9 +30,11 @@ type AMMDeposit struct {
 	// LPTokenOut is the LP tokens to receive (optional)
 	LPTokenOut *tx.Amount `json:"LPTokenOut,omitempty" xrpl:"LPTokenOut,omitempty,amount"`
 
-	// TradingFee is the trading fee for tfTwoAssetIfEmpty mode (optional)
-	// Only used when depositing into an empty AMM
-	TradingFee uint16 `json:"TradingFee,omitempty" xrpl:"TradingFee,omitempty"`
+	// TradingFee is the trading fee for tfTwoAssetIfEmpty mode (optional).
+	// Pointer-typed so a present-but-zero field is distinguishable from an absent
+	// one: every deposit mode except tfTwoAssetIfEmpty rejects the field's
+	// presence (rippled reads sfTradingFee as an optional, value-independent).
+	TradingFee *uint16 `json:"TradingFee,omitempty" xrpl:"TradingFee,omitempty"`
 }
 
 // NewAMMDeposit creates a new AMMDeposit transaction
@@ -89,7 +91,7 @@ func (a *AMMDeposit) Validate() error {
 	hasAmount2 := a.Amount2 != nil
 	hasEPrice := a.EPrice != nil
 	hasLPTokens := a.LPTokenOut != nil
-	hasTradingFee := a.TradingFee > 0
+	hasTradingFee := a.TradingFee != nil
 
 	if flags&tfLPToken != 0 {
 		// tfLPToken: LPTokenOut required, [Amount, Amount2] optional but must be both or neither, no EPrice, no TradingFee
@@ -164,7 +166,7 @@ func (a *AMMDeposit) Validate() error {
 	}
 
 	// Reference: rippled AMMDeposit.cpp lines 156-160
-	if a.TradingFee > tradingFeeThreshold {
+	if a.TradingFee != nil && *a.TradingFee > tradingFeeThreshold {
 		return ter.Errorf(ter.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
@@ -368,8 +370,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled AMMDeposit.cpp doApply() line 389-391
 	var tfee uint16
 	if lptBalance.IsZero() {
-		if a.TradingFee > 0 {
-			tfee = a.TradingFee
+		if a.TradingFee != nil {
+			tfee = *a.TradingFee
 		}
 	} else {
 		tfee = getAccountTradingFee(amm, accountID, ctx.Config.ParentCloseTime)
@@ -728,8 +730,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		depositAmount1 = amount1
 		depositAmount2 = amount2
 		// Set trading fee if provided
-		if a.TradingFee > 0 {
-			amm.TradingFee = a.TradingFee
+		if a.TradingFee != nil {
+			amm.TradingFee = *a.TradingFee
 		}
 
 	default:

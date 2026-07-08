@@ -68,7 +68,7 @@ type AMMDepositBuilder struct {
 	amount2    *tx.Amount
 	lpTokenOut *tx.Amount
 	ePrice     *tx.Amount
-	tradingFee uint16
+	tradingFee *uint16
 	fee        string
 	flags      uint32
 }
@@ -107,9 +107,10 @@ func (b *AMMDepositBuilder) EPrice(amt tx.Amount) *AMMDepositBuilder {
 	return b
 }
 
-// TradingFee sets the trading fee for tfTwoAssetIfEmpty.
+// TradingFee sets the trading fee for tfTwoAssetIfEmpty. Marking it present (via
+// a pointer) matters: every other deposit mode rejects a present sfTradingFee.
 func (b *AMMDepositBuilder) TradingFee(fee uint16) *AMMDepositBuilder {
-	b.tradingFee = fee
+	b.tradingFee = &fee
 	return b
 }
 

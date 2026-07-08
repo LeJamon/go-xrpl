@@ -473,3 +473,40 @@ func TestBid(t *testing.T) {
 		t.Log("Outbid previous owner passed")
 	})
 }
+
+// TestBidAuthAccountsPrecedence pins that the fixAMMv1_3 duplicate/self
+// AuthAccounts check is a preflight rejection (temMALFORMED), ahead of preclaim's
+// terNO_AMM — so it is not masked when no AMM exists for the asset pair. Before
+// the fix the check lived in Preclaim, behind the AMM lookup.
+// Reference: rippled AMMBid.cpp preflight lines 81-95.
+func TestBidAuthAccountsPrecedence(t *testing.T) {
+	// fixAMMv1_3 is Supported::yes, so it is enabled in the default env.
+	t.Run("DuplicateAuthAccountsBeatsNoAMM", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.FundWithIOUs(30000, 0)
+		env.Close()
+		// No AMM is created for XRP/USD in this env.
+		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
+			AuthAccounts(env.Bob.Address, env.Bob.Address). // duplicate
+			Build()
+		result := env.Submit(bidTx)
+		if result.Success {
+			t.Fatal("duplicate AuthAccounts must be rejected in preflight")
+		}
+		amm.ExpectTER(t, result, amm.TemMALFORMED)
+	})
+
+	t.Run("SelfAuthAccountBeatsNoAMM", func(t *testing.T) {
+		env := amm.NewAMMTestEnv(t)
+		env.FundWithIOUs(30000, 0)
+		env.Close()
+		bidTx := amm.AMMBid(env.Carol, amm.XRP(), env.USD).
+			AuthAccounts(env.Carol.Address). // self-authorization
+			Build()
+		result := env.Submit(bidTx)
+		if result.Success {
+			t.Fatal("self AuthAccount must be rejected in preflight")
+		}
+		amm.ExpectTER(t, result, amm.TemMALFORMED)
+	})
+}
