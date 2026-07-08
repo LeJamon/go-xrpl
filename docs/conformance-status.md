@@ -16,10 +16,10 @@ Running conformance tests (timeout=300s)...
 =========================================
  CONFORMANCE SUMMARY
 =========================================
- Total:    1365 pass /  143 fail / 1508  (90.5%)
- Skipped:    10
+ Total:    1334 pass /  120 fail / 1454  (91.7%)
+ Skipped:    64
  In scope: 1260 pass /    0 fail / 1260  (100.0%)
- Out:       105 pass /  143 fail /  248
+ Out:        74 pass /  120 fail /  194
 =========================================
 
 Per-suite breakdown:
@@ -91,7 +91,7 @@ app/Transaction_ordering                          3     0     3   100%
 app/TrustAndBalance                              13     0    13   100%
 app/TxQMetaInfo                                  19     0    19   100%
 app/TxQPosNegFlows                               17     0    17   100%
-app/Vault                                        83   103   186    44%
+app/Vault                                        52    80   132    39%
 app/XChain                                        1    14    15     6%
 app/XChainSim                                     0     1     1     0%
 ledger/BookDirs                                   1     0     1   100%

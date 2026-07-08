@@ -520,7 +520,7 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 			if iss == nil {
 				return state.NewXRPLNumber(0, 0), nil
 			}
-			maxAmt := uint64(entry.MaxMPTokenAmount)
+			maxAmt := entry.MaxMPTokenAmount
 			if iss.MaximumAmount != nil {
 				maxAmt = *iss.MaximumAmount
 			}
