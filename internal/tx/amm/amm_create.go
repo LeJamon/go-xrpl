@@ -96,6 +96,11 @@ func (a *AMMCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
+func (a *AMMCreate) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Amount.IsMPT() || a.Amount2.IsMPT())
+}
+
 // Preclaim validates AMM uniqueness, authorization, freeze, DefaultRipple, the
 // LP-token-trustline reserve, funding, that neither asset is an LP token, the
 // pseudo-account collision (featureSingleAssetVault), and the clawback gate.
