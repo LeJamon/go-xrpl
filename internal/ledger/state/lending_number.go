@@ -71,7 +71,7 @@ func roundIOUToScale(v IOUAmountValue, scale int, mode RoundingMode) IOUAmountVa
 	if v.IsZero() || v.Exponent() >= scale {
 		return v
 	}
-	refMant := int64(MinMantissa)
+	refMant := MinMantissa
 	if v.IsNegative() {
 		refMant = -refMant
 	}

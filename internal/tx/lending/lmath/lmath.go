@@ -63,9 +63,10 @@ func tenthBipsOfValue(value N, tenthBips uint32) N {
 	return value.Mul(numU(tenthBips)).Div(numU(protocol.TenthBipsPerUnity))
 }
 
-// isRounded reports whether value already sits at the asset's precision for
-// scale: rounding down and up agree (rippled isRounded).
-func isRounded(asset Asset, value N, scale int) bool {
+// IsRounded reports whether value already sits at the asset's precision for
+// scale: rounding down and up agree (rippled isRounded). The Loan* transactors
+// use it for the tecPRECISION_LOSS field checks.
+func IsRounded(asset Asset, value N, scale int) bool {
 	down := roundToAsset(asset, value, scale, state.RoundDownward)
 	up := roundToAsset(asset, value, scale, state.RoundUpward)
 	return down.Equal(up)
