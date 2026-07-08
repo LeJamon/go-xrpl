@@ -4,11 +4,22 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
-// isLegalNetAmount checks if an amount is a valid net amount.
-// Reference: rippled protocol/STAmount.h isLegalNet()
+// maxNativeDrops is rippled STAmount::cMaxNativeN — the isLegalNet ceiling on a
+// native (XRP) amount's magnitude.
+const maxNativeDrops uint64 = 100_000_000_000_000_000
+
+// isLegalNetAmount mirrors rippled STAmount isLegalNet: a native amount's
+// magnitude may not exceed cMaxNativeN; non-native amounts are always legal.
+// Zero amounts are legal here and are rejected later by the temBAD_OFFER check.
 func isLegalNetAmount(amt tx.Amount) bool {
-	// A legal net amount is non-zero
-	return !amt.IsZero()
+	if !amt.IsNative() {
+		return true
+	}
+	d := amt.Drops()
+	if d < 0 {
+		d = -d
+	}
+	return uint64(d) <= maxNativeDrops
 }
 
 // isAmountZeroOrNegative checks if an amount is zero or negative.

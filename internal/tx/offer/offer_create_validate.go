@@ -9,33 +9,29 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// Validate performs rules-independent validation on the OfferCreate transaction.
-// This is called by the engine's preflight step BEFORE hash computation and fee deduction.
-// All checks here must NOT depend on amendment rules (rules-dependent checks go in Preflight).
-// Reference: rippled CreateOffer.cpp preflight() - rules-independent subset
+// Validate runs the rules-free structural preflight checks of OfferCreate, in
+// rippled's preflight order. The flags mask (amendment-conditional, GetFlagsMask)
+// and the sfDomainID amendment gate (CheckExtraFeatures) are enforced by the
+// engine before this body, so no rules-dependent check remains here.
 func (o *OfferCreate) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Reference: rippled CreateOffer.cpp preflight() lines 61-65
+	// The invalid-flags mask (GetFlagsMask) is enforced by the engine at the
+	// preflight0 position, before this body — mirroring rippled preflight0.
 	flags := o.GetFlags()
-	if flags&tfOfferCreateMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags set")
+
+	// tfHybrid requires DomainID (rules-independent; rippled's first body check).
+	if (flags&tfHybrid != 0) && o.DomainID == nil {
+		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
-	// IoC and FoK are mutually exclusive
-	// Reference: lines 73-80
+	// IoC and FoK are mutually exclusive.
 	bImmediateOrCancel := (flags & OfferCreateFlagImmediateOrCancel) != 0
 	bFillOrKill := (flags & OfferCreateFlagFillOrKill) != 0
 	if bImmediateOrCancel && bFillOrKill {
 		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set both ImmediateOrCancel and FillOrKill")
-	}
-
-	// tfHybrid requires DomainID (rules-independent check)
-	// Reference: lines 70-71
-	if (flags&tfHybrid != 0) && o.DomainID == nil {
-		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
 	// Reference: lines 82-88
@@ -114,24 +110,25 @@ func badCurrency() string {
 	return "XRP"
 }
 
-// PreflightRules performs the amendment-rules-dependent preflight checks for
-// OfferCreate. The rules-independent structural validation lives in Validate().
-// The engine runs this right after Validate(), so these tem* rejections happen
-// before fee deduction, matching rippled's preflight().
-// Reference: rippled CreateOffer.cpp preflight() lines 49-51, 67-68
-func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
-	// Check if DomainID field is present without PermissionedDEX amendment
-	// Reference: rippled CreateOffer.cpp preflight() lines 49-51
+// GetFlagsMask returns the invalid-flags mask enforced by the engine at the
+// preflight0 position. It is amendment-conditional, mirroring rippled
+// CreateOffer::getFlagsMask: tfHybrid is only a valid flag once PermissionedDEX
+// is enabled, so with the amendment off it is added to the invalid mask.
+func (o *OfferCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.PermissionedDEXEnabled() {
+		return tfOfferCreateMask
+	}
+	return tfOfferCreateMask | tfHybrid
+}
+
+// CheckExtraFeatures runs the amendment gate rippled evaluates in
+// checkExtraFeatures — before preflight0's flags mask and the common checks — so
+// an sfDomainID under a disabled PermissionedDEX surfaces temDISABLED ahead of
+// every other tx-specific tem code.
+func (o *OfferCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 	if o.DomainID != nil && !rules.PermissionedDEXEnabled() {
 		return ter.Errorf(ter.TemDISABLED, "DomainID requires PermissionedDEX amendment")
 	}
-
-	// Reference: lines 67-68
-	flags := o.GetFlags()
-	if !rules.PermissionedDEXEnabled() && (flags&tfHybrid != 0) {
-		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires PermissionedDEX amendment")
-	}
-
 	return nil
 }
 
