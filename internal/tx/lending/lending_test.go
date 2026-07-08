@@ -18,19 +18,19 @@ var registerOnce sync.Once
 
 func registerLending() { registerOnce.Do(lending.Register) }
 
-// TestLendingAmendmentRemainsUnsupported guards the stubbed Apply
-// implementations. Every Loan* Apply returns tefINTERNAL and mutates no state
-// because the real lending semantics are not implemented. LendingProtocol MUST
-// stay SupportedNo so the engine rejects these transactions at preflight
-// (temDISABLED). Do not flip this until the transactors are fully implemented
-// (issue #1245).
-func TestLendingAmendmentRemainsUnsupported(t *testing.T) {
+// TestLendingAmendmentSupported pins LendingProtocol to rippled 3.1.0's
+// registration: Supported::yes, VoteBehavior::DefaultNo. The Loan* transactors
+// are fully implemented, so the node applies them once the amendment activates.
+func TestLendingAmendmentSupported(t *testing.T) {
 	f := amendment.GetFeature(amendment.FeatureLendingProtocol)
 	if f == nil {
 		t.Fatal("LendingProtocol must be registered")
 	}
-	if f.Supported != amendment.SupportedNo {
-		t.Errorf("LendingProtocol must stay SupportedNo while lending Apply is stubbed, got %v", f.Supported)
+	if f.Supported != amendment.SupportedYes {
+		t.Errorf("LendingProtocol must be SupportedYes, got %v", f.Supported)
+	}
+	if f.Vote != amendment.VoteDefaultNo {
+		t.Errorf("LendingProtocol must be VoteDefaultNo, got %v", f.Vote)
 	}
 }
 
