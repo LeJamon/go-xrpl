@@ -34,16 +34,23 @@ func (c *CredentialAccept) TxType() tx.Type {
 	return tx.TypeCredentialAccept
 }
 
+// GetFlagsMask reports the invalid-flag mask. rippled's
+// CredentialAccept::getFlagsMask is `fixInvalidTxFlags ? tfUniversalMask : 0`,
+// so with the amendment active any flag is rejected temINVALID_FLAG at
+// preflight0 (before the field checks and signature verification); with it off
+// the mask is zero and all flags pass.
+func (c *CredentialAccept) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.Enabled(amendment.FeatureFixInvalidTxFlags) {
+		return tx.TfUniversalMask
+	}
+	return 0
+}
+
 // Reference: rippled Credentials.cpp CredentialAccept::preflight()
-// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
-// Validate() has no access to amendment rules.
 func (c *CredentialAccept) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
-
-	// Flag check is deferred to Apply() where amendment rules are available.
-	// Reference: rippled Credentials.cpp:304-308 — gated behind fixInvalidTxFlags.
 
 	// Issuer is required and must not be zero
 	// Reference: rippled Credentials.cpp:310-314
@@ -129,14 +136,6 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) {
 
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()
 func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Check for invalid flags, gated behind fixInvalidTxFlags
-	// Reference: rippled Credentials.cpp:304-308
-	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
-		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return ter.TemINVALID_FLAG
-		}
-	}
-
 	ctx.Log.Trace("credential accept apply",
 		"account", c.Account,
 		"issuer", c.Issuer,
