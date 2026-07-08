@@ -85,7 +85,7 @@ func (n *NFTokenCancelOffer) Flatten() (map[string]any, error) {
 }
 
 func (n *NFTokenCancelOffer) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	return nil
 }
 
 // Reference: rippled NFTokenCancelOffer.cpp preclaim + doApply

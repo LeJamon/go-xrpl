@@ -3,7 +3,6 @@ package check
 import (
 	"encoding/hex"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -54,7 +53,7 @@ func (c *CheckCancel) Flatten() (map[string]any, error) {
 }
 
 func (c *CheckCancel) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureChecks}
+	return nil
 }
 
 // Apply implements preclaim + doApply matching rippled's CancelCheck.

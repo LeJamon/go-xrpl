@@ -28,11 +28,9 @@ func rulesDisabling(name string) *amendment.Rules {
 // PreflightRules must preserve.
 func TestEscrowCreate_PreflightPrecedence(t *testing.T) {
 	on := amendment.AllSupportedRules()
-	no1543 := rulesDisabling("fix1543")
 
-	// fix1543 gates the flag mask: on → reject stray flags; off → allow any flags.
+	// The flag mask rejects stray flags unconditionally (fix1543 retired).
 	require.Equal(t, tx.TfUniversalMask, (&EscrowCreate{}).GetFlagsMask(on))
-	require.Equal(t, uint32(0), (&EscrowCreate{}).GetFlagsMask(no1543))
 
 	// A zero non-XRP amount whose currency is also the reserved "XRP" code
 	// surfaces temBAD_AMOUNT — rippled's Issue helper checks the amount before the
@@ -63,7 +61,6 @@ func TestEscrowFinish_PreflightPrecedence(t *testing.T) {
 	noCreds := rulesDisabling("Credentials")
 
 	require.Equal(t, tx.TfUniversalMask, (&EscrowFinish{}).GetFlagsMask(on))
-	require.Equal(t, uint32(0), (&EscrowFinish{}).GetFlagsMask(rulesDisabling("fix1543")))
 
 	// A CredentialIDs-bearing EscrowFinish that is ALSO shape-malformed (duplicate
 	// IDs) and carries a Condition without a Fulfillment.
@@ -97,5 +94,4 @@ func TestEscrowFinish_PreflightPrecedence(t *testing.T) {
 // TestEscrowCancel_PreflightPrecedence pins the EscrowCancel mask-position finding.
 func TestEscrowCancel_PreflightPrecedence(t *testing.T) {
 	require.Equal(t, tx.TfUniversalMask, (&EscrowCancel{}).GetFlagsMask(amendment.AllSupportedRules()))
-	require.Equal(t, uint32(0), (&EscrowCancel{}).GetFlagsMask(rulesDisabling("fix1543")))
 }

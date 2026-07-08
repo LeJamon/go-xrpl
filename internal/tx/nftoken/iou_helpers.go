@@ -164,10 +164,9 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter
 	return tx.RippleCredit(view, from, issuerID, amount)
 }
 
-// payIOU wraps accountSendIOU with post-hoc balance validation.
-// With fixNonFungibleTokensV1_2, after the payment is processed, it checks that
-// neither party's balance went negative (which would indicate insufficient funds
-// to cover the IOU transfer rate).
+// payIOU wraps accountSendIOU with post-hoc balance validation: after the
+// payment is processed, it checks that neither party's balance went negative
+// (which would indicate insufficient funds to cover the IOU transfer rate).
 // Reference: rippled NFTokenAcceptOffer.cpp pay()
 func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
@@ -176,9 +175,6 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Resul
 
 	result := accountSendIOU(ctx.View, from, to, amount)
 
-	if !ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-		return result
-	}
 	if result != ter.TesSUCCESS {
 		return result
 	}
@@ -228,42 +224,6 @@ func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.A
 	}
 
 	return balance.Signum()
-}
-
-// accountHoldsIOU returns the IOU balance without the issuer exception.
-// This matches rippled's accountHolds behavior: the issuer is NOT treated as
-// having unlimited funds (unlike AccountFunds).
-// Used for pre-fixNonFungibleTokensV1_2 fund checks.
-func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) tx.Amount {
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	// NO issuer exception here (unlike AccountFunds)
-
-	trustLineKey := keylet.Line(accountID, issuerID, amount.Currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
-	balance := rs.Balance
-	if !accountIsLow {
-		balance = balance.Negate()
-	}
-
-	if balance.Signum() <= 0 {
-		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
-	}
-
-	return state.NewIssuedAmountFromValue(balance.IOU().Mantissa(), balance.IOU().Exponent(), amount.Currency, amount.Issuer)
 }
 
 // checkIssuerTrustLineForAccept checks that the NFT issuer has a trust line for the

@@ -1,7 +1,6 @@
 package check
 
 import (
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -90,7 +89,7 @@ func (c *CheckCreate) Flatten() (map[string]any, error) {
 }
 
 func (c *CheckCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureChecks}
+	return nil
 }
 
 // Apply implements preclaim + doApply matching rippled's CreateCheck.
@@ -112,11 +111,8 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Check DisallowIncoming flag on destination
 	// Reference: CreateCheck.cpp L93-98
-	rules := ctx.Rules()
-	if rules.Enabled(amendment.FeatureDisallowIncoming) {
-		if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
-			return ter.TecNO_PERMISSION
-		}
+	if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Check RequireDestTag on destination

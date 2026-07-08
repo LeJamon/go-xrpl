@@ -33,9 +33,6 @@ const (
 	// maxDeletableTokenOfferEntries is the max offers to delete on burn
 	maxDeletableTokenOfferEntries = 500
 
-	// maxInt is used as unlimited limit for pre-amendment offer deletion
-	maxInt = int(^uint(0) >> 1)
-
 	// maxTokenOfferCancelCount is the max offers that can be cancelled in one tx
 	maxTokenOfferCancelCount = 500
 )

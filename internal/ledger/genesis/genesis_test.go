@@ -312,10 +312,14 @@ func TestGenesisHashConformance(t *testing.T) {
 			t.Fatalf("genesis creation failed: %v", err)
 		}
 
-		// Verified hashes for standard genesis with default amendments and legacy fees.
-		// Includes fixCleanup3_1_3 (VoteDefaultYes), added to the default genesis set.
-		expectedAccountHash := "b3531a7a6476e648c5046bdcf06295a78e073cb0c7255ae5866c6b6469a119b5"
-		expectedLedgerHash := "765d2365e1fa9f3abcff5c838dc3d251aa8bb5ae2ff44cc2fc5b8690b5cb0ec3"
+		// Verified hashes for standard genesis with default amendments and legacy
+		// fees. After the rippled 3.2.0 retirement wave the default genesis set is
+		// the three still-active VoteDefaultYes fixes (fixCleanup3_1_3,
+		// fixAMMOverflowOffer, fixRemoveNFTokenAutoTrustLine); the 36 retired
+		// amendments are permanently enabled but no longer voted, so they drop out
+		// of the genesis Amendments object (same serializer, smaller set).
+		expectedAccountHash := "109663ecf9d70d74fb8e0db85cc30b738f100c32274c6aa6362194c86363eef8"
+		expectedLedgerHash := "c5592320a07ec0f0b84b01972d049b5f6b89fc71a72adbe217470899762b9a7b"
 
 		gotAccountHash := hex.EncodeToString(gen.Header.AccountHash[:])
 		gotLedgerHash := hex.EncodeToString(gen.Header.Hash[:])
