@@ -188,7 +188,7 @@ func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
 			return 0
 		}
 		guardNativeOffset(offset)
-		drops := XRPLNumber{mantissa: int64(amount), exponent: offset}.ToInt64WithMode(RoundToNearest)
+		drops := newXRPLNumberRaw(int64(amount), offset).ToInt64WithMode(RoundToNearest)
 		guardNativeDrops(drops)
 		return drops
 	}

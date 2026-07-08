@@ -26,6 +26,7 @@ Total: 104 amendments.
 | `DepositAuth` | yes | yes |
 | `DepositPreauth` | yes | yes |
 | `DisallowIncoming` | yes | no |
+| `DynamicMPT` | no | no |
 | `DynamicNFT` | yes | no |
 | `EnforceInvariants` | yes | no |
 | `Escrow` | yes | no |

@@ -31,6 +31,7 @@ var (
 	FeatureFixBatchInnerSigs             = registerFix("fixBatchInnerSigs", SupportedNo, VoteDefaultNo)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)
+	FeatureDynamicMPT                    = registerFeature("DynamicMPT", SupportedNo, VoteDefaultNo)
 	FeatureFixDelegateV1_1               = registerFix("fixDelegateV1_1", SupportedNo, VoteDefaultNo)
 	FeatureFixTokenEscrowV1              = registerFix("fixTokenEscrowV1", SupportedYes, VoteDefaultNo)
 	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedYes, VoteDefaultNo)

@@ -136,8 +136,8 @@ func (v *IOUAmountValue) normalizeRounded(mode RoundingMode) {
 	// Reference: IOUAmount.cpp lines 83-93
 	if GetNumberSwitchover() {
 		n := NewXRPLNumberRounded(v.mantissa, v.exponent, mode)
-		v.mantissa = n.mantissa
-		v.exponent = n.exponent
+		v.mantissa = n.Mantissa()
+		v.exponent = n.Exponent()
 		if v.exponent > MaxExponent {
 			panic("IOUAmount overflow")
 		}
