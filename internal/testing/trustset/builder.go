@@ -120,6 +120,18 @@ func (b *TrustSetBuilder) ClearFreeze() *TrustSetBuilder {
 	return b
 }
 
+// DeepFreeze deep-freezes this trust line (requires featureDeepFreeze).
+func (b *TrustSetBuilder) DeepFreeze() *TrustSetBuilder {
+	b.flags |= trustsettx.TrustSetFlagSetDeepFreeze
+	return b
+}
+
+// ClearDeepFreeze clears the deep-freeze flag on this trust line.
+func (b *TrustSetBuilder) ClearDeepFreeze() *TrustSetBuilder {
+	b.flags |= trustsettx.TrustSetFlagClearDeepFreeze
+	return b
+}
+
 // Build constructs the TrustSet transaction.
 func (b *TrustSetBuilder) Build() tx.Transaction {
 	ts := trustsettx.NewTrustSet(b.account.Address, b.limitAmount)
