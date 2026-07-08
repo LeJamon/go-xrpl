@@ -143,9 +143,16 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return ter.TefINTERNAL
 	}
 
-	// Ambiguous: issuer-is-owner must name the asset explicitly.
-	if v.Amount == nil && !isNativeAsset(vd.Asset) && !vd.AssetIsMPT && vd.Asset.Issuer == v.Account {
-		return ter.TecWRONG_ASSET
+	// Ambiguous: when the vault asset's issuer is the vault owner, the clawback
+	// must name the asset explicitly.
+	if v.Amount == nil && !isNativeAsset(vd.Asset) && !vd.AssetIsMPT {
+		ownerAddr, oerr := state.EncodeAccountID(vd.Owner)
+		if oerr != nil {
+			return ter.TefINTERNAL
+		}
+		if vd.Asset.Issuer == ownerAddr {
+			return ter.TecWRONG_ASSET
+		}
 	}
 
 	if v.clawsBackShares(vd, accountID) {

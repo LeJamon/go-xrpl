@@ -84,7 +84,7 @@ func SendAsset(ctx *tx.ApplyContext, from, to [20]byte, asset tx.Asset, amountN 
 		return sendMPTAsset(ctx, id, from, to, uint64(amountN.ToInt64WithMode(state.RoundTowardsZero)))
 	}
 	amt := state.NewIssuedAmountFromValue(amountN.Mantissa(), amountN.Exponent(), asset.Currency, asset.Issuer)
-	return tx.RippleCredit(ctx.View, from, to, amt)
+	return tx.RippleSendIOU(ctx.View, from, to, amt, true)
 }
 
 // adjustXRPBalance adds delta drops to an account, modifying ctx.Account for the
