@@ -73,7 +73,7 @@ func (d *DepositPreauth) TxType() tx.Type {
 }
 
 func (d *DepositPreauth) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureDepositPreauth}
+	return nil
 }
 
 // CheckExtraFeatures gates the credential-based forms on the Credentials

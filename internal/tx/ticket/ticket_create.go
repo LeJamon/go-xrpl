@@ -28,10 +28,8 @@ func (t *TicketCreate) TxType() tx.Type {
 	return tx.TypeTicketCreate
 }
 
-// RequiredAmendments returns amendments required for TicketCreate.
-// Reference: rippled CreateTicket.cpp preflight() — temDISABLED if !featureTicketBatch
 func (t *TicketCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureTicketBatch}
+	return nil
 }
 
 // GetFlagsMask adopts the engine FlagsMasker seam. CreateTicket defines no

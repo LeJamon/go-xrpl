@@ -55,8 +55,7 @@ func (s *SignerListSet) Validate() error {
 	// determineOperation: a non-zero quorum with signer entries is a "set"; a
 	// zero quorum with no entries is a "destroy". Any other combination is
 	// malformed. The signer-entry validation (counts, weights, duplicates,
-	// quorum, WalletLocator) is amendment-aware and runs in Apply via
-	// validateQuorumAndSignerEntries — Validate() has no access to rules.
+	// quorum) runs in PreflightRules via validateQuorumAndSignerEntries.
 	// Reference: rippled SetSignerList.cpp determineOperation()
 	hasEntries := len(s.SignerEntries) > 0
 	switch {
@@ -80,33 +79,26 @@ func (s *SignerListSet) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return 0
 }
 
-// PreflightRules runs the amendment-aware signer-entry validation for a set
-// operation. rippled runs validateQuorumAndSignerEntries in the preflight body;
-// Validate() only classifies set vs destroy, so a non-zero quorum reaching here
-// is a set (the malformed combinations are already rejected).
-// Reference: rippled SetSignerList.cpp preflight() → validateQuorumAndSignerEntries.
+// PreflightRules runs the signer-entry validation for a set operation. rippled
+// runs validateQuorumAndSignerEntries in the preflight body; Validate() only
+// classifies set vs destroy, so a non-zero quorum reaching here is a set (the
+// malformed combinations are already rejected).
 func (s *SignerListSet) PreflightRules(rules *amendment.Rules) error {
 	if s.SignerQuorum == 0 {
 		return nil
 	}
-	if r := s.validateQuorumAndSignerEntries(rules.Enabled(amendment.FeatureExpandedSignerList)); r != ter.TesSUCCESS {
+	if r := s.validateQuorumAndSignerEntries(); r != ter.TesSUCCESS {
 		return ter.Errorf(r, "invalid signer entries")
 	}
 	return nil
 }
 
-// validateQuorumAndSignerEntries performs the amendment-aware validation rippled
-// runs in preflight: entry-count bounds (8 without featureExpandedSignerList, 32
-// with), no duplicates, positive weights, no self-reference, WalletLocator only
-// when the amendment is enabled, and a reachable quorum. The check order matches
+// validateQuorumAndSignerEntries performs the signer-entry validation rippled
+// runs in preflight: entry-count bounds (1..32), no duplicates, positive
+// weights, no self-reference, and a reachable quorum. The check order matches
 // rippled so a transaction malformed in more than one way reports the same TER.
-// Reference: rippled SetSignerList.cpp:260-330 validateQuorumAndSignerEntries
-func (s *SignerListSet) validateQuorumAndSignerEntries(expandedSignerList bool) ter.Result {
-	maxEntries := 32
-	if !expandedSignerList {
-		maxEntries = 8
-	}
-	if len(s.SignerEntries) < 1 || len(s.SignerEntries) > maxEntries {
+func (s *SignerListSet) validateQuorumAndSignerEntries() ter.Result {
+	if len(s.SignerEntries) < 1 || len(s.SignerEntries) > 32 {
 		return ter.TemMALFORMED
 	}
 
@@ -126,9 +118,6 @@ func (s *SignerListSet) validateQuorumAndSignerEntries(expandedSignerList bool) 
 		totalWeight += uint64(e.SignerEntry.SignerWeight)
 		if e.SignerEntry.Account == s.Account {
 			return ter.TemBAD_SIGNER
-		}
-		if e.SignerEntry.WalletLocator != "" && !expandedSignerList {
-			return ter.TemMALFORMED
 		}
 	}
 
@@ -183,12 +172,11 @@ func (s *SetRegularKey) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return tx.TfUniversalMask
 }
 
-// PreflightRules rejects setting the regular key to the account's own address
-// once fixMasterKeyAsRegularKey is active, before any ledger-state check.
+// PreflightRules rejects setting the regular key to the account's own address,
+// before any ledger-state check.
 // Reference: rippled SetRegularKey.cpp preflight().
 func (s *SetRegularKey) PreflightRules(rules *amendment.Rules) error {
-	if rules.Enabled(amendment.FeatureFixMasterKeyAsRegularKey) &&
-		s.RegularKey != "" && s.RegularKey == s.Account {
+	if s.RegularKey != "" && s.RegularKey == s.Account {
 		return ter.Errorf(ter.TemBAD_REGKEY, "regular key cannot be the master key")
 	}
 	return nil
@@ -306,14 +294,6 @@ func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey ke
 	return ter.TesSUCCESS
 }
 
-// signerCountBasedOwnerCountDelta computes the OwnerCount cost for a signer list
-// when featureMultiSignReserve is NOT enabled.
-// The rule is: 2 base + 1 per signer entry.
-// Reference: rippled SetSignerList.cpp signerCountBasedOwnerCountDelta()
-func signerCountBasedOwnerCountDelta(entryCount int) int {
-	return 2 + entryCount
-}
-
 // Reference: rippled SetSignerList.cpp preflight() + doApply(), replaceSignerList(), destroySignerList()
 func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("signer list set apply",
@@ -346,10 +326,9 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	// --- Replace (or create) signer list ---
 	// Reference: rippled SetSignerList.cpp replaceSignerList()
 
-	// Signer-entry validity (counts, weights, duplicates, quorum, WalletLocator)
-	// is enforced in PreflightRules — the outer path and preflightInner both run
-	// it, so by the time Apply runs the entries are known valid.
-	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)
+	// Signer-entry validity (counts, weights, duplicates, quorum) is enforced in
+	// PreflightRules — the outer path and preflightInner both run it, so by the
+	// time Apply runs the entries are known valid.
 
 	// Preemptively remove any old signer list. May reduce the reserve,
 	// so this is done before checking the reserve.
@@ -360,14 +339,10 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Compute new reserve. Verify the account has funds to meet the reserve.
 	oldOwnerCount := ctx.Account.OwnerCount
 
-	// The required reserve changes based on featureMultiSignReserve.
-	// Reference: rippled SetSignerList.cpp:359-366
+	// A signer list costs a flat one owner-reserve unit and carries
+	// lsfOneOwnerCount.
 	addedOwnerCount := 1
 	flags := state.LsfOneOwnerCount
-	if !ctx.Rules().Enabled(amendment.FeatureMultiSignReserve) {
-		addedOwnerCount = signerCountBasedOwnerCountDelta(len(s.SignerEntries))
-		flags = 0
-	}
 
 	newReserve := ctx.AccountReserve(oldOwnerCount + uint32(addedOwnerCount))
 
@@ -419,7 +394,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		owner = &ctx.AccountID
 	}
 
-	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, flags, expandedSignerList, dirResult.Page, owner)
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, flags, true, dirResult.Page, owner)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return ter.TefINTERNAL
