@@ -345,22 +345,23 @@ func TestOfferCancelValidation(t *testing.T) {
 	}
 }
 
-// TestOfferCancelFlagValidation verifies OfferCancel rejects any non-universal
-// flag, matching rippled CancelOffer::preflight (temINVALID_FLAG).
+// TestOfferCancelFlagValidation verifies OfferCancel's invalid-flags mask. The
+// mask itself is enforced by the engine at preflight0 (FlagsMasker); Validate no
+// longer checks flags. Matches rippled's base Transactor::getFlagsMask (universal).
 func TestOfferCancelFlagValidation(t *testing.T) {
-	t.Run("non-universal flag rejected", func(t *testing.T) {
-		o := NewOfferCancel("rAlice", 12345)
-		o.SetFlags(0x00000001)
-		err := o.Validate()
-		if err == nil || err.Error() != "temINVALID_FLAG: invalid flags set" {
-			t.Errorf("expected temINVALID_FLAG, got %v", err)
+	o := NewOfferCancel("rAlice", 12345)
+	mask := o.GetFlagsMask(nil)
+	if mask != tx.TfUniversalMask {
+		t.Fatalf("GetFlagsMask = %#x, want tfUniversalMask %#x", mask, tx.TfUniversalMask)
+	}
+	t.Run("non-universal flag intersects mask", func(t *testing.T) {
+		if uint32(0x00000001)&mask == 0 {
+			t.Errorf("non-universal flag 0x1 should intersect the invalid mask")
 		}
 	})
-	t.Run("universal flag accepted", func(t *testing.T) {
-		o := NewOfferCancel("rAlice", 12345)
-		o.SetFlags(tx.TfFullyCanonicalSig)
-		if err := o.Validate(); err != nil {
-			t.Errorf("expected no error for universal flag, got %v", err)
+	t.Run("universal flag outside mask", func(t *testing.T) {
+		if tx.TfFullyCanonicalSig&mask != 0 {
+			t.Errorf("tfFullyCanonicalSig should not intersect the invalid mask")
 		}
 	})
 }
