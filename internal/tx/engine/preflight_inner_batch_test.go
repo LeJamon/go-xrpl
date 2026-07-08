@@ -75,3 +75,54 @@ func TestPreflightInnerBatchFlag_AbsentFlag(t *testing.T) {
 		t.Fatalf("preflightInnerBatchFlag(no flag) = %v, want TesSUCCESS", got)
 	}
 }
+
+// rulesPreflightTx adopts RulesPreflighter with a fixed verdict.
+type rulesPreflightTx struct {
+	*txcore.BaseTx
+	err error
+}
+
+func (t *rulesPreflightTx) PreflightRules(*amendment.Rules) error { return t.err }
+
+// TestPreflightInner_RunsPerTypeSeams pins that inner-batch preflight runs the
+// full per-type preflight body, not just Validate(). rippled routes inner txs
+// through the same invokePreflight (Batch.cpp → preflight(stx, tapBATCH)), so
+// FlagsMasker, CheckExtraFeatures and RulesPreflighter all apply — otherwise a
+// type carrying half its preflight in PreflightRules (Clawback, MPTokenIssuanceSet)
+// would let a malformed inner slip through to apply.
+func TestPreflightInner_RunsPerTypeSeams(t *testing.T) {
+	e := preflightEngine(allRules())
+
+	t.Run("PreflightRules runs for inner tx", func(t *testing.T) {
+		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+		tx := &rulesPreflightTx{BaseTx: base, err: ter.Errorf(ter.TemMALFORMED, "bad")}
+		if got := e.preflightInner(tx); got != ter.TemMALFORMED {
+			t.Fatalf("preflightInner = %v, want TemMALFORMED", got)
+		}
+	})
+
+	t.Run("FlagsMasker runs for inner tx", func(t *testing.T) {
+		bit := uint32(0x00010000)
+		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+		base.Flags = &bit
+		tx := &flagMaskTx{BaseTx: base, mask: bit}
+		if got := e.preflightInner(tx); got != ter.TemINVALID_FLAG {
+			t.Fatalf("preflightInner = %v, want TemINVALID_FLAG", got)
+		}
+	})
+
+	t.Run("CheckExtraFeatures runs for inner tx", func(t *testing.T) {
+		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+		tx := &extraFeaturesTx{BaseTx: base, err: ter.Errorf(ter.TemDISABLED, "disabled")}
+		if got := e.preflightInner(tx); got != ter.TemDISABLED {
+			t.Fatalf("preflightInner = %v, want TemDISABLED", got)
+		}
+	})
+
+	t.Run("clean inner tx passes", func(t *testing.T) {
+		base := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
+		if got := e.preflightInner(base); got != ter.TesSUCCESS {
+			t.Fatalf("preflightInner = %v, want TesSUCCESS", got)
+		}
+	})
+}

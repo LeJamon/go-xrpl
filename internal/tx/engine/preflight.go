@@ -202,11 +202,19 @@ type BatchOuter interface {
 	InnerTransactions() []txcore.Transaction
 }
 
-// preflightInner runs the common structural checks for an inner batch tx.
-// Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
-// Fee/signature/multi-sign/inner-flag rejections are skipped here because inner
-// txs carry Fee=0, no signature, no multi-signers, and tfInnerBatchTxn set (all
-// validated by Batch.Validate()).
+// preflightInner runs the structural checks for an inner batch tx. rippled routes
+// inner txs through the SAME invokePreflight as standalone txs (Batch.cpp:338 →
+// preflight(stx, tapBATCH)): the amendment gate, checkExtraFeatures, preflight0's
+// flags mask, and the full T::preflight body all run — tapBATCH only makes
+// preflight1/preflight2 skip the fee and signature checks. So this must run every
+// per-type preflight seam (FlagsMasker, CheckExtraFeatures, RulesPreflighter), not
+// just Validate(): a type that carries part of its preflight body in PreflightRules
+// (e.g. Clawback, MPTokenIssuanceSet) would otherwise have that half silently
+// skipped for an inner tx, letting a malformed inner apply. Any failure collapses
+// to temINVALID_INNER_BATCH at the call site, so the intra-order here is immaterial.
+// Fee/signature/multi-sign/inner-flag rejections stay skipped (inner txs carry
+// Fee=0, no signature, no multi-signers, tfInnerBatchTxn set — all validated by
+// Batch.Validate()).
 func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	common := innerTx.GetCommon()
 	rules := e.rules()
@@ -221,6 +229,16 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 			return ter.TemDISABLED
 		}
 	}
+	if efc, ok := innerTx.(txcore.ExtraFeaturesChecker); ok {
+		if err := efc.CheckExtraFeatures(rules); err != nil {
+			return parseValidationError(err)
+		}
+	}
+	if fm, ok := innerTx.(txcore.FlagsMasker); ok {
+		if common.GetFlags()&fm.GetFlagsMask(rules) != 0 {
+			return ter.TemINVALID_FLAG
+		}
+	}
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
 	}
@@ -232,6 +250,11 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	}
 	if err := innerTx.Validate(); err != nil {
 		return parseValidationError(err)
+	}
+	if rp, ok := innerTx.(txcore.RulesPreflighter); ok {
+		if err := rp.PreflightRules(rules); err != nil {
+			return parseValidationError(err)
+		}
 	}
 	return ter.TesSUCCESS
 }
