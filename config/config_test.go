@@ -330,6 +330,32 @@ func validCompleteConfig() *Config {
 	}
 }
 
+func TestOverlayConfig_VerifyEndpointsValidation(t *testing.T) {
+	cases := []struct {
+		name    string
+		value   *int
+		wantErr bool
+	}{
+		{"absent", nil, false},
+		{"zero", intPtr(0), false},
+		{"one", intPtr(1), false},
+		{"two_rejected", intPtr(2), true},
+		{"negative_rejected", intPtr(-1), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := OverlayConfig{VerifyEndpoints: tc.value}
+			err := o.Validate()
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), "verify_endpoints")
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestConfigValidation_CompleteConfig(t *testing.T) {
 	assert.NoError(t, ValidateConfig(validCompleteConfig()))
 }

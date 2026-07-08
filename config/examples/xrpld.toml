@@ -162,6 +162,9 @@ journal_size_limit = 1582080
 max_unknown_time = 600   # seconds (300-1800)
 max_diverged_time = 300  # seconds (60-900)
 # public_ip = "203.0.113.7"
+# verify_endpoints = 1   # 0|1 (default 1); 0 accepts non-public gossip
+                         # addresses for local dev — a security risk on
+                         # a public network
 
 [transaction_queue]
 ledgers_in_queue = 20

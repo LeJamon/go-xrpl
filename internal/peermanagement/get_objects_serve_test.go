@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,6 +94,38 @@ func TestServeGetObjects_FetchesAndReplies(t *testing.T) {
 
 	// A generic by-hash request is charged feeModerateBurdenPeer.
 	assert.Positive(t, peer.Load(), "serving a by-hash request must charge the peer")
+}
+
+// TestServeGetObjects_TruncatesAtReplyCap pins rippled PeerImp.cpp:2551-2562
+// (#6110): a query for more objects than Tuning::hardMaxReplyNodes is
+// truncated to the cap, closing a per-object NodeStore-fetch DoS. The
+// provider is consulted only up to the cap and the reply never exceeds it.
+func TestServeGetObjects_TruncatesAtReplyCap(t *testing.T) {
+	lookups := 0
+	o := &Overlay{
+		peers: make(map[PeerID]*Peer),
+		nodeObjectProvider: func([32]byte) ([]byte, bool) {
+			lookups++
+			return []byte{0x01}, true
+		},
+	}
+	peer := newServeTestPeer(t, PeerID(404))
+	o.peers[peer.ID()] = peer
+
+	const requested = hardMaxReplyNodes + 5
+	objs := make([]message.IndexedObject, requested)
+	for i := range objs {
+		var h [32]byte
+		binary.BigEndian.PutUint32(h[:], uint32(i+1))
+		objs[i] = message.IndexedObject{Hash: h[:]}
+	}
+	req := &message.GetObjectByHash{Query: true, Objects: objs}
+	o.serveGetObjects(peer.ID(), req)
+
+	reply := decodeGetObjectsReply(t, peer)
+	assert.Len(t, reply.Objects, hardMaxReplyNodes, "reply must be capped at hardMaxReplyNodes")
+	assert.Equal(t, hardMaxReplyNodes, lookups, "provider consulted only up to the cap")
+	assert.Positive(t, peer.Load(), "serving + truncation charge the peer")
 }
 
 // TestServeGetObjects_AlwaysRepliesEvenWhenEmpty verifies the rippled
