@@ -93,6 +93,15 @@ func (p *PaymentChannelFund) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return 0
 }
 
+// PreflightRules rejects a zero Channel once fixCleanup3_2_0 is enabled: a zero
+// hash cannot be a ledger key.
+func (p *PaymentChannelFund) PreflightRules(rules *amendment.Rules) error {
+	if rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
+		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
+	}
+	return nil
+}
+
 // Reference: rippled PayChan.cpp PayChanFund::doApply()
 func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("payment channel fund apply",
@@ -129,9 +138,10 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Auto-close check: if CancelAfter or Expiration has passed
 	// Reference: rippled PayChan.cpp doApply() lines 345-360
+	rules := ctx.Rules()
 	closeTime := ctx.Config.ParentCloseTime
-	if (channel.CancelAfter > 0 && closeTime >= channel.CancelAfter) ||
-		(channel.Expiration > 0 && closeTime >= channel.Expiration) {
+	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
+		isChannelExpired(rules, closeTime, channel.Expiration) {
 		return closeChannel(ctx, channelKey, channel)
 	}
 
@@ -146,7 +156,7 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled PayChan.cpp doApply() lines 370-381
 	if p.Expiration != nil {
 		// minExpiration = closeTime + settleDelay
-		minExpiration := closeTime + channel.SettleDelay
+		minExpiration := saturatingAdd(rules, closeTime, channel.SettleDelay)
 
 		// If channel already has expiration and it's less than minExpiration, use it
 		if channel.Expiration > 0 && channel.Expiration < minExpiration {
@@ -155,6 +165,9 @@ func (p *PaymentChannelFund) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// New expiration must be >= minExpiration
 		if *p.Expiration < minExpiration {
+			if rules.FixCleanup3_2_0Enabled() {
+				return ter.TecNO_PERMISSION
+			}
 			return ter.TemBAD_EXPIRATION
 		}
 

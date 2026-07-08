@@ -176,6 +176,15 @@ func (p *PaymentChannelClaim) CheckExtraFeatures(rules *amendment.Rules) error {
 	return nil
 }
 
+// PreflightRules rejects a zero Channel once fixCleanup3_2_0 is enabled: a zero
+// hash cannot be a ledger key.
+func (p *PaymentChannelClaim) PreflightRules(rules *amendment.Rules) error {
+	if rules.FixCleanup3_2_0Enabled() && isZeroChannel(p.Channel) {
+		return ter.Errorf(ter.TemMALFORMED, "Channel must not be zero")
+	}
+	return nil
+}
+
 // SetClose sets the close flag
 func (p *PaymentChannelClaim) SetClose() {
 	flags := p.GetFlags() | tfPayChanClose
@@ -249,8 +258,8 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Auto-close on expiration
 	// Reference: rippled PayChan.cpp doApply() lines 466-469
 	closeTime := ctx.Config.ParentCloseTime
-	if (channel.CancelAfter > 0 && closeTime >= channel.CancelAfter) ||
-		(channel.Expiration > 0 && closeTime >= channel.Expiration) {
+	if isChannelExpired(rules, closeTime, channel.CancelAfter) ||
+		isChannelExpired(rules, closeTime, channel.Expiration) {
 		return closeChannel(ctx, channelKey, channel)
 	}
 
@@ -277,6 +286,9 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 		// Destination claiming without signature
 		// Reference: rippled PayChan.cpp doApply() line 529
 		if isDest && !isOwner && p.Signature == "" {
+			if rules.FixCleanup3_2_0Enabled() {
+				return ter.TecNO_PERMISSION
+			}
 			return ter.TemBAD_SIGNATURE
 		}
 
@@ -285,6 +297,9 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 		// ledger state. Reference: rippled PayChan.cpp doApply() lines 532-537.
 		if p.Signature != "" {
 			if !strings.EqualFold(p.PublicKey, channel.PublicKey) {
+				if rules.FixCleanup3_2_0Enabled() {
+					return ter.TecNO_PERMISSION
+				}
 				return ter.TemBAD_SIGNER
 			}
 		}
@@ -388,7 +403,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 
 		// Owner closing: set expiration to closeTime + SettleDelay
-		settleExpiration := closeTime + channel.SettleDelay
+		settleExpiration := saturatingAdd(rules, closeTime, channel.SettleDelay)
 		if channel.Expiration == 0 || channel.Expiration > settleExpiration {
 			channel.Expiration = settleExpiration
 			channelChanged = true
