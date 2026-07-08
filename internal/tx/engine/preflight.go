@@ -3,12 +3,14 @@ package engine
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/sigcache"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -112,6 +114,13 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 	// preflight1 (which itself runs preflight0).
 	if result := e.preflight1(tx, common, rules); result != ter.TesSUCCESS {
 		return result
+	}
+
+	// preflightUniversal — after preflight1 and before T::preflight, reject a
+	// transaction carrying a non-canonical native or MPT amount in any field
+	// (rippled Transactor::preflightUniversal, gated on fixCleanup3_2_0).
+	if rules.FixCleanup3_2_0Enabled() && hasInvalidAmount(tx) {
+		return ter.TemBAD_AMOUNT
 	}
 
 	// T::preflight — the tx-type-specific body: the rules-free Validate() plus
@@ -598,6 +607,30 @@ func PrewarmSignature(txn txcore.Transaction, rules *amendment.Rules) {
 			sigcache.MarkVerified(txID)
 		}
 	}
+}
+
+// hasInvalidAmount reports whether the transaction carries a non-canonical
+// native or MPT amount in any field, mirroring rippled's hasInvalidAmount scan
+// of the serialized STTx. The transaction is normalised to its canonical JSON
+// map (each amount rendered as a drops string or {value, ...} object) so the
+// scan sees a value that go-xrpl's amount-capping binary codec would otherwise
+// refuse to round-trip. A flatten/marshal failure yields false: the universal
+// check never manufactures a rejection it cannot substantiate, leaving any real
+// malformation to the per-type preflight.
+func hasInvalidAmount(tx txcore.Transaction) bool {
+	flat, err := tx.Flatten()
+	if err != nil {
+		return false
+	}
+	b, err := json.Marshal(flat)
+	if err != nil {
+		return false
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return false
+	}
+	return invariants.HasInvalidAmount(m)
 }
 
 // parseValidationError maps a Validate() error to a TER result code.
