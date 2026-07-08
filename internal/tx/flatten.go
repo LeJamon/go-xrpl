@@ -268,6 +268,12 @@ func flattenAmount(a Amount) any {
 // IOU assets have "currency" and "issuer" keys.
 // Reference: rippled Issue type serialization
 func flattenAsset(a Asset) map[string]any {
+	// MPT assets are identified solely by their issuance ID.
+	if a.MPTIssuanceID != "" {
+		return map[string]any{
+			"mpt_issuance_id": a.MPTIssuanceID,
+		}
+	}
 	// XRP is represented by currency "XRP" with no issuer
 	if a.Currency == "" || a.Currency == "XRP" {
 		return map[string]any{

@@ -15,11 +15,31 @@ import (
 )
 
 // preclaim validates the transaction against the current ledger state.
-// Mirrors rippled's Transactor::operator()() pre-application pipeline:
+// Mirrors rippled's invoke_preclaim pipeline (applySteps.cpp, PR #6192):
 //
-//	checkSeqProxy → checkPriorTxAndLastLedger → checkFee → checkPermission →
-//	checkSign (+ checkBatchSign) → tx-type preclaim.
-func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
+//	checkSeqProxy → checkPriorTxAndLastLedger → checkSign (+ checkBatchSign) →
+//	checkFee → checkPermission → tx-type preclaim.
+//
+// The signature stage precedes the fee and permission checks so that no
+// fee-charging TER is ever returned before the signature has been verified.
+func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Result) {
+	// Any panic reachable from adversarial ledger state — most commonly an
+	// IOUAmount / XRPLNumber arithmetic overflow while reading a crafted balance
+	// or amount — is recovered and surfaced as tefEXCEPTION so it can never
+	// terminate the node. The ledger-mutation invariant violations that rippled
+	// converted to catchable exceptions in 3.1.2 (ApplyStateTable / ApplyView
+	// directory ops) are reachable only from preclaim/doApply contexts; doApply
+	// is already covered by invokeApply. Mirrors rippled applySteps.cpp
+	// preclaim() wrapping invoke_preclaim in try{...}catch(std::exception){
+	// tefEXCEPTION }.
+	defer func() {
+		if r := recover(); r != nil {
+			e.logger.Error("transaction preclaim panic recovered, returning tefEXCEPTION",
+				"txHash", hex.EncodeToString(txHash[:]), "panic", r)
+			result = ter.TefEXCEPTION
+		}
+	}()
+
 	common := tx.GetCommon()
 
 	// Resolve and parse the source account; this is shared by all subsequent steps.
@@ -34,28 +54,36 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
 	if result := e.checkPriorTxAndLastLedger(common, account, txHash); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := e.checkFee(tx, common, account); result != ter.TesSUCCESS {
-		return result
-	}
-	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
-		return result
-	}
+
+	// The signature is verified before the fee and permission checks so that a
+	// transaction that fails both signature verification and a fee/permission
+	// check reports the signature failure. No fee-charging TER (terINSUF_FEE_B,
+	// tecNO_DELEGATE_PERMISSION, ...) may precede the signature check, which
+	// would risk charging a fee on an unauthorized transaction.
+	// Reference: rippled applySteps.cpp invoke_preclaim (PR #6192).
 	if result := e.checkSign(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
-
-	// Step 6: checkBatchSign — batch signer authorization
-	// Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
-	// This checks that each BatchSigner is authorized to act as their account.
-	// This runs even when SkipSignatureVerification is true because it checks
-	// authorization (account existence, master key, regular key), not crypto.
+	// checkBatchSign is part of the signature stage (rippled Batch::checkSign =
+	// Transactor::checkSign + Transactor::checkBatchSign), so it moves ahead of
+	// checkFee together with checkSign. It verifies each BatchSigner is
+	// authorized to act as their account and runs even under
+	// SkipSignatureVerification because it checks authorization (account
+	// existence, master/regular key), not crypto.
 	if bsp, ok := tx.(txcore.BatchSignerProvider); ok {
 		if result := e.checkBatchSign(bsp.GetBatchSigners()); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
-	// Step 7: Transaction-specific preclaim checks.
+	if result := e.checkFee(tx, common, account); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := e.checkPermission(tx, common, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+
+	// Transaction-specific preclaim checks.
 	// These run after all common preclaim checks and are subject to the
 	// TapRETRY gate in Apply(). tec results from preclaim are NOT applied
 	// when TapRETRY is set (likelyToClaimFee = false), matching rippled's

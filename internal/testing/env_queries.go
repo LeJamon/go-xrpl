@@ -1,6 +1,8 @@
 package testing
 
 import (
+	"encoding/hex"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/txq"
@@ -109,6 +111,23 @@ func (e *TestEnv) Exists(acc *Account) bool {
 	exists, err := e.ledger.Exists(accountKey)
 	if err != nil {
 		e.t.Fatalf("Failed to check account existence: %v", err)
+	}
+	return exists
+}
+
+// VaultExists reports whether a vault ledger entry with the given 64-char hex
+// ID exists.
+func (e *TestEnv) VaultExists(id string) bool {
+	e.t.Helper()
+	raw, err := hex.DecodeString(id)
+	if err != nil || len(raw) != 32 {
+		e.t.Fatalf("VaultExists: invalid vault id %q", id)
+	}
+	var key [32]byte
+	copy(key[:], raw)
+	exists, eerr := e.ledger.Exists(keylet.VaultByID(key))
+	if eerr != nil {
+		e.t.Fatalf("Failed to check vault existence: %v", eerr)
 	}
 	return exists
 }

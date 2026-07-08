@@ -457,6 +457,23 @@ func RpcErrorExpectedFieldHighFee(field, expectedType string) *RpcError {
 		"Invalid field '"+field+"', not "+expectedType+".")
 }
 
+// RpcErrorMalformedField reports a present-but-wrong-type selector subfield.
+// It carries a field-specific token (e.g. "malformedBroker", "malformedSeq"),
+// the rpcINVALID_PARAMS code, and rippled's expected_field_message, matching the
+// invalidFieldError path in rippled's ledger_entry field parsers.
+func RpcErrorMalformedField(token, field, expectedType string) *RpcError {
+	return NewRpcError(RpcINVALID_PARAMS, token, token,
+		"Invalid field '"+field+"', not "+expectedType+".")
+}
+
+// RpcErrorMalformedRequestMissingField reports an absent required selector
+// subfield. rippled's missingFieldError leaves the token at its "malformedRequest"
+// default and sets the message to missing_field_message.
+func RpcErrorMalformedRequestMissingField(field string) *RpcError {
+	return NewRpcError(RpcINVALID_PARAMS, "malformedRequest", "malformedRequest",
+		"Missing field '"+field+"'.")
+}
+
 // RpcErrorSigningMalformed returns an error when a transaction's signing is malformed
 // (matches rippled rpcSIGNING_MALFORMED, code 63, token "signingMalformed").
 func RpcErrorSigningMalformed() *RpcError {
