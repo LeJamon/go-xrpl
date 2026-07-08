@@ -151,6 +151,8 @@ var validLedgerEntryTypes = map[string]bool{
 	"Credential":                      true,
 	"PermissionedDomain":              true,
 	"Vault":                           true,
+	"LoanBroker":                      true,
+	"Loan":                            true,
 }
 
 // maxPermissionedDomainCredentials is the maximum number of credentials in a
@@ -215,6 +217,12 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkValidPseudoAccounts(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidLoan(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidLoanBroker(entries, view, rules)
 		},
 		func() *InvariantViolation {
 			return checkNoModifiedUnmodifiableFields(entries, rules)

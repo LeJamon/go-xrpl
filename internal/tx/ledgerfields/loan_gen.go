@@ -39,7 +39,7 @@ type Loan struct {
 	StartDate                uint32
 	PaymentInterval          uint32
 	GracePeriod              uint32
-	PreviousPaymentDate      uint32
+	PreviousPaymentDueDate   uint32
 	NextPaymentDueDate       uint32
 	PaymentRemaining         uint32
 	PeriodicPayment          any
@@ -70,7 +70,7 @@ const (
 	loanBitStartDate
 	loanBitPaymentInterval
 	loanBitGracePeriod
-	loanBitPreviousPaymentDate
+	loanBitPreviousPaymentDueDate
 	loanBitNextPaymentDueDate
 	loanBitPaymentRemaining
 	loanBitPeriodicPayment
@@ -128,8 +128,8 @@ func (l *Loan) Decode(data []byte) error {
 				l.GracePeriod = val
 				l.present |= loanBitGracePeriod
 			case 57:
-				l.PreviousPaymentDate = val
-				l.present |= loanBitPreviousPaymentDate
+				l.PreviousPaymentDueDate = val
+				l.present |= loanBitPreviousPaymentDueDate
 			case 58:
 				l.NextPaymentDueDate = val
 				l.present |= loanBitNextPaymentDueDate
@@ -311,8 +311,8 @@ func (l *Loan) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&loanBitGracePeriod != 0 && !(skipDefault && l.GracePeriod == 0) {
 		out["GracePeriod"] = l.GracePeriod
 	}
-	if l.present&loanBitPreviousPaymentDate != 0 && !(skipDefault && l.PreviousPaymentDate == 0) {
-		out["PreviousPaymentDate"] = l.PreviousPaymentDate
+	if l.present&loanBitPreviousPaymentDueDate != 0 && !(skipDefault && l.PreviousPaymentDueDate == 0) {
+		out["PreviousPaymentDueDate"] = l.PreviousPaymentDueDate
 	}
 	if l.present&loanBitNextPaymentDueDate != 0 && !(skipDefault && l.NextPaymentDueDate == 0) {
 		out["NextPaymentDueDate"] = l.NextPaymentDueDate
@@ -376,7 +376,7 @@ func (l *Loan) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "StartDate", prv.StartDate, l.StartDate, prv.present&loanBitStartDate, l.present&loanBitStartDate)
 	emitIfChangedUint32(out, "PaymentInterval", prv.PaymentInterval, l.PaymentInterval, prv.present&loanBitPaymentInterval, l.present&loanBitPaymentInterval)
 	emitIfChangedUint32(out, "GracePeriod", prv.GracePeriod, l.GracePeriod, prv.present&loanBitGracePeriod, l.present&loanBitGracePeriod)
-	emitIfChangedUint32(out, "PreviousPaymentDate", prv.PreviousPaymentDate, l.PreviousPaymentDate, prv.present&loanBitPreviousPaymentDate, l.present&loanBitPreviousPaymentDate)
+	emitIfChangedUint32(out, "PreviousPaymentDueDate", prv.PreviousPaymentDueDate, l.PreviousPaymentDueDate, prv.present&loanBitPreviousPaymentDueDate, l.present&loanBitPreviousPaymentDueDate)
 	emitIfChangedUint32(out, "NextPaymentDueDate", prv.NextPaymentDueDate, l.NextPaymentDueDate, prv.present&loanBitNextPaymentDueDate, l.present&loanBitNextPaymentDueDate)
 	emitIfChangedUint32(out, "PaymentRemaining", prv.PaymentRemaining, l.PaymentRemaining, prv.present&loanBitPaymentRemaining, l.present&loanBitPaymentRemaining)
 	emitIfChangedDeep(out, "PeriodicPayment", prv.PeriodicPayment, l.PeriodicPayment, prv.present&loanBitPeriodicPayment, l.present&loanBitPeriodicPayment)
@@ -444,8 +444,8 @@ func (l *Loan) EmitChangeOrigFields(out map[string]any) {
 	if l.present&loanBitGracePeriod != 0 {
 		out["GracePeriod"] = l.GracePeriod
 	}
-	if l.present&loanBitPreviousPaymentDate != 0 {
-		out["PreviousPaymentDate"] = l.PreviousPaymentDate
+	if l.present&loanBitPreviousPaymentDueDate != 0 {
+		out["PreviousPaymentDueDate"] = l.PreviousPaymentDueDate
 	}
 	if l.present&loanBitNextPaymentDueDate != 0 {
 		out["NextPaymentDueDate"] = l.NextPaymentDueDate
@@ -563,8 +563,8 @@ func (l *Loan) ToMap() map[string]any {
 	if l.present&loanBitGracePeriod != 0 {
 		out["GracePeriod"] = l.GracePeriod
 	}
-	if l.present&loanBitPreviousPaymentDate != 0 {
-		out["PreviousPaymentDate"] = l.PreviousPaymentDate
+	if l.present&loanBitPreviousPaymentDueDate != 0 {
+		out["PreviousPaymentDueDate"] = l.PreviousPaymentDueDate
 	}
 	if l.present&loanBitNextPaymentDueDate != 0 {
 		out["NextPaymentDueDate"] = l.NextPaymentDueDate
