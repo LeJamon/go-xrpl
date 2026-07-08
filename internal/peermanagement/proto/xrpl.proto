@@ -207,9 +207,11 @@ enum ObjectType {
 }
 
 message TMGetObjectByHash {
+    // Previously used - don't reuse.
+    reserved 3;
+
     optional ObjectType type = 1;
     optional bool query = 2;
-    uint32 seq = 3;
     bytes ledger_hash = 4;
     bool fat = 5;
     repeated TMIndexedObject objects = 6;
