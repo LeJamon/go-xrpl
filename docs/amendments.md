@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 106 amendments.
+Total: 107 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -40,6 +40,7 @@ Total: 106 amendments.
 | `InvariantsV1_1` | no | no |
 | `LendingProtocol` | no | no |
 | `MPTokensV1` | yes | no |
+| `MPTokensV2` | no | no |
 | `MultiSign` | yes | no |
 | `MultiSignReserve` | yes | yes |
 | `NFTokenMintOffer` | yes | no |

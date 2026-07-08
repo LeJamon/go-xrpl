@@ -276,6 +276,50 @@ func TestNewPathSet(t *testing.T) {
 	}
 }
 
+// TestPathSetMPTRoundTrip exercises the MPTokensV2 TypeMpt (0x40) path-element
+// bit: a step carrying an mpt_issuance_id serializes the 24-byte id and decodes
+// back to the same JSON. It also asserts the mutual-exclusion reject when both
+// currency and mpt_issuance_id are present.
+func TestPathSetMPTRoundTrip(t *testing.T) {
+	const mptID = "0102030405060708090A0B0C0D0E0F101112131415161718"
+	acct := "rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN"
+
+	input := []any{[]any{
+		map[string]any{"account": acct, "mpt_issuance_id": mptID},
+	}}
+
+	encoded, err := PathSet{}.FromJSON(input)
+	require.NoError(t, err)
+
+	// Layout: type byte (account|mpt = 0x41), 20-byte account, 24-byte id, 0x00.
+	require.Equal(t, byte(typeAccount|typeMPT), encoded[0])
+	require.Equal(t, byte(pathsetEndByte), encoded[len(encoded)-1])
+	require.Len(t, encoded, 1+20+MPTIssuanceIDByteLength+1)
+
+	parser := serdes.NewBinaryParser(encoded, definitions.Get())
+	decoded, err := PathSet{}.ToJSON(parser)
+	require.NoError(t, err)
+
+	paths, ok := decoded.([]any)
+	require.True(t, ok)
+	require.Len(t, paths, 1)
+	step := paths[0].([]any)[0].(map[string]any)
+	require.Equal(t, acct, step["account"])
+	require.Equal(t, mptID, step["mpt_issuance_id"])
+	require.Equal(t, typeAccount|typeMPT, step["type"])
+	require.Nil(t, step["currency"])
+}
+
+// TestPathSetMPTAndCurrencyRejected mirrors rippled's reject of a path element
+// carrying both a currency and an MPT id (STPathSet.cpp:95-96).
+func TestPathSetMPTAndCurrencyRejected(t *testing.T) {
+	input := []any{[]any{
+		map[string]any{"currency": "USD", "mpt_issuance_id": "0102030405060708090A0B0C0D0E0F101112131415161718"},
+	}}
+	_, err := PathSet{}.FromJSON(input)
+	require.ErrorIs(t, err, ErrBadPathElementMPTCurrency)
+}
+
 func TestParsePathStep(t *testing.T) {
 	tt := []struct {
 		name        string
@@ -286,11 +330,33 @@ func TestParsePathStep(t *testing.T) {
 	}{
 		{
 			name:     "fail - bad path element type bits",
-			dataType: 0x40,
+			dataType: 0x02,
 			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser(nil, definitions.Get())
 			},
 			expectedErr: ErrBadPathElement,
+		},
+		{
+			name:     "fail - MPT and Currency both set",
+			dataType: typeCurrency | typeMPT,
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				return serdes.NewBinaryParser(nil, definitions.Get())
+			},
+			expectedErr: ErrBadPathElementMPTCurrency,
+		},
+		{
+			name:     "pass - parse MPT path step",
+			dataType: typeMPT,
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				id := make([]byte, MPTIssuanceIDByteLength)
+				for i := range id {
+					id[i] = byte(i + 1)
+				}
+				return serdes.NewBinaryParser(id, definitions.Get())
+			},
+			expected: map[string]any{
+				"mpt_issuance_id": "0102030405060708090A0B0C0D0E0F101112131415161718",
+			},
 		},
 		{
 			name:     "fail - truncated account field",
