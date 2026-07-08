@@ -272,3 +272,26 @@ func TestDelegate_PaymentMPT(t *testing.T) {
 	mint.GetCommon().Delegate = bob.Address
 	require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(mint, bob).Code)
 }
+
+// TestDelegate_LendingNotDelegatable covers the 3.2.0 change making the
+// Lending transactions non-delegatable. LendingProtocol is enabled so the
+// rejection is the NotDelegable rule, not the missing-amendment guard.
+func TestDelegate_LendingNotDelegatable(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("PermissionDelegationV1_1")
+	env.EnableFeature("LendingProtocol")
+	gw := jtx.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	env.Fund(gw, alice)
+	env.Close()
+
+	loanPerms := []string{
+		"LoanBrokerSet", "LoanBrokerDelete", "LoanBrokerCoverDeposit",
+		"LoanBrokerCoverWithdraw", "LoanBrokerCoverClawback",
+		"LoanSet", "LoanDelete", "LoanManage", "LoanPay",
+	}
+	for _, perm := range loanPerms {
+		res := grantPermissions(env, gw, alice, perm)
+		require.Equalf(t, "temMALFORMED", res.Code, "permission %q", perm)
+	}
+}

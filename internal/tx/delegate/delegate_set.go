@@ -28,6 +28,15 @@ var notDelegatableTxTypes = map[uint16]bool{
 	69:  true, // ttVAULT_WITHDRAW
 	70:  true, // ttVAULT_CLAWBACK
 	71:  true, // ttBATCH
+	74:  true, // ttLOAN_BROKER_SET
+	75:  true, // ttLOAN_BROKER_DELETE
+	76:  true, // ttLOAN_BROKER_COVER_DEPOSIT
+	77:  true, // ttLOAN_BROKER_COVER_WITHDRAW
+	78:  true, // ttLOAN_BROKER_COVER_CLAWBACK
+	80:  true, // ttLOAN_SET
+	81:  true, // ttLOAN_DELETE
+	82:  true, // ttLOAN_MANAGE
+	84:  true, // ttLOAN_PAY
 	100: true, // ttAMENDMENT (EnableAmendment)
 	101: true, // ttFEE (SetFee)
 	102: true, // ttUNL_MODIFY (UNLModify)
