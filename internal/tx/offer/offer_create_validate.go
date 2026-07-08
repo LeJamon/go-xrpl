@@ -132,6 +132,17 @@ func (o *OfferCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 	return nil
 }
 
+// PreflightRules carries the amendment-gated tem* checks rippled evaluates in
+// OfferCreate::preflight after the flags mask.
+func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
+	// A zero DomainID is invalid: keylet::permissionedDomain uses the DomainID
+	// as the ledger key, so a zero DomainID can never name a domain entry.
+	if o.DomainID != nil && rules.FixCleanup3_2_0Enabled() && *o.DomainID == ([32]byte{}) {
+		return ter.Errorf(ter.TemMALFORMED, "DomainID cannot be zero")
+	}
+	return nil
+}
+
 // Preclaim validates the transaction against ledger state before application.
 // Runs through the engine's Preclaimer dispatch, before fee deduction.
 // Reference: rippled CreateOffer.cpp preclaim() lines 142-225
