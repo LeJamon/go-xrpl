@@ -124,6 +124,14 @@ func checkValidMPTIssuance(tx Transaction, result Result, entries []InvariantEnt
 		}
 	}
 
+	// A transaction with the mayDeleteMPT privilege (VaultWithdraw /
+	// VaultClawback) may delete exactly one MPToken with no other MPT changes.
+	if result == TesSUCCESS && hasPrivilege(txType, mayDeleteMPT) &&
+		mptokensDeleted == 1 && mptokensCreated == 0 &&
+		mptIssuancesCreated == 0 && mptIssuancesDeleted == 0 {
+		return nil
+	}
+
 	// For all other tx types (or non-success results), no MPT changes at all.
 	if mptIssuancesCreated != 0 || mptIssuancesDeleted != 0 ||
 		mptokensCreated != 0 || mptokensDeleted != 0 {

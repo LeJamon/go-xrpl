@@ -387,6 +387,7 @@ var coverageFixtures = map[string]map[string]any{
 		"LossUnrealized":    "0",
 		"ShareMPTID":        fxHash192,
 		"WithdrawalPolicy":  uint32(1),
+		"Scale":             uint32(6),
 		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
