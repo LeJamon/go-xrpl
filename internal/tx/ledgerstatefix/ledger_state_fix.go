@@ -12,10 +12,10 @@ import (
 )
 
 // LedgerStateFix fix types
-// Reference: rippled LedgerStateFix.h FixType enum
+// Reference: rippled LedgerStateFix.h FixType enum (std::uint16_t)
 const (
 	// LedgerFixTypeNFTokenPageLink repairs NFToken directory page links
-	LedgerFixTypeNFTokenPageLink uint8 = 1
+	LedgerFixTypeNFTokenPageLink uint16 = 1
 )
 
 // LedgerStateFix errors
@@ -29,14 +29,17 @@ var (
 type LedgerStateFix struct {
 	tx.BaseTx
 
-	// LedgerFixType identifies the type of fix (required)
-	LedgerFixType uint8 `json:"LedgerFixType" xrpl:"LedgerFixType"`
+	// LedgerFixType identifies the type of fix (required). sfLedgerFixType is a
+	// UINT16 on the wire, so wire values above 255 must still parse and reach the
+	// default preflight arm (tefINVALID_LEDGER_FIX_TYPE) rather than failing to
+	// decode.
+	LedgerFixType uint16 `json:"LedgerFixType" xrpl:"LedgerFixType"`
 
 	// Owner is the owner account (required for nfTokenPageLink fix)
 	Owner string `json:"Owner,omitempty" xrpl:"Owner,omitempty"`
 }
 
-func NewLedgerStateFix(account string, fixType uint8) *LedgerStateFix {
+func NewLedgerStateFix(account string, fixType uint16) *LedgerStateFix {
 	return &LedgerStateFix{
 		BaseTx:        *tx.NewBaseTx(tx.TypeLedgerStateFix, account),
 		LedgerFixType: fixType,
@@ -55,14 +58,16 @@ func (l *LedgerStateFix) TxType() tx.Type {
 	return tx.TypeLedgerStateFix
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LedgerStateFix defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0
+// (rippled does not override getFlagsMask for LedgerStateFix).
+func (l *LedgerStateFix) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Reference: rippled LedgerStateFix.cpp preflight()
 func (l *LedgerStateFix) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Reference: rippled LedgerStateFix.cpp:36-37
-	if err := tx.CheckFlags(l.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
@@ -87,11 +92,10 @@ func (l *LedgerStateFix) Flatten() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	// LedgerFixType is UInt16 in the binary codec but uint8 in Go.
 	// Convert to int so the codec's UInt16.FromJSON() can handle it.
 	if v, ok := m["LedgerFixType"]; ok {
 		switch val := v.(type) {
-		case uint8:
+		case uint16:
 			m["LedgerFixType"] = int(val)
 		}
 	}
