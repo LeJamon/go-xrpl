@@ -545,6 +545,36 @@ func disabledRetiredAmendments(enabled []string) []string {
 	return missing
 }
 
+// fixtureDisablesRetiredAmendments returns the retired amendments that any of a
+// fixture's env scopes — the top-level env or any mid-fixture env_reset — record
+// as disabled, in name order. Fixtures split their scenarios across scopes: a
+// scope that disables a retired amendment exercises pre-retirement behaviour
+// that no longer exists, so the whole fixture cannot be reproduced end-to-end.
+func fixtureDisablesRetiredAmendments(fixture *Fixture) []string {
+	missing := make(map[string]bool)
+	collect := func(env *EnvConfig) {
+		if env == nil || len(env.AmendmentsEnabled) == 0 {
+			return
+		}
+		for _, name := range disabledRetiredAmendments(env.AmendmentsEnabled) {
+			missing[name] = true
+		}
+	}
+	collect(fixture.Env)
+	for i := range fixture.Steps {
+		collect(fixture.Steps[i].Env)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(missing))
+	for name := range missing {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func RunFixture(t *testing.T, fixturePath string) {
 	t.Helper()
 
@@ -558,15 +588,14 @@ func RunFixture(t *testing.T, fixturePath string) {
 		t.Fatalf("Failed to parse fixture %s: %v", fixturePath, err)
 	}
 
-	// A fixture that records a retired amendment as disabled tests a protocol
-	// configuration that no longer exists — retired amendments are permanently
-	// enabled, so the engine forces them on and the recording cannot be
-	// reproduced. Mirrors rippled 3.2.0 deleting these FeatureBitset variations;
-	// the fixtures should be re-recorded from a 3.2.0 corpus.
-	if fixture.Env != nil && len(fixture.Env.AmendmentsEnabled) > 0 {
-		if missing := disabledRetiredAmendments(fixture.Env.AmendmentsEnabled); len(missing) > 0 {
-			t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable post-3.2.0 retirement; re-record from rippled 3.2.0", strings.Join(missing, ", "))
-		}
+	// A fixture that records a retired amendment as disabled — in its top-level
+	// env or in any mid-fixture env_reset scope — tests a protocol configuration
+	// that no longer exists. Retired amendments are permanently enabled, so the
+	// engine forces them on and the recording cannot be reproduced. Mirrors
+	// rippled 3.2.0 deleting these FeatureBitset variations; the fixtures should
+	// be re-recorded from a 3.2.0 corpus.
+	if missing := fixtureDisablesRetiredAmendments(&fixture); len(missing) > 0 {
+		t.Skipf("Skipped: fixture disables retired amendment(s) %s — unreachable post-3.2.0 retirement; re-record from rippled 3.2.0", strings.Join(missing, ", "))
 	}
 
 	// Detect TxQ suites by fixture path.

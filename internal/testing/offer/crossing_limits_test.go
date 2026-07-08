@@ -17,29 +17,19 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
-// crossingLimitsFeatureSets matches the 4 feature combinations from
-// CrossingLimits_test.cpp run() method (lines 514-530).
+// crossingLimitsFeatureSets matches the feature combinations from
+// CrossingLimits_test.cpp run() method:
 //
 //	testAll(sa);
-//	testAll(sa - featureFlowSortStrands);
 //	testAll(sa - featurePermissionedDEX);
-//	testAll(sa - featureFlowSortStrands - featurePermissionedDEX);
 var crossingLimitsFeatureSets = []featureSet{
 	{
 		name:     "all",
 		disabled: []string{},
 	},
 	{
-		name:     "noFlowSortStrands",
-		disabled: []string{"FlowSortStrands"},
-	},
-	{
 		name:     "noPermDEX",
 		disabled: []string{"PermissionedDEX"},
-	},
-	{
-		name:     "noFlowSortStrands_noPermDEX",
-		disabled: []string{"FlowSortStrands", "PermissionedDEX"},
 	},
 }
 
@@ -55,46 +45,6 @@ func nOffers(t *testing.T, env *jtx.TestEnv, n int, acc *jtx.Account, takerPays,
 		env.Close()
 	}
 	jtx.RequireOwnerCount(t, env, acc, startOwnerCount+uint32(n))
-}
-
-// TestCrossingLimits_Fix1515Disabled tests the legacy (pre-fix1515) crossing
-// limit of 2000 offers. With fix1515 disabled the payment engine consumes up to
-// 2000 offers per execution instead of 1000, so a 1100-offer crossing that the
-// enabled path would cap at 1000 completes in full.
-// Reference: rippled BookStep.cpp:86-91 (maxOffersToConsume) — disabled = 2000.
-func TestCrossingLimits_Fix1515Disabled(t *testing.T) {
-	env := newEnvWithFeatures(t, []string{"fix1515"})
-
-	gw := jtx.NewAccount("gateway")
-	alice := jtx.NewAccount("alice")
-	bob := jtx.NewAccount("bob")
-
-	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
-
-	// 1100 funded offers: more than the enabled (1000) limit, fewer than the
-	// disabled (2000) limit — so the whole book crosses in one execution.
-	const bobsOfferCount = 1100
-
-	env.FundAmount(gw, uint64(jtx.XRP(100000000)))
-	env.FundAmount(alice, uint64(jtx.XRP(100000000)))
-	env.FundAmount(bob, uint64(jtx.XRP(100000000)))
-
-	env.Trust(bob, USD(float64(bobsOfferCount)))
-	result := env.Submit(payment.PayIssued(gw, bob, USD(float64(bobsOfferCount))).Build())
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-
-	nOffers(t, env, bobsOfferCount, bob, jtx.XRPTxAmountFromXRP(1), USD(1))
-
-	// Alice crosses Bob's entire book. Under the enabled 1000 limit she would
-	// stop at 1000; under the disabled 2000 limit she consumes all 1100.
-	result = env.Submit(OfferCreate(alice, USD(float64(bobsOfferCount)), jtx.XRPTxAmountFromXRP(float64(bobsOfferCount))).Build())
-	jtx.RequireTxSuccess(t, result)
-	env.Close()
-
-	jtx.RequireIOUBalance(t, env, alice, gw, "USD", float64(bobsOfferCount))
-	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
-	jtx.RequireOwnerCount(t, env, bob, 1)
 }
 
 // TestCrossingLimits_StepLimit tests that the payment engine step limit
@@ -445,11 +395,8 @@ func testAutoBridgedLimits(t *testing.T, disabledFeatures []string) {
 }
 
 // TestCrossingLimits_OfferOverflow tests offer overflow behavior when
-// consuming excessive offers across multiple quality levels.
-// The behavior differs based on featureFlowSortStrands:
-//   - Without FlowSortStrands: results in tecOVERSIZE
-//   - With FlowSortStrands: stops after consuming 1996 offers, tesSUCCESS
-//
+// consuming excessive offers across multiple quality levels. The crossing
+// stops after consuming 1996 offers and succeeds.
 // Reference: CrossingLimits_test.cpp testOfferOverflow (lines 444-512)
 func TestCrossingLimits_OfferOverflow(t *testing.T) {
 	for _, fs := range crossingLimitsFeatureSets {
@@ -481,8 +428,7 @@ func testOfferOverflow(t *testing.T, disabledFeatures []string) {
 	env.Close()
 
 	// Set up a book with many offers. At each quality keep the number of
-	// offers below the limit. However, if all the offers are consumed it
-	// would create a tecOVERSIZE error without FlowSortStrands.
+	// offers below the limit. The crossing stops after consuming 1996 offers.
 	nOffers(t, env, 998, alice, jtx.XRPTxAmountFromXRP(1.00), USD(1))
 	nOffers(t, env, 998, alice, jtx.XRPTxAmountFromXRP(0.99), USD(1))
 	nOffers(t, env, 998, alice, jtx.XRPTxAmountFromXRP(0.98), USD(1))
@@ -490,20 +436,9 @@ func testOfferOverflow(t *testing.T, disabledFeatures []string) {
 	nOffers(t, env, 998, alice, jtx.XRPTxAmountFromXRP(0.96), USD(1))
 	nOffers(t, env, 998, alice, jtx.XRPTxAmountFromXRP(0.95), USD(1))
 
-	withSortStrands := featureEnabled(disabledFeatures, "FlowSortStrands")
-
 	result = env.Submit(OfferCreate(bob, USD(8000), jtx.XRPTxAmountFromXRP(8000)).Build())
-
-	if withSortStrands {
-		jtx.RequireTxSuccess(t, result)
-	} else {
-		jtx.RequireTxClaimed(t, result, jtx.TecOVERSIZE)
-	}
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	if withSortStrands {
-		jtx.RequireIOUBalance(t, env, bob, gw, "USD", 1996)
-	} else {
-		jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
-	}
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 1996)
 }
