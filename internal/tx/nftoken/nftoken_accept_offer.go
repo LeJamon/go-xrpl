@@ -121,6 +121,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// These flags are used both for fixNFTokenNegOffer (temBAD_OFFER)
 	// and for the pay() negative check (tecINTERNAL).
 	var buyOfferNegative, sellOfferNegative bool
+	// With fixCleanup3_1_3, an expired offer no longer fails at this point;
+	// it flows through the remaining checks and is deleted (with tecEXPIRED)
+	// once the rest of processing would otherwise have succeeded.
+	cleanupExpired := ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
+	var buyOfferExpired, sellOfferExpired bool
 
 	if n.NFTokenBuyOffer != "" {
 		buyOfferIDBytes, err := hex.DecodeString(n.NFTokenBuyOffer)
@@ -152,8 +157,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// Check expiration
 		if tx.HasExpiredField(buyOffer.Expiration, ctx.Config.ParentCloseTime) {
-			ctx.Log.Warn("nftoken accept offer: buy offer expired")
-			return ter.TecEXPIRED
+			if !cleanupExpired {
+				ctx.Log.Warn("nftoken accept offer: buy offer expired")
+				return ter.TecEXPIRED
+			}
+			buyOfferExpired = true
 		}
 
 		// The parser records the amount's sign (uint64 Amount cannot).
@@ -198,8 +206,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// Check expiration
 		if tx.HasExpiredField(sellOffer.Expiration, ctx.Config.ParentCloseTime) {
-			ctx.Log.Warn("nftoken accept offer: sell offer expired")
-			return ter.TecEXPIRED
+			if !cleanupExpired {
+				ctx.Log.Warn("nftoken accept offer: sell offer expired")
+				return ter.TecEXPIRED
+			}
+			sellOfferExpired = true
 		}
 
 		// The parser records the amount's sign (uint64 Amount cannot).
@@ -572,6 +583,25 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 			}
 		}
+	}
+
+	// --- fixCleanup3_1_3: delete any expired offers and fail with tecEXPIRED ---
+	// Reaching here means every other preclaim check passed; an expired offer
+	// would otherwise have been consumed, so instead delete it from the ledger
+	// and return tecEXPIRED. The engine's tec-recovery re-applies these erasures
+	// as DeletedNodes. Only offers that are actually expired are removed.
+	if cleanupExpired && (buyOfferExpired || sellOfferExpired) {
+		if buyOfferExpired {
+			if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
+				return ter.TecINTERNAL
+			}
+		}
+		if sellOfferExpired {
+			if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
+				return ter.TecINTERNAL
+			}
+		}
+		return ter.TecEXPIRED
 	}
 
 	// --- Dispatch to mode-specific doApply ---

@@ -28,6 +28,7 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	FeatureFixCleanup3_1_3               = registerFix("fixCleanup3_1_3", SupportedYes, VoteDefaultYes)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixIncludeKeyletFields        = registerFix("fixIncludeKeyletFields", SupportedYes, VoteDefaultNo)
 	FeatureDynamicMPT                    = registerFeature("DynamicMPT", SupportedNo, VoteDefaultNo)

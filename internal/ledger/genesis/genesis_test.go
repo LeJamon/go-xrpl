@@ -312,9 +312,10 @@ func TestGenesisHashConformance(t *testing.T) {
 			t.Fatalf("genesis creation failed: %v", err)
 		}
 
-		// Verified hashes for standard genesis with default amendments and legacy fees
-		expectedAccountHash := "3791bf543e5b77a17bc454f7a0720e4615760f457135f399de67c54d7929546d"
-		expectedLedgerHash := "e158c218a9af027957a54ecd7d25f4ad35c90b2aaf8de4956723a17d80f5b3f4"
+		// Verified hashes for standard genesis with default amendments and legacy fees.
+		// Includes fixCleanup3_1_3 (VoteDefaultYes), added to the default genesis set.
+		expectedAccountHash := "b3531a7a6476e648c5046bdcf06295a78e073cb0c7255ae5866c6b6469a119b5"
+		expectedLedgerHash := "765d2365e1fa9f3abcff5c838dc3d251aa8bb5ae2ff44cc2fc5b8690b5cb0ec3"
 
 		gotAccountHash := hex.EncodeToString(gen.Header.AccountHash[:])
 		gotLedgerHash := hex.EncodeToString(gen.Header.Hash[:])

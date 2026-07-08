@@ -3,8 +3,15 @@ package invariants
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
+
+// cleanup313Rules returns a Rules with only fixCleanup3_1_3 enabled, for
+// exercising the post-amendment hybrid-offer and permissioned-domain invariants.
+func cleanup313Rules() *amendment.Rules {
+	return amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_1_3})
+}
 
 // makeHybridOfferBlob builds a serialized hybrid Offer SLE, optionally with the
 // AdditionalBooks STArray present, for invariant testing.
@@ -97,30 +104,34 @@ func TestValidPermissionedDEX_HybridDegenerateShapes(t *testing.T) {
 	emptyBooks := []([32]byte){}
 	twoBooks := []([32]byte){nonZero, nonZero}
 
+	// wantOld is the pre-fixCleanup3_1_3 expectation (size > 1 or absent field
+	// fails); wantNew is the post-amendment expectation (size != 1 fails, so a
+	// present empty array now also fails).
 	tests := []struct {
-		name          string
-		domainID      *[32]byte
-		books         *[]([32]byte)
-		wantViolation bool
+		name     string
+		domainID *[32]byte
+		books    *[]([32]byte)
+		wantOld  bool
+		wantNew  bool
 	}{
-		{"present zero DomainID passes presence", &zero, &oneBook, false},
-		{"present empty AdditionalBooks passes presence", &nonZero, &emptyBooks, false},
-		{"present zero DomainID + empty array both pass", &zero, &emptyBooks, false},
-		{"absent DomainID fails", nil, &oneBook, true},
-		{"absent AdditionalBooks fails", &nonZero, nil, true},
-		{"AdditionalBooks size > 1 fails", &nonZero, &twoBooks, true},
+		{"present zero DomainID passes presence", &zero, &oneBook, false, false},
+		{"present empty AdditionalBooks", &nonZero, &emptyBooks, false, true},
+		{"present zero DomainID + empty array", &zero, &emptyBooks, false, true},
+		{"absent DomainID fails", nil, &oneBook, true, true},
+		{"absent AdditionalBooks fails", &nonZero, nil, true, true},
+		{"AdditionalBooks size > 1 fails", &nonZero, &twoBooks, true, true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			blob := makeRawHybridOfferBlob(tc.domainID, tc.books)
 			entries := []InvariantEntry{{EntryType: "Offer", After: blob}}
-			v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil)
-			if tc.wantViolation && v == nil {
-				t.Fatalf("expected ValidPermissionedDEX violation, got none")
+
+			if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil, nil); (v != nil) != tc.wantOld {
+				t.Fatalf("pre-amendment: got violation=%v, want %v (%v)", v != nil, tc.wantOld, v)
 			}
-			if !tc.wantViolation && v != nil {
-				t.Fatalf("unexpected violation: %s", v.Message)
+			if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil, cleanup313Rules()); (v != nil) != tc.wantNew {
+				t.Fatalf("post-amendment: got violation=%v, want %v (%v)", v != nil, tc.wantNew, v)
 			}
 		})
 	}
@@ -148,12 +159,16 @@ func TestValidPermissionedDEX_HybridAdditionalBooks(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			blob := makeHybridOfferBlob(t, tc.withDomain, tc.withAddlBooks)
 			entries := []InvariantEntry{{EntryType: "Offer", After: blob}}
-			v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil)
-			if tc.wantViolation && v == nil {
-				t.Fatalf("expected ValidPermissionedDEX violation, got none")
-			}
-			if !tc.wantViolation && v != nil {
-				t.Fatalf("unexpected violation: %s", v.Message)
+			// The serializer emits at most one AdditionalBooks entry, so a
+			// well-formed hybrid holds exactly one book: both eras agree.
+			for _, rules := range []*amendment.Rules{nil, cleanup313Rules()} {
+				v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil, rules)
+				if tc.wantViolation && v == nil {
+					t.Fatalf("expected ValidPermissionedDEX violation, got none")
+				}
+				if !tc.wantViolation && v != nil {
+					t.Fatalf("unexpected violation: %s", v.Message)
+				}
 			}
 		})
 	}
