@@ -2,6 +2,7 @@
 package offer
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -29,14 +30,17 @@ func (o *OfferCancel) TxType() tx.Type {
 	return tx.TypeOfferCancel
 }
 
+// GetFlagsMask returns the invalid-flags mask enforced by the engine at the
+// preflight0 position. CancelOffer defines no type-specific flags, so it uses the
+// universal mask (rippled's base Transactor::getFlagsMask).
+func (o *OfferCancel) GetFlagsMask(*amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Reference: rippled CancelOffer.cpp preflight()
 func (o *OfferCancel) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags set")
 	}
 
 	if o.OfferSequence == 0 {

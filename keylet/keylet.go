@@ -573,6 +573,22 @@ func LoanBroker(ownerID [20]byte, sequence uint32) Keylet {
 	}
 }
 
+// LoanBrokerByID returns a LoanBroker keylet for a known LoanBroker ID.
+func LoanBrokerByID(brokerID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeLoanBroker,
+		Key:  brokerID,
+	}
+}
+
+// LoanByID returns a Loan keylet for a known Loan ID.
+func LoanByID(loanID [32]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeLoan,
+		Key:  loanID,
+	}
+}
+
 // Loan returns the keylet for a Loan entry.
 // Reference: rippled Indexes.cpp loan(uint256 const& loanBrokerID, std::uint32_t loanSeq)
 func Loan(loanBrokerID [32]byte, loanSeq uint32) Keylet {

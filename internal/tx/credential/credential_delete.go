@@ -36,16 +36,23 @@ func (c *CredentialDelete) TxType() tx.Type {
 	return tx.TypeCredentialDelete
 }
 
+// GetFlagsMask reports the invalid-flag mask. rippled's
+// CredentialDelete::getFlagsMask is `fixInvalidTxFlags ? tfUniversalMask : 0`,
+// so with the amendment active any flag is rejected temINVALID_FLAG at
+// preflight0 (before the Subject/Issuer/CredentialType checks and signature
+// verification); with it off the mask is zero and all flags pass.
+func (c *CredentialDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if rules.Enabled(amendment.FeatureFixInvalidTxFlags) {
+		return tx.TfUniversalMask
+	}
+	return 0
+}
+
 // Reference: rippled Credentials.cpp CredentialDelete::preflight()
-// Note: The fixInvalidTxFlags-gated flag check is done in Apply() because
-// Validate() has no access to amendment rules.
 func (c *CredentialDelete) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
 		return err
 	}
-
-	// Flag check is deferred to Apply() where amendment rules are available.
-	// Reference: rippled Credentials.cpp:217-222 — gated behind fixInvalidTxFlags.
 
 	// At least one of Subject or Issuer must be present
 	// Reference: rippled Credentials.cpp:224-233
@@ -57,8 +64,14 @@ func (c *CredentialDelete) Validate() error {
 		}
 	}
 
-	// If present, Subject and Issuer must not be zero accounts
-	// Reference: rippled Credentials.cpp:235-241
+	// If present, Subject and Issuer must not be zero accounts. A present but
+	// zero-length STAccount deserializes to "", which rippled sees as a present
+	// account that isZero(), so it must be rejected the same as a present 20-byte
+	// zero account — not treated as absent.
+	// Reference: rippled Credentials.cpp — (subject && subject->isZero()) etc.
+	if c.HasField("Subject") && c.Subject == "" {
+		return ErrCredentialZeroAccount
+	}
 	if c.Subject != "" {
 		if subjectID, err := state.DecodeAccountID(c.Subject); err == nil {
 			var zeroAccount [20]byte
@@ -66,6 +79,9 @@ func (c *CredentialDelete) Validate() error {
 				return ErrCredentialZeroAccount
 			}
 		}
+	}
+	if c.HasField("Issuer") && c.Issuer == "" {
+		return ErrCredentialZeroAccount
 	}
 	if c.Issuer != "" {
 		if issuerID, err := state.DecodeAccountID(c.Issuer); err == nil {
@@ -105,14 +121,6 @@ func (c *CredentialDelete) RequiredAmendments() [][32]byte {
 
 // Reference: rippled Credentials.cpp CredentialDelete::doApply()
 func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) ter.Result {
-	// Check for invalid flags, gated behind fixInvalidTxFlags
-	// Reference: rippled Credentials.cpp:217-222
-	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
-		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return ter.TemINVALID_FLAG
-		}
-	}
-
 	ctx.Log.Trace("credential delete apply",
 		"account", c.Account,
 		"subject", c.Subject,

@@ -93,6 +93,17 @@ type FlagsMasker interface {
 	GetFlagsMask(rules *amendment.Rules) uint32
 }
 
+// SigValidatedPreflighter is implemented by transaction types with a preflight
+// check that rippled runs in T::preflightSigValidated — the invokePreflight stage
+// AFTER preflight2's cryptographic signature verification. The engine runs it
+// once signature verification succeeds, so a check placed here is trumped by a
+// bad-signature temINVALID, matching rippled. EscrowFinish adopts it for its
+// CredentialIDs shape check (credentials::checkFields), which rippled defers past
+// the signature. A non-nil error carries a tem* code via ter.Errorf.
+type SigValidatedPreflighter interface {
+	PreflightSigValidated() error
+}
+
 // Preclaimer is implemented by transaction types that need additional
 // stateful validation beyond the engine's common preclaim checks.
 // Preclaim runs AFTER the engine's sequence/fee/signature checks and

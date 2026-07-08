@@ -146,7 +146,7 @@ func TestPaymentValidation(t *testing.T) {
 				Destination: "rBob",
 			},
 			expectError: true,
-			errorMsg:    "temBAD_AMOUNT: Amount is required",
+			errorMsg:    "temBAD_AMOUNT: Amount must be positive",
 		},
 		{
 			name: "missing account",
@@ -1154,7 +1154,7 @@ func TestDeliverMinValidation(t *testing.T) {
 				return p
 			}(),
 			expectError: true,
-			errorMsg:    "temBAD_AMOUNT: DeliverMin currency must match Amount",
+			errorMsg:    "temBAD_AMOUNT: DeliverMin asset must match Amount",
 		},
 
 		// DeliverMin issuer must match Amount issuer
@@ -1173,7 +1173,7 @@ func TestDeliverMinValidation(t *testing.T) {
 				return p
 			}(),
 			expectError: true,
-			errorMsg:    "temBAD_AMOUNT: DeliverMin currency must match Amount",
+			errorMsg:    "temBAD_AMOUNT: DeliverMin asset must match Amount",
 		},
 
 		// DeliverMin must not exceed Amount.

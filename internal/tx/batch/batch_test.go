@@ -387,10 +387,20 @@ func TestBatchRequiredAmendments(t *testing.T) {
 
 func TestBatchConstants(t *testing.T) {
 	assert.Equal(t, 8, MaxBatchTransactions)
-	assert.Equal(t, uint32(0x00000001), BatchFlagAllOrNothing)
-	assert.Equal(t, uint32(0x00000002), BatchFlagOnlyOne)
-	assert.Equal(t, uint32(0x00000004), BatchFlagUntilFailure)
-	assert.Equal(t, uint32(0x00000008), BatchFlagIndependent)
+	assert.Equal(t, uint32(0x00010000), BatchFlagAllOrNothing)
+	assert.Equal(t, uint32(0x00020000), BatchFlagOnlyOne)
+	assert.Equal(t, uint32(0x00040000), BatchFlagUntilFailure)
+	assert.Equal(t, uint32(0x00080000), BatchFlagIndependent)
+
+	// Pins finding Batch-mask-value: tfBatchMask matches rippled TxFlags.h
+	// (0x7FF0FFFF) — it permits tfFullyCanonicalSig and the four mode bits, and
+	// rejects tfInnerBatchTxn on the outer Batch.
+	assert.Equal(t, uint32(0x7FF0FFFF), tfBatchMask)
+	assert.Zero(t, tx.TfFullyCanonicalSig&tfBatchMask, "tfFullyCanonicalSig must be allowed")
+	assert.NotZero(t, tx.TfInnerBatchTxn&tfBatchMask, "tfInnerBatchTxn must be rejected on the outer")
+	for _, mode := range []uint32{BatchFlagAllOrNothing, BatchFlagOnlyOne, BatchFlagUntilFailure, BatchFlagIndependent} {
+		assert.Zero(t, mode&tfBatchMask, "mode flag must be allowed")
+	}
 }
 
 // TestCalculateMinimumFee_SingleSignBaseline pins the common case

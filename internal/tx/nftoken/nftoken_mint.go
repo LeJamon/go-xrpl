@@ -49,8 +49,12 @@ const (
 
 	// Reference: rippled TxFlags.h tfNFTokenMintMask — all masks carve out
 	// tfUniversal so inner Batch txs (which carry tfInnerBatchTxn) aren't rejected.
+	// The four variants correspond to rippled's amendment-conditional selection in
+	// NFTokenMint::getFlagsMask (fixRemoveNFTokenAutoTrustLine × DynamicNFT):
+	// the "Old" masks permit tfTrustLine, the "WithMutable" masks permit tfMutable.
 	tfNFTokenMintMask               uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable)
 	tfNFTokenMintMaskWithMutable    uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
+	tfNFTokenMintOldMask            uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTrustLine | NFTokenMintFlagTransferable)
 	tfNFTokenMintOldMaskWithMutable uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTrustLine | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
 )
 
@@ -66,19 +70,32 @@ func (n *NFTokenMint) TxType() tx.Type {
 	return tx.TypeNFTokenMint
 }
 
+// GetFlagsMask returns the amendment-conditional invalid-flags mask, enforced by
+// the engine at preflight0. tfTrustLine is only permitted before
+// fixRemoveNFTokenAutoTrustLine; tfMutable is only permitted once DynamicNFT is
+// enabled.
+// Reference: rippled NFTokenMint::getFlagsMask.
+func (n *NFTokenMint) GetFlagsMask(rules *amendment.Rules) uint32 {
+	dynamicNFT := rules.NFTsWithDynamicEnabled()
+	if rules.Enabled(amendment.FeatureFixRemoveNFTokenAutoTrustLine) {
+		if dynamicNFT {
+			return tfNFTokenMintMaskWithMutable
+		}
+		return tfNFTokenMintMask
+	}
+	if dynamicNFT {
+		return tfNFTokenMintOldMaskWithMutable
+	}
+	return tfNFTokenMintOldMask
+}
+
 // Reference: rippled NFTokenMint.cpp preflight
 func (n *NFTokenMint) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// Use the most permissive mask here since Validate() has no access to Rules.
-	// The amendment-dependent checks (rejecting tfTrustLine when
-	// fixRemoveNFTokenAutoTrustLine is enabled, rejecting tfMutable when
-	// DynamicNFT is not enabled) are in Apply().
-	if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenMint flags")
-	}
+	// Flag mask is enforced by the engine at preflight0 via GetFlagsMask.
 
 	// TransferFee must be <= maxTransferFee (50000 = 50%)
 	if n.TransferFee != nil {
@@ -119,43 +136,25 @@ func (n *NFTokenMint) Validate() error {
 		return ter.Errorf(ter.TemMALFORMED, "Amount required when Destination or Expiration present")
 	}
 
-	// When Amount is present, validate the offer fields using the same logic as
-	// tokenOfferCreatePreflight in rippled. Mint always creates a sell offer.
-	// Reference: rippled NFTokenMint.cpp preflight → tokenOfferCreatePreflight
-	if n.Amount != nil {
-		// Negative amount check — only when fixNFTokenNegOffer is enabled
-		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreflight line 847
-		// Note: checked at runtime in Apply() since Validate() doesn't have amendment context
-
-		// IOU-specific checks
-		if !n.Amount.IsNative() {
-			// Extract NFToken flags from transaction flags (lower 16 bits)
-			nftFlags := uint16(n.GetFlags() & 0xFFFF)
-
-			// If token has OnlyXRP flag, IOU offers are not allowed
-			if nftFlags&NFTokenFlagOnlyXRP != 0 {
-				return ter.Errorf(ter.TemBAD_AMOUNT, "NFToken requires XRP only")
-			}
-
-			// Zero IOU amount is not allowed
-			if n.Amount.IsZero() {
-				return ter.Errorf(ter.TemBAD_AMOUNT, "IOU amount cannot be zero")
-			}
-		}
-
-		// Expiration of 0 is invalid
-		if n.Expiration != nil && *n.Expiration == 0 {
-			return ter.Errorf(ter.TemBAD_EXPIRATION, "Expiration cannot be 0")
-		}
-
-		// Destination cannot be the same as the account creating the offer
-		// Reference: rippled tokenOfferCreatePreflight — "if (dest == acctID)"
-		if n.Destination != "" && n.Destination == n.Account {
-			return ter.Errorf(ter.TemMALFORMED, "Destination cannot be the same as Account")
-		}
-	}
+	// The Amount-dependent offer checks (negative, OnlyXRP, zero, expiration,
+	// destination) run in PreflightRules because their order and gating depend
+	// on the active amendments.
 
 	return nil
+}
+
+// PreflightRules runs the amendment-aware offer validation shared with
+// NFTokenCreateOffer, when Mint carries offer fields. A Mint always creates a
+// sell offer with no Owner. This runs after Validate (rippled invokes
+// tokenOfferCreatePreflight at the end of NFTokenMint::preflight, after the
+// TransferFee/Issuer/URI/Amount-required checks).
+// Reference: rippled NFTokenMint.cpp preflight → nft::tokenOfferCreatePreflight.
+func (n *NFTokenMint) PreflightRules(rules *amendment.Rules) error {
+	if n.Amount == nil {
+		return nil
+	}
+	nftFlags := uint16(n.GetFlags() & 0xFFFF)
+	return tokenOfferCreatePreflight(rules, n.Account, *n.Amount, n.Destination, n.Expiration, nftFlags, "", true)
 }
 
 func (n *NFTokenMint) Flatten() (map[string]any, error) {
@@ -194,27 +193,8 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 		"flags", n.GetFlags(),
 	)
 
-	// Amendment-dependent flag check.
-	// Reference: rippled NFTokenMint.cpp preflight — mask depends on amendments
-	dynamicNFT := ctx.Rules().NFTsWithDynamicEnabled()
-	if ctx.Rules().Enabled(amendment.FeatureFixRemoveNFTokenAutoTrustLine) {
-		if dynamicNFT {
-			if n.GetFlags()&tfNFTokenMintMaskWithMutable != 0 {
-				return ter.TemINVALID_FLAG
-			}
-		} else {
-			if n.GetFlags()&tfNFTokenMintMask != 0 {
-				return ter.TemINVALID_FLAG
-			}
-		}
-	} else {
-		if dynamicNFT {
-			if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
-				return ter.TemINVALID_FLAG
-			}
-		}
-		// else: use the old permissive mask (already checked in Validate)
-	}
+	// The amendment-conditional flag mask is enforced by the engine at preflight0
+	// via GetFlagsMask.
 
 	accountID := ctx.AccountID
 
@@ -265,11 +245,8 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Preclaim checks for the combined mint+offer path.
 	// Reference: rippled NFTokenMint.cpp preclaim → tokenOfferCreatePreclaim
 	if n.Amount != nil {
-		// Negative amount check — gated by fixNFTokenNegOffer amendment
-		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreflight line 847
-		if n.Amount.IsNegative() && ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return ter.TemBAD_AMOUNT
-		}
+		// The negative-amount tem* check runs in preflight (PreflightRules →
+		// tokenOfferCreatePreflight), before this point.
 
 		if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
 			return ter.TecEXPIRED

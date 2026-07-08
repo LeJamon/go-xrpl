@@ -17,7 +17,7 @@ func TestSerializeBatchDigest(t *testing.T) {
 		{0x01},
 		{0x02, 0x03},
 	}
-	flags := uint32(0x00000001)
+	flags := BatchFlagAllOrNothing
 
 	got := serializeBatch(flags, txids)
 

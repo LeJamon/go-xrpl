@@ -19,6 +19,17 @@ type NFTokenCancelOffer struct {
 	NFTokenOffers []string `json:"NFTokenOffers" xrpl:"NFTokenOffers"`
 }
 
+// tfNFTokenCancelOfferMask matches rippled TxFlags.h tfNFTokenCancelOfferMask =
+// ~tfUniversal: no type-specific flags are defined, but the universal bits
+// (tfFullyCanonicalSig, tfInnerBatchTxn) are always permitted.
+const tfNFTokenCancelOfferMask = tx.TfUniversalMask
+
+// GetFlagsMask makes the engine enforce the invalid-flags mask at preflight0,
+// ahead of the account/fee/signing-key checks — matching rippled preflight0.
+func (n *NFTokenCancelOffer) GetFlagsMask(*amendment.Rules) uint32 {
+	return tfNFTokenCancelOfferMask
+}
+
 // NewNFTokenCancelOffer creates a new NFTokenCancelOffer transaction
 func NewNFTokenCancelOffer(account string, offerIDs []string) *NFTokenCancelOffer {
 	return &NFTokenCancelOffer{
@@ -37,10 +48,7 @@ func (n *NFTokenCancelOffer) Validate() error {
 		return err
 	}
 
-	// Check flags - no flags are valid for NFTokenCancelOffer
-	if n.GetFlags()&tfNFTokenCancelOfferMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for NFTokenCancelOffer")
-	}
+	// Flag mask is enforced by the engine at preflight0 via GetFlagsMask.
 
 	// Must have at least one offer ID
 	if len(n.NFTokenOffers) == 0 {
