@@ -969,7 +969,8 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Initialize fee auction vote if depositing into empty AMM
 	// Reference: rippled AMMDeposit.cpp lines 472-474
 	if lptBalance.IsZero() {
-		initializeFeeAuctionVote(amm, accountID, lptCurrency, ammAccountAddr, tfee, ctx.Config.ParentCloseTime)
+		initializeFeeAuctionVote(amm, accountID, lptCurrency, ammAccountAddr, tfee, ctx.Config.ParentCloseTime,
+			ctx.Rules().Enabled(amendment.FeatureFixCleanup3_2_0))
 	}
 
 	ammBytes, err := serializeAMMData(amm)
