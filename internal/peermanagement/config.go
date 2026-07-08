@@ -147,6 +147,14 @@ type Config struct {
 	// check; nil suppresses both.
 	PublicIP net.IP
 
+	// VerifyEndpoints validates addresses advertised in inbound
+	// TMEndpoints gossip: when true (the default), non-public / loopback
+	// / port-0 addresses are silently dropped before reaching Discovery,
+	// mirroring rippled PeerFinder is_valid_address. Setting it false
+	// (the [overlay] verify_endpoints = 0 knob) accepts them, for local
+	// dev networks — a security risk on a public network.
+	VerifyEndpoints bool
+
 	// Clock function for testing
 	Clock func() time.Time
 }
@@ -178,6 +186,10 @@ func DefaultConfig() Config {
 
 		TxReduceRelayMinPeers: DefaultTxReduceRelayMinPeers,
 		TxRelayPercentage:     DefaultTxRelayPercentage,
+
+		// Endpoint verification is on by default; only a local dev
+		// network (verify_endpoints = 0) turns it off.
+		VerifyEndpoints: true,
 
 		Clock: time.Now,
 	}
@@ -339,6 +351,16 @@ func WithServerDomain(domain string) Option {
 func WithPublicIP(ip net.IP) Option {
 	return func(c *Config) {
 		c.PublicIP = ip
+	}
+}
+
+// WithVerifyEndpoints toggles validation of addresses advertised in
+// inbound TMEndpoints gossip (the [overlay] verify_endpoints knob).
+// Defaults to true; passing false accepts non-public/loopback/port-0
+// addresses for local dev networks.
+func WithVerifyEndpoints(enabled bool) Option {
+	return func(c *Config) {
+		c.VerifyEndpoints = enabled
 	}
 }
 

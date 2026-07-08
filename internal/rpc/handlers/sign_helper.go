@@ -349,6 +349,9 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
+		if e := arraySizeRPCError(err); e != nil {
+			return nil, e
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 

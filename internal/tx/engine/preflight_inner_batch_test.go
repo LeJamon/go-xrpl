@@ -59,8 +59,7 @@ func TestPreflightInnerBatchFlag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := NewEngine(newMockBaseView(), txcore.EngineConfig{Rules: tt.rules})
-			if got := e.preflightInnerBatchFlag(innerFlaggedTx()); got != tt.want {
+			if got := preflightInnerBatchFlag(innerFlaggedTx(), tt.rules); got != tt.want {
 				t.Fatalf("preflightInnerBatchFlag = %v, want %v", got, tt.want)
 			}
 		})
@@ -71,8 +70,8 @@ func TestPreflightInnerBatchFlag(t *testing.T) {
 // tfInnerBatchTxn) is unaffected by the gate regardless of the amendments.
 func TestPreflightInnerBatchFlag_AbsentFlag(t *testing.T) {
 	tx := txcore.NewBaseTx(txcore.TypePayment, precedenceSourceAddr)
-	e := NewEngine(newMockBaseView(), txcore.EngineConfig{Rules: batchRules("Batch", "fixBatchInnerSigs")})
-	if got := e.preflightInnerBatchFlag(tx.GetCommon()); got != ter.TesSUCCESS {
+	rules := batchRules("Batch", "fixBatchInnerSigs")
+	if got := preflightInnerBatchFlag(tx.GetCommon(), rules); got != ter.TesSUCCESS {
 		t.Fatalf("preflightInnerBatchFlag(no flag) = %v, want TesSUCCESS", got)
 	}
 }

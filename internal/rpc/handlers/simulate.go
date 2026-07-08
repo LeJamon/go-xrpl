@@ -212,6 +212,16 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
+	// STParsedJSONObject also caps each JSON array field at MaxJSONArrayElements
+	// (rippled maxSTParsedJSONArraySize); surface an overflow as invalidParams
+	// before the transaction is parsed and simulated. Other encode failures are
+	// left to the parse/validate path below.
+	if _, encErr := binarycodec.Encode(txJsonMap); encErr != nil {
+		if e := arraySizeRPCError(encErr); e != nil {
+			return nil, e
+		}
+	}
+
 	// Marshal tx_json for parse + service call.
 	txJSON, err := json.Marshal(txJsonMap)
 	if err != nil {

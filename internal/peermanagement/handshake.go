@@ -328,16 +328,68 @@ func configIPIsV6(ip net.IP) bool {
 	return ip.To4() == nil
 }
 
-// isPublicIP mirrors beast::IP::is_public. v6 link-local is private
-// (fe80::/10) — Go's IsPrivate doesn't cover that, so we add it.
+// isPublicIP mirrors beast::IP::is_public (rippled 3.1.3's rewrite in
+// IPAddressV4.cpp / IPAddressV6.cpp). "Public" means globally routable:
+// beyond RFC1918 / loopback / multicast it rejects the reserved IPv4
+// special-purpose ranges (0/8, CGNAT, link-local, IETF-protocol,
+// TEST-NETs, 6to4 relay, benchmarking, 240/4) and the reserved IPv6
+// ranges (ULA, link-local, discard, documentation, Teredo, ORCHIDv2,
+// 6to4). Global IPv6 unicast is public — the pre-3.1.3 beast dropped
+// essentially all IPv6 gossip.
 func isPublicIP(ip net.IP) bool {
 	if ip == nil || ip.IsUnspecified() {
 		return false
 	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsMulticast() {
+	if v4 := ip.To4(); v4 != nil {
+		return isPublicIPv4(v4)
+	}
+	return isPublicIPv6(ip)
+}
+
+// isPublicIPv4 ports beast::IP::is_public(AddressV4): reject private
+// (10/8, 172.16/12, 192.168/16, loopback), multicast, and every
+// reserved special-purpose range. v4 must be a 4-byte slice.
+func isPublicIPv4(v4 net.IP) bool {
+	ip := uint32(v4[0])<<24 | uint32(v4[1])<<16 | uint32(v4[2])<<8 | uint32(v4[3])
+	switch {
+	case ip&0xff000000 == 0x0a000000, // 10.0.0.0/8
+		ip&0xfff00000 == 0xac100000, // 172.16.0.0/12
+		ip&0xffff0000 == 0xc0a80000, // 192.168.0.0/16
+		ip&0xff000000 == 0x7f000000, // 127.0.0.0/8 loopback
+		ip&0xf0000000 == 0xe0000000, // 224.0.0.0/4 multicast
+		ip&0xff000000 == 0x00000000, // 0.0.0.0/8 "this network"
+		ip&0xffc00000 == 0x64400000, // 100.64.0.0/10 CGNAT
+		ip&0xffff0000 == 0xa9fe0000, // 169.254.0.0/16 link-local
+		ip&0xffffff00 == 0xc0000000, // 192.0.0.0/24 IETF protocol
+		ip&0xffffff00 == 0xc0000200, // 192.0.2.0/24 TEST-NET-1
+		ip&0xffffff00 == 0xc0586300, // 192.88.99.0/24 6to4 relay
+		ip&0xfffe0000 == 0xc6120000, // 198.18.0.0/15 benchmarking
+		ip&0xffffff00 == 0xc6336400, // 198.51.100.0/24 TEST-NET-2
+		ip&0xffffff00 == 0xcb007100, // 203.0.113.0/24 TEST-NET-3
+		ip&0xf0000000 == 0xf0000000: // 240.0.0.0/4 reserved
 		return false
 	}
-	if ip.To4() == nil && ip.IsLinkLocalUnicast() {
+	return true
+}
+
+// isPublicIPv6 ports beast::IP::is_public(AddressV6). The caller routes
+// v4-mapped addresses to isPublicIPv4 via To4, so ip here is pure IPv6.
+func isPublicIPv6(ip net.IP) bool {
+	b := ip.To16()
+	if b == nil {
+		return false
+	}
+	switch {
+	case ip.IsLoopback(), // ::1
+		b[0]&0xfe == 0xfc,                 // fc00::/7 ULA (private)
+		b[0] == 0xff,                      // ff00::/8 multicast
+		b[0] == 0xfe && b[1]&0xc0 == 0x80, // fe80::/10 link-local
+		b[0] == 0x01 && b[1] == 0 && b[2] == 0 && b[3] == 0 &&
+			b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0, // 100::/64 discard
+		b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8,      // 2001:db8::/32 documentation
+		b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3] == 0x00,      // 2001::/32 Teredo
+		b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x00 && b[3]&0xf0 == 0x20, // 2001:20::/28 ORCHIDv2
+		b[0] == 0x20 && b[1] == 0x02:                                      // 2002::/16 6to4
 		return false
 	}
 	return true

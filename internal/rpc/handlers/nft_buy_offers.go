@@ -63,13 +63,12 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		return nil, selErr
 	}
 
-	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
-	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)
-	var userLimit uint32
-	if request.Limit != nil {
-		userLimit = *request.Limit
+	// Apply rippled's readLimitField with nftOffers tuning (NFTOffers.cpp:69):
+	// absent limit -> default, explicit 0 -> invalidParams, else clamp.
+	limit, limitErr := ReadLimitField(params, LimitNFTOffers, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
 	}
-	limit := ClampLimit(userLimit, LimitNFTOffers, ctx.Unlimited)
 
 	// Validate marker if provided - must be a valid hex string
 	marker := request.Marker

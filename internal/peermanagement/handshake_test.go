@@ -1261,7 +1261,7 @@ func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 
-	publicIP := net.ParseIP("198.51.100.1")
+	publicIP := net.ParseIP("1.2.3.4")
 	cfg := DefaultHandshakeConfig()
 	cfg.PublicIP = publicIP
 
@@ -1269,7 +1269,7 @@ func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
 
 	t.Run("matching_public_ip_passes", func(t *testing.T) {
 		headers := buildAllHeadersRequest(t, id, cfg, socketIP)
-		require.Equal(t, "198.51.100.1", headers.Get(HeaderRemoteIP))
+		require.Equal(t, "1.2.3.4", headers.Get(HeaderRemoteIP))
 
 		_, err := ParseHandshakeExtras(headers, publicIP, socketIP)
 		require.NoError(t, err)
@@ -1277,9 +1277,9 @@ func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
 
 	t.Run("mismatched_public_ip_rejected", func(t *testing.T) {
 		headers := buildAllHeadersRequest(t, id, cfg, socketIP)
-		// Peer claims our IP is 203.0.113.5 — but our config says
+		// Peer claims our IP is 5.6.7.8 — but our config says
 		// otherwise and they connected from a public address. Reject.
-		headers.Set(HeaderRemoteIP, "203.0.113.5")
+		headers.Set(HeaderRemoteIP, "5.6.7.8")
 
 		_, err := ParseHandshakeExtras(headers, publicIP, socketIP)
 		require.Error(t, err)
@@ -1291,7 +1291,7 @@ func TestHandshake_RemoteIPSelfReported_MatchesTcpConn(t *testing.T) {
 		// Same mismatched header, but the peer connected from
 		// loopback — rippled and we both skip the comparison.
 		headers := buildAllHeadersRequest(t, id, cfg, socketIP)
-		headers.Set(HeaderRemoteIP, "203.0.113.5")
+		headers.Set(HeaderRemoteIP, "5.6.7.8")
 
 		_, err := ParseHandshakeExtras(headers, publicIP, asSocketIP(t, net.ParseIP("127.0.0.1")))
 		require.NoError(t, err)
@@ -1315,8 +1315,8 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)
 
-	pA := net.ParseIP("198.51.100.42") // sender's public IP
-	pB := net.ParseIP("203.0.113.7")   // receiver's public IP
+	pA := net.ParseIP("1.2.3.42") // sender's public IP
+	pB := net.ParseIP("5.6.7.7")  // receiver's public IP
 
 	var closed, parent [32]byte
 	for i := range closed {
@@ -1639,11 +1639,11 @@ func TestInstanceCookie_GeneratorRange(t *testing.T) {
 	}
 }
 
-// isPublicIP must mirror beast::IP::is_public: IPv4 link-local stays
-// public (rippled IPAddressV4.cpp only flags RFC1918+loopback); IPv6
-// link-local is private to match rippled IPAddressV6.cpp's `(byte0 &
-// 0xfd)` catching fe80::/10. Loopback / RFC1918 / multicast are private
-// in both families.
+// isPublicIP must mirror beast::IP::is_public after rippled 3.1.3's
+// rewrite: IPv4 link-local (169.254/16) and the other reserved
+// special-purpose ranges are no longer public, and global IPv6 unicast
+// (e.g. 2606:4700::1) IS public where the pre-3.1.3 beast dropped it.
+// Loopback / RFC1918 / multicast stay private in both families.
 func TestIsPublicIP_BeastParity(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1651,18 +1651,41 @@ func TestIsPublicIP_BeastParity(t *testing.T) {
 		want bool
 	}{
 		{"public_v4", "8.8.8.8", true},
-		{"link_local_v4", "169.254.1.1", true},
+		{"public_v4_172_15", "172.15.0.1", true}, // just below the 172.16/12 block
 		{"loopback_v4", "127.0.0.1", false},
 		{"rfc1918_10", "10.0.0.1", false},
 		{"rfc1918_172_16", "172.16.5.4", false},
 		{"rfc1918_192_168", "192.168.1.1", false},
 		{"multicast_v4", "224.0.0.1", false},
 		{"unspecified_v4", "0.0.0.0", false},
-		{"public_v6", "2001:db8::1", true},
+		// Newly-reserved IPv4 ranges (3.1.3 beast rewrite).
+		{"this_network_v4", "0.1.2.3", false},   // 0.0.0.0/8
+		{"cgnat_v4", "100.64.0.1", false},       // 100.64.0.0/10
+		{"link_local_v4", "169.254.1.1", false}, // 169.254.0.0/16
+		{"ietf_protocol_v4", "192.0.0.8", false},
+		{"test_net_1_v4", "192.0.2.5", false},
+		{"6to4_relay_v4", "192.88.99.1", false},
+		{"benchmarking_v4", "198.18.0.1", false}, // 198.18.0.0/15
+		{"benchmarking_v4_19", "198.19.0.1", false},
+		{"test_net_2_v4", "198.51.100.7", false},
+		{"test_net_3_v4", "203.0.113.9", false},
+		{"reserved_240_v4", "240.0.0.1", false},
+		// IPv6.
+		{"documentation_v6", "2001:db8::1", false}, // 2001:db8::/32
+		{"global_v6", "2606:4700::1", true},        // global unicast, now public
+		{"global_v6_2400", "2400:cb00::1", true},
 		{"loopback_v6", "::1", false},
 		{"unspecified_v6", "::", false},
 		{"ula_v6", "fc00::1", false},
+		{"ula_v6_fd", "fd12:3456::1", false},
 		{"link_local_v6", "fe80::1", false},
+		{"multicast_v6", "ff02::1", false},
+		{"teredo_v6", "2001::1", false},      // 2001::/32
+		{"orchidv2_v6", "2001:20::1", false}, // 2001:20::/28
+		{"6to4_v6", "2002::1", false},        // 2002::/16
+		{"discard_v6", "0100::1", false},     // 100::/64
+		{"v4_mapped_public", "::ffff:8.8.8.8", true},
+		{"v4_mapped_private", "::ffff:10.0.0.1", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1724,13 +1747,13 @@ func TestWriteRawHandshakeRequest_EmitsAllNewHeaders(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 	cfg.InstanceCookie = 0xCAFEBABE12345678
 	cfg.ServerDomain = "example.com"
-	cfg.PublicIP = net.ParseIP("198.51.100.10")
+	cfg.PublicIP = net.ParseIP("1.2.3.10")
 	cfg.LedgerHintProvider = func() (LedgerHints, bool) {
 		return LedgerHints{Closed: closed, Parent: parent}, true
 	}
 	req, err := BuildHandshakeRequest(id, make([]byte, 32), cfg)
 	require.NoError(t, err)
-	addAddressHeaders(req.Header, cfg, net.ParseIP("203.0.113.5"))
+	addAddressHeaders(req.Header, cfg, net.ParseIP("5.6.7.8"))
 
 	var buf bytes.Buffer
 	require.NoError(t, WriteRawHandshakeRequest(&buf, req))
@@ -1741,8 +1764,8 @@ func TestWriteRawHandshakeRequest_EmitsAllNewHeaders(t *testing.T) {
 		HeaderServerDomain + ": example.com",
 		HeaderClosedLedger + ": " + strings.ToUpper(hex.EncodeToString(closed[:])),
 		HeaderPreviousLedger + ": " + strings.ToUpper(hex.EncodeToString(parent[:])),
-		HeaderRemoteIP + ": 203.0.113.5",
-		HeaderLocalIP + ": 198.51.100.10",
+		HeaderRemoteIP + ": 5.6.7.8",
+		HeaderLocalIP + ": 1.2.3.10",
 	} {
 		assert.Contains(t, wire, h, "missing %s on the wire", h)
 	}

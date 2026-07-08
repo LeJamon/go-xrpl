@@ -52,6 +52,9 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 		}
 
 		st := GetSerializedType(v.Type)
+		if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
+			return nil, err
+		}
 		b, err := st.FromJSON(fimap[v])
 		if err != nil {
 			return nil, err
@@ -62,6 +65,35 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 		}
 	}
 	return t.binarySerializer.GetSink(), nil
+}
+
+// checkJSONArraySize enforces MaxJSONArrayElements on a JSON array field before
+// it is serialized, mirroring rippled's per-array-field maxSTParsedJSONArraySize
+// cap. Only STArray/Vector256/PathSet field values are JSON arrays; the outer
+// PathSet array is capped here, its inner paths in PathSet.FromJSON.
+func checkJSONArraySize(fieldName, fieldType string, value any) error {
+	switch fieldType {
+	case "STArray", "Vector256", "PathSet":
+		if n, ok := jsonArrayLen(value); ok && n > MaxJSONArrayElements {
+			return &JSONArrayTooLargeError{Field: fieldName}
+		}
+	}
+	return nil
+}
+
+// jsonArrayLen reports the length of a JSON array value in any of the shapes the
+// codec accepts, or (0, false) if the value is not an array.
+func jsonArrayLen(value any) (int, bool) {
+	switch v := value.(type) {
+	case []any:
+		return len(v), true
+	case []map[string]any:
+		return len(v), true
+	case []string:
+		return len(v), true
+	default:
+		return 0, false
+	}
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data

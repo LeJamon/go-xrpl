@@ -56,9 +56,41 @@ type Appliable interface {
 // body. The engine runs PreflightRules right after Validate(), so these checks
 // reject (with a tem* code and no fee) at the correct pipeline stage, before any
 // ledger-state preclaim runs — matching rippled where rules-gated tem* checks
-// are interleaved into the transactor's preflight().
+// are interleaved into the transactor's per-type preflight() body (T::preflight).
 type RulesPreflighter interface {
 	PreflightRules(rules *amendment.Rules) error
+}
+
+// ExtraFeaturesChecker is implemented by transaction types with an amendment
+// gate that rippled evaluates in T::checkExtraFeatures — which runs in
+// invokePreflight BEFORE preflight1's common checks (flags mask, NetworkID,
+// account, fee, signing key). The engine runs it first so an amendment-gated
+// rejection (e.g. CreateOffer carrying sfDomainID under a disabled
+// PermissionedDEX → temDISABLED) precedes any common-field TER. A non-nil error
+// should carry a temDISABLED-class code via ter.Errorf.
+//
+// This is the engine seam; no transaction type adopts it yet. A type opts in by
+// implementing it and moving the corresponding amendment gate out of its
+// Validate()/PreflightRules body. Reference: rippled Transactor.h invokePreflight.
+type ExtraFeaturesChecker interface {
+	CheckExtraFeatures(rules *amendment.Rules) error
+}
+
+// FlagsMasker is implemented by transaction types that declare the set of flag
+// bits that are invalid for the type. The engine rejects a transaction whose
+// flags intersect the mask with temINVALID_FLAG at the preflight0 position,
+// mirroring rippled preflight0's `tx.getFlags() & T::getFlagsMask(ctx)`. The
+// mask may depend on the active amendments (e.g. a flag valid only once an
+// amendment is enabled).
+//
+// This is the engine seam; no transaction type adopts it yet. A type that does
+// not implement it keeps its per-Validate() flag check as the backstop — the
+// engine applies no mask, because the universal mask would reject every valid
+// type-specific flag (tfPartialPayment, tfPassive, …). A type opts in by
+// implementing GetFlagsMask (typically `tfUniversalMask | typeSpecificBits`) and
+// dropping the equivalent flag check from Validate().
+type FlagsMasker interface {
+	GetFlagsMask(rules *amendment.Rules) uint32
 }
 
 // Preclaimer is implemented by transaction types that need additional

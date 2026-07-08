@@ -100,6 +100,9 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if txBlobHex == "" {
 		encoded, err := binarycodec.Encode(txJsonMap)
 		if err != nil {
+			if e := arraySizeRPCError(err); e != nil {
+				return nil, e
+			}
 			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode tx_json: %v", err))
 		}
 		txBlobHex = encoded

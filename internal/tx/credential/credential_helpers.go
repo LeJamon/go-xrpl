@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"sort"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -281,13 +282,16 @@ func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []stri
 	return ter.TesSUCCESS
 }
 
-// RemoveExpiredCredentials deletes any expired credentials in credentialIDs
-// from the ledger, adjusting owner directories and counts. It returns true if
-// at least one credential was expired.
+// removeExpired is the shared per-credential deletion loop. anyExpired reports
+// whether any credential was expired; failTER is the first failing deletion TER
+// (tesSUCCESS if none failed). When stopOnFailure is true it returns immediately
+// on the first deletion failure — the success-path behaviour rippled gates on
+// fixCleanup3_1_3; otherwise every expired credential is processed and failures
+// are only logged (the tec-recovery cleanup).
 // Reference: rippled CredentialHelpers.cpp credentials::removeExpired()
-func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool {
+func removeExpired(ctx *tx.ApplyContext, credentialIDs []string, stopOnFailure bool) (anyExpired bool, failTER ter.Result) {
 	closeTime := ctx.Config.ParentCloseTime
-	anyExpired := false
+	failTER = ter.TesSUCCESS
 
 	for _, idHex := range credentialIDs {
 		credIDBytes, err := hex.DecodeString(idHex)
@@ -309,12 +313,43 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 		}
 
 		if CheckCredentialExpired(cred, closeTime) {
-			_ = DeleteSLE(ctx, credKey, cred)
+			if r := DeleteSLE(ctx, credKey, cred); r != ter.TesSUCCESS {
+				ctx.Log.Error("removeExpiredCredentials: failed to delete expired credential", "ter", r.String())
+				if stopOnFailure {
+					return anyExpired, r
+				}
+				if failTER == ter.TesSUCCESS {
+					failTER = r
+				}
+			}
 			anyExpired = true
 		}
 	}
 
-	return anyExpired
+	return anyExpired, failTER
+}
+
+// RemoveExpiredCredentials deletes any expired credentials in credentialIDs on a
+// transaction's success path, adjusting owner directories and counts. It returns
+// whether at least one credential was expired and the TER to abort with. Under
+// fixCleanup3_1_3 a deletion failure aborts the transaction (returns the failing
+// TER); before the amendment the failure is swallowed (returns tesSUCCESS),
+// matching rippled removeExpired.
+func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) (bool, ter.Result) {
+	fix313 := ctx.Rules().Enabled(amendment.FeatureID("fixCleanup3_1_3"))
+	anyExpired, failTER := removeExpired(ctx, credentialIDs, fix313)
+	if fix313 {
+		return anyExpired, failTER
+	}
+	return anyExpired, ter.TesSUCCESS
+}
+
+// RemoveExpiredCredentialsOnTec runs the tec-recovery cleanup: every expired
+// credential is deleted and a deletion failure is only logged, never propagated,
+// matching rippled Transactor::removeExpiredCredentials. This path is unchanged
+// by fixCleanup3_1_3.
+func RemoveExpiredCredentialsOnTec(ctx *tx.ApplyContext, credentialIDs []string) {
+	removeExpired(ctx, credentialIDs, false)
 }
 
 // VerifyDepositPreauth enforces deposit authorization for a transaction
@@ -327,8 +362,14 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
 	credentialsPresent := len(credentialIDs) > 0
 
-	if credentialsPresent && RemoveExpiredCredentials(ctx, credentialIDs) {
-		return ter.TecEXPIRED
+	if credentialsPresent {
+		anyExpired, r := RemoveExpiredCredentials(ctx, credentialIDs)
+		if r != ter.TesSUCCESS {
+			return r
+		}
+		if anyExpired {
+			return ter.TecEXPIRED
+		}
 	}
 
 	if dstAccount != nil && (dstAccount.Flags&state.LsfDepositAuth) != 0 && src != dst {

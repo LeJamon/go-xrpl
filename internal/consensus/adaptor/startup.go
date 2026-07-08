@@ -643,6 +643,12 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 		}
 	}
 
+	// [overlay] verify_endpoints toggles TMEndpoints gossip validation.
+	// Absent leaves the default on; an explicit 0/1 overrides it.
+	if appCfg.Overlay.VerifyEndpoints != nil {
+		opts = append(opts, peermanagement.WithVerifyEndpoints(*appCfg.Overlay.VerifyEndpoints != 0))
+	}
+
 	return opts
 }
 

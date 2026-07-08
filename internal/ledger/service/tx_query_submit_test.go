@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -40,6 +41,57 @@ func signedPaymentWithFee(t *testing.T, env *testenv.TestEnv, sender, receiver *
 		t.Fatalf("ComputeTransactionHash: %v", err)
 	}
 	return blob, hash
+}
+
+// memoPaymentBlob builds an (unsigned) Payment blob carrying a memo whose
+// MemoData is the given hex string. It encodes the field map directly rather
+// than via the typed Payment.Flatten, whose reflective memo conversion is a
+// separate concern; the local memo check reads the decoded Memos regardless.
+func memoPaymentBlob(t *testing.T, from, to string, memoDataHex string) []byte {
+	t.Helper()
+	txMap := map[string]any{
+		"TransactionType": "Payment",
+		"Account":         from,
+		"Destination":     to,
+		"Amount":          "100000000",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"Memos": []map[string]any{
+			{"Memo": map[string]any{"MemoData": memoDataHex}},
+		},
+	}
+	hexStr, err := binarycodec.Encode(txMap)
+	if err != nil {
+		t.Fatalf("binarycodec.Encode: %v", err)
+	}
+	blob, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("hex.DecodeString: %v", err)
+	}
+	return blob
+}
+
+// TestService_SubmitTransaction_RejectsOversizedMemo verifies the local
+// submission ingress enforces rippled's passesLocalChecks memo rule: a memo
+// whose serialized size exceeds 1024 bytes is refused temMALFORMED at
+// Service.SubmitTransaction, before the engine ever runs. This is the local-only
+// counterpart to the engine's now memo-agnostic preflight (see the engine
+// AcceptsOversizedMemo test) — a relayed or consensus-applied oversized-memo tx
+// still applies, so the two behaviours cannot fork.
+func TestService_SubmitTransaction_RejectsOversizedMemo(t *testing.T) {
+	svc := newServiceForOpenLedgerTest(t)
+	master := testenv.MasterAccount()
+	alice := testenv.NewAccount("alice")
+
+	// 1020 decoded bytes → 1025 serialized (> 1024).
+	blob := memoPaymentBlob(t, master.Address, alice.Address, strings.Repeat("AA", 1020))
+	res := submitBlob(t, svc, blob, false)
+	if res.Result != ter.TemMALFORMED {
+		t.Fatalf("Result = %s, want temMALFORMED", res.Result)
+	}
+	if res.Applied {
+		t.Errorf("Applied = true, want false for a memo-rejected tx")
+	}
 }
 
 func submitBlob(t *testing.T, svc *service.Service, blob []byte, failHard bool) *service.SubmitResult {

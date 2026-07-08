@@ -390,6 +390,24 @@ const endpointsIngestMaxEntries = 1024
 // while staying under the 1024 wholesale-reject bound.
 const endpointsIngestSampleMax = 64
 
+// isValidGossipAddress mirrors rippled PeerFinder is_valid_address
+// (Logic.h): an address advertised in TMEndpoints gossip is usable only
+// if it is specified, not loopback, publicly routable, and carries a
+// non-zero port. The is_loopback check is redundant with isPublicIP but
+// kept for structural fidelity with rippled.
+func isValidGossipAddress(host net.IP, port uint16) bool {
+	if host == nil || host.IsUnspecified() {
+		return false
+	}
+	if host.IsLoopback() {
+		return false
+	}
+	if !isPublicIP(host) {
+		return false
+	}
+	return port != 0
+}
+
 // handleEndpointsMessage processes mtENDPOINTS from a peer and feeds the
 // advertised addresses into Discovery, the gossip half of overlay peer
 // discovery. Mirrors rippled PeerImp::onMessage(TMEndpoints) at
@@ -462,13 +480,25 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 		}
 
 		address := tm.Endpoint
+		host := parsed.Host
 		if tm.Hops == 0 {
 			// hops==0 describes the sender; trust the socket IP over
 			// the self-reported host (PeerImp.cpp:1234-1235).
 			if remoteIP == "" {
 				continue
 			}
+			host = remoteIP
 			address = Endpoint{Host: remoteIP, Port: parsed.Port}.String()
+		}
+
+		// Discard addresses that aren't publicly routable when endpoint
+		// verification is on (rippled PeerFinder is_valid_address, gated
+		// on config verifyEndpoints). The check runs on the post-rewrite
+		// host so a hops==0 peer behind a private socket is dropped too.
+		// A silent drop, not a charge: the address parsed fine, it is
+		// just not gossip-worthy.
+		if o.cfg.VerifyEndpoints && !isValidGossipAddress(net.ParseIP(host), parsed.Port) {
+			continue
 		}
 
 		accepted = append(accepted, ingestEndpoint{address: address, hops: tm.Hops})
@@ -563,6 +593,13 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	encodeAndSend(peer, message.TypeTransactions, reply, "TMTransactions reply")
 }
 
+// hardMaxReplyNodes caps how many objects a single by-hash reply may
+// carry. Mirrors rippled Tuning::hardMaxReplyNodes: each served object
+// costs a NodeStore fetch, so an unbounded query is a per-object fetch
+// DoS. When the cap is hit the reply is truncated and the requester
+// charged an extra feeModerateBurdenPeer (PeerImp.cpp:2551-2562, #6110).
+const hardMaxReplyNodes = 12288
+
 // serveGetObjects answers an inbound mtGET_OBJECTS query for generic
 // node-store objects by hash. Mirrors rippled
 // PeerImp::onMessage(TMGetObjectByHash) generic branch
@@ -637,6 +674,13 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 			out.Index = append([]byte(nil), obj.NodeID...)
 		}
 		reply.Objects = append(reply.Objects, out)
+
+		// Truncate once the reply reaches the object cap, charging the
+		// requester again for the burden (PeerImp.cpp:2551-2562).
+		if len(reply.Objects) >= hardMaxReplyNodes {
+			peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash reply limit reached")
+			break
+		}
 	}
 
 	encodeAndSend(peer, message.TypeGetObjects, reply, "TMGetObjectByHash reply")
