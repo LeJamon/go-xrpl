@@ -16,6 +16,18 @@ func newTestMPTAmount(value int64, issuer string) state.Amount {
 	return state.NewMPTAmountWithIssuanceID(value, issuer, testMPTIssuanceID)
 }
 
+// preflightClawback runs Clawback's preflight body in engine order: the
+// rules-free Validate() (flags mask) followed by PreflightRules() (the
+// amount/holder body). The engine invokes them in exactly this sequence.
+func preflightClawback(c *Clawback, rules *amendment.Rules) error {
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	return c.PreflightRules(rules)
+}
+
+func allRules() *amendment.Rules { return amendment.AllSupportedRules() }
+
 // Clawback Validation Tests
 // Based on rippled Clawback_test.cpp
 
@@ -62,7 +74,7 @@ func TestClawbackValidation(t *testing.T) {
 				Amount: tx.NewXRPAmount(1000000),
 			},
 			wantErr: true,
-			errMsg:  "XRP",
+			errMsg:  "positive", // isXRP folded into the Issue-arm temBAD_AMOUNT
 		},
 		{
 			name: "invalid - negative Amount",
@@ -80,7 +92,7 @@ func TestClawbackValidation(t *testing.T) {
 				Amount: tx.NewIssuedAmountFromFloat64(0.0, "USD", "rHolder"),
 			},
 			wantErr: true,
-			errMsg:  "Amount is required",
+			errMsg:  "positive",
 		},
 		{
 			name: "invalid - IOU clawback from self",
@@ -123,7 +135,7 @@ func TestClawbackValidation(t *testing.T) {
 			seq := uint32(1)
 			tt.tx.Common.Sequence = &seq
 
-			err := tt.tx.Validate()
+			err := preflightClawback(tt.tx, allRules())
 			if tt.wantErr {
 				require.Error(t, err)
 				if tt.errMsg != "" {
@@ -134,6 +146,51 @@ func TestClawbackValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestClawbackPreflightOrder pins the per-arm precedence findings: rippled checks
+// the holder shape before the amount's XRP/zero/negative rejection in both the
+// Issue arm and the MPT arm, so a transaction that is malformed on both counts
+// surfaces the holder temMALFORMED, not temBAD_AMOUNT.
+// Reference: rippled Clawback.cpp preflightHelper<Issue>/<MPTIssue>.
+func TestClawbackPreflightOrder(t *testing.T) {
+	// Finding 1 — IOU/Issue arm: Holder-present temMALFORMED wins over a zero,
+	// negative, or XRP amount that would otherwise be temBAD_AMOUNT.
+	t.Run("IOU arm: Holder beats zero amount", func(t *testing.T) {
+		c := &Clawback{
+			BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
+			Amount: tx.NewIssuedAmountFromFloat64(0.0, "USD", "rHolder"),
+			Holder: "rSomeone", // Holder must not be present for IOU clawback
+		}
+		require.ErrorContains(t, preflightClawback(c, allRules()), "temMALFORMED")
+	})
+	t.Run("IOU arm: Holder beats native XRP amount", func(t *testing.T) {
+		c := &Clawback{
+			BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
+			Amount: tx.NewXRPAmount(1000000),
+			Holder: "rSomeone",
+		}
+		require.ErrorContains(t, preflightClawback(c, allRules()), "temMALFORMED")
+	})
+
+	// Finding 2 — MPT arm: the holder-shape temMALFORMED checks (missing holder,
+	// holder==account) win over a zero/negative amount's temBAD_AMOUNT.
+	t.Run("MPT arm: missing Holder beats zero amount", func(t *testing.T) {
+		c := &Clawback{
+			BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
+			Amount: newTestMPTAmount(0, "rIssuer"), // zero → temBAD_AMOUNT if reached
+			// Holder omitted → temMALFORMED must fire first
+		}
+		require.ErrorContains(t, preflightClawback(c, allRules()), "temMALFORMED")
+	})
+	t.Run("MPT arm: Holder==Account beats zero amount", func(t *testing.T) {
+		c := &Clawback{
+			BaseTx: *tx.NewBaseTx(tx.TypeClawback, "rIssuer"),
+			Amount: newTestMPTAmount(0, "rIssuer"),
+			Holder: "rIssuer", // == Account → temMALFORMED before amount check
+		}
+		require.ErrorContains(t, preflightClawback(c, allRules()), "temMALFORMED")
+	})
 }
 
 // Flatten Tests
@@ -205,11 +262,14 @@ func TestClawbackRequiredAmendments(t *testing.T) {
 		assert.NotContains(t, amendments, amendment.FeatureMPTokensV1)
 	})
 
-	t.Run("MPToken clawback requires Clawback and MPTokensV1 amendments", func(t *testing.T) {
+	t.Run("MPToken clawback gates on Clawback only; MPTokensV1 is a preflight-arm gate", func(t *testing.T) {
 		clawbackTx := NewMPTokenClawback("rIssuer", "rHolder", testMPTIssuanceID, newTestMPTAmount(100, "rIssuer"))
 		amendments := clawbackTx.RequiredAmendments()
-		assert.Contains(t, amendments, amendment.FeatureClawback)
-		assert.Contains(t, amendments, amendment.FeatureMPTokensV1)
+		assert.Equal(t, [][32]byte{amendment.FeatureClawback}, amendments)
+		// MPTokensV1 is enforced inside the MPT preflight arm (temDISABLED), not
+		// as a macro gate — so a bad flag/fee is not masked by temDISABLED.
+		rules := amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported).DisableByName("MPTokensV1").Build()
+		require.ErrorContains(t, clawbackTx.PreflightRules(rules), "temDISABLED")
 	})
 }
 

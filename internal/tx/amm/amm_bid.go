@@ -70,14 +70,35 @@ func (a *AMMBid) Validate() error {
 		}
 	}
 
-	// Max 4 auth accounts. The duplicate/self-authorization check is gated on
-	// fixAMMv1_3 and lives in Preclaim, since Validate() has no access to
-	// amendment rules.
+	// Max 4 auth accounts. The fixAMMv1_3-gated duplicate/self-authorization
+	// check lives in PreflightRules (it needs amendment rules), still ahead of
+	// any preclaim state check, matching rippled.
 	// Reference: rippled AMMBid.cpp preflight lines 73-96
 	if len(a.AuthAccounts) > auctionSlotMaxAuthAccounts {
 		return ter.Errorf(ter.TemMALFORMED, "cannot have more than 4 AuthAccounts")
 	}
 
+	return nil
+}
+
+// PreflightRules performs AMMBid's amendment-gated preflight check: under
+// fixAMMv1_3 an AuthAccounts entry that duplicates another or equals the
+// submitting account is temMALFORMED. rippled runs this in preflight, before
+// signature verification and before every preclaim state check (terNO_AMM,
+// tecAMM_EMPTY, terNO_ACCOUNT), so it must not sink into Preclaim.
+// Reference: rippled AMMBid.cpp preflight lines 81-95.
+func (a *AMMBid) PreflightRules(rules *amendment.Rules) error {
+	if len(a.AuthAccounts) == 0 || !rules.Enabled(amendment.FeatureFixAMMv1_3) {
+		return nil
+	}
+	seen := make(map[string]bool)
+	for _, authAcct := range a.AuthAccounts {
+		acct := authAcct.AuthAccount.Account
+		if acct == a.Common.Account || seen[acct] {
+			return ter.Errorf(ter.TemMALFORMED, "duplicate or self AuthAccount")
+		}
+		seen[acct] = true
+	}
 	return nil
 }
 
@@ -101,21 +122,6 @@ func (a *AMMBid) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result
 	lptAMMBalance := amm.LPTokenBalance
 	if lptAMMBalance.IsZero() {
 		return ter.TecAMM_EMPTY
-	}
-
-	// Reject duplicate or self-authorized AuthAccounts. This is a preflight check
-	// in rippled (temMALFORMED) gated on fixAMMv1_3; Validate() has no rules
-	// access, so it runs here.
-	// Reference: rippled AMMBid.cpp preflight lines 81-95
-	if len(a.AuthAccounts) > 0 && config.GetRules().Enabled(amendment.FeatureFixAMMv1_3) {
-		seen := make(map[string]bool)
-		for _, authAcct := range a.AuthAccounts {
-			acct := authAcct.AuthAccount.Account
-			if acct == a.Common.Account || seen[acct] {
-				return ter.TemMALFORMED
-			}
-			seen[acct] = true
-		}
 	}
 
 	// Reference: rippled AMMBid.cpp preclaim lines 116-126

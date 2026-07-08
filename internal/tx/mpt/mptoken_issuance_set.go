@@ -77,45 +77,33 @@ func (m *MPTokenIssuanceSet) TxType() tx.Type {
 	return tx.TypeMPTokenIssuanceSet
 }
 
-// Reference: rippled MPTokenIssuanceSet.cpp preflight
+// Validate holds MPTokenIssuanceSet's rules-independent preflight: the flags mask
+// and the MPTokenIssuanceID structural checks. The rest of rippled's preflight
+// body — the DomainID/Holder and lock/unlock shape checks, the no-op check and
+// the DynamicMPT mutation checks — is amendment-dependent and lives in
+// PreflightRules, so the whole body keeps rippled's order (notably the isMutate
+// temDISABLED gate leading it, ahead of the DomainID/Holder temMALFORMED check).
+// Reference: rippled MPTokenIssuanceSet.cpp getFlagsMask + preflight().
 func (m *MPTokenIssuanceSet) Validate() error {
 	if err := m.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	// DomainID and Holder cannot both be present
-	// Reference: rippled MPTokenIssuanceSet.cpp:40-41
-	if m.hasDomainID && m.Holder != "" {
-		return ter.Errorf(ter.TemMALFORMED, "cannot specify both DomainID and Holder")
-	}
-
-	flags := m.GetFlags()
-
-	if flags&^tfMPTokenIssuanceSetValidMask != 0 {
+	// Reference: rippled MPTokenIssuanceSet.cpp getFlagsMask (tfMPTokenIssuanceSetMask).
+	if m.GetFlags()&^tfMPTokenIssuanceSetValidMask != 0 {
 		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceSet")
 	}
 
-	// Cannot set both tfMPTLock and tfMPTUnlock
-	if (flags&MPTokenIssuanceSetFlagLock) != 0 && (flags&MPTokenIssuanceSetFlagUnlock) != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set both tfMPTLock and tfMPTUnlock")
-	}
-
-	// MPTokenIssuanceID is required
+	// MPTokenIssuanceID is a required UINT192 (rippled enforces its presence and
+	// 24-byte width at deserialization, before preflight).
 	if m.MPTokenIssuanceID == "" {
 		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID is required")
 	}
-
 	if len(m.MPTokenIssuanceID) != 48 {
 		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
 	}
-
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
 		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
-	}
-
-	// Holder cannot be the same as Account
-	if m.Holder != "" && m.Holder == m.Account {
-		return ter.Errorf(ter.TemMALFORMED, "Holder cannot be the same as Account")
 	}
 
 	return nil
@@ -127,16 +115,36 @@ func (m *MPTokenIssuanceSet) isMutate() bool {
 	return m.MutableFlags != nil || m.MPTokenMetadata != nil || m.TransferFee != nil
 }
 
-// PreflightRules holds the amendment-rules-dependent preflight checks. Mutation
-// fields are parsed but rejected before DynamicMPT activates, and every
-// mutation-shape check is gated on the amendment.
+// PreflightRules is the body of rippled's MPTokenIssuanceSet::preflight, in its
+// exact order. It leads with the mutation-fields-require-DynamicMPT temDISABLED
+// gate (ahead of the DomainID/Holder and lock/unlock shape checks), so a tx
+// carrying a mutation field before the amendment activates is rejected temDISABLED
+// even when it is also otherwise malformed. Keeping the whole body here (rather
+// than splitting the rules-free shape checks into Validate) is what preserves
+// that intra-preflight order.
 // Reference: rippled MPTokenIssuanceSet.cpp preflight().
 func (m *MPTokenIssuanceSet) PreflightRules(rules *amendment.Rules) error {
 	isMutate := m.isMutate()
 	dynamicMPT := rules.Enabled(amendment.FeatureDynamicMPT)
 
+	// Mutation fields require DynamicMPT — first check of the preflight body.
 	if isMutate && !dynamicMPT {
 		return ter.Errorf(ter.TemDISABLED, "mutation fields require DynamicMPT")
+	}
+
+	// DomainID and Holder cannot both be present.
+	if m.hasDomainID && m.Holder != "" {
+		return ter.Errorf(ter.TemMALFORMED, "cannot specify both DomainID and Holder")
+	}
+
+	// Cannot set both tfMPTLock and tfMPTUnlock.
+	if (m.GetFlags()&MPTokenIssuanceSetFlagLock) != 0 && (m.GetFlags()&MPTokenIssuanceSetFlagUnlock) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set both tfMPTLock and tfMPTUnlock")
+	}
+
+	// Holder cannot be the same as Account.
+	if m.Holder != "" && m.Holder == m.Account {
+		return ter.Errorf(ter.TemMALFORMED, "Holder cannot be the same as Account")
 	}
 
 	// Under SingleAssetVault or DynamicMPT the transaction must change something.
