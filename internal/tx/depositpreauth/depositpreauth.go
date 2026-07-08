@@ -72,24 +72,36 @@ func (d *DepositPreauth) TxType() tx.Type {
 	return tx.TypeDepositPreauth
 }
 
-// Reference: rippled DepositPreauth::preflight() amendment checks
 func (d *DepositPreauth) RequiredAmendments() [][32]byte {
-	amendments := [][32]byte{amendment.FeatureDepositPreauth}
-	if len(d.AuthorizeCredentials) > 0 || len(d.UnauthorizeCredentials) > 0 {
-		amendments = append(amendments, amendment.FeatureCredentials)
+	return [][32]byte{amendment.FeatureDepositPreauth}
+}
+
+// CheckExtraFeatures gates the credential-based forms on the Credentials
+// amendment. Presence is keyed on the field, not its length, so a present but
+// empty AuthorizeCredentials/UnauthorizeCredentials array with the amendment
+// disabled is temDISABLED — the same NotTEC rippled returns from
+// checkExtraFeatures, before preflight1's common checks and before the
+// temARRAY_EMPTY body check.
+func (d *DepositPreauth) CheckExtraFeatures(rules *amendment.Rules) error {
+	if (d.AuthorizeCredentials != nil || d.UnauthorizeCredentials != nil) &&
+		!rules.Enabled(amendment.FeatureCredentials) {
+		return ter.Errorf(ter.TemDISABLED, "credentials require the Credentials amendment")
 	}
-	return amendments
+	return nil
+}
+
+// GetFlagsMask reports the invalid-flag mask. DepositPreauth defines no
+// type-specific flags, so only the universal bits (tfFullyCanonicalSig,
+// tfInnerBatchTxn) are permitted — matching rippled, which leaves getFlagsMask
+// at its tfUniversalMask default. The engine rejects flags intersecting the
+// mask at preflight0.
+func (d *DepositPreauth) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 // Reference: rippled DepositPreauth::preflight()
 func (d *DepositPreauth) Validate() error {
 	if err := d.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed
-	// Reference: rippled preflight() - tx.getFlags() & tfUniversalMask
-	if err := tx.CheckNoFlags(d.GetFlags()); err != nil {
 		return err
 	}
 
