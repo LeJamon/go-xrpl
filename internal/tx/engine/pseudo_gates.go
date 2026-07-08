@@ -110,12 +110,6 @@ func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) 
 		return ter.TemBAD_SEQUENCE
 	}
 
-	// NegativeUNL amendment must be enabled for UNL_MODIFY pseudo-tx.
-	// Reference: Change.cpp:72-77.
-	if tx.TxType() == txcore.TypeUNLModify && (rules == nil || !rules.NegativeUNLEnabled()) {
-		return ter.TemDISABLED
-	}
-
 	return ter.TesSUCCESS
 }
 

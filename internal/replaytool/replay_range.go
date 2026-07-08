@@ -666,16 +666,16 @@ func (r *replayRangeRunner) processBlock(
 		return nil, nil, fmt.Errorf("loading amendments: %w", err)
 	}
 
-	// Flag-ledger NegativeUNL transition: on a flag ledger with
-	// featureNegativeUNL enabled, apply the pending ValidatorToDisable /
-	// ValidatorToReEnable transitions to the NegativeUNL entry BEFORE creating the
-	// tx-apply engine and applying txs, mirroring rippled BuildLedger.cpp:48-53
-	// (updateNegativeUNL runs on the freshly-built ledger before the OpenView
-	// tx-apply accum) and the catchup path in inbound/replay_delta.go. A
-	// UNLModify pseudo-tx sets the pending transition at one flag ledger; the next
-	// flag ledger moves it into DisabledValidators. Without this the next flag
-	// ledger after a UNLModify forks account_hash even though every transaction matches.
-	if protocol.IsFlagLedger(targetLedger) && rules != nil && rules.Enabled(amendment.FeatureNegativeUNL) {
+	// Flag-ledger NegativeUNL transition: on a flag ledger, apply the pending
+	// ValidatorToDisable / ValidatorToReEnable transitions to the NegativeUNL
+	// entry BEFORE creating the tx-apply engine and applying txs, mirroring
+	// rippled BuildLedger.cpp:48-53 (updateNegativeUNL runs on the freshly-built
+	// ledger before the OpenView tx-apply accum) and the catchup path in
+	// inbound/replay_delta.go. A UNLModify pseudo-tx sets the pending transition
+	// at one flag ledger; the next flag ledger moves it into DisabledValidators.
+	// Without this the next flag ledger after a UNLModify forks account_hash even
+	// though every transaction matches.
+	if protocol.IsFlagLedger(targetLedger) {
 		if err := openLedger.UpdateNegativeUNL(); err != nil {
 			return nil, nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
 		}

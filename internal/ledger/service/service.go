@@ -694,7 +694,7 @@ func (s *Service) SubmitOpenLedgerTx(blob []byte, local bool) (openledger.Result
 	// per-tx cost runs concurrently across ingress workers instead of serialising
 	// under modifyMu; the in-strand check then reuses the cached verdict (#1105).
 	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+		txengine.PrewarmSignature(ptx.Parsed)
 	}
 	_, res := ov.Submit(ptx, cfg, queue)
 
@@ -731,7 +731,7 @@ func (s *Service) PrewarmSignatures(blobs [][]byte) {
 			defer wg.Done()
 			for blob := range work {
 				if ptx, err := openledger.ParsePendingTx(blob); err == nil {
-					txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+					txengine.PrewarmSignature(ptx.Parsed)
 				}
 			}
 		}()

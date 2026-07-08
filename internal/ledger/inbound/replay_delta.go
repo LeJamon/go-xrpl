@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/crypto/common"
@@ -606,12 +605,11 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 
 	engine := txengine.NewEngine(child, engineCfg)
 
-	// R6b.1: on a flag ledger with featureNegativeUNL, apply pending
-	// ValidatorToDisable / ValidatorToReEnable transitions BEFORE
-	// applying any txs. Without this, every flag ledger's replay-delta
-	// produces a wrong AccountHash on networks with featureNegativeUNL
-	// and falls back to legacy catchup.
-	if protocol.IsFlagLedger(child.Sequence()) && engineCfg.Rules != nil && engineCfg.Rules.Enabled(amendment.FeatureNegativeUNL) {
+	// R6b.1: on a flag ledger, apply pending ValidatorToDisable /
+	// ValidatorToReEnable transitions BEFORE applying any txs. Without this,
+	// every flag ledger's replay-delta produces a wrong AccountHash and falls
+	// back to legacy catchup.
+	if protocol.IsFlagLedger(child.Sequence()) {
 		if err := child.UpdateNegativeUNL(); err != nil {
 			return nil, fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
 		}
