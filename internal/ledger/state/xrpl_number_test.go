@@ -6,6 +6,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestXRPLNumber_CmpTwoNegatives locks in parity with rippled 3.2.0's Number
+// operator< fix: two negative Numbers with equal exponents compare by magnitude
+// correctly (the larger magnitude is the smaller number). goXRPL compares via
+// Sub().Signum(), so it was never subject to rippled's pre-3.2.0 inversion, but
+// this guards against a regression.
+func TestXRPLNumber_CmpTwoNegatives(t *testing.T) {
+	neg5 := NewXRPLNumber(-5, 0)
+	neg3 := NewXRPLNumber(-3, 0)
+	require.Equal(t, -1, neg5.Cmp(neg3), "-5 < -3")
+	require.Equal(t, 1, neg3.Cmp(neg5), "-3 > -5")
+	require.Equal(t, 0, neg5.Cmp(NewXRPLNumber(-5, 0)))
+}
+
 // TestXRPLGuard_PushPop verifies that guard digits are preserved through push/pop.
 func TestXRPLGuard_PushPop(t *testing.T) {
 	t.Parallel()

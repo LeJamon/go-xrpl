@@ -198,7 +198,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				ownerBalance,
 				ownerOwnerCount,
 				escrowEntry.Account,
-				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
+				// Pre-fixCleanup3_2_0 the refund used the erased escrow SLE for the
+				// reserve/bump (owner count 0); the amendment uses the creator's
+				// account entry so the returned MPToken's reserve is charged to it.
+				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
 			); result != ter.TesSUCCESS {
 				return result
@@ -218,7 +221,11 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 				escrowAmount,
 				escrowEntry.Account, escrowEntry.Account, // senderID == receiverID (cancel returns to creator)
 				createAsset,
-				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
+				// Pre-fixCleanup3_2_0 the refund used the erased escrow SLE for the
+				// reserve/bump (owner count 0); the amendment uses the creator's
+				// account entry so a newly-created trust line's reserve is charged
+				// to it.
+				rules.Enabled(amendment.FeatureFixCleanup3_2_0),
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
 			); result != ter.TesSUCCESS {
 				return result

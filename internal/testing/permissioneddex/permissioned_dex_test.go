@@ -52,6 +52,112 @@ func parseDomainID(hexStr string) [32]byte {
 	return id
 }
 
+// TestPermissionedDEX_ZeroDomainID verifies that a zero DomainID is rejected as
+// temMALFORMED in OfferCreate and Payment once fixCleanup3_2_0 is enabled. A zero
+// DomainID can never name a PermissionedDomain ledger entry.
+// Reference: rippled PermissionedDEX_test testOfferCreate / testPayment zero-domain arms.
+func TestPermissionedDEX_ZeroDomainID(t *testing.T) {
+	var zeroDomain [32]byte
+	zeroHex := hex.EncodeToString(zeroDomain[:])
+
+	t.Run("OfferCreate_fixEnabled_temMALFORMED", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		dex := SetupPermissionedDEX(t, env)
+		result := env.Submit(
+			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
+				DomainID(zeroDomain).Build(),
+		)
+		requireResult(t, result, "temMALFORMED")
+	})
+
+	// With the fix disabled the zero-DomainID preflight check is absent, so the
+	// offer passes preflight (rippled skips its own disabled arm because a
+	// zero-key keylet read can crash an assert-enabled build; goXRPL's read is
+	// safe and simply finds no domain). We only assert the check did not fire.
+	t.Run("OfferCreate_fixDisabled_passesPreflight", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("fixCleanup3_2_0")
+		dex := SetupPermissionedDEX(t, env)
+		result := env.Submit(
+			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
+				DomainID(zeroDomain).Build(),
+		)
+		if result.Code == "temMALFORMED" {
+			t.Errorf("expected zero-DomainID to pass preflight with fixCleanup3_2_0 disabled, got temMALFORMED")
+		}
+	})
+
+	t.Run("Payment_fixEnabled_temMALFORMED", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		dex := SetupPermissionedDEX(t, env)
+		result := env.Submit(
+			paymentBuilder.PayIssued(dex.Bob, dex.Alice, dex.USD(10)).
+				SendMax(jtx.XRPTxAmount(10_000_000)).
+				Paths(usdPath(dex.GW)).
+				DomainID(zeroHex).Build(),
+		)
+		requireResult(t, result, "temMALFORMED")
+	})
+
+	t.Run("Payment_fixDisabled_passesPreflight", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.DisableFeature("fixCleanup3_2_0")
+		dex := SetupPermissionedDEX(t, env)
+		result := env.Submit(
+			paymentBuilder.PayIssued(dex.Bob, dex.Alice, dex.USD(10)).
+				SendMax(jtx.XRPTxAmount(10_000_000)).
+				Paths(usdPath(dex.GW)).
+				DomainID(zeroHex).Build(),
+		)
+		if result.Code == "temMALFORMED" {
+			t.Errorf("expected zero-DomainID to pass preflight with fixCleanup3_2_0 disabled, got temMALFORMED")
+		}
+	})
+}
+
+// TestPermissionedDEX_CancelRegularOfferWithDomainCreate exercises the
+// ValidPermissionedDEX deletion fix: a domain OfferCreate that cancels the
+// submitter's own regular (non-domain) offer via OfferSequence succeeds once
+// fixCleanup3_2_0 is enabled, but pre-amendment the invariant flags the deleted
+// regular offer and the transaction fails with tecINVARIANT_FAILED.
+// Reference: rippled PermissionedDEX_test testCancelRegularOfferWithDomainCreate (#7118).
+func TestPermissionedDEX_CancelRegularOfferWithDomainCreate(t *testing.T) {
+	run := func(t *testing.T, fixOn bool) {
+		env := jtx.NewTestEnv(t)
+		if !fixOn {
+			env.DisableFeature("fixCleanup3_2_0")
+		}
+		dex := SetupPermissionedDEX(t, env)
+
+		// bob places a regular (non-domain) offer.
+		regularSeq := env.Seq(dex.Bob)
+		jtx.RequireTxSuccess(t, env.Submit(
+			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).Build()))
+		env.Close()
+		offerBuilder.RequireOfferInLedger(t, env, dex.Bob, regularSeq)
+
+		// bob places a domain offer that cancels the regular one via OfferSequence.
+		domainSeq := env.Seq(dex.Bob)
+		res := env.Submit(
+			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(20_000_000), dex.USD(20)).
+				DomainID(dex.DomainID).OfferSequence(regularSeq).Build())
+		env.Close()
+
+		if fixOn {
+			jtx.RequireTxSuccess(t, res)
+			offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, regularSeq)
+			offerBuilder.RequireOfferInLedger(t, env, dex.Bob, domainSeq)
+		} else {
+			requireResult(t, res, "tecINVARIANT_FAILED")
+			offerBuilder.RequireOfferInLedger(t, env, dex.Bob, regularSeq)
+			offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, domainSeq)
+		}
+	}
+
+	t.Run("fixOn", func(t *testing.T) { run(t, true) })
+	t.Run("fixOff", func(t *testing.T) { run(t, false) })
+}
+
 // TestPermissionedDEX_OfferCreate tests OfferCreate with domain IDs.
 // Reference: rippled PermissionedDEX_test::testOfferCreate
 func TestPermissionedDEX_OfferCreate(t *testing.T) {

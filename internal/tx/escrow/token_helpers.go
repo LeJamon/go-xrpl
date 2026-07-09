@@ -464,15 +464,15 @@ func escrowUnlockIOU(
 	trustLineExists := err == nil && trustLineData != nil
 
 	if !trustLineExists && createAsset && !receiverIsIssuer {
-		// On finish, rippled scopes the reserve check and the owner-count bump to
-		// the destination account. On cancel, it scopes both to the soon-erased
-		// escrow SLE (its sfOwnerCount reads as 0 and the bump is discarded), so
-		// the caller passes bumpDestOwnerCount=false and the reserve uses 0.
-		reserveOwnerCount := destOwnerCount
+		// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped to
+		// the destination account (bumpDestOwnerCount=true). Pre-amendment, cancel
+		// scoped them to the soon-erased escrow SLE, which has no sfOwnerCount:
+		// rippled throws reading it, yielding tefEXCEPTION whenever a new trust line
+		// must be created during a cancel refund.
 		if !bumpDestOwnerCount {
-			reserveOwnerCount = 0
+			return ter.TefEXCEPTION
 		}
-		reserve := reserveBase + uint64(reserveOwnerCount+1)*reserveIncrement
+		reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
 		if destBalance < reserve {
 			return ter.TecNO_LINE_INSUF_RESERVE
 		}
@@ -582,14 +582,15 @@ func escrowUnlockMPT(
 		receiverExists, _ := view.Exists(receiverTokenKey)
 
 		if !receiverExists && createAsset {
-			// On cancel rippled scopes the reserve check and owner-count bump to
-			// the soon-erased escrow SLE (sfOwnerCount reads 0, bump discarded);
-			// on finish both apply to the destination account.
-			reserveOwnerCount := destOwnerCount
+			// Post-fixCleanup3_2_0 the reserve check and owner-count bump are scoped
+			// to the destination account. Pre-amendment, cancel scoped them to the
+			// soon-erased escrow SLE, which has no sfOwnerCount: rippled throws
+			// reading it, yielding tefEXCEPTION whenever a new MPToken must be
+			// created during a cancel refund.
 			if !bumpDestOwnerCount {
-				reserveOwnerCount = 0
+				return ter.TefEXCEPTION
 			}
-			reserve := reserveBase + uint64(reserveOwnerCount+1)*reserveIncrement
+			reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
 			if destBalance < reserve {
 				return ter.TecINSUFFICIENT_RESERVE
 			}

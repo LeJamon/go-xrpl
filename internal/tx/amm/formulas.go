@@ -495,7 +495,7 @@ func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, 
 // initializeFeeAuctionVote initializes the vote slots and auction slot for an AMM.
 // This is called when creating an AMM or when depositing into an empty AMM.
 // Reference: rippled AMMUtils.cpp initializeFeeAuctionVote lines 340-384
-func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency string, ammAccountAddr string, tfee uint16, parentCloseTime uint32) {
+func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency string, ammAccountAddr string, tfee uint16, parentCloseTime uint32, clearStaleAuthAccounts bool) {
 	// Clear existing vote slots and add creator's vote
 	amm.VoteSlots = []VoteSlotData{
 		{
@@ -517,13 +517,24 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 	// Expiration is one full time slot (24 hours) after the parent close.
 	expiration := parentCloseTime + uint32(totalTimeSlotSecs)
 
+	// Pre-fixCleanup3_2_0, rippled peeks and mutates the existing auction slot in
+	// place, so a prior holder's AuthAccounts survive an empty-AMM re-init. The
+	// amendment clears them. Preserve them when the amendment is off.
+	authAccounts := make([][20]byte, 0)
+	authAccountsPresent := false
+	if !clearStaleAuthAccounts && amm.AuctionSlot != nil && amm.AuctionSlot.AuthAccountsPresent {
+		authAccounts = amm.AuctionSlot.AuthAccounts
+		authAccountsPresent = true
+	}
+
 	// Initialize auction slot
 	amm.AuctionSlot = &AuctionSlotData{
-		Account:       accountID,
-		Expiration:    expiration,
-		Price:         zeroAmount(tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}),
-		DiscountedFee: discountedFee,
-		AuthAccounts:  make([][20]byte, 0),
+		Account:             accountID,
+		Expiration:          expiration,
+		Price:               zeroAmount(tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}),
+		DiscountedFee:       discountedFee,
+		AuthAccounts:        authAccounts,
+		AuthAccountsPresent: authAccountsPresent,
 	}
 }
 
