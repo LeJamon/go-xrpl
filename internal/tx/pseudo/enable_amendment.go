@@ -5,22 +5,10 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
-
-// fixTrustLinesToSelfIndexes are the two RippleState ledger entries that
-// existed on mainnet whose LowLimit and HighLimit belong to the same account
-// (a trust line to self). fixTrustLinesToSelf deletes them on activation.
-// Reference: rippled Change.cpp activateTrustLinesToSelfFix (lines 233-239).
-var fixTrustLinesToSelfIndexes = [...]string{
-	"2F8F21EFCAFD7ACFB07D5BB04F0D2E18587820C7611305BB674A64EAB0FA71E1",
-	"326035D5C0560A9DA8636545DD5A1B0DFCFF63E68D491B5522B767BB00564B1A",
-}
 
 var (
 	ErrAmendmentMissing = ter.Errorf(ter.TemMALFORMED, "EnableAmendment missing amendment hash")
@@ -166,12 +154,6 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) ter.Result {
 		)
 		sle.Amendments = append(sle.Amendments, amendmentHash)
 
-		// Reference: rippled Change.cpp:324-325 — fixTrustLinesToSelf runs a
-		// one-off ledger migration when it activates.
-		if amendmentHash == amendment.FeatureFixTrustLinesToSelf {
-			activateTrustLinesToSelfFix(ctx)
-		}
-
 		// The in-memory AmendmentTable.enable() notification (Change.cpp:327)
 		// and setAmendmentBlocked() on unsupported activation (Change.cpp:329-334)
 		// are driven by the validated-ledger resync in the ledger service
@@ -198,73 +180,6 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
-}
-
-// activateTrustLinesToSelfFix removes the known trust-lines-to-self when the
-// fixTrustLinesToSelf amendment activates. It is best-effort and never fails
-// the enable: a missing, wrong-typed, or non-self entry is skipped, mirroring
-// rippled's removeTrustLineToSelf returning success in those cases.
-// Reference: rippled Change.cpp:166-246.
-func activateTrustLinesToSelfFix(ctx *tx.ApplyContext) {
-	for _, indexHex := range fixTrustLinesToSelfIndexes {
-		index, err := parseAmendmentHash(indexHex)
-		if err != nil {
-			continue
-		}
-		k := keylet.Keylet{Key: index}
-
-		data, readErr := ctx.View.Read(k)
-		if readErr != nil || data == nil {
-			continue // missing entry -> skip
-		}
-		if typeCode, typeErr := state.GetLedgerEntryType(data); typeErr != nil || typeCode != uint16(entry.TypeRippleState) {
-			continue // not a trust line -> skip
-		}
-		rs, parseErr := state.ParseRippleState(data)
-		if parseErr != nil {
-			continue
-		}
-		// Only a genuine trust line to self: rippled treats the entry as such only
-		// when sfLowLimit == sfHighLimit as full STAmounts — currency, issuer, AND
-		// value all equal (Change.cpp:187-194 / STAmount::operator==).
-		if rs.LowLimit.Issuer != rs.HighLimit.Issuer ||
-			rs.LowLimit.Currency != rs.HighLimit.Currency ||
-			rs.LowLimit.Value() != rs.HighLimit.Value() {
-			continue
-		}
-		lowID, lowErr := state.DecodeAccountID(rs.LowLimit.Issuer)
-		highID, highErr := state.DecodeAccountID(rs.HighLimit.Issuer)
-		if lowErr != nil || highErr != nil {
-			continue
-		}
-
-		// Remove from both owner directories first. Rippled aborts the migration
-		// if either dirRemove fails (Change.cpp:196-212); lacking an all-or-nothing
-		// sandbox, we skip the entry on failure rather than leave it half-removed.
-		if _, derr := state.DirRemove(ctx.View, keylet.OwnerDir(lowID), rs.LowNode, index, false); derr != nil {
-			ctx.Log.Warn("fixTrustLinesToSelf: low owner-dir remove failed; skipping", "index", indexHex, "err", derr)
-			continue
-		}
-		if _, derr := state.DirRemove(ctx.View, keylet.OwnerDir(highID), rs.HighNode, index, false); derr != nil {
-			ctx.Log.Warn("fixTrustLinesToSelf: high owner-dir remove failed; skipping", "index", indexHex, "err", derr)
-			continue
-		}
-
-		// Release the reserve held by each side that paid it.
-		// Reference: rippled Change.cpp:214-220.
-		if rs.Flags&state.LsfLowReserve != 0 {
-			_ = tx.AdjustOwnerCount(ctx.View, lowID, -1)
-		}
-		if rs.Flags&state.LsfHighReserve != 0 {
-			_ = tx.AdjustOwnerCount(ctx.View, highID, -1)
-		}
-
-		if eraseErr := ctx.View.Erase(k); eraseErr != nil {
-			ctx.Log.Warn("fixTrustLinesToSelf: failed to erase trust line to self", "index", indexHex)
-			continue
-		}
-		ctx.Log.Info("fixTrustLinesToSelf: removed trust line to self", "index", indexHex)
-	}
 }
 
 // parseAmendmentHash parses a hex-encoded amendment hash string into [32]byte.

@@ -67,7 +67,7 @@ func newAccountSet(account string) *txcore.BaseTx {
 // wins over telNETWORK_ID_MAKES_TX_NON_CANONICAL.
 func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 	t.Run("delegate==account beats NetworkID", func(t *testing.T) {
-		e := preflightEngine(batchRules("PermissionDelegation"))
+		e := preflightEngine(batchRules("PermissionDelegationV1_1"))
 		tx := newAccountSet(precedenceSourceAddr)
 		tx.Delegate = precedenceSourceAddr // == Account → temBAD_SIGNER
 		tx.NetworkID = u32(99)             // legacy node (ID 0) forbids the field
@@ -77,39 +77,12 @@ func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 	})
 
 	t.Run("delegate-disabled beats NetworkID", func(t *testing.T) {
-		e := preflightEngine(allRules()) // PermissionDelegation is Supported::no → disabled
+		e := preflightEngine(allRules()) // PermissionDelegationV1_1 is Supported::no → disabled
 		tx := newAccountSet(precedenceSourceAddr)
-		tx.Delegate = precedenceGenesisAddr // present, PermissionDelegation off → temDISABLED
+		tx.Delegate = precedenceGenesisAddr // present, PermissionDelegationV1_1 off → temDISABLED
 		tx.NetworkID = u32(99)
 		if got := e.preflight(tx); got != ter.TemDISABLED {
 			t.Fatalf("preflight = %v, want TemDISABLED", got)
-		}
-	})
-}
-
-// TestPreflightPrecedence_TicketAmendmentFirst pins finding E-ticket: the
-// TicketSequence-without-featureTicketBatch temMALFORMED is the first preflight1
-// check, ahead of NetworkID and the signing-key shape check.
-func TestPreflightPrecedence_TicketAmendmentFirst(t *testing.T) {
-	e := preflightEngine(rulesWithout("TicketBatch"))
-
-	t.Run("ticket-amendment beats NetworkID", func(t *testing.T) {
-		tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		tx.Fee = "10"
-		tx.TicketSequence = u32(7)
-		tx.NetworkID = u32(99)
-		if got := e.preflight(tx); got != ter.TemMALFORMED {
-			t.Fatalf("preflight = %v, want TemMALFORMED", got)
-		}
-	})
-
-	t.Run("ticket-amendment beats bad signing key", func(t *testing.T) {
-		tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		tx.Fee = "10"
-		tx.TicketSequence = u32(7)
-		tx.SigningPubKey = "00" // invalid key type → temBAD_SIGNATURE if reached
-		if got := e.preflight(tx); got != ter.TemMALFORMED {
-			t.Fatalf("preflight = %v, want TemMALFORMED", got)
 		}
 	})
 }

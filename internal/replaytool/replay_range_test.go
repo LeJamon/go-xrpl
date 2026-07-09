@@ -71,7 +71,9 @@ func TestLoadRulesFromState_Empty(t *testing.T) {
 func TestLoadRulesFromState_Populated(t *testing.T) {
 	flowID := amendment.FeatureID("Flow")
 	checksID := amendment.FeatureID("Checks")
-	disabledID := amendment.FeatureID("DepositAuth")
+	// AMM is supported but not retired and absent from the SLE, so it stays
+	// disabled (Flow/Checks are retired and would be enabled regardless).
+	disabledID := amendment.FeatureID("AMM")
 
 	data, err := pseudo.SerializeAmendmentsSLE(&pseudo.AmendmentsSLE{
 		Amendments: [][32]byte{flowID, checksID},
@@ -95,7 +97,7 @@ func TestLoadRulesFromState_Populated(t *testing.T) {
 		t.Error("expected Checks to be enabled")
 	}
 	if rules.Enabled(disabledID) {
-		t.Error("expected DepositAuth to be disabled")
+		t.Error("expected AMM to be disabled")
 	}
 }
 

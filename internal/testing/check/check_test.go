@@ -44,66 +44,36 @@ func requireTrustLineInBothDirs(t *testing.T, env *jtx.TestEnv, holder, issuer *
 	require.True(t, inDir(issuer), "trust line missing from issuer's owner directory")
 }
 
-// TestCheck_Enabled tests that checks are gated by the Checks amendment.
+// TestCheck_Enabled tests that all check-related facilities are available.
 // Reference: rippled Check_test.cpp testEnabled (lines 140-189)
 func TestCheck_Enabled(t *testing.T) {
-	t.Run("AmendmentDisabled", func(t *testing.T) {
-		// If the Checks amendment is not enabled, you should not be able
-		// to create, cash, or cancel checks.
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("Checks")
+	env := jtx.NewTestEnv(t)
 
-		alice := jtx.NewAccount("alice")
-		env.Fund(alice)
-		env.Close()
+	alice := jtx.NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
 
-		master := env.MasterAccount()
-		chkID := check.GetCheckID(master, env.Seq(master))
+	master := env.MasterAccount()
 
-		result := env.Submit(check.CheckCreate(master, alice, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		require.Equal(t, "temDISABLED", result.Code, "CheckCreate should be disabled")
-		env.Close()
+	// Create and cash a check
+	chkID1 := check.GetCheckID(master, env.Seq(master))
+	result := env.Submit(check.CheckCreate(master, alice, tx.NewXRPAmount(jtx.XRP(100))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-		result = env.Submit(check.CheckCashAmount(alice, chkID, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		require.Equal(t, "temDISABLED", result.Code, "CheckCash should be disabled")
-		env.Close()
+	result = env.Submit(check.CheckCashAmount(alice, chkID1, tx.NewXRPAmount(jtx.XRP(100))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-		result = env.Submit(check.CheckCancel(alice, chkID).Build())
-		require.Equal(t, "temDISABLED", result.Code, "CheckCancel should be disabled")
-		env.Close()
-	})
+	// Create and cancel a check
+	chkID2 := check.GetCheckID(master, env.Seq(master))
+	result = env.Submit(check.CheckCreate(master, alice, tx.NewXRPAmount(jtx.XRP(100))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-	t.Run("AmendmentEnabled", func(t *testing.T) {
-		// If the Checks amendment is enabled, all check-related facilities
-		// should be available.
-		env := jtx.NewTestEnv(t)
-
-		alice := jtx.NewAccount("alice")
-		env.Fund(alice)
-		env.Close()
-
-		master := env.MasterAccount()
-
-		// Create and cash a check
-		chkID1 := check.GetCheckID(master, env.Seq(master))
-		result := env.Submit(check.CheckCreate(master, alice, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(check.CheckCashAmount(alice, chkID1, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// Create and cancel a check
-		chkID2 := check.GetCheckID(master, env.Seq(master))
-		result = env.Submit(check.CheckCreate(master, alice, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(check.CheckCancel(alice, chkID2).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-	})
+	result = env.Submit(check.CheckCancel(alice, chkID2).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 }
 
 // TestCheck_CreateValid tests many valid ways to create a check.
@@ -226,29 +196,6 @@ func TestCheck_CreateValid(t *testing.T) {
 // TestCheck_CreateDisallowIncoming tests the DisallowIncomingCheck flag.
 // Reference: rippled Check_test.cpp testCreateDisallowIncoming (lines 292-384)
 func TestCheck_CreateDisallowIncoming(t *testing.T) {
-	t.Run("FlagNotSetWithoutAmendment", func(t *testing.T) {
-		// Test flag doesn't set unless amendment enabled
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DisallowIncoming")
-
-		alice := jtx.NewAccount("alice")
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		// Set the DisallowIncomingCheck flag
-		result := env.Submit(accountset.AccountSet(alice).
-			SetFlag(accounttx.AccountSetFlagDisallowIncomingCheck).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// The flag should NOT be set on the account (amendment not enabled)
-		info := env.AccountInfo(alice)
-		require.NotNil(t, info)
-		// lsfDisallowIncomingCheck = 0x08000000
-		require.Equal(t, uint32(0), info.Flags&0x08000000,
-			"DisallowIncomingCheck flag should not be set without amendment")
-	})
-
 	t.Run("FlagBlocksIncomingChecks", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
@@ -804,9 +751,6 @@ func TestCheck_CashXRP(t *testing.T) {
 func TestCheck_CashIOU(t *testing.T) {
 	t.Run("SimpleIOUWithAmount", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
-		// Disable CheckCashMakesTrustLine so missing trust line returns tecNO_LINE
-		// (matches rippled's first test pass: sa - featureCheckCashMakesTrustLine)
-		env.DisableFeature("CheckCashMakesTrustLine")
 
 		gw := jtx.NewAccount("gateway")
 		alice := jtx.NewAccount("alice")
@@ -847,18 +791,9 @@ func TestCheck_CashIOU(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// bob tries but has no trust line for USD
-		result = env.Submit(check.CheckCashAmount(bob, chkID1, USD(10)).Build())
-		require.Equal(t, "tecNO_LINE", result.Code)
-		env.Close()
-
-		// bob sets up trust line, but not high enough
+		// bob sets up a trust line for USD
 		result = env.Submit(trustset.TrustSet(bob, USD(9.5)).Build())
 		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(check.CheckCashAmount(bob, chkID1, USD(10)).Build())
-		require.Equal(t, "tecPATH_PARTIAL", result.Code)
 		env.Close()
 
 		// bob sets trust line high enough but asks for more than SendMax
@@ -1334,9 +1269,6 @@ func TestCheck_CashQuality(t *testing.T) {
 // Reference: rippled Check_test.cpp testCashInvalid (lines 1366-1662)
 func TestCheck_CashInvalid(t *testing.T) {
 	env := jtx.NewTestEnv(t)
-	// Disable CheckCashMakesTrustLine so missing trust line returns tecNO_LINE
-	// (matches rippled's first test pass: sa - featureCheckCashMakesTrustLine)
-	env.DisableFeature("CheckCashMakesTrustLine")
 
 	gw := jtx.NewAccount("gateway")
 	alice := jtx.NewAccount("alice")
@@ -1357,16 +1289,10 @@ func TestCheck_CashInvalid(t *testing.T) {
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	// bob tries to cash without a trust line
-	t.Run("NoBobTrustLine", func(t *testing.T) {
-		chkID := check.GetCheckID(alice, env.Seq(alice))
-		env.Submit(check.CheckCreate(alice, bob, USD(20)).Build())
-		env.Close()
-
-		result := env.Submit(check.CheckCashAmount(bob, chkID, USD(20)).Build())
-		require.Equal(t, "tecNO_LINE", result.Code)
-		env.Close()
-	})
+	// alice writes a check to bob before he has a trust line; it stays on the
+	// ledger uncashed.
+	env.Submit(check.CheckCreate(alice, bob, USD(20)).Build())
+	env.Close()
 
 	// Set up bob's trustline
 	result = env.Submit(trustset.TrustSet(bob, USD(20)).Build())
@@ -1928,59 +1854,33 @@ func requireDeliveredAmount(t *testing.T, result jtx.TxResult, expected tx.Amoun
 	}
 }
 
-// TestCheck_Fix1623Enable tests the fix1623 amendment for DeliveredAmount.
+// TestCheck_Fix1623Enable tests that CheckCash reports delivered_amount.
 // Reference: rippled Check_test.cpp testFix1623Enable (lines 1870-1913)
 func TestCheck_Fix1623Enable(t *testing.T) {
-	t.Run("WithoutFix1623", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("fix1623")
+	env := jtx.NewTestEnv(t)
 
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-		env.Fund(alice, bob)
-		env.Close()
+	env.Fund(alice, bob)
+	env.Close()
 
-		chkID := check.GetCheckID(alice, env.Seq(alice))
-		result := env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(200))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+	chkID := check.GetCheckID(alice, env.Seq(alice))
+	result := env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(200))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-		result = env.Submit(check.CheckCashDeliverMin(bob, chkID, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+	result = env.Submit(check.CheckCashDeliverMin(bob, chkID, tx.NewXRPAmount(jtx.XRP(100))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-		require.NotNil(t, result.Metadata)
-		require.Nil(t, result.Metadata.DeliveredAmount, "delivered_amount must not be set without fix1623")
-	})
-
-	t.Run("WithFix1623", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-
-		env.Fund(alice, bob)
-		env.Close()
-
-		chkID := check.GetCheckID(alice, env.Seq(alice))
-		result := env.Submit(check.CheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(200))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(check.CheckCashDeliverMin(bob, chkID, tx.NewXRPAmount(jtx.XRP(100))).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		// With fix1623, delivered_amount must be set to the amount actually
-		// delivered, which is the full SendMax (200 XRP) since alice's liquid
-		// XRP exceeds it. Reference: CashCheck.cpp L322-324.
-		expected := tx.NewXRPAmount(jtx.XRP(200))
-		require.NotNil(t, result.Metadata)
-		require.NotNil(t, result.Metadata.DeliveredAmount, "delivered_amount must be set with fix1623")
-		require.True(t, result.Metadata.DeliveredAmount.IsNative())
-		require.Equal(t, expected.Value(), result.Metadata.DeliveredAmount.Value())
-	})
+	// delivered_amount must be set to the amount actually delivered, which is
+	// the full SendMax (200 XRP) since alice's liquid XRP exceeds it.
+	expected := tx.NewXRPAmount(jtx.XRP(200))
+	require.NotNil(t, result.Metadata)
+	require.NotNil(t, result.Metadata.DeliveredAmount, "delivered_amount must be set")
+	require.True(t, result.Metadata.DeliveredAmount.IsNative())
+	require.Equal(t, expected.Value(), result.Metadata.DeliveredAmount.Value())
 }
 
 // TestCheck_WithTickets tests check operations using tickets.

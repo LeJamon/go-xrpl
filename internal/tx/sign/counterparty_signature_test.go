@@ -140,7 +140,7 @@ func TestCounterpartySignature_SingleSignValid(t *testing.T) {
 	}
 	transaction.GetCommon().CounterpartySignature = cp
 
-	if err := VerifyCounterpartySignature(transaction, cp, nil, false); err != nil {
+	if err := VerifyCounterpartySignature(transaction, cp, false); err != nil {
 		t.Fatalf("valid counterparty signature rejected: %v", err)
 	}
 }
@@ -159,7 +159,7 @@ func TestCounterpartySignature_SingleSignWrongKey(t *testing.T) {
 	}
 	cp := &txcore.CounterpartySignature{SigningPubKey: wrongPub, TxnSignature: sig}
 
-	err = VerifyCounterpartySignature(transaction, cp, nil, false)
+	err = VerifyCounterpartySignature(transaction, cp, false)
 	if err == nil {
 		t.Fatal("wrong-key counterparty signature was accepted")
 	}
@@ -181,7 +181,7 @@ func TestCounterpartySignature_SingleAndMultiRejected(t *testing.T) {
 			{Signer: txcore.Signer{Account: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}},
 		},
 	}
-	if err := VerifyCounterpartySignature(transaction, cp, nil, false); err == nil {
+	if err := VerifyCounterpartySignature(transaction, cp, false); err == nil {
 		t.Fatal("counterparty signed two ways was accepted")
 	}
 }
@@ -203,7 +203,7 @@ func TestCounterpartySignature_MultiSignValid(t *testing.T) {
 	sortSigners(signers)
 	cp := &txcore.CounterpartySignature{Signers: signers}
 
-	if err := VerifyCounterpartySignature(transaction, cp, nil, false); err != nil {
+	if err := VerifyCounterpartySignature(transaction, cp, false); err != nil {
 		t.Fatalf("valid multi-signed counterparty rejected: %v", err)
 	}
 }
@@ -222,7 +222,7 @@ func TestCounterpartySignature_MultiSignWrongKey(t *testing.T) {
 			{Signer: txcore.Signer{Account: s1Addr, SigningPubKey: wrongPub, TxnSignature: sig1}},
 		},
 	}
-	err := VerifyCounterpartySignature(transaction, cp, nil, false)
+	err := VerifyCounterpartySignature(transaction, cp, false)
 	if err == nil {
 		t.Fatal("multi-signed counterparty with wrong key accepted")
 	}
@@ -250,7 +250,7 @@ func TestCounterpartySignature_MultiSignUnsorted(t *testing.T) {
 	signers[0], signers[1] = signers[1], signers[0]
 	cp := &txcore.CounterpartySignature{Signers: signers}
 
-	if err := VerifyCounterpartySignature(transaction, cp, nil, false); err == nil {
+	if err := VerifyCounterpartySignature(transaction, cp, false); err == nil {
 		t.Fatal("unsorted counterparty signers accepted")
 	}
 }
@@ -273,7 +273,7 @@ func TestCounterpartySignature_MultiSignSelfSignAllowed(t *testing.T) {
 			{Signer: txcore.Signer{Account: txAccount, SigningPubKey: pub, TxnSignature: sig}},
 		},
 	}
-	if err := VerifyCounterpartySignature(transaction, cp, nil, false); err != nil {
+	if err := VerifyCounterpartySignature(transaction, cp, false); err != nil {
 		t.Fatalf("counterparty self-sign should be allowed: %v", err)
 	}
 }

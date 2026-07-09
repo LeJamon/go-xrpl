@@ -43,9 +43,8 @@ func TestBookStep_CrossUsesDirectoryTierQuality(t *testing.T) {
 
 	step := NewBookStep(inIssue, outIssue, strandSrc, strandDst, nil, false)
 	step.parentCloseTime = 1000
-	// Both reduced-offers amendments are active at mainnet ledger 99226374, so the
-	// strict ceil paths are the live ones.
-	step.fixReducedOffersV1 = true
+	// fixReducedOffersV2 is active at mainnet ledger 99226374, so the strict
+	// ceil path is the live one.
 	step.fixReducedOffersV2 = true
 
 	// Placement quality is 100 USD : 50 XRP. The directory key encodes this tier.

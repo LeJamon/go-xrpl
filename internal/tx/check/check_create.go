@@ -90,7 +90,7 @@ func (c *CheckCreate) Flatten() (map[string]any, error) {
 }
 
 func (c *CheckCreate) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureChecks}
+	return nil
 }
 
 // CheckExtraFeatures gates an MPT-denominated SendMax on the MPTokensV2
@@ -122,11 +122,8 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Check DisallowIncoming flag on destination
 	// Reference: CreateCheck.cpp L93-98
-	rules := ctx.Rules()
-	if rules.Enabled(amendment.FeatureDisallowIncoming) {
-		if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
-			return ter.TecNO_PERMISSION
-		}
+	if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Check RequireDestTag on destination

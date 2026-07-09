@@ -333,15 +333,10 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 	}
 
 	var startingSeq uint32
-	switch {
-	case pseudo:
+	if pseudo {
 		startingSeq = 0
-	case rules != nil && rules.Enabled(amendment.FeatureDeletableAccounts):
-		if view != nil {
-			startingSeq = view.LedgerSeq()
-		}
-	default:
-		startingSeq = 1
+	} else if view != nil {
+		startingSeq = view.LedgerSeq()
 	}
 	if seq != startingSeq {
 		return &InvariantViolation{

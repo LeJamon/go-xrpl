@@ -110,7 +110,7 @@ func (n *NFTokenCreateOffer) SetSellOffer() {
 }
 
 func (n *NFTokenCreateOffer) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	return nil
 }
 
 // Reference: rippled NFTokenCreateOffer.cpp doApply
@@ -245,12 +245,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TecUNFUNDED_OFFER
 			}
 		} else {
-			var funds tx.Amount
-			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-				funds = tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-			} else {
-				funds = accountHoldsIOU(ctx.View, accountID, n.Amount)
-			}
+			funds := tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 			if funds.Signum() <= 0 {
 				return ter.TecUNFUNDED_OFFER
 			}
@@ -264,24 +259,20 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 		if result != ter.TesSUCCESS {
 			return result
 		}
-		if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-			if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return ter.TecNO_PERMISSION
-			}
+		if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+			return ter.TecNO_PERMISSION
 		}
 	}
 
 	// 6. Owner disallow incoming check (for buy offers)
 	// Reference: rippled tokenOfferCreatePreclaim lines 990-1004
 	if n.Owner != "" {
-		if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-			ownerAccount, _, result := ctx.LookupAccount(n.Owner)
-			if result != ter.TesSUCCESS {
-				return ter.TecNO_TARGET
-			}
-			if ownerAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return ter.TecNO_PERMISSION
-			}
+		ownerAccount, _, result := ctx.LookupAccount(n.Owner)
+		if result != ter.TesSUCCESS {
+			return ter.TecNO_TARGET
+		}
+		if ownerAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+			return ter.TecNO_PERMISSION
 		}
 	}
 

@@ -28,96 +28,76 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 	// =========================================================================
 	// Fill or Kill - unless we fully cross, just charge a fee and don't place
 	// the offer on the books. But also clean up expired offers.
-	// fix1578 changes the return code. Verify expected behavior.
 	// =========================================================================
 	t.Run("FillOrKill", func(t *testing.T) {
-		// Inner loop: test with fix1578 disabled and enabled.
-		for _, fix1578Name := range []string{"fix1578_disabled", "fix1578_enabled"} {
-			t.Run(fix1578Name, func(t *testing.T) {
-				env := newEnvWithFeatures(t, disabledFeatures)
+		env := newEnvWithFeatures(t, disabledFeatures)
 
-				// Tweak fix1578 for this sub-test.
-				if fix1578Name == "fix1578_disabled" {
-					env.DisableFeature("fix1578")
-				} else {
-					env.EnableFeature("fix1578")
-				}
+		gw := jtx.NewAccount("gateway")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 
-				fix1578Enabled := env.FeatureEnabled("fix1578")
+		USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
 
-				gw := jtx.NewAccount("gateway")
-				alice := jtx.NewAccount("alice")
-				bob := jtx.NewAccount("bob")
+		f := env.BaseFee()
 
-				USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
+		env.FundAmount(gw, startBalance)
+		env.FundAmount(alice, startBalance)
+		env.FundAmount(bob, startBalance)
+		env.Close()
 
-				f := env.BaseFee()
+		// bob creates an offer that expires before the next ledger close.
+		result := env.Submit(
+			OfferCreate(bob, USD(500), jtx.XRPTxAmountFromXRP(500)).
+				Expiration(LastClose(env) + 1).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		jtx.RequireOwnerCount(t, env, bob, 1)
+		RequireOfferCount(t, env, bob, 1)
 
-				env.FundAmount(gw, startBalance)
-				env.FundAmount(alice, startBalance)
-				env.FundAmount(bob, startBalance)
-				env.Close()
+		// bob creates the offer that will be crossed.
+		result = env.Submit(
+			OfferCreate(bob, USD(500), jtx.XRPTxAmountFromXRP(500)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		jtx.RequireOwnerCount(t, env, bob, 2)
+		RequireOfferCount(t, env, bob, 2)
 
-				// bob creates an offer that expires before the next ledger close.
-				result := env.Submit(
-					OfferCreate(bob, USD(500), jtx.XRPTxAmountFromXRP(500)).
-						Expiration(LastClose(env) + 1).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-				jtx.RequireOwnerCount(t, env, bob, 1)
-				RequireOfferCount(t, env, bob, 1)
+		env.Trust(alice, USD(1000))
+		result = env.Submit(payment.PayIssued(gw, alice, USD(1000)).Build())
+		jtx.RequireTxSuccess(t, result)
 
-				// bob creates the offer that will be crossed.
-				result = env.Submit(
-					OfferCreate(bob, USD(500), jtx.XRPTxAmountFromXRP(500)).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-				jtx.RequireOwnerCount(t, env, bob, 2)
-				RequireOfferCount(t, env, bob, 2)
+		// Order that can't be filled but will remove bob's expired offer:
+		result = env.Submit(
+			OfferCreate(alice, jtx.XRPTxAmountFromXRP(1000), USD(1000)).
+				FillOrKill().Build())
+		jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
 
-				env.Trust(alice, USD(1000))
-				result = env.Submit(payment.PayIssued(gw, alice, USD(1000)).Build())
-				jtx.RequireTxSuccess(t, result)
+		// Trust() reimburses its fee, so alice only paid 1 fee (FoK offer).
+		jtx.RequireBalance(t, env, alice, startBalance-(f*1))
+		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		RequireOfferCount(t, env, alice, 0)
 
-				// Order that can't be filled but will remove bob's expired offer:
-				{
-					offerTx := OfferCreate(alice, jtx.XRPTxAmountFromXRP(1000), USD(1000)).
-						FillOrKill().Build()
-					result = env.Submit(offerTx)
-					if fix1578Enabled {
-						jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
-					} else {
-						jtx.RequireTxSuccess(t, result)
-					}
-				}
-				// Trust() reimburses its fee, so alice only paid 1 fee (FoK offer).
-				jtx.RequireBalance(t, env, alice, startBalance-(f*1))
-				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
-				jtx.RequireOwnerCount(t, env, alice, 1)
-				RequireOfferCount(t, env, alice, 0)
+		jtx.RequireBalance(t, env, bob, startBalance-(f*2))
+		jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
+		jtx.RequireOwnerCount(t, env, bob, 1)
+		RequireOfferCount(t, env, bob, 1)
 
-				jtx.RequireBalance(t, env, bob, startBalance-(f*2))
-				jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
-				jtx.RequireOwnerCount(t, env, bob, 1)
-				RequireOfferCount(t, env, bob, 1)
+		// Order that can be filled
+		result = env.Submit(
+			OfferCreate(alice, jtx.XRPTxAmountFromXRP(500), USD(500)).
+				FillOrKill().Build())
+		jtx.RequireTxSuccess(t, result)
 
-				// Order that can be filled
-				result = env.Submit(
-					OfferCreate(alice, jtx.XRPTxAmountFromXRP(500), USD(500)).
-						FillOrKill().Build())
-				jtx.RequireTxSuccess(t, result)
+		jtx.RequireBalance(t, env, alice, startBalance-(f*2)+uint64(jtx.XRP(500)))
+		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 500)
+		jtx.RequireOwnerCount(t, env, alice, 1)
+		RequireOfferCount(t, env, alice, 0)
 
-				jtx.RequireBalance(t, env, alice, startBalance-(f*2)+uint64(jtx.XRP(500)))
-				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 500)
-				jtx.RequireOwnerCount(t, env, alice, 1)
-				RequireOfferCount(t, env, alice, 0)
-
-				jtx.RequireBalance(t, env, bob, startBalance-(f*2)-uint64(jtx.XRP(500)))
-				jtx.RequireIOUBalance(t, env, bob, gw, "USD", 500)
-				jtx.RequireOwnerCount(t, env, bob, 1)
-				RequireOfferCount(t, env, bob, 0)
-			})
-		}
+		jtx.RequireBalance(t, env, bob, startBalance-(f*2)-uint64(jtx.XRP(500)))
+		jtx.RequireIOUBalance(t, env, bob, gw, "USD", 500)
+		jtx.RequireOwnerCount(t, env, bob, 1)
+		RequireOfferCount(t, env, bob, 0)
 	})
 
 	// =========================================================================
@@ -144,17 +124,10 @@ func testFillModes(t *testing.T, disabledFeatures []string) {
 		jtx.RequireTxSuccess(t, result)
 
 		// No cross:
-		{
-			iocEnabled := featureEnabled(disabledFeatures, "ImmediateOfferKilled")
-			offerTx := OfferCreate(alice, jtx.XRPTxAmountFromXRP(1000), USD(1000)).
-				ImmediateOrCancel().Build()
-			result = env.Submit(offerTx)
-			if iocEnabled {
-				jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
-			} else {
-				jtx.RequireTxSuccess(t, result)
-			}
-		}
+		result = env.Submit(
+			OfferCreate(alice, jtx.XRPTxAmountFromXRP(1000), USD(1000)).
+				ImmediateOrCancel().Build())
+		jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
 		// Trust() reimburses its fee, so alice only paid 1 fee (IoC offer).
 		jtx.RequireBalance(t, env, alice, startBalance-f)
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1000)
@@ -632,16 +605,6 @@ func testSellWithFillOrKill(t *testing.T, disabledFeatures []string) {
 	env.FundAmount(bob, uint64(jtx.XRP(10000000)))
 	env.Close()
 
-	// Code returned if an offer is killed.
-	// fix1578 changes the return code from tesSUCCESS to tecKILLED.
-	fix1578Enabled := env.FeatureEnabled("fix1578")
-	var killedCode string
-	if fix1578Enabled {
-		killedCode = jtx.TecKILLED
-	} else {
-		killedCode = jtx.TesSUCCESS
-	}
-
 	// bob offers XRP for USD.
 	env.Trust(bob, USD(200))
 	env.Close()
@@ -658,11 +621,7 @@ func testSellWithFillOrKill(t *testing.T, disabledFeatures []string) {
 	{
 		result = env.Submit(
 			OfferCreate(alice, USD(21), jtx.XRPTxAmountFromXRP(2100)).FillOrKill().Sell().Build())
-		if killedCode == jtx.TecKILLED {
-			jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
-		} else {
-			jtx.RequireTxSuccess(t, result)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
 		env.Close()
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
 		RequireOfferCount(t, env, alice, 0)
@@ -713,11 +672,7 @@ func testSellWithFillOrKill(t *testing.T, disabledFeatures []string) {
 	{
 		result = env.Submit(
 			OfferCreate(alice, USD(1), jtx.XRPTxAmountFromXRP(501)).FillOrKill().Sell().Build())
-		if killedCode == jtx.TecKILLED {
-			jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
-		} else {
-			jtx.RequireTxSuccess(t, result)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
 		env.Close()
 		jtx.RequireIOUBalance(t, env, alice, gw, "USD", 35)
 		RequireOfferCount(t, env, alice, 0)

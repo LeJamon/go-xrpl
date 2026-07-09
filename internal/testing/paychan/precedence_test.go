@@ -5,8 +5,20 @@ import (
 	"testing"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
+
+// strayPayChanFlag is a bit outside every PayChan flag mask — neither a
+// universal flag nor a PayChanClaim flag (tfRenew=0x00010000, tfClose=0x00020000)
+// — so it is stray for Create, Fund and Claim alike.
+const strayPayChanFlag = uint32(0x00040000)
+
+// withFlag ORs a flag bit into a transaction's Flags field.
+func withFlag(txn tx.Transaction, flag uint32) tx.Transaction {
+	txn.GetCommon().SetFlags(txn.GetCommon().GetFlags() | flag)
+	return txn
+}
 
 // openChannel funds alice + bob and opens a 1000-XRP channel, returning its hex ID.
 func openChannel(t *testing.T, env *jtx.TestEnv, alice, bob *jtx.Account) string {

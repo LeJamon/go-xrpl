@@ -3,7 +3,6 @@ package payment
 import (
 	"encoding/hex"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
@@ -15,30 +14,22 @@ import (
 // already resolved by the engine before this runs.
 //
 // Mint: the sender (sfAccount) issues the delivered currency. Burn: the
-// destination issues it. XRP is never a mint or burn. Under fixDelegateV1_1
-// cross-currency delivery is additionally forbidden and the checks extend to
-// MPT; before the amendment an MPT amount is rejected outright.
+// destination issues it. XRP is never a mint or burn. Granular permissions are
+// only valid for direct payments, so a cross-currency SendMax or any Paths
+// forbids the grant; the mint/burn checks cover both IOU and MPT.
 func (p *Payment) CheckDelegatePermission(pc tx.DelegatePermissionContext) ter.Result {
 	account := p.GetCommon().Account
 	amt := p.Amount
 
-	if pc.Rules != nil && pc.Rules.Enabled(amendment.FeatureFixDelegateV1_1) {
-		if p.SendMax != nil && !sameAsset(*p.SendMax, amt) {
-			return ter.TecNO_DELEGATE_PERMISSION
-		}
-		return paymentMintBurn(pc, amt, account, p.Destination)
-	}
-
-	// Pre-amendment: the mint/burn permissions do not support MPT.
-	if amt.IsMPT() {
-		return ter.TefEXCEPTION
+	if (p.SendMax != nil && !sameAsset(*p.SendMax, amt)) || len(p.Paths) > 0 {
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	return paymentMintBurn(pc, amt, account, p.Destination)
 }
 
 func paymentMintBurn(pc tx.DelegatePermissionContext, amt state.Amount, account, destination string) ter.Result {
 	if amt.Native {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	issuer := amountIssuer(amt)
 	if pc.HasGranular(tx.GranularPaymentMint) && issuer == account {
@@ -47,7 +38,7 @@ func paymentMintBurn(pc tx.DelegatePermissionContext, amt state.Amount, account,
 	if pc.HasGranular(tx.GranularPaymentBurn) && issuer == destination {
 		return ter.TesSUCCESS
 	}
-	return ter.TecNO_DELEGATE_PERMISSION
+	return ter.TerNO_DELEGATE_PERMISSION
 }
 
 // amountIssuer returns the r-address of an asset's issuer: the currency issuer

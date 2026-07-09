@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -22,24 +21,12 @@ import (
 )
 
 // Bounds on the size of a multi-signer array, mirroring rippled
-// STTx::minMultiSigners / STTx::maxMultiSigners. The maximum is amendment-gated:
-// featureExpandedSignerList raises it from 8 to 32.
+// STTx::minMultiSigners / STTx::kMaxMultiSigners. It governs both the regular
+// Signers array and a Batch signer's nested Signers array.
 const (
-	MinMultiSigners    = 1
-	maxSignersBase     = 8
-	maxSignersExpanded = 32
+	MinMultiSigners = 1
+	MaxMultiSigners = 32
 )
-
-// MaxMultiSigners returns the upper bound on a multi-signer array for the given
-// rules: 32 with featureExpandedSignerList enabled, 8 otherwise. It governs both
-// the regular Signers array and a Batch signer's nested Signers array.
-// Reference: rippled STTx::maxMultiSigners.
-func MaxMultiSigners(rules *amendment.Rules) int {
-	if rules != nil && rules.Enabled(amendment.FeatureExpandedSignerList) {
-		return maxSignersExpanded
-	}
-	return maxSignersBase
-}
 
 // Signature verification errors
 var (
@@ -392,11 +379,11 @@ const counterpartyPrefix = "Counterparty: "
 // multi-signing payload. Unlike a top-level multi-sign, the counterparty may
 // sign for the transaction's own Account. Every error is prefixed
 // "Counterparty: " to match rippled's messages.
-func VerifyCounterpartySignature(tx txcore.Transaction, cp *txcore.CounterpartySignature, rules *amendment.Rules, mustBeFullyCanonical bool) error {
+func VerifyCounterpartySignature(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool) error {
 	if cp.SigningPubKey != "" {
 		return verifyCounterpartySingleSign(tx, cp, mustBeFullyCanonical)
 	}
-	return verifyCounterpartyMultiSign(tx, cp, rules, mustBeFullyCanonical)
+	return verifyCounterpartyMultiSign(tx, cp, mustBeFullyCanonical)
 }
 
 // verifyCounterpartySingleSign verifies a single-signed counterparty object. A
@@ -422,7 +409,7 @@ func verifyCounterpartySingleSign(tx txcore.Transaction, cp *txcore.Counterparty
 // direct TxnSignature alongside the Signers array is rejected as signed two
 // ways. Reference: rippled multiSignHelper (txnAccountID unseated, so a signer
 // may equal the transaction Account).
-func verifyCounterpartyMultiSign(tx txcore.Transaction, cp *txcore.CounterpartySignature, rules *amendment.Rules, mustBeFullyCanonical bool) error {
+func verifyCounterpartyMultiSign(tx txcore.Transaction, cp *txcore.CounterpartySignature, mustBeFullyCanonical bool) error {
 	// An empty SigningPubKey with no Signers is neither a single- nor a
 	// multi-signature (rippled multiSignHelper's !isFieldPresent(sfSigners) arm).
 	if len(cp.Signers) == 0 {
@@ -431,7 +418,7 @@ func verifyCounterpartyMultiSign(tx txcore.Transaction, cp *txcore.CounterpartyS
 	if cp.TxnSignature != "" {
 		return errors.New(counterpartyPrefix + "Cannot both single- and multi-sign.")
 	}
-	if len(cp.Signers) > MaxMultiSigners(rules) {
+	if len(cp.Signers) > MaxMultiSigners {
 		return errors.New(counterpartyPrefix + "Invalid Signers array size.")
 	}
 

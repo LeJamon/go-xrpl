@@ -139,15 +139,11 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 }
 
 // preflight1 runs rippled Transactor::preflight1 (which invokes preflight0) in
-// its exact order: ticket-amendment → delegate → preflight0 (NetworkID, flags
-// mask) → account → fee → signing-key shape → ticket+AccountTxnID → the
-// outer-only tfInnerBatchTxn rejection (last).
+// its exact order: delegate → preflight0 (NetworkID, flags mask) → account →
+// fee → signing-key shape → ticket+AccountTxnID → the outer-only
+// tfInnerBatchTxn rejection (last).
 // Reference: rippled Transactor.cpp preflight1/preflight0.
 func (e *Engine) preflight1(tx txcore.Transaction, common *txcore.Common, rules *amendment.Rules) ter.Result {
-	// A TicketSequence without featureTicketBatch is the first preflight1 check.
-	if result := checkTicketAmendment(common, rules); result != ter.TesSUCCESS {
-		return result
-	}
 	// The delegate check precedes preflight0 (and thus the NetworkID checks).
 	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
@@ -281,9 +277,6 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkSigningKeyShape(common); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := checkTicketAmendment(common, rules); result != ter.TesSUCCESS {
-		return result
-	}
 	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
@@ -323,22 +316,13 @@ func preflightInnerBatchFlag(common *txcore.Common, rules *amendment.Rules) ter.
 	return ter.TemINVALID_FLAG
 }
 
-// checkTicketAmendment rejects a TicketSequence field when featureTicketBatch is
-// not enabled. Reference: rippled Transactor.cpp preflight1 (first check).
-func checkTicketAmendment(common *txcore.Common, rules *amendment.Rules) ter.Result {
-	if common.TicketSequence != nil && !rules.Enabled(amendment.FeatureTicketBatch) {
-		return ter.TemMALFORMED
-	}
-	return ter.TesSUCCESS
-}
-
 // checkDelegate validates the sfDelegate field.
 // Reference: rippled Transactor.cpp preflight1 (delegate block, before preflight0).
 func checkDelegate(common *txcore.Common, rules *amendment.Rules) ter.Result {
 	if common.Delegate == "" {
 		return ter.TesSUCCESS
 	}
-	if !rules.Enabled(amendment.FeaturePermissionDelegation) {
+	if !rules.Enabled(amendment.FeaturePermissionDelegationV1_1) {
 		return ter.TemDISABLED
 	}
 	if common.Delegate == common.Account {
@@ -409,8 +393,8 @@ func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txco
 	if !sign.IsMultiSigned(tx) {
 		return ter.TesSUCCESS
 	}
-	// The signer array must lie within the rules-gated bounds.
-	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners(e.rules()) {
+	// The signer array must lie within the multi-signer bounds.
+	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners {
 		return ter.TemINVALID
 	}
 	txAccountID, acctErr := state.DecodeAccountID(common.Account)
@@ -451,7 +435,7 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 	if !ok {
 		return ter.TesSUCCESS
 	}
-	maxSigners := sign.MaxMultiSigners(e.rules())
+	maxSigners := sign.MaxMultiSigners
 	for _, signer := range bsp.GetBatchSigners() {
 		// A single-signed BatchSigner has no nested array; multi-sign is keyed
 		// off an empty SigningPubKey, matching Batch.verifyBatchSignatures.
@@ -482,9 +466,7 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	// rippled STTx::checkSign. A failure is a bad signature (checkValidity's
 	// Validity::SigBad), which rippled maps to temINVALID.
 	if cp := tx.GetCommon().CounterpartySignature; cp != nil {
-		mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
-			(tx.GetCommon().GetFlags()&txcore.TfFullyCanonicalSig) != 0
-		if err := sign.VerifyCounterpartySignature(tx, cp, e.rules(), mustBeFullyCanonical); err != nil {
+		if err := sign.VerifyCounterpartySignature(tx, cp, true); err != nil {
 			return ter.TemINVALID
 		}
 	}
@@ -505,12 +487,10 @@ func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 // of the transaction's own signature. Reference: rippled STTx::checkSingleSign /
 // checkMultiSign via preflight2's checkValidity.
 func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
-	// Full canonicality (low-S secp256k1) is required when RequireFullyCanonicalSig
-	// is enabled, or — independent of the amendment — when the transaction opts in
-	// via the tfFullyCanonicalSig flag.
-	// Reference: rippled apply.cpp:78-84 + STTx::checkSingleSign/checkMultiSign.
-	mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
-		(tx.GetCommon().GetFlags()&txcore.TfFullyCanonicalSig) != 0
+	// Full canonicality (low-S secp256k1) is unconditionally required.
+	// Reference: rippled STTx::checkSingleSign/checkMultiSign (verify() defaults
+	// to fullyCanonical).
+	mustBeFullyCanonical := true
 	if sign.IsMultiSigned(tx) {
 		// Preflight verifies only the multi-sign structure (already checked in
 		// preflightMultiSignStructure) and the per-signer cryptographic
@@ -571,11 +551,7 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 // transactions stay on the in-strand path because go-xrpl interleaves their
 // crypto check with ledger-state signer-list authorization, which must observe
 // the apply view.
-//
-// rules supplies the parent ledger's amendment state so the canonicality
-// requirement matches the in-strand check; a nil rules honours only the per-tx
-// tfFullyCanonicalSig flag.
-func PrewarmSignature(txn txcore.Transaction, rules *amendment.Rules) {
+func PrewarmSignature(txn txcore.Transaction) {
 	if txn == nil {
 		return
 	}
@@ -588,9 +564,7 @@ func PrewarmSignature(txn txcore.Transaction, rules *amendment.Rules) {
 	if common.SigningPubKey == "" {
 		return
 	}
-	mustBeFullyCanonical := (rules != nil && rules.RequireFullyCanonicalSigEnabled()) ||
-		(common.GetFlags()&txcore.TfFullyCanonicalSig) != 0
-	if sign.VerifySignature(txn, mustBeFullyCanonical) == nil {
+	if sign.VerifySignature(txn, true) == nil {
 		common.MarkSignatureVerified()
 		// Publish to the tx-ID cache so the consensus build path (fresh object,
 		// cold flag) skips the redundant verify.

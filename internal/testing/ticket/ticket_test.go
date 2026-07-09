@@ -37,91 +37,6 @@ func noop(acc *jtx.Account) *account.AccountSet {
 }
 
 // --------------------------------------------------------------------------
-// TestTicket_FeatureNotEnabled
-// Reference: rippled Ticket_test.cpp testTicketNotEnabled (lines 382-426)
-// --------------------------------------------------------------------------
-
-func TestTicket_FeatureNotEnabled(t *testing.T) {
-	env := jtx.NewTestEnv(t)
-	env.DisableFeature("TicketBatch")
-	env.Close()
-	master := env.MasterAccount()
-
-	// ticket::create(master, 1) → temDISABLED
-	result := env.Submit(ticket.TicketCreate(master, 1).Build())
-	jtx.RequireTxFail(t, result, "temDISABLED")
-	env.Close()
-	jtx.RequireOwnerCount(t, env, master, 0)
-	jtx.RequireTicketCount(t, env, master, 0)
-
-	// noop(master) with ticket::use(1) → temMALFORMED
-	noop1 := noop(master)
-	jtx.WithTicketSeq(noop1, 1)
-	result = env.Submit(noop1)
-	jtx.RequireTxFail(t, result, "temMALFORMED")
-
-	// noop(master) with ticket::use(1) AND explicit seq → temMALFORMED
-	// In rippled, ticket::use(1) sets TicketSequence=1 and Sequence=0.
-	// Then seq(env.seq(master)) overrides Sequence back to non-zero.
-	// Since TicketBatch is disabled, temMALFORMED from the disabled feature
-	// check takes precedence over temSEQ_AND_TICKET.
-	noop2 := noop(master)
-	jtx.WithTicketSeq(noop2, 1)
-	seq := env.Seq(master)
-	noop2.SetSequence(seq) // Override Sequence back to non-zero
-	result = env.Submit(noop2)
-	jtx.RequireTxFail(t, result, "temMALFORMED")
-
-	// Close enough ledgers that the previous transactions are no
-	// longer retried.
-	for range 8 {
-		env.Close()
-	}
-
-	// Enable the feature
-	env.EnableFeature("TicketBatch")
-	env.Close()
-	jtx.RequireOwnerCount(t, env, master, 0)
-	jtx.RequireTicketCount(t, env, master, 0)
-
-	// Create 2 tickets
-	ticketSeq := env.Seq(master) + 1
-	tc2 := ticket.TicketCreate(master, 2).Build()
-	result = env.Submit(tc2)
-	jtx.RequireTxSuccess(t, result)
-	ticket.CheckTicketCreateMeta(t, result, tc2)
-	env.Close()
-	jtx.RequireOwnerCount(t, env, master, 2)
-	jtx.RequireTicketCount(t, env, master, 2)
-
-	// Use first ticket with noop
-	noop3 := noop(master)
-	jtx.WithTicketSeq(noop3, ticketSeq)
-	result = env.Submit(noop3)
-	jtx.RequireTxSuccess(t, result)
-	ticket.CheckTicketConsumeMeta(t, result, noop3)
-	ticketSeq++
-	env.Close()
-	jtx.RequireOwnerCount(t, env, master, 1)
-	jtx.RequireTicketCount(t, env, master, 1)
-
-	// Attempt to disable master key using a ticket. This fails with
-	// tecNO_ALTERNATIVE_KEY since master has no regular key or signer list.
-	// tec-class results still consume the ticket.
-	fset := account.NewAccountSet(master.Address)
-	fset.Fee = "10"
-	flag := account.AccountSetFlagDisableMaster
-	fset.SetFlag = &flag
-	jtx.WithTicketSeq(fset, ticketSeq)
-	result = env.Submit(fset)
-	jtx.RequireTxFail(t, result, "tecNO_ALTERNATIVE_KEY")
-	ticket.CheckTicketConsumeMeta(t, result, fset)
-	env.Close()
-	jtx.RequireOwnerCount(t, env, master, 0)
-	jtx.RequireTicketCount(t, env, master, 0)
-}
-
-// --------------------------------------------------------------------------
 // TestTicket_CreatePreflightFail
 // Reference: rippled Ticket_test.cpp testTicketCreatePreflightFail (lines 428-473)
 // --------------------------------------------------------------------------
@@ -663,69 +578,34 @@ func TestTicket_SignWithTicketSequence(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestTicket_FixBothSeqAndTicket(t *testing.T) {
-	t.Run("WithoutFeature", func(t *testing.T) {
-		// Reference: rippled lines 935-957
-		// Try the test without featureTicketBatch enabled.
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("TicketBatch")
-		alice := jtx.NewAccount("alice")
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
 
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.Close()
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.Close()
 
-		// Fail to create a ticket.
-		ticketSeq := env.Seq(alice) + 1
-		result := env.Submit(ticket.TicketCreate(alice, 1).Build())
-		jtx.RequireTxFail(t, result, "temDISABLED")
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireTicketCount(t, env, alice, 0)
-		require.Equal(t, ticketSeq, env.Seq(alice)+1)
+	// Create a ticket.
+	ticketSeq := env.Seq(alice) + 1
+	result := env.Submit(ticket.TicketCreate(alice, 1).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+	jtx.RequireOwnerCount(t, env, alice, 1)
+	jtx.RequireTicketCount(t, env, alice, 1)
+	require.Equal(t, ticketSeq+1, env.Seq(alice))
 
-		// Create a transaction that includes both a ticket and a non-zero
-		// sequence number. Since a ticket is used and tickets are not yet
-		// enabled the transaction should be malformed.
-		noopBoth := noop(alice)
-		jtx.WithTicketSeq(noopBoth, ticketSeq)
-		seq := env.Seq(alice)
-		noopBoth.SetSequence(seq) // Override Sequence back to non-zero
-		result = env.Submit(noopBoth)
-		jtx.RequireTxFail(t, result, "temMALFORMED")
-		env.Close()
-	})
+	// Create a transaction that includes both a ticket and a non-zero
+	// sequence number. The transaction fails with temSEQ_AND_TICKET.
+	noopBoth := noop(alice)
+	jtx.WithTicketSeq(noopBoth, ticketSeq)
+	seq := env.Seq(alice)
+	noopBoth.SetSequence(seq) // Override Sequence back to non-zero
+	result = env.Submit(noopBoth)
+	jtx.RequireTxFail(t, result, "temSEQ_AND_TICKET")
+	env.Close()
 
-	t.Run("WithFeature", func(t *testing.T) {
-		// Reference: rippled lines 958-985
-		// Try the test with featureTicketBatch enabled.
-		env := jtx.NewTestEnv(t)
-		alice := jtx.NewAccount("alice")
-
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		// Create a ticket.
-		ticketSeq := env.Seq(alice) + 1
-		result := env.Submit(ticket.TicketCreate(alice, 1).Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-		jtx.RequireOwnerCount(t, env, alice, 1)
-		jtx.RequireTicketCount(t, env, alice, 1)
-		require.Equal(t, ticketSeq+1, env.Seq(alice))
-
-		// Create a transaction that includes both a ticket and a non-zero
-		// sequence number. The transaction fails with temSEQ_AND_TICKET.
-		noopBoth := noop(alice)
-		jtx.WithTicketSeq(noopBoth, ticketSeq)
-		seq := env.Seq(alice)
-		noopBoth.SetSequence(seq) // Override Sequence back to non-zero
-		result = env.Submit(noopBoth)
-		jtx.RequireTxFail(t, result, "temSEQ_AND_TICKET")
-		env.Close()
-
-		// Verify that the transaction failed by looking at alice's
-		// sequence number and tickets.
-		jtx.RequireOwnerCount(t, env, alice, 1)
-		jtx.RequireTicketCount(t, env, alice, 1)
-		require.Equal(t, ticketSeq+1, env.Seq(alice))
-	})
+	// Verify that the transaction failed by looking at alice's
+	// sequence number and tickets.
+	jtx.RequireOwnerCount(t, env, alice, 1)
+	jtx.RequireTicketCount(t, env, alice, 1)
+	require.Equal(t, ticketSeq+1, env.Seq(alice))
 }

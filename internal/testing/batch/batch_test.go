@@ -1357,7 +1357,7 @@ func TestBatchDelegate(t *testing.T) {
 		// Inner tx[1] is a regular payment from alice to bob.
 		// Reference: rippled Batch_test.cpp testBatchDelegate() - "delegated non atomic inner"
 		env := newBatchEnv(t)
-		env.EnableFeature("PermissionDelegation")
+		env.EnableFeature("PermissionDelegationV1_1")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -1402,7 +1402,7 @@ func TestBatchDelegate(t *testing.T) {
 		// Carol submits batch: inner tx[0] is payment bob->alice with Delegate=carol, inner tx[1] is payment alice->bob.
 		// Reference: rippled Batch_test.cpp testBatchDelegate() - "delegated atomic inner"
 		env := newBatchEnv(t)
-		env.EnableFeature("PermissionDelegation")
+		env.EnableFeature("PermissionDelegationV1_1")
 
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
@@ -3492,56 +3492,5 @@ func TestBatchSignerArrayBound(t *testing.T) {
 
 		result := env.Submit(batch)
 		require.Equal(t, "temBAD_SIGNATURE", result.Code)
-	})
-
-	// Amendment disabled: the bound drops to 8. 9 nested signers is rejected in
-	// preflight regardless of the SignerList.
-	t.Run("ExpandedSignerList disabled - 9 nested signers rejected", func(t *testing.T) {
-		env := newBatchEnv(t)
-		env.DisableFeature("ExpandedSignerList")
-		env.Close()
-		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
-
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-		env.Close()
-
-		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 9))
-		env.Close()
-
-		result := env.Submit(batch)
-		require.Equal(t, "temBAD_SIGNATURE", result.Code)
-	})
-
-	// Amendment disabled: 8 nested signers is exactly the bound and passes the
-	// full pipeline when bob authorizes all eight with a met quorum.
-	t.Run("ExpandedSignerList disabled - 8 nested signers accepted", func(t *testing.T) {
-		env := newBatchEnv(t)
-		env.DisableFeature("ExpandedSignerList")
-		env.Close()
-		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
-
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-		env.Close()
-
-		signers := makeNestedSigners(env, 8)
-		env.Close()
-
-		signerEntries := make([]xtesting.TestSigner, len(signers))
-		for i, s := range signers {
-			signerEntries[i] = xtesting.TestSigner{Account: s, Weight: 1}
-		}
-		env.SetSignerList(bob, uint32(len(signers)), signerEntries)
-		env.Close()
-
-		batch := buildBatch(env, alice, bob, signers)
-
-		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
 	})
 }

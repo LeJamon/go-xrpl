@@ -7,7 +7,7 @@ import (
 
 // fixAMMv1_1Enabled reports whether fixAMMv1_1 governs this execution,
 // nil-defaulting to the active-network value (enabled) for rules-free contexts
-// such as pathfinding liquidity estimation, matching fix1515Enabled's convention.
+// such as pathfinding liquidity estimation.
 func fixAMMv1_1Enabled(sb *PaymentSandbox) bool {
 	rules := sb.Rules()
 	return rules == nil || rules.Enabled(amendment.FeatureFixAMMv1_1)

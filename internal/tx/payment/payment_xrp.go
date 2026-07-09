@@ -3,7 +3,6 @@ package payment
 import (
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -27,24 +26,25 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		feeDrops = ctx.Config.BaseFee // fallback to base fee if not specified
 	}
 
-	// IMPORTANT: sender.Balance has already had fee deducted (in doApply).
-	// Rippled checks against mPriorBalance (balance BEFORE fee deduction).
-	// We reconstruct the pre-fee balance for the check.
-	// Reference: rippled Payment.cpp:619 - if (mPriorBalance < dstAmount.xrp() + mmm)
-	priorBalance := ctx.Account.Balance + feeDrops
+	// PriorBalance is the source account's balance before its own fee was
+	// deducted (rippled's mPriorBalance). For a delegated payment the fee is
+	// charged to the delegate, so the source balance is untouched.
+	priorBalance := ctx.PriorBalance()
 
 	// Calculate reserve as: ReserveBase + (ownerCount * ReserveIncrement)
 	// This matches rippled's accountReserve(ownerCount) calculation
 	reserve := ctx.Config.ReserveBase + (uint64(ctx.Account.OwnerCount) * ctx.Config.ReserveIncrement)
 
-	// Use max(reserve, fee) as the minimum balance that must remain
-	// This matches rippled's behavior: auto const mmm = std::max(reserve, ctx_.tx.getFieldAmount(sfFee).xrp())
-	// Reference: rippled Payment.cpp:617
-	mmm := max(feeDrops, reserve)
+	// The final spend may dip into the reserve to cover its own fee — but only
+	// when the source account is the fee payer. In a delegated payment the fee
+	// payer is the delegate, so the source need only keep its plain reserve.
+	// Reference: rippled Payment.cpp doApply() (fix: decouple reserve from fee).
+	minRequired := reserve
+	if p.GetCommon().Delegate == "" {
+		minRequired = max(feeDrops, reserve)
+	}
 
-	// Check sender has enough balance using PRE-FEE balance
-	// Reference: rippled Payment.cpp:619 - if (mPriorBalance < dstAmount.xrp() + mmm)
-	if priorBalance < amountDrops+mmm {
+	if priorBalance < amountDrops+minRequired {
 		return ter.TecUNFUNDED_PAYMENT
 	}
 
@@ -83,13 +83,10 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount
 		// AND destination balance are <= base reserve, deposit preauth is NOT
 		// checked at all (expired credentials are left untouched too).
-		if ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
-			dstReserve := ctx.Config.ReserveBase
-
-			if amountDrops > dstReserve || destAccount.Balance > dstReserve {
-				if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
-					return result
-				}
+		dstReserve := ctx.Config.ReserveBase
+		if amountDrops > dstReserve || destAccount.Balance > dstReserve {
+			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 
@@ -129,20 +126,13 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_DST_INSUF_XRP
 	}
 
-	// Create new account
-	// With featureDeletableAccounts enabled, new accounts start with sequence
-	// equal to the current ledger sequence. Otherwise, sequence starts at 1.
-	// (see rippled Payment.cpp:409-411)
-	var accountSequence uint32
-	if ctx.Rules().DeletableAccountsEnabled() {
-		accountSequence = ctx.Config.LedgerSequence
-	} else {
-		accountSequence = 1
-	}
+	// Create new account. New accounts start with sequence equal to the current
+	// ledger sequence. Reference: rippled Payment.cpp:433 (setFieldU32(sfSequence,
+	// view().seq())).
 	newAccount := &state.AccountRoot{
 		Account:           p.Destination,
 		Balance:           amountDrops,
-		Sequence:          accountSequence,
+		Sequence:          ctx.Config.LedgerSequence,
 		Flags:             0,
 		PreviousTxnID:     ctx.TxHash,
 		PreviousTxnLgrSeq: ctx.Config.LedgerSequence,

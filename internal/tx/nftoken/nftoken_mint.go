@@ -173,15 +173,14 @@ func (n *NFTokenMint) SetTransferable() {
 	n.SetFlags(flags)
 }
 
-// When offer fields (Amount, Destination, Expiration) are present, also requires
+// When offer fields (Amount, Destination, Expiration) are present, requires
 // FeatureNFTokenMintOffer.
 // Reference: rippled NFTokenMint.cpp preflight — temDISABLED when offer fields present without amendment
 func (n *NFTokenMint) RequiredAmendments() [][32]byte {
-	amends := [][32]byte{amendment.FeatureNonFungibleTokensV1}
 	if n.Amount != nil || n.Destination != "" || n.Expiration != nil {
-		amends = append(amends, amendment.FeatureNFTokenMintOffer)
+		return [][32]byte{amendment.FeatureNFTokenMintOffer}
 	}
-	return amends
+	return nil
 }
 
 // Reference: rippled NFTokenMint.cpp doApply
@@ -321,56 +320,41 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 			if result != ter.TesSUCCESS {
 				return result
 			}
-			if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-				if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-					return ter.TecNO_PERMISSION
-				}
+			if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
+				return ter.TecNO_PERMISSION
 			}
 		}
 	}
 
-	// Get the token sequence from MintedNFTokens.
-	// With fixNFTokenRemint, the token sequence is FirstNFTokenSequence + MintedNFTokens.
-	// Reference: rippled NFTokenMint.cpp doApply lines 227-291
+	// The token's unique sequence is FirstNFTokenSequence + MintedNFTokens.
+	// Reference: rippled NFTokenMint.cpp doApply
 	var tokenSeq uint32
 
-	if !ctx.Rules().Enabled(amendment.FeatureFixNFTokenRemint) {
-		// Without fixNFTokenRemint: tokenSeq = MintedNFTokens
-		tokenSeq = issuerAccount.MintedNFTokens
-		nextTokenSeq := tokenSeq + 1
-		if nextTokenSeq < tokenSeq {
-			return ter.TecMAX_SEQUENCE_REACHED
+	// If the issuer hasn't minted an NFToken before, set FirstNFTokenSequence.
+	if !issuerAccount.HasFirstNFTSeq {
+		acctSeq := issuerAccount.Sequence
+		// If minted by authorized minter (Issuer field present) or using a ticket,
+		// use acctSeq as-is. Otherwise, the sequence was pre-incremented, so use acctSeq - 1.
+		if n.Issuer != "" || n.GetCommon().TicketSequence != nil {
+			issuerAccount.FirstNFTokenSequence = acctSeq
+		} else {
+			issuerAccount.FirstNFTokenSequence = acctSeq - 1
 		}
-		issuerAccount.MintedNFTokens = nextTokenSeq
-	} else {
-		// With fixNFTokenRemint:
-		// If the issuer hasn't minted an NFToken before, set FirstNFTokenSequence.
-		// Reference: rippled NFTokenMint.cpp lines 245-271
-		if !issuerAccount.HasFirstNFTSeq {
-			acctSeq := issuerAccount.Sequence
-			// If minted by authorized minter (Issuer field present) or using a ticket,
-			// use acctSeq as-is. Otherwise, the sequence was pre-incremented, so use acctSeq - 1.
-			if n.Issuer != "" || n.GetCommon().TicketSequence != nil {
-				issuerAccount.FirstNFTokenSequence = acctSeq
-			} else {
-				issuerAccount.FirstNFTokenSequence = acctSeq - 1
-			}
-			issuerAccount.HasFirstNFTSeq = true
-		}
+		issuerAccount.HasFirstNFTSeq = true
+	}
 
-		mintedNftCnt := issuerAccount.MintedNFTokens
-		issuerAccount.MintedNFTokens = mintedNftCnt + 1
-		if issuerAccount.MintedNFTokens == 0 {
-			return ter.TecMAX_SEQUENCE_REACHED
-		}
+	mintedNftCnt := issuerAccount.MintedNFTokens
+	issuerAccount.MintedNFTokens = mintedNftCnt + 1
+	if issuerAccount.MintedNFTokens == 0 {
+		return ter.TecMAX_SEQUENCE_REACHED
+	}
 
-		// tokenSeq = FirstNFTokenSequence + MintedNFTokens (before increment)
-		offset := issuerAccount.FirstNFTokenSequence
-		tokenSeq = offset + mintedNftCnt
+	// tokenSeq = FirstNFTokenSequence + MintedNFTokens (before increment)
+	offset := issuerAccount.FirstNFTokenSequence
+	tokenSeq = offset + mintedNftCnt
 
-		if tokenSeq+1 == 0 || tokenSeq < offset {
-			return ter.TecMAX_SEQUENCE_REACHED
-		}
+	if tokenSeq+1 == 0 || tokenSeq < offset {
+		return ter.TecMAX_SEQUENCE_REACHED
 	}
 
 	// Get flags for the token from transaction flags
@@ -416,7 +400,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	ctx.Account.OwnerCount += uint32(insertResult.PagesCreated)
 
-	// MintedNFTokens was already incremented above in the fixNFTokenRemint/non-fix branches.
+	// MintedNFTokens was already incremented above.
 
 	// If issuer is different from minter, update the issuer account - tracked automatically
 	if n.Issuer != "" {

@@ -105,7 +105,7 @@ func (n *NFTokenCancelOffer) PreflightRules(rules *amendment.Rules) error {
 }
 
 func (n *NFTokenCancelOffer) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1}
+	return nil
 }
 
 // Reference: rippled NFTokenCancelOffer.cpp preclaim + doApply

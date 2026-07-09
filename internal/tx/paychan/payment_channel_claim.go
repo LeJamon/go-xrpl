@@ -153,14 +153,11 @@ func (p *PaymentChannelClaim) RequiredAmendments() [][32]byte {
 // active: everything except the universal flags plus tfRenew/tfClose.
 const tfPayChanClaimMask = ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)
 
-// GetFlagsMask returns the invalid-flags mask enforced at preflight0. fix1543
-// rejects any flag outside tfPayChanClaimMask; before it, any flags are allowed.
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any flag
+// outside tfPayChanClaimMask is rejected.
 // Reference: rippled PayChan.cpp PayChanClaim::getFlagsMask.
 func (p *PaymentChannelClaim) GetFlagsMask(rules *amendment.Rules) uint32 {
-	if rules.Enabled(amendment.FeatureFix1543) {
-		return tfPayChanClaimMask
-	}
-	return 0
+	return tfPayChanClaimMask
 }
 
 // CheckExtraFeatures gates the CredentialIDs field on the Credentials amendment.
@@ -336,21 +333,10 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 
-		// DisallowXRP check — bug compatibility, only when DepositAuth is NOT enabled
-		// Reference: rippled PayChan.cpp doApply() lines 546-551
-		depositAuth := rules.Enabled(amendment.FeatureDepositAuth)
-		if !depositAuth && isOwner && !isDest {
-			if destAccount.Flags&state.LsfDisallowXRP != 0 {
-				return ter.TecNO_TARGET
-			}
-		}
-
-		// DepositAuth check — when DepositAuth IS enabled
-		// Reference: rippled PayChan.cpp doApply() lines 553-563
-		if depositAuth {
-			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != ter.TesSUCCESS {
-				return result
-			}
+		// Deposit authorization check.
+		// Reference: rippled PayChan.cpp doApply() — verifyDepositPreauth()
+		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != ter.TesSUCCESS {
+			return result
 		}
 
 		// Transfer funds to destination

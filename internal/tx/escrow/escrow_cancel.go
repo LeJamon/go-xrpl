@@ -48,14 +48,11 @@ func (e *EscrowCancel) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
-// GetFlagsMask returns the invalid-flags mask enforced at preflight0. fix1543
-// rejects any stray (non-universal) flag; before it, any flags are allowed.
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
 // Reference: rippled Escrow.cpp EscrowCancel::getFlagsMask.
 func (e *EscrowCancel) GetFlagsMask(rules *amendment.Rules) uint32 {
-	if rules.Enabled(amendment.FeatureFix1543) {
-		return tx.TfUniversalMask
-	}
-	return 0
+	return tx.TfUniversalMask
 }
 
 // Apply applies an EscrowCancel transaction
@@ -111,21 +108,14 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	closeTime := ctx.Config.ParentCloseTime
 
-	// Time validation — cancel is only allowed after CancelAfter time
-	// Reference: rippled Escrow.cpp doApply() lines 1310-1329
-	if rules.Enabled(amendment.FeatureFix1571) {
-		// fix1571: must have CancelAfter set, and close time must be past it
-		if escrowEntry.CancelAfter == 0 {
-			return ter.TecNO_PERMISSION
-		}
-		if closeTime <= escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
-	} else {
-		// Pre-fix1571: same logic
-		if escrowEntry.CancelAfter == 0 || closeTime <= escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
+	// Time validation — cancel is only allowed strictly after CancelAfter, which
+	// must be set.
+	// Reference: rippled EscrowCancel.cpp doApply().
+	if escrowEntry.CancelAfter == 0 {
+		return ter.TecNO_PERMISSION
+	}
+	if closeTime <= escrowEntry.CancelAfter {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Remove escrow from owner directory

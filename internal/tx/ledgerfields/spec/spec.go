@@ -513,6 +513,7 @@ var Specs = []Entry{
 			{Name: "Authorize"},
 			{Name: "Permissions"},
 			{Name: "OwnerNode"},
+			{Name: "DestinationNode"},
 			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},

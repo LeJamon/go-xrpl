@@ -108,10 +108,10 @@ func TestPreclaimPrecedence_SignBeforeFee(t *testing.T) {
 // TestPreclaimPrecedence_SignBeforePermission pins the same reorder for the
 // delegate permission check (go-xrpl's checkPermission, PR #1257): a
 // delegated transaction that fails both signature verification and the delegate
-// permission check surfaces the signature failure, not tecNO_DELEGATE_PERMISSION.
+// permission check surfaces the signature failure, not terNO_DELEGATE_PERMISSION.
 func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 	// Source delegates to the genesis account. No Delegate SLE exists, so
-	// checkPermission yields tecNO_DELEGATE_PERMISSION. Signature is verified
+	// checkPermission yields terNO_DELEGATE_PERMISSION. Signature is verified
 	// against the delegate (genesis); disabling its master key makes checkSign
 	// yield tefMASTER_DISABLED. The delegate funds the fee, so checkFee passes.
 	makeTx := func() *txcore.BaseTx {
@@ -150,8 +150,8 @@ func TestPreclaimPrecedence_SignBeforePermission(t *testing.T) {
 				Sequence: 1,
 			},
 		})
-		if got := e.preclaim(makeTx(), [32]byte{}); got != ter.TecNO_DELEGATE_PERMISSION {
-			t.Fatalf("permission-only failure = %v, want TecNO_DELEGATE_PERMISSION", got)
+		if got := e.preclaim(makeTx(), [32]byte{}); got != ter.TerNO_DELEGATE_PERMISSION {
+			t.Fatalf("permission-only failure = %v, want TerNO_DELEGATE_PERMISSION", got)
 		}
 	})
 }

@@ -35,11 +35,6 @@ type StrandContext struct {
 	// ParentCloseTime is the parent ledger close time (Ripple epoch seconds).
 	// Used by BookStep for offer expiration and AMM auction slot expiry checks.
 	ParentCloseTime uint32
-	// Fix1781 indicates whether the fix1781 amendment is enabled.
-	// When true, XRP endpoint steps are included in circular payment loop detection.
-	// When false, XRP endpoint loop checks are skipped (pre-amendment behavior).
-	// Reference: rippled XRPEndpointStep.cpp check(): ctx.view.rules().enabled(fix1781)
-	Fix1781 bool
 }
 
 // NewStrandContext creates a new context for strand building
@@ -105,14 +100,8 @@ func (ctx *StrandContext) CheckBookStepLoop(bookOut Issue) ter.Result {
 }
 
 // CheckXRPEndpointLoop checks XRP endpoint step for loops.
-// This check is gated on the fix1781 amendment. When fix1781 is not enabled,
-// the check is skipped entirely (pre-amendment behavior allows circular XRP paths).
-// Reference: rippled XRPEndpointStep.cpp lines 365-375
+// Reference: rippled XRPEndpointStep.cpp check() (seenDirectAssets insert).
 func (ctx *StrandContext) CheckXRPEndpointLoop(isLast bool) ter.Result {
-	if !ctx.Fix1781 {
-		return ter.TesSUCCESS
-	}
-
 	xrpIssue := Issue{Currency: "XRP", Issuer: [20]byte{}}
 	issuesIndex := 0
 	if !isLast {
@@ -160,7 +149,6 @@ const (
 //   - paths: Payment paths from transaction
 //   - addDefaultPath: Whether to add the default path (direct)
 //   - offerCrossing: Whether strands are built for offer crossing (skips trust-line checks)
-//   - fix1781: Whether the fix1781 amendment gates XRP-endpoint loop detection
 //
 // Returns: List of executable strands, error if any path is invalid
 // Reference: rippled PaySteps.cpp toStrands()
@@ -172,7 +160,6 @@ func ToStrands(
 	paths [][]PathStep,
 	addDefaultPath bool,
 	offerCrossing bool,
-	fix1781 bool,
 ) ([]Strand, ter.Result) {
 	// Validate source and destination are not XRP pseudo-accounts
 	// Reference: rippled PaySteps.cpp:148-150
@@ -204,7 +191,7 @@ func ToStrands(
 
 	// Add default path if requested
 	if addDefaultPath {
-		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, nil, true, offerCrossing, fix1781)
+		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, nil, true, offerCrossing)
 		if result != ter.TesSUCCESS {
 			// For tem* errors, fail immediately
 			if isTemMalformed(result) || len(paths) == 0 {
@@ -221,7 +208,7 @@ func ToStrands(
 
 	// Convert each explicit path to a strand
 	for _, path := range paths {
-		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, path, false, offerCrossing, fix1781)
+		strand, result := ToStrandWithLoopCheck(view, src, dst, dstIssue, srcIssue, path, false, offerCrossing)
 		if result != ter.TesSUCCESS {
 			lastFailResult = result
 			// For tem* errors, fail immediately
@@ -268,7 +255,6 @@ func ToStrandWithLoopCheck(
 	path []PathStep,
 	isDefaultPath bool,
 	offerCrossing bool,
-	fix1781 bool,
 ) (Strand, ter.Result) {
 	// Create strand context for loop detection
 	ctx := NewStrandContext(view, src, dst)
@@ -276,9 +262,6 @@ func ToStrandWithLoopCheck(
 	ctx.IsDefaultPath = isDefaultPath
 	if offerCrossing {
 		ctx.OfferCrossing = true
-	}
-	if fix1781 {
-		ctx.Fix1781 = true
 	}
 
 	// Use the context-aware strand builder
