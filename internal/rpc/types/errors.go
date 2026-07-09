@@ -57,7 +57,21 @@ type RpcError struct {
 	// envelope. Transport writers special-case this flag the same way they do
 	// invalidApiVersion / forbidden.
 	overloaded bool
+
+	// logDetail carries the internal-error detail the caller passed to
+	// RpcErrorInternal. It is never serialized — the wire always shows the
+	// fixed InternalErrorMessage, matching rippled's fixed rpcINTERNAL entry —
+	// but the dispatcher logs it server-side (with method + client) so an
+	// unexpected storage/codec failure stays diagnosable without leaking
+	// internal detail to the client.
+	logDetail string
 }
+
+// InternalErrorMessage is the fixed wire text for every rpcINTERNAL response,
+// matching rippled's ErrorCodes.cpp errorInfo entry
+// ({rpcINTERNAL, "internal", "Internal error.", 500}). Detail passed to
+// RpcErrorInternal is logged server-side, never shipped to the client.
+const InternalErrorMessage = "Internal error."
 
 // WithExtra returns a copy of the error carrying additional result fields that
 // the response builder merges into the error envelope, mirroring rippled's
@@ -305,8 +319,23 @@ func RpcErrorInvalidHotWallet() *RpcError {
 	return NewRpcError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
 }
 
-func RpcErrorInternal(message string) *RpcError {
-	return NewRpcError(RpcINTERNAL, "internal", "internal", message)
+// RpcErrorInternal builds the fixed rpcINTERNAL envelope. The detail argument
+// is NOT put on the wire (that would leak internal storage/codec state and fork
+// the API byte-for-byte from rippled, which always returns "Internal error.");
+// it is retained on logDetail for the dispatcher to log server-side.
+func RpcErrorInternal(detail string) *RpcError {
+	e := NewRpcError(RpcINTERNAL, "internal", "internal", InternalErrorMessage)
+	e.logDetail = detail
+	return e
+}
+
+// LogDetail returns the server-side-only internal-error detail (empty for
+// non-internal errors or an internal error built without detail).
+func (e *RpcError) LogDetail() string {
+	if e == nil {
+		return ""
+	}
+	return e.logDetail
 }
 
 func RpcErrorNoPermission(method string) *RpcError {

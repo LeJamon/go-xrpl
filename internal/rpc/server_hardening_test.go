@@ -75,6 +75,35 @@ func TestPostBodyLimit(t *testing.T) {
 	}
 }
 
+// TestInternalErrorMessageNotLeakedOnWire ensures a handler's internal-error
+// detail never reaches the client: the wire error_message is the fixed
+// "Internal error." and the caller's detail string appears nowhere in the
+// response body, matching rippled's fixed rpcINTERNAL entry.
+func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
+	const secret = "pebble internal key 0xdeadbeef corrupt at offset 4096"
+	srv := newHardeningServer(t, time.Second, "account_info", &stubHandler{
+		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+			return nil, types.RpcErrorInternal("Failed to get account info: " + secret)
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"account_info","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234"
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if strings.Contains(rr.Body.String(), secret) {
+		t.Fatalf("internal error detail leaked onto the wire:\n%s", rr.Body.String())
+	}
+	result := decodeEnvelope(t, rr.Body.Bytes())
+	if got := result["error_message"]; got != "Internal error." {
+		t.Errorf("error_message = %v, want the fixed %q", got, "Internal error.")
+	}
+	if got := result["error"]; got != "internal" {
+		t.Errorf("error = %v, want %q", got, "internal")
+	}
+}
+
 // TestRoleNotElevatableByHeader ensures that a remote peer cannot become
 // Admin by sending X-Forwarded-For: 127.0.0.1 / X-Real-IP: 127.0.0.1.
 func TestRoleNotElevatableByHeader(t *testing.T) {

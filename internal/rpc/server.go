@@ -747,6 +747,12 @@ func dispatchMethod(
 	}
 	result, rpcErr := handler.Handle(ctx, params)
 	finalizeLoad(tracker, ctx, method, handler, rpcErr, log)
+	// An internal error ships the fixed "Internal error." to the client; the
+	// caller's detail is logged here (the one choke point with method + client)
+	// so an unexpected failure stays diagnosable without leaking to the wire.
+	if detail := rpcErr.LogDetail(); detail != "" {
+		log.Error("rpc internal error", "method", method, "client", ctx.ClientIP, "detail", detail)
+	}
 	return result, rpcErr
 }
 

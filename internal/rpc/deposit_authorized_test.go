@@ -611,7 +611,7 @@ func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
 	resp, err := method.Handle(ctx, paramsJSON)
 
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Ledger service not available")
+	assert.Contains(t, err.LogDetail(), "Ledger service not available")
 	assert.Nil(t, resp)
 }
 

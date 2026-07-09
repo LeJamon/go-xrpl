@@ -197,6 +197,42 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 	}
 }
 
+// TestInternalErrorHidesDetail pins the rpcINTERNAL contract: the wire message
+// is always the fixed rippled string, and the caller's detail is retained only
+// on LogDetail for server-side logging — never serialized. This prevents
+// leaking internal storage/codec state to the client and forking the API from
+// rippled's fixed "Internal error." on every internal failure.
+func TestInternalErrorHidesDetail(t *testing.T) {
+	const detail = "pebble: key aabbcc size=4096 not found"
+	e := RpcErrorInternal(detail)
+
+	if e.Message != InternalErrorMessage {
+		t.Errorf("wire message = %q, want the fixed %q", e.Message, InternalErrorMessage)
+	}
+	if e.Message != "Internal error." {
+		t.Errorf("wire message = %q, want rippled's exact %q", e.Message, "Internal error.")
+	}
+	if e.LogDetail() != detail {
+		t.Errorf("LogDetail = %q, want %q", e.LogDetail(), detail)
+	}
+	// The detail must not appear on any serialized field.
+	if e.ErrorString == detail || e.Type == detail {
+		t.Errorf("internal detail leaked onto a serialized field")
+	}
+}
+
+// TestLogDetailEmptyForNonInternal confirms only rpcINTERNAL carries a log
+// detail, so the dispatcher's detail-logging branch never fires for ordinary
+// user errors.
+func TestLogDetailEmptyForNonInternal(t *testing.T) {
+	if got := RpcErrorInvalidParams("bad").LogDetail(); got != "" {
+		t.Errorf("LogDetail = %q, want empty for a non-internal error", got)
+	}
+	if got := (*RpcError)(nil).LogDetail(); got != "" {
+		t.Errorf("nil-receiver LogDetail = %q, want empty", got)
+	}
+}
+
 // Bare-token errors mirror rippled handlers that set jvResult[jss::error]
 // directly (e.g. VaultInfo.cpp:101, TransactionEntry.cpp:71): only `error` is
 // wired, never error_code or error_message. Errors built through inject_error

@@ -506,7 +506,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
@@ -521,7 +521,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 	})
 
 	t.Run("Service returns error", func(t *testing.T) {
