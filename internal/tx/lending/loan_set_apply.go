@@ -170,7 +170,12 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if lendNum(b.DebtMaximum).Signum() != 0 && lendNum(b.DebtMaximum).Cmp(newDebtTotal) < 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
-	minCover := lmath.RoundAssetUpward(mAsset, lmath.TenthBipsOfValue(newDebtTotal, b.CoverRateMinimum), newDebtTotal.Exponent())
+	var minCover lmath.N
+	if ctx.Rules().FixCleanup3_2_0Enabled() {
+		minCover = minimumBrokerCover(newDebtTotal, b.CoverRateMinimum, vaultScale, integral)
+	} else {
+		minCover = brokerCoverRate(newDebtTotal, b.CoverRateMinimum)
+	}
 	if lendNum(b.CoverAvailable).Cmp(minCover) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}

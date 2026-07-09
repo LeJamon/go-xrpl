@@ -210,7 +210,12 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	// Where the broker's fee goes: to the owner while cover is above the minimum,
 	// otherwise back into the first-loss cover pool.
-	minCover := lmath.RoundAssetUpward(mAsset, lmath.TenthBipsOfValue(lendNum(b.DebtTotal), b.CoverRateMinimum), loanScale)
+	var minCover lmath.N
+	if ctx.Rules().FixCleanup3_2_0Enabled() {
+		minCover = minimumBrokerCover(lendNum(b.DebtTotal), b.CoverRateMinimum, vaultScaleOf(vinfo, integral), integral)
+	} else {
+		minCover = brokerCoverRateAtScale(lendNum(b.DebtTotal), b.CoverRateMinimum, loanScale, integral)
+	}
 	sendFeeToOwner := lendNum(b.CoverAvailable).Cmp(minCover) >= 0 &&
 		vault.AssetFrozen(ctx.View, b.Owner, asset) == ter.TesSUCCESS &&
 		tx.RequireAuth(ctx.View, asset, b.Owner) == ter.TesSUCCESS

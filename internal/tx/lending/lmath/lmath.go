@@ -80,6 +80,16 @@ func tenthBipsOfValue(value N, tenthBips uint32) N {
 // debt rate computations in the transactors).
 func TenthBipsOfValue(value N, tenthBips uint32) N { return tenthBipsOfValue(value, tenthBips) }
 
+// TenthBipsOfValueRounded is TenthBipsOfValue with an explicit rounding mode on
+// the multiply and divide, mirroring rippled's NumberRoundModeGuard around the
+// broker cover-rate computations.
+func TenthBipsOfValueRounded(value N, tenthBips uint32, mode state.RoundingMode) N {
+	if tenthBips == 0 || value.IsZero() {
+		return zeroN()
+	}
+	return value.MulRounded(numU(tenthBips), mode).DivRounded(numU(protocol.TenthBipsPerUnity), mode)
+}
+
 // RoundAssetUpward / RoundAssetDownward / RoundAssetNearest expose roundToAsset
 // at a decimal scale under a fixed mode for the transactor cover/debt math.
 func RoundAssetUpward(asset Asset, value N, scale int) N {
