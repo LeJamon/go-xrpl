@@ -6,7 +6,9 @@ import (
 	"time"
 
 	googlegrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/drops"
@@ -135,6 +137,64 @@ func TestGRPCServer_RejectsUnspecifiedSecureGateway(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected startGRPCServer to reject unspecified secure_gateway IP")
 	}
+}
+
+// TestGRPCRecoveryInterceptor_RecoversPanic proves a panicking gRPC handler is
+// turned into a fixed codes.Internal status rather than crashing the process,
+// and that no internal detail leaks into the returned message.
+func TestGRPCRecoveryInterceptor_RecoversPanic(t *testing.T) {
+	interceptor := grpcRecoveryInterceptor(xrpllog.Discard())
+	info := &googlegrpc.UnaryServerInfo{FullMethod: "/xrpl.rpc.v1.XRPLedgerAPIService/GetLedger"}
+
+	var resp any
+	var err error
+	assertNotPanics(t, func() {
+		resp, err = interceptor(context.Background(), nil, info, func(context.Context, any) (any, error) {
+			panic("simulated handler panic on a truncated blob")
+		})
+	})
+
+	if resp != nil {
+		t.Errorf("expected nil response on recovered panic, got %v", resp)
+	}
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("expected a gRPC status error, got %v", err)
+	}
+	if st.Code() != codes.Internal {
+		t.Errorf("code=%v, want %v", st.Code(), codes.Internal)
+	}
+	if st.Message() != "Internal error." {
+		t.Errorf("message=%q, want the fixed %q (no internal detail)", st.Message(), "Internal error.")
+	}
+}
+
+// TestGRPCRecoveryInterceptor_PassesThrough confirms the interceptor is
+// transparent on the non-panicking path.
+func TestGRPCRecoveryInterceptor_PassesThrough(t *testing.T) {
+	interceptor := grpcRecoveryInterceptor(xrpllog.Discard())
+	info := &googlegrpc.UnaryServerInfo{FullMethod: "/test/Method"}
+	want := "ok"
+
+	resp, err := interceptor(context.Background(), nil, info, func(context.Context, any) (any, error) {
+		return want, nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp != want {
+		t.Errorf("resp=%v, want %v", resp, want)
+	}
+}
+
+func assertNotPanics(t *testing.T, fn func()) {
+	t.Helper()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("interceptor let a panic escape: %v", r)
+		}
+	}()
+	fn()
 }
 
 // TestGRPCServer_DisabledByDefault confirms the boot path starts no gRPC
