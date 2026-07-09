@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -238,6 +239,16 @@ type Service struct {
 	persistStopped bool
 	persistWG      sync.WaitGroup
 
+	// ledgerEventCh feeds the single accepted-ledger event dispatcher (see
+	// dispatchLedgerEvent). A single consumer preserves FIFO delivery and runs
+	// eventCallback single-threaded, replacing per-event goroutines that ran the
+	// callback concurrently with itself — racing the subscriber's mutable state
+	// and reordering ledgerClosed stream events. Started by Start, joined by Stop.
+	ledgerEventCh       chan *LedgerAcceptedEvent
+	ledgerEventQuit     chan struct{}
+	ledgerEventWG       sync.WaitGroup
+	droppedLedgerEvents atomic.Uint64
+
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
 	// per-tx ingress off an O(amendments) parse + Rules allocation per submit.
@@ -386,6 +397,11 @@ func (s *Service) Start() error {
 		s.persistQuit = make(chan struct{})
 		s.persistWG.Add(1)
 		go s.runPersistWorker()
+
+		s.ledgerEventCh = make(chan *LedgerAcceptedEvent, ledgerEventBufferDepth)
+		s.ledgerEventQuit = make(chan struct{})
+		s.ledgerEventWG.Add(1)
+		go s.runLedgerEventDispatcher()
 	}
 
 	genesisResult, err := genesis.Create(s.config.GenesisConfig)

@@ -111,10 +111,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			LedgerInfo:         ledgerInfo,
 			TransactionResults: txResults,
 		}
-
-		// Goroutine so the callback can't block ledger ops.
-		callback := s.eventCallback
-		go callback(event)
+		s.dispatchLedgerEvent(event)
 	}
 
 	s.logger.Info("Ledger accepted",
@@ -566,9 +563,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			TransactionResults: txResults,
 		}
 		if promotedByDrain {
-			// Goroutine: subscriber callbacks must not re-enter s.mu (held).
-			callback := s.eventCallback
-			go callback(event)
+			s.dispatchLedgerEvent(event)
 		} else {
 			s.stashPendingValidationLocked(closedLedgerHash, event)
 		}
@@ -632,7 +627,6 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	// close — consensus may abandon a closed ledger).
 	pool := s.localTxs
 	event := s.drainPendingValidationLocked(expectedHash)
-	callback := s.eventCallback
 	s.mu.Unlock()
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
@@ -642,8 +636,8 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 		pool.Sweep(l)
 	}
 
-	if event != nil && callback != nil {
-		go callback(event)
+	if event != nil {
+		s.dispatchLedgerEvent(event)
 	}
 }
 
@@ -1030,9 +1024,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 				TransactionResults: txResults,
 			}
 			if promotedByDrain {
-				// Goroutine: subscriber callbacks must not re-enter s.mu (held).
-				callback := s.eventCallback
-				go callback(event)
+				s.dispatchLedgerEvent(event)
 			} else {
 				s.stashPendingValidationLocked(h.Hash, event)
 			}

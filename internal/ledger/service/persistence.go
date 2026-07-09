@@ -154,13 +154,18 @@ func (s *Service) Stop() {
 	}
 	s.persistStopped = true
 	quit := s.persistQuit
+	eventQuit := s.ledgerEventQuit
 	s.mu.Unlock()
 
-	// Signal the worker to drain the queue and exit, then wait for it. The
-	// channel is never closed, so the drain can complete without racing a
+	// Signal the workers to drain their queues and exit, then wait for them. The
+	// channels are never closed, so the drains can complete without racing a
 	// concurrent send.
 	close(quit)
+	if eventQuit != nil {
+		close(eventQuit)
+	}
 	s.persistWG.Wait()
+	s.ledgerEventWG.Wait()
 }
 
 // runPersistWorker drains the persist queue in FIFO order, keeping
