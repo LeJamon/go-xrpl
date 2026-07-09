@@ -734,8 +734,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	// Create HTTP JSON-RPC server with 30 second timeout
-	httpServer := rpc.NewServer(30*time.Second, services)
+	// Create HTTP JSON-RPC server. The dispatch timeout stays strictly below
+	// the transport WriteTimeout (see httpWriteTimeout) so a timed-out request
+	// can still serialize its error envelope.
+	httpServer := rpc.NewServer(rpcDispatchTimeout, services)
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		httpServer.SetPeerSource(consensusComponents.Overlay)
 	}
@@ -743,7 +745,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	services.SetDispatcher(httpServer)
 
 	// Create WebSocket server for real-time subscriptions
-	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
+	wsServer = rpc.NewWebSocketServer(rpcDispatchTimeout, services)
 	if globalConfig.WebsocketPingFrequency > 0 {
 		wsServer.SetPingInterval(time.Duration(globalConfig.WebsocketPingFrequency) * time.Second)
 	}
@@ -1166,8 +1168,13 @@ func startListeners(
 	httpServer http.Handler,
 	wsServer *rpc.WebSocketServer,
 ) (httpSrvs, wsSrvs []*http.Server, listenerErrCh chan error, err error) {
-	// Shared connection limiter for all ports
+	// Shared connection limiter for all ports. Seeded with a bounded process-wide
+	// default so an unset per-port limit can't leave WS connections unbounded;
+	// [server] max_connections overrides it (negative disables the global cap).
 	connLimiter := rpc.NewConnLimiter()
+	if cfg.Server.MaxConnections != 0 {
+		connLimiter.SetGlobalLimit(cfg.Server.MaxConnections)
+	}
 	wsServer.SetConnLimiter(connLimiter)
 
 	// Build the base HTTP mux (shared handler logic, wrapped per-port below)
@@ -1253,11 +1260,12 @@ func startListeners(
 		wrappedMux := http.NewServeMux()
 		wrappedMux.Handle("/", rpc.PortMiddleware(entry.pc, connLimiter, httpMux))
 		srv := &http.Server{
-			Addr:         entry.addr,
-			Handler:      wrappedMux,
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 30 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			Addr:              entry.addr,
+			Handler:           wrappedMux,
+			ReadHeaderTimeout: httpReadHeaderTimeout,
+			ReadTimeout:       httpReadTimeout,
+			WriteTimeout:      httpWriteTimeout,
+			IdleTimeout:       httpIdleTimeout,
 		}
 		httpSrvs = append(httpSrvs, srv)
 		go func(n, addr string, s *http.Server) {
@@ -1274,6 +1282,21 @@ func startListeners(
 
 	return httpSrvs, wsSrvs, listenerErrCh, nil
 }
+
+// HTTP transport timeouts. httpWriteTimeout must stay strictly greater than
+// rpcDispatchTimeout: net/http measures WriteTimeout from the start of the
+// handler and covers execution plus the response write, so a request that
+// consumes its full dispatch budget still needs headroom to serialize its
+// timeout/error envelope instead of writing into a socket net/http has already
+// closed (which the client sees as a connection reset, not a clean 503).
+// Deriving both from the one dispatch constant keeps them from drifting.
+const (
+	rpcDispatchTimeout    = 30 * time.Second
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = rpcDispatchTimeout + 10*time.Second
+	httpWriteTimeout      = rpcDispatchTimeout + 10*time.Second
+	httpIdleTimeout       = 60 * time.Second
+)
 
 // Pebble-internal tuning with no corresponding config key: the block
 // cache for the storage engine itself and the max open file handles.

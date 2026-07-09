@@ -16,6 +16,10 @@ type ServerConfig struct {
 	Limit    int      `toml:"limit" mapstructure:"limit"`       // Default connection limit
 	User     string   `toml:"user" mapstructure:"user"`         // Default HTTP basic auth user
 	Password string   `toml:"password" mapstructure:"password"` // Default HTTP basic auth password
+	// MaxConnections is the process-wide ceiling on concurrent HTTP + WebSocket
+	// connections. 0 keeps the bounded built-in default; a negative value
+	// disables the global cap (per-port limits still apply).
+	MaxConnections int `toml:"max_connections" mapstructure:"max_connections"`
 }
 
 // PortConfig represents individual port configurations like [port_rpc_admin_local]

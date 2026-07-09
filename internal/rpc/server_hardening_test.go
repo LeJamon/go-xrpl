@@ -104,6 +104,46 @@ func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
 	}
 }
 
+// TestBatchElementCap rejects a batch envelope past MaxBatchElements with a
+// 400, while a batch at the cap is accepted — bounding request amplification on
+// the public endpoint without breaking legitimate batching.
+func TestBatchElementCap(t *testing.T) {
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{})
+
+	buildBatch := func(n int) string {
+		els := make([]string, n)
+		for i := range els {
+			els[i] = `{"method":"ping","params":[{}]}`
+		}
+		return `{"method":"batch","params":[` + strings.Join(els, ",") + `]}`
+	}
+
+	// Over the cap → 400.
+	req := httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements+1)))
+	req.RemoteAddr = "10.0.0.1:1234"
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("over-cap batch: expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
+	}
+
+	// At the cap → 200 with one reply per element.
+	req = httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements)))
+	req.RemoteAddr = "10.0.0.1:1234"
+	rr = httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("at-cap batch: expected 200, got %d\nbody: %s", rr.Code, rr.Body.String())
+	}
+	var replies []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
+		t.Fatalf("batch reply not a JSON array: %v\nbody: %s", err, rr.Body.String())
+	}
+	if len(replies) != MaxBatchElements {
+		t.Errorf("reply count = %d, want %d", len(replies), MaxBatchElements)
+	}
+}
+
 // TestRoleNotElevatableByHeader ensures that a remote peer cannot become
 // Admin by sending X-Forwarded-For: 127.0.0.1 / X-Real-IP: 127.0.0.1.
 func TestRoleNotElevatableByHeader(t *testing.T) {
