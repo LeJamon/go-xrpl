@@ -26,24 +26,25 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		feeDrops = ctx.Config.BaseFee // fallback to base fee if not specified
 	}
 
-	// IMPORTANT: sender.Balance has already had fee deducted (in doApply).
-	// Rippled checks against mPriorBalance (balance BEFORE fee deduction).
-	// We reconstruct the pre-fee balance for the check.
-	// Reference: rippled Payment.cpp:619 - if (mPriorBalance < dstAmount.xrp() + mmm)
-	priorBalance := ctx.Account.Balance + feeDrops
+	// PriorBalance is the source account's balance before its own fee was
+	// deducted (rippled's mPriorBalance). For a delegated payment the fee is
+	// charged to the delegate, so the source balance is untouched.
+	priorBalance := ctx.PriorBalance()
 
 	// Calculate reserve as: ReserveBase + (ownerCount * ReserveIncrement)
 	// This matches rippled's accountReserve(ownerCount) calculation
 	reserve := ctx.Config.ReserveBase + (uint64(ctx.Account.OwnerCount) * ctx.Config.ReserveIncrement)
 
-	// Use max(reserve, fee) as the minimum balance that must remain
-	// This matches rippled's behavior: auto const mmm = std::max(reserve, ctx_.tx.getFieldAmount(sfFee).xrp())
-	// Reference: rippled Payment.cpp:617
-	mmm := max(feeDrops, reserve)
+	// The final spend may dip into the reserve to cover its own fee — but only
+	// when the source account is the fee payer. In a delegated payment the fee
+	// payer is the delegate, so the source need only keep its plain reserve.
+	// Reference: rippled Payment.cpp doApply() (fix: decouple reserve from fee).
+	minRequired := reserve
+	if p.GetCommon().Delegate == "" {
+		minRequired = max(feeDrops, reserve)
+	}
 
-	// Check sender has enough balance using PRE-FEE balance
-	// Reference: rippled Payment.cpp:619 - if (mPriorBalance < dstAmount.xrp() + mmm)
-	if priorBalance < amountDrops+mmm {
+	if priorBalance < amountDrops+minRequired {
 		return ter.TecUNFUNDED_PAYMENT
 	}
 

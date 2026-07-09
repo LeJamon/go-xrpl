@@ -19,27 +19,27 @@ func (a *AccountSet) CheckDelegatePermission(pc tx.DelegatePermissionContext) te
 	}
 	// No flag-based granular permission exists for AccountSet.
 	if setFlag != 0 || clearFlag != 0 || a.GetFlags()&tx.TfUniversalMask != 0 {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 
 	if a.present("EmailHash", a.EmailHash != "") && !pc.HasGranular(tx.GranularAccountEmailHashSet) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	// WalletLocator and NFTokenMinter have no granular permission.
 	if a.present("WalletLocator", a.WalletLocator != "") || a.present("NFTokenMinter", a.NFTokenMinter != "") {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if a.MessageKey != nil && !pc.HasGranular(tx.GranularAccountMessageKeySet) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if a.Domain != nil && !pc.HasGranular(tx.GranularAccountDomainSet) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if a.TransferRate != nil && !pc.HasGranular(tx.GranularAccountTransferRateSet) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	if a.TickSize != nil && !pc.HasGranular(tx.GranularAccountTickSizeSet) {
-		return ter.TecNO_DELEGATE_PERMISSION
+		return ter.TerNO_DELEGATE_PERMISSION
 	}
 	return ter.TesSUCCESS
 }

@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 107 amendments.
+Total: 106 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -48,7 +48,7 @@ Total: 107 amendments.
 | `NonFungibleTokensV1` | yes | no |
 | `NonFungibleTokensV1_1` | yes | no |
 | `PayChan` | yes | no |
-| `PermissionDelegation` | no | no |
+| `PermissionDelegationV1_1` | no | no |
 | `PermissionedDEX` | yes | no |
 | `PermissionedDomains` | yes | no |
 | `PriceOracle` | yes | no |
@@ -83,7 +83,6 @@ Total: 107 amendments.
 | `fixBatchInnerSigs` | no | no |
 | `fixCheckThreading` | yes | no |
 | `fixCleanup3_1_3` | yes | yes |
-| `fixDelegateV1_1` | no | no |
 | `fixDirectoryLimit` | yes | no |
 | `fixDisallowIncomingV1` | yes | no |
 | `fixEmptyDID` | yes | no |

@@ -21,7 +21,22 @@ var notDelegatableTxTypes = map[uint16]bool{
 	12:  true, // ttSIGNER_LIST_SET
 	21:  true, // ttACCOUNT_DELETE
 	64:  true, // ttDELEGATE_SET
+	65:  true, // ttVAULT_CREATE
+	66:  true, // ttVAULT_SET
+	67:  true, // ttVAULT_DELETE
+	68:  true, // ttVAULT_DEPOSIT
+	69:  true, // ttVAULT_WITHDRAW
+	70:  true, // ttVAULT_CLAWBACK
 	71:  true, // ttBATCH
+	74:  true, // ttLOAN_BROKER_SET
+	75:  true, // ttLOAN_BROKER_DELETE
+	76:  true, // ttLOAN_BROKER_COVER_DEPOSIT
+	77:  true, // ttLOAN_BROKER_COVER_WITHDRAW
+	78:  true, // ttLOAN_BROKER_COVER_CLAWBACK
+	80:  true, // ttLOAN_SET
+	81:  true, // ttLOAN_DELETE
+	82:  true, // ttLOAN_MANAGE
+	84:  true, // ttLOAN_PAY
 	100: true, // ttAMENDMENT (EnableAmendment)
 	101: true, // ttFEE (SetFee)
 	102: true, // ttUNL_MODIFY (UNLModify)
@@ -137,18 +152,14 @@ func (d *DelegateSet) Flatten() (map[string]any, error) {
 }
 
 func (d *DelegateSet) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeaturePermissionDelegation}
+	return [][32]byte{amendment.FeaturePermissionDelegationV1_1}
 }
 
-// PreflightRules performs the amendment-gated preflight checks. Under
-// fixDelegateV1_1 every requested permission must be delegatable, and a
-// violation is rejected at preflight with temMALFORMED (before the amendment
-// the same check runs in preclaim and yields tecNO_PERMISSION).
+// PreflightRules rejects any requested permission that is not delegatable with
+// temMALFORMED. The check is unconditional: the whole transaction is gated by
+// PermissionDelegationV1_1, which folds in the former fixDelegateV1_1 rule.
 // Reference: rippled DelegateSet.cpp preflight().
 func (d *DelegateSet) PreflightRules(rules *amendment.Rules) error {
-	if rules == nil || !rules.Enabled(amendment.FeatureFixDelegateV1_1) {
-		return nil
-	}
 	for _, p := range d.Permissions {
 		pv := state.LookupPermissionValue(p.Permission.PermissionValue)
 		if !isDelegatable(pv, rules) {
@@ -176,91 +187,81 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_TARGET
 	}
 
-	// Check that all permissions are delegatable. Under fixDelegateV1_1 this
-	// runs in preflight (see PreflightRules, returning temMALFORMED); before the
-	// amendment it stays here and returns tecNO_PERMISSION.
-	rules := ctx.Rules()
 	permValues := d.permissionValues()
-	if rules == nil || !rules.Enabled(amendment.FeatureFixDelegateV1_1) {
-		for _, pv := range permValues {
-			if !isDelegatable(pv, rules) {
-				return ter.TecNO_PERMISSION
-			}
-		}
-	}
-
 	delegateKey := keylet.Delegate(ctx.AccountID, authorizeID)
 
 	existingData, readErr := ctx.View.Read(delegateKey)
-	if readErr == nil && existingData != nil {
-		// Delegate SLE exists -- update or delete
+	delegateExists := readErr == nil && existingData != nil
+
+	// Preclaim: deleting a delegate object that does not exist is invalid.
+	// Reference: rippled DelegateSet.cpp preclaim().
+	if len(permValues) == 0 && !delegateExists {
+		return ter.TecNO_ENTRY
+	}
+
+	if delegateExists {
+		// Empty permissions -- delete the delegate entry.
 		if len(permValues) == 0 {
-			// Empty permissions -- delete the delegate entry
 			return deleteDelegate(ctx, delegateKey, ctx.AccountID)
 		}
 
-		// Update the existing delegate with new permissions
-		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0, [32]byte{}, 0)
+		// Update the existing delegate with new permissions, preserving the
+		// OwnerNode, DestinationNode, and threading pointers.
+		existingEntry, parseErr := state.ParseDelegate(existingData)
+		if parseErr != nil {
+			return ter.TefINTERNAL
+		}
+		var destNode *uint64
+		if existingEntry.HasDestinationNode {
+			dn := existingEntry.DestinationNode
+			destNode = &dn
+		}
+		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode, destNode, existingEntry.PreviousTxnID, existingEntry.PreviousTxnLgrSeq)
 		if serErr != nil {
 			return ter.TefINTERNAL
 		}
-
-		// Preserve the existing OwnerNode and threading pointers.
-		existingEntry, parseErr := state.ParseDelegate(existingData)
-		if parseErr == nil {
-			newData, serErr = state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode, existingEntry.PreviousTxnID, existingEntry.PreviousTxnLgrSeq)
-			if serErr != nil {
-				return ter.TefINTERNAL
-			}
-		}
-
 		if err := ctx.View.Update(delegateKey, newData); err != nil {
 			return ter.TefINTERNAL
 		}
 		return ter.TesSUCCESS
 	}
 
-	// Delegate SLE does not exist -- create new one
-	if len(permValues) == 0 {
-		// Nothing to create
-		return ter.TesSUCCESS
-	}
-
+	// Delegate SLE does not exist -- create a new one (permValues is non-empty,
+	// guaranteed by the empty-list preclaim check above).
+	//
 	// Check reserve against the prior balance (before the actual fee was
 	// deducted), allowing the account to dip into the reserve to pay fees.
 	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		return result
 	}
 
-	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0, [32]byte{}, 0)
-	if serErr != nil {
-		return ter.TefINTERNAL
-	}
-
-	if err := ctx.View.Insert(delegateKey, delegateData); err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Insert into owner directory
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, dirErr := state.DirInsert(ctx.View, ownerDirKey, delegateKey.Key, false, func(dir *state.DirectoryNode) {
+	// Add to the delegating account's owner directory (OwnerNode).
+	ownerDir, dirErr := state.DirInsert(ctx.View, keylet.OwnerDir(ctx.AccountID), delegateKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if dirErr != nil {
 		return ter.TecDIR_FULL
 	}
 
-	// Update OwnerNode on the delegate entry if page != 0
-	if dirResult.Page != 0 {
-		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, dirResult.Page, [32]byte{}, 0)
-		if serErr != nil {
-			return ter.TefINTERNAL
-		}
-		if err := ctx.View.Update(delegateKey, newData); err != nil {
-			return ter.TefINTERNAL
-		}
+	// Add to the authorized account's owner directory (DestinationNode) so the
+	// entry is found and cleaned up when either account is deleted.
+	authDir, authErr := state.DirInsert(ctx.View, keylet.OwnerDir(authorizeID), delegateKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = authorizeID
+	})
+	if authErr != nil {
+		return ter.TecDIR_FULL
+	}
+	destNode := authDir.Page
+
+	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, ownerDir.Page, &destNode, [32]byte{}, 0)
+	if serErr != nil {
+		return ter.TefINTERNAL
+	}
+	if err := ctx.View.Insert(delegateKey, delegateData); err != nil {
+		return ter.TefINTERNAL
 	}
 
+	// Only the delegating account's owner count is incremented on creation.
 	ctx.Account.OwnerCount++
 	return ter.TesSUCCESS
 }
@@ -279,8 +280,13 @@ func deleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, account [20
 		return ter.TefINTERNAL
 	}
 
-	ownerDirKey := keylet.OwnerDir(account)
-	state.DirRemove(ctx.View, ownerDirKey, existingEntry.OwnerNode, delegateKey.Key, false)
+	// Remove from the delegating account's owner directory.
+	state.DirRemove(ctx.View, keylet.OwnerDir(account), existingEntry.OwnerNode, delegateKey.Key, false)
+
+	// Remove from the authorized account's owner directory, if linked there.
+	if existingEntry.HasDestinationNode {
+		state.DirRemove(ctx.View, keylet.OwnerDir(existingEntry.Authorize), existingEntry.DestinationNode, delegateKey.Key, false)
+	}
 
 	// Erase the delegate entry
 	if err := ctx.View.Erase(delegateKey); err != nil {
@@ -288,6 +294,7 @@ func deleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, account [20
 		return ter.TefINTERNAL
 	}
 
+	// Only the delegating account's owner count was incremented on creation.
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
@@ -315,34 +322,32 @@ func (d *DelegateSet) permissionValues() []uint32 {
 // isDelegatable reports whether a permission value may be delegated under the
 // given amendment rules.
 //
-// Granular permissions are always delegatable. A transaction-level permission
-// (value == txType + 1) is delegatable unless the type is explicitly
-// non-delegatable. Under fixDelegateV1_1 the check is stricter: the value must
-// map to a registered transaction type, and that type's introducing amendment
-// (if any) must be enabled.
+// Granular permissions are always delegatable. Otherwise the value must map to
+// a registered transaction type whose introducing amendment (if any) is enabled
+// and which is not explicitly non-delegatable.
+// Reference: rippled Permissions.cpp Permission::isDelegable().
 func isDelegatable(permissionValue uint32, rules *amendment.Rules) bool {
 	// Granular permissions are always delegatable — but only KNOWN granular
 	// permissions. rippled short-circuits on getGranularName(value) != nullopt,
 	// so an unknown value in the granular range (>= 65536) is NOT treated as
-	// granular; it falls through to the transaction-type path below (where it is
-	// not a registered type and, under fixDelegateV1_1, is rejected).
-	// Reference: rippled Permissions.cpp isDelegatable().
+	// granular; it falls through to the transaction-type path below, where it is
+	// not a registered type and is therefore rejected.
 	if state.IsGranularPermissionValue(permissionValue) {
 		return true
 	}
 
 	txType, known := permissionTxType(permissionValue)
-
-	if rules != nil && rules.Enabled(amendment.FeatureFixDelegateV1_1) {
-		if !known {
-			return false
-		}
-		if feature, gated := txIntroducingAmendment(txType); gated && !rules.Enabled(feature) {
-			return false
-		}
+	if !known {
+		return false
 	}
 
-	if known && notDelegatableTxTypes[txType] {
+	// Delegation is only allowed if the transaction type's introducing amendment
+	// (if any) is enabled.
+	if feature, gated := txIntroducingAmendment(txType); gated && (rules == nil || !rules.Enabled(feature)) {
+		return false
+	}
+
+	if notDelegatableTxTypes[txType] {
 		return false
 	}
 	return true

@@ -175,6 +175,23 @@ func defaultEnvConfig() EnvConfig {
 	}
 }
 
+// knownAmendments filters a fixture's captured amendment list to names still
+// registered in go-xrpl. Fixtures recorded against an older rippled carry
+// amendments that have since been deleted from the protocol (e.g.
+// PermissionDelegation / fixDelegateV1_1, replaced by PermissionDelegationV1_1);
+// those names are dropped so the vast majority of fixtures that only list them
+// incidentally keep running. Fixtures that genuinely depend on a deleted
+// amendment are excluded via skipTests.
+func knownAmendments(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if amendment.GetFeatureByName(name) != nil {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
 // runner holds the state for executing a single fixture.
 type runner struct {
 	t        *testing.T
@@ -771,7 +788,9 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "env_reset":
 			r.execEnvReset(i, step)
 		case "enable_amendment":
-			r.env.EnableFeatureNow(step.Amendment)
+			if amendment.GetFeatureByName(step.Amendment) != nil {
+				r.env.EnableFeatureNow(step.Amendment)
+			}
 		case "modify_state":
 			r.execModifyState(i, step)
 		default:
@@ -881,7 +900,9 @@ func (r *runner) replaySteps(steps []Step, isContinuation bool) {
 			// During replay, the txns were already applied by Close().
 			// Nothing to do here.
 		case "enable_amendment":
-			r.env.EnableFeatureNow(step.Amendment)
+			if amendment.GetFeatureByName(step.Amendment) != nil {
+				r.env.EnableFeatureNow(step.Amendment)
+			}
 		case "modify_state":
 			r.execModifyState(i, step)
 		case "env_reset":
@@ -1009,7 +1030,7 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 	} else {
 		r.env = jtx.NewTestEnvWithConfig(r.t, genCfg)
 	}
-	r.env.SetAmendments(cfg.AmendmentsEnabled)
+	r.env.SetAmendments(knownAmendments(cfg.AmendmentsEnabled))
 	if cfg.NetworkID != nil {
 		r.env.SetNetworkID(*cfg.NetworkID)
 	}

@@ -411,10 +411,9 @@ func enumToStr(fieldName string, value any) (any, error) {
 			return name, nil
 		}
 		// sfPermissionValue is a plain UINT32; a value with no registered name is
-		// still valid on the wire (rippled includes such DelegateSets before
-		// fixDelegateV1_1). Emit its decimal form so it round-trips through the
-		// string-typed struct field and reaches the delegatability check rather
-		// than failing to decode.
+		// still valid on the wire. Emit its decimal form so it round-trips through
+		// the string-typed struct field and reaches the delegatability check
+		// rather than failing to decode.
 		return strconv.FormatUint(uint64(code), 10), nil
 	default:
 		return value, nil
