@@ -8,12 +8,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 )
 
-// TestVault_IOULifecycle exercises the ValidVault invariant across an IOU vault's
-// create → deposit → withdraw → delete. IOU is the branch that needs scale-aware
-// rounding of balance deltas (the trust-line balances carry an exponent), so a
-// clean tesSUCCESS through the whole lifecycle proves the invariant does not
-// false-positive on the rounded delta reconciliation.
-func TestVault_IOULifecycle(t *testing.T) {
+// TestVault_IOULifecycleInvariants exercises the ValidVault invariant across an
+// IOU vault's create → deposit → withdraw → delete. IOU is the branch that needs
+// scale-aware rounding of balance deltas (the trust-line balances carry an
+// exponent), so a clean tesSUCCESS through the whole lifecycle proves the
+// invariant does not false-positive on the rounded delta reconciliation.
+func TestVault_IOULifecycleInvariants(t *testing.T) {
 	env := newVaultEnv(t)
 	issuer := jtx.NewAccount("issuer")
 	owner := jtx.NewAccount("owner")
