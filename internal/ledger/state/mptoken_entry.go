@@ -28,6 +28,7 @@ type MPTokenIssuanceData struct {
 	LockedAmount      *uint64
 	MPTokenMetadata   string  // hex-encoded
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
+	ReferenceHolding  *string // hex-encoded 32-byte hash (vault share underlying), nil if not set
 	Flags             uint32
 	MutableFlags      uint32 // soeDEFAULT: CanMutate permission bits, 0 when absent
 
@@ -114,6 +115,9 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 			case 34: // DomainID (nth=34)
 				domainHex := hex.EncodeToString(f.Value)
 				issuance.DomainID = &domainHex
+			case 39: // ReferenceHolding (nth=39)
+				refHex := hex.EncodeToString(f.Value)
+				issuance.ReferenceHolding = &refHex
 			}
 
 		case stBlob:
@@ -168,6 +172,10 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 
 	if issuance.DomainID != nil && *issuance.DomainID != "" {
 		jsonObj["DomainID"] = strings.ToUpper(*issuance.DomainID)
+	}
+
+	if issuance.ReferenceHolding != nil && *issuance.ReferenceHolding != "" {
+		jsonObj["ReferenceHolding"] = strings.ToUpper(*issuance.ReferenceHolding)
 	}
 
 	// sfMutableFlags is soeDEFAULT; emitting it when zero would fork account_hash

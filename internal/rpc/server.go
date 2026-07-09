@@ -990,6 +990,11 @@ func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts
 			resultObj["error_code"] = rpcErr.Code
 			resultObj["error_message"] = rpcErr.Message
 		}
+		// Merge any extra result fields the handler attached (rippled
+		// injectError semantics, e.g. ledger_entry's computed index).
+		for k, v := range rpcErr.Extra {
+			resultObj[k] = v
+		}
 		if request != nil {
 			resultObj["request"] = request
 		}

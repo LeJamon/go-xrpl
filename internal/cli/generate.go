@@ -150,7 +150,7 @@ admin = ["127.0.0.1"]
 protocol = "http"
 
 [port_peer]
-port = 51235
+port = 2459
 ip = "0.0.0.0"
 protocol = "peer"
 

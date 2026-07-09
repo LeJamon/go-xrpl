@@ -111,6 +111,11 @@ func (a *AMMClawback) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMMClawback}
 }
 
+// CheckExtraFeatures gates MPT pool assets/claw amount on the MPTokensV2 amendment.
+func (a *AMMClawback) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT() || amountIsMPT(a.Amount))
+}
+
 // Preclaim requires the holder and AMM to exist and the issuer to permit
 // clawback (lsfAllowTrustLineClawback set, lsfNoFreeze clear).
 // Reference: rippled AMMClawback.cpp preclaim

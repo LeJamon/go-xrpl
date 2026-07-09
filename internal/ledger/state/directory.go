@@ -57,6 +57,14 @@ type DirectoryNode struct {
 	TakerGetsIssuer   [20]byte
 	ExchangeRate      uint64 // Quality encoded as uint64
 
+	// MPT-denominated book directories (MPTokensV2). When a book side is an
+	// MPT, the directory carries the 192-bit MPTokenIssuanceID *instead of* the
+	// currency/issuer pair for that side (rippled setBookDir visits the asset:
+	// Issue → TakerPaysCurrency/Issuer, MPTIssue → TakerPaysMPT). nil = not an
+	// MPT side.
+	TakerPaysMPT *[24]byte
+	TakerGetsMPT *[24]byte
+
 	// Optional fields (per rippled ledger_entries.macro)
 	NFTokenID [32]byte // For NFToken offer directories
 	DomainID  [32]byte // For permissioned domain directories
@@ -200,14 +208,24 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 	// These fields may exist even on owner directory pages (they're stored in ledger state)
 	hasBookFields := isBookDir || dir.ExchangeRate != 0 ||
 		dir.TakerPaysCurrency != [20]byte{} || dir.TakerPaysIssuer != [20]byte{} ||
-		dir.TakerGetsCurrency != [20]byte{} || dir.TakerGetsIssuer != [20]byte{}
+		dir.TakerGetsCurrency != [20]byte{} || dir.TakerGetsIssuer != [20]byte{} ||
+		dir.TakerPaysMPT != nil || dir.TakerGetsMPT != nil
 
 	if hasBookFields {
-		// Include all four currency/issuer fields
-		jsonObj["TakerPaysCurrency"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysCurrency[:]))
-		jsonObj["TakerPaysIssuer"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysIssuer[:]))
-		jsonObj["TakerGetsCurrency"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsCurrency[:]))
-		jsonObj["TakerGetsIssuer"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsIssuer[:]))
+		// Each side is either an Issue (currency + issuer) or an MPT (the 192-bit
+		// issuance id), never both — matching rippled's setBookDir asset visit.
+		if dir.TakerPaysMPT != nil {
+			jsonObj["TakerPaysMPT"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysMPT[:]))
+		} else {
+			jsonObj["TakerPaysCurrency"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysCurrency[:]))
+			jsonObj["TakerPaysIssuer"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysIssuer[:]))
+		}
+		if dir.TakerGetsMPT != nil {
+			jsonObj["TakerGetsMPT"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsMPT[:]))
+		} else {
+			jsonObj["TakerGetsCurrency"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsCurrency[:]))
+			jsonObj["TakerGetsIssuer"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsIssuer[:]))
+		}
 		if dir.ExchangeRate != 0 {
 			jsonObj["ExchangeRate"] = formatUint64Hex(dir.ExchangeRate)
 		}
@@ -284,6 +302,16 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 				dir.TakerGetsCurrency = f.Hash160()
 			case 4: // TakerGetsIssuer
 				dir.TakerGetsIssuer = f.Hash160()
+			}
+
+		case stHash192:
+			switch f.FieldCode {
+			case 3: // TakerPaysMPT
+				id := f.Hash192()
+				dir.TakerPaysMPT = &id
+			case 4: // TakerGetsMPT
+				id := f.Hash192()
+				dir.TakerGetsMPT = &id
 			}
 
 		case stAccountID:

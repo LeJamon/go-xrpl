@@ -54,6 +54,11 @@ func (a *AMMDelete) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
+func (a *AMMDelete) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT())
+}
+
 // Preclaim requires the AMM to exist and be empty.
 // Reference: rippled AMMDelete.cpp preclaim
 func (a *AMMDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {

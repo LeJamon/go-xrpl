@@ -105,6 +105,18 @@ func (c *CheckCash) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureChecks}
 }
 
+// CheckExtraFeatures gates an MPT-denominated Amount or DeliverMin on the
+// MPTokensV2 amendment, mirroring rippled CheckCash::checkExtraFeatures.
+func (c *CheckCash) CheckExtraFeatures(rules *amendment.Rules) error {
+	if rules.MPTokensV2Enabled() {
+		return nil
+	}
+	if (c.Amount != nil && c.Amount.IsMPT()) || (c.DeliverMin != nil && c.DeliverMin.IsMPT()) {
+		return ter.Errorf(ter.TemDISABLED, "MPT amounts require MPTokensV2 amendment")
+	}
+	return nil
+}
+
 // Apply implements preclaim + doApply matching rippled's CashCheck.
 func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check cash apply",

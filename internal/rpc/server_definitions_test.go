@@ -257,6 +257,97 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	}
 }
 
+// TestServerDefinitions_3_2_0_Sections verifies the five sections added in
+// rippled 3.2.0 (#6321): TRANSACTION_FORMATS, LEDGER_ENTRY_FORMATS,
+// TRANSACTION_FLAGS, LEDGER_ENTRY_FLAGS and ACCOUNT_SET_FLAGS.
+func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
+	method := &handlers.ServerDefinitionsMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+
+	resultJSON, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(resultJSON, &resp))
+
+	// asJSONNum returns the numeric value of resp[...] regardless of the
+	// json.Number/float64 decode.
+	num := func(v any) float64 {
+		f, ok := v.(float64)
+		require.True(t, ok, "expected numeric value, got %T", v)
+		return f
+	}
+
+	t.Run("TRANSACTION_FORMATS", func(t *testing.T) {
+		formats, ok := resp["TRANSACTION_FORMATS"].(map[string]any)
+		require.True(t, ok, "TRANSACTION_FORMATS should be a map")
+		common, ok := formats["common"].([]any)
+		require.True(t, ok, "should carry a 'common' array")
+		require.NotEmpty(t, common)
+		el0 := common[0].(map[string]any)
+		assert.Contains(t, el0, "name")
+		assert.Contains(t, el0, "optionality")
+
+		payment, ok := formats["Payment"].([]any)
+		require.True(t, ok, "should carry a Payment format")
+		// Payment's Amount is required (optionality 0); a common field like
+		// Fee must NOT appear in the per-type list.
+		names := map[string]float64{}
+		for _, f := range payment {
+			m := f.(map[string]any)
+			names[m["name"].(string)] = num(m["optionality"])
+		}
+		require.Contains(t, names, "Amount")
+		assert.EqualValues(t, 0, names["Amount"], "Payment.Amount is required")
+		assert.NotContains(t, names, "Fee", "common fields excluded from per-type list")
+	})
+
+	t.Run("LEDGER_ENTRY_FORMATS", func(t *testing.T) {
+		formats, ok := resp["LEDGER_ENTRY_FORMATS"].(map[string]any)
+		require.True(t, ok, "LEDGER_ENTRY_FORMATS should be a map")
+		_, ok = formats["common"].([]any)
+		require.True(t, ok, "should carry a 'common' array")
+		ar, ok := formats["AccountRoot"].([]any)
+		require.True(t, ok, "should carry an AccountRoot format")
+		require.NotEmpty(t, ar)
+	})
+
+	t.Run("TRANSACTION_FLAGS", func(t *testing.T) {
+		flags, ok := resp["TRANSACTION_FLAGS"].(map[string]any)
+		require.True(t, ok, "TRANSACTION_FLAGS should be a map")
+		universal, ok := flags["universal"].(map[string]any)
+		require.True(t, ok, "should carry a 'universal' group")
+		assert.EqualValues(t, 0x80000000, num(universal["tfFullyCanonicalSig"]))
+		payment, ok := flags["Payment"].(map[string]any)
+		require.True(t, ok)
+		assert.EqualValues(t, 0x00020000, num(payment["tfPartialPayment"]))
+	})
+
+	t.Run("LEDGER_ENTRY_FLAGS", func(t *testing.T) {
+		flags, ok := resp["LEDGER_ENTRY_FLAGS"].(map[string]any)
+		require.True(t, ok, "LEDGER_ENTRY_FLAGS should be a map")
+		ar, ok := flags["AccountRoot"].(map[string]any)
+		require.True(t, ok)
+		assert.EqualValues(t, 0x00040000, num(ar["lsfRequireAuth"]))
+		mpt, ok := flags["MPToken"].(map[string]any)
+		require.True(t, ok)
+		assert.EqualValues(t, 0x00000004, num(mpt["lsfMPTAMM"]), "3.2.0 lsfMPTAMM")
+	})
+
+	t.Run("ACCOUNT_SET_FLAGS", func(t *testing.T) {
+		asf, ok := resp["ACCOUNT_SET_FLAGS"].(map[string]any)
+		require.True(t, ok, "ACCOUNT_SET_FLAGS should be a map")
+		assert.EqualValues(t, 1, num(asf["asfRequireDest"]))
+		assert.EqualValues(t, 17, num(asf["asfAllowTrustLineLocking"]))
+		assert.NotContains(t, asf, "asfTshCollect", "asf 11 is intentionally absent")
+	})
+}
+
 // TestServerDefinitionsMethodMetadata tests the method's metadata functions.
 func TestServerDefinitionsMethodMetadata(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}

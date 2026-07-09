@@ -3,6 +3,8 @@ package offer
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -19,6 +21,56 @@ func xrpAmount(drops int64) tx.Amount {
 
 func iouAmount(value float64, currency, issuer string) tx.Amount {
 	return tx.NewIssuedAmountFromFloat64(value, currency, issuer)
+}
+
+func mptAmount(value int64, issuer, mptIssuanceID string) tx.Amount {
+	return state.NewMPTAmountWithIssuanceID(value, issuer, mptIssuanceID)
+}
+
+// TestOfferCreateMPTGate covers the MPTokensV2 checkExtraFeatures gate: an offer
+// with an MPT on either side is temDISABLED unless MPTokensV2 is enabled
+// (rippled OfferCreate::checkExtraFeatures).
+func TestOfferCreateMPTGate(t *testing.T) {
+	const mptID = "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12"
+	off := amendment.NewRules(nil)
+	on := amendment.NewRules([][32]byte{amendment.FeatureMPTokensV2})
+
+	cases := []struct {
+		name      string
+		takerPays tx.Amount
+		takerGets tx.Amount
+	}{
+		{"MPT pays", mptAmount(100, "rIssuer", mptID), xrpAmount(1000000)},
+		{"MPT gets", xrpAmount(1000000), mptAmount(100, "rIssuer", mptID)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := &OfferCreate{
+				BaseTx:    *tx.NewBaseTx(tx.TypeOfferCreate, "rAlice"),
+				TakerPays: tc.takerPays,
+				TakerGets: tc.takerGets,
+			}
+			if err := o.CheckExtraFeatures(off); err == nil {
+				t.Fatal("MPT offer without MPTokensV2: expected temDISABLED, got nil")
+			} else if re, ok := ter.AsResultError(err); !ok || re.Code != ter.TemDISABLED {
+				t.Fatalf("MPT offer without MPTokensV2: want temDISABLED, got %v", err)
+			}
+			if err := o.CheckExtraFeatures(on); err != nil {
+				t.Fatalf("MPT offer with MPTokensV2: want nil, got %v", err)
+			}
+		})
+	}
+
+	// A non-MPT offer passes the gate regardless of the amendment.
+	iouOffer := &OfferCreate{
+		BaseTx:    *tx.NewBaseTx(tx.TypeOfferCreate, "rAlice"),
+		TakerPays: iouAmount(100, "USD", "rGateway"),
+		TakerGets: xrpAmount(1000000),
+	}
+	if err := iouOffer.CheckExtraFeatures(off); err != nil {
+		t.Fatalf("non-MPT offer without MPTokensV2: want nil, got %v", err)
+	}
 }
 
 // TestOfferCreateValidation tests OfferCreate transaction validation.
