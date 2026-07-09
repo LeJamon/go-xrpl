@@ -95,7 +95,8 @@ func TestAmountBytesInvalid(t *testing.T) {
 // sfBalance (Amount, field code 2) with the given native drops. The high field
 // nibble 0x6 is Amount; the low nibble 0x2 is the Balance field code.
 func balanceFieldObject(drops uint64) []byte {
-	out := []byte{0x62}
+	out := make([]byte, 0, 9)
+	out = append(out, 0x62)
 	return append(out, nativeAmountBytes(drops, true)...)
 }
 
