@@ -172,8 +172,10 @@ func doOverpayment(asset Asset, loanScale int, overpaymentComponents ExtendedPay
 // LoanMakePayment applies a payment to the loan and returns the breakdown of
 // amounts paid, mutating loan in place (rippled loanMakePayment). now is the
 // parent close time in Ripple-epoch seconds. A result other than tesSUCCESS is a
-// failure; loan must not be persisted in that case.
-func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRate uint32, amount N, paymentType LoanPaymentType) (LoanPaymentParts, ter.Result) {
+// failure; loan must not be persisted in that case. fixCleanupEnabled reflects
+// the fixCleanup3_1_3 amendment: when set, an overpayment Amount is truncated to
+// the loan scale so meaningless dust is not processed.
+func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRate uint32, amount N, paymentType LoanPaymentType, fixCleanupEnabled bool) (LoanPaymentParts, ter.Result) {
 	if loan.PaymentRemaining == 0 || loan.PrincipalOutstanding.IsZero() {
 		return LoanPaymentParts{}, ter.TecKILLED
 	}
@@ -232,9 +234,15 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 		return LoanPaymentParts{}, ter.TecINSUFFICIENT_PAYMENT
 	}
 
+	// Post-fixCleanup3_1_3: truncate the raw Amount to the loan scale before
+	// deriving the overpayment, so dust below the asset's precision is ignored.
+	roundedAmount := amount
+	if fixCleanupEnabled {
+		roundedAmount = RoundAssetTowardsZero(asset, amount, loanScale)
+	}
 	if paymentType == PaymentOverpayment && loan.HasOverpaymentFlag && loan.PaymentRemaining > 0 &&
-		totalPaid.Cmp(amount) < 0 && numPayments < protocol.LoanMaximumPaymentsPerTransaction {
-		overpayment := minN(amount.Sub(totalPaid), loan.TotalValueOutstanding)
+		totalPaid.Cmp(roundedAmount) < 0 && numPayments < protocol.LoanMaximumPaymentsPerTransaction {
+		overpayment := minN(roundedAmount.Sub(totalPaid), loan.TotalValueOutstanding)
 		overpaymentComponents := computeOverpaymentComponents(asset, loanScale, overpayment, loan.OverpaymentInterestRate, loan.OverpaymentFee, managementFeeRate)
 		if gtZero(overpaymentComponents.TrackedPrincipalDelta) {
 			oParts, ok, err := doOverpayment(asset, loanScale, overpaymentComponents, loan, periodicRate, loan.PaymentRemaining, managementFeeRate)

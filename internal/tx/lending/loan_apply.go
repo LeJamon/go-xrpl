@@ -1,6 +1,7 @@
 package lending
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
@@ -191,16 +192,56 @@ func (l *LoanManage) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	flags := l.GetFlags()
+	integral := assetIntegral(vinfo.Asset)
+	var result ter.Result
 	switch {
 	case flags&TfLoanDefault != 0:
-		return l.defaultLoan(ctx, loanKey, loan, brokerKey, b, vaultKey, vinfo)
+		result = l.defaultLoan(ctx, loanKey, loan, brokerKey, b, vaultKey, vinfo)
 	case flags&TfLoanImpair != 0:
-		return l.impairLoan(ctx, loanKey, loan, vaultKey, vinfo)
+		result = l.impairLoan(ctx, loanKey, loan, vaultKey, vinfo)
 	case flags&TfLoanUnimpair != 0:
-		return l.unimpairLoan(ctx, loanKey, loan, vaultKey, vinfo)
+		result = l.unimpairLoan(ctx, loanKey, loan, vaultKey, vinfo)
 	default:
-		return ter.TesSUCCESS
+		result = ter.TesSUCCESS
 	}
+
+	// Post-fixCleanup3_1_3: round the NUMBER fields of the Loan, LoanBroker, and
+	// Vault to the asset precision on every successful path. Pre-amendment only
+	// the noop path did so.
+	if result == ter.TesSUCCESS && ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3) {
+		if r := l.associateEntities(ctx, loanKey, brokerKey, vaultKey, integral); r != ter.TesSUCCESS {
+			return r
+		}
+	}
+	return result
+}
+
+// associateEntities rounds the NUMBER fields of the Loan, LoanBroker, and Vault
+// to the vault asset's precision after a successful default/impair/unimpair, so
+// no accounting field carries sub-precision dust (rippled associateAsset).
+func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey, vaultKey keylet.Keylet, integral bool) ter.Result {
+	loan, err := readLoan(ctx.View, loanKey)
+	if err != nil || loan == nil {
+		return ter.TefBAD_LEDGER
+	}
+	associateLoanAsset(loan, integral)
+	if r := updateLoan(ctx, loanKey, loan); r != ter.TesSUCCESS {
+		return r
+	}
+	b, berr := readLoanBroker(ctx.View, brokerKey)
+	if berr != nil || b == nil {
+		return ter.TefBAD_LEDGER
+	}
+	associateBrokerAsset(b, integral)
+	if r := updateBroker(ctx, brokerKey, b); r != ter.TesSUCCESS {
+		return r
+	}
+	v, verr := vault.ReadVaultLending(ctx.View, vaultKey)
+	if verr != nil || v == nil {
+		return ter.TefBAD_LEDGER
+	}
+	associateVaultAsset(v, integral)
+	return vault.UpdateVaultTotals(ctx, vaultKey, v.AssetsTotal, v.AssetsAvailable, v.LossUnrealized)
 }
 
 func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending) ter.Result {
@@ -221,7 +262,6 @@ func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loa
 	if !hasExpired(ctx.Config.ParentCloseTime, loan.NextPaymentDueDate) {
 		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime
 	}
-	associateLoanAsset(loan, integral)
 	return updateLoan(ctx, loanKey, loan)
 }
 
@@ -248,7 +288,6 @@ func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l
 	} else {
 		loan.NextPaymentDueDate = ctx.Config.ParentCloseTime + loan.PaymentInterval
 	}
-	associateLoanAsset(loan, integral)
 	return updateLoan(ctx, loanKey, loan)
 }
 
@@ -300,7 +339,6 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	}
 	b.DebtTotal = numStr(lmath.AdjustImprecise(asset, debtTotal, totalDefault.Negate(), vaultScale))
 	b.CoverAvailable = numStr(lendNum(b.CoverAvailable).Sub(covered))
-	associateBrokerAsset(b, integral)
 	if res := updateBroker(ctx, brokerKey, b); res != ter.TesSUCCESS {
 		return res
 	}
@@ -312,7 +350,6 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	loan.ManagementFeeOutstanding = ""
 	loan.PaymentRemaining = 0
 	loan.NextPaymentDueDate = 0
-	associateLoanAsset(loan, integral)
 	if res := updateLoan(ctx, loanKey, loan); res != ter.TesSUCCESS {
 		return res
 	}
