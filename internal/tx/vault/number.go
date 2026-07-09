@@ -58,6 +58,18 @@ func pow10(scale uint8) state.XRPLNumber {
 	return state.NewXRPLNumber(1, int(scale))
 }
 
+// roundToVaultScale rounds a deposit amount down to the vault's post-deposit
+// AssetsTotal scale (fixCleanup3_2_0), so a sub-ULP tail can't be absorbed by
+// one accounting rail and not the other. Integral assets are whole units, so it
+// is a no-op there.
+func roundToVaultScale(amount, assetsTotal state.XRPLNumber, integral bool) state.XRPLNumber {
+	if integral {
+		return amount
+	}
+	postScale := assetsTotal.Add(amount).AssetExponent(false, state.RoundToNearest)
+	return amount.RoundToAssetScale(false, postScale, state.RoundDownward)
+}
+
 // assetsToSharesDeposit converts a deposit of assets into freshly minted shares.
 // The share count is truncated toward zero. Reference: rippled View.cpp.
 func assetsToSharesDeposit(assetsTotal, shareTotal, assets state.XRPLNumber, scale uint8) state.XRPLNumber {
