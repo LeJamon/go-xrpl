@@ -406,7 +406,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	if !ok {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
-	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), resp.LedgerHeader)
+	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), resp.LedgerHeader)
 	if computed != advertised {
 		return fmt.Errorf("header hash mismatch: computed %x advertised %x",
 			computed[:8], advertised[:8])
@@ -446,7 +446,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		if err != nil {
 			return fmt.Errorf("tx %d: split blob: %w", i, err)
 		}
-		txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+		txID := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 		txIndex, err := extractTransactionIndex(metaBytes)
 		if err != nil {
 			return fmt.Errorf("tx %d: extract index: %w", i, err)

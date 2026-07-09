@@ -171,7 +171,7 @@ func (n *innerNode) updateHashUnsafe() error {
 
 	h := common.AcquireSHA512()
 	defer common.ReleaseSHA512(h)
-	h.Write(protocol.HashPrefixInnerNode[:])
+	h.Write(protocol.HashPrefixInnerNode().Bytes())
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
@@ -269,7 +269,7 @@ func (n *innerNode) SerializeForWire() ([]byte, error) {
 				result = append(result, byte(i))
 			}
 		}
-		result = append(result, protocol.WireTypeCompressedInner)
+		result = append(result, byte(protocol.WireTypeCompressedInner))
 		return result, nil
 	}
 
@@ -282,7 +282,7 @@ func (n *innerNode) SerializeForWire() ([]byte, error) {
 			copy(result[off:off+32], ch[:])
 		}
 	}
-	result[BranchFactor*32] = protocol.WireTypeInner
+	result[BranchFactor*32] = byte(protocol.WireTypeInner)
 	return result, nil
 }
 
@@ -302,7 +302,7 @@ func (n *innerNode) SerializeWithPrefix() ([]byte, error) {
 	}
 
 	result := make([]byte, fullInnerSerializedSize)
-	copy(result[:4], protocol.HashPrefixInnerNode[:])
+	copy(result[:4], protocol.HashPrefixInnerNode().Bytes())
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			off := 4 + i*32
@@ -319,7 +319,7 @@ func newInnerNodeFromWire(data []byte) (*innerNode, error) {
 		return nil, fmt.Errorf("empty wire data")
 	}
 
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 	nodeData := data[:len(data)-1]
 
 	switch wireType {

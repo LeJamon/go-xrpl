@@ -11,7 +11,7 @@ import (
 // asset paired with a non-zero issuer is temBAD_ISSUER, and — when a pair is
 // supplied — an asset matching neither member is temBAD_AMM_TOKENS.
 func invalidAMMAsset(asset tx.Asset, pair *[2]tx.Asset) ter.Result {
-	if keylet.CurrencyBytes(asset.Currency) == keylet.BadCurrency {
+	if keylet.CurrencyBytes(asset.Currency) == keylet.BadCurrency() {
 		return ter.TemBAD_CURRENCY
 	}
 	isXRP := isXRPAsset(asset)

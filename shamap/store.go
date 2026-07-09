@@ -31,13 +31,13 @@ func DeserializeFromPrefix(data []byte) (Node, error) {
 	copy(prefix[:], data[:4])
 
 	switch prefix {
-	case protocol.HashPrefixInnerNode:
+	case protocol.HashPrefixInnerNode():
 		return parseInnerNodeFromPrefix(data)
-	case protocol.HashPrefixLeafNode:
+	case protocol.HashPrefixLeafNode():
 		return parseAccountStateLeafFromPrefix(data)
-	case protocol.HashPrefixTransactionID:
+	case protocol.HashPrefixTransactionID():
 		return parseTransactionLeafFromPrefix(data)
-	case protocol.HashPrefixTxNode:
+	case protocol.HashPrefixTxNode():
 		return parseTransactionWithMetaLeafFromPrefix(data)
 	default:
 		return nil, fmt.Errorf("unknown hash prefix: %x", prefix)
@@ -115,7 +115,7 @@ func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
 
 	txData := data[4:]
 
-	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
+	key := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), txData)
 	item := NewItem(key, txData)
 
 	node, err := newTransactionLeafNode(item)

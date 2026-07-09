@@ -93,8 +93,8 @@ func AddRaw(header LedgerHeader, includeHash bool) []byte {
 // substituted here. This is the single source of truth for the ledger hash; the
 // ledger and genesis packages both delegate to it.
 func CalculateHash(h LedgerHeader) [32]byte {
-	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster.Bytes())+SizeBase)
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
+	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster().Bytes())+SizeBase)
+	data = append(data, protocol.HashPrefixLedgerMaster().Bytes()...)
 	data = binary.BigEndian.AppendUint32(data, h.LedgerIndex)
 	data = binary.BigEndian.AppendUint64(data, h.Drops)
 	data = append(data, h.ParentHash[:]...)

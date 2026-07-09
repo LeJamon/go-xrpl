@@ -64,7 +64,7 @@ func makeMetaBlob(t *testing.T, txIndex uint32) []byte {
 func makeTxLeaf(t *testing.T, payload []byte, txIndex uint32) ([]byte, [32]byte) {
 	t.Helper()
 	meta := makeMetaBlob(t, txIndex)
-	txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], payload)
+	txID := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), payload)
 	blob := make([]byte, 0, len(payload)+len(meta)+4)
 	blob = append(blob, vlEncode(len(payload))...)
 	blob = append(blob, payload...)
@@ -170,7 +170,7 @@ func (p *lookupProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) 
 	wantHash := want.Hash()
 	objects := []message.IndexedObject{{
 		Hash:      append([]byte(nil), wantHash[:]...),
-		Data:      append(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(wantHdr, false)...),
+		Data:      append(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(wantHdr, false)...),
 		LedgerSeq: seq,
 	}}
 	appendNodes := func(m *shamap.SHAMap) error {

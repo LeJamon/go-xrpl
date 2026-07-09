@@ -155,7 +155,7 @@ func TestRouter_ForwardWalk_RearmsNextOnCompletion(t *testing.T) {
 		AccountHash: rootHash,
 	}
 	data := header.AddRaw(hdr, false)
-	childHash := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), data)
+	childHash := common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), data)
 
 	il := inbound.New(childHash, c+1, 7, serveTestLogger())
 	require.NoError(t, il.GotBase([]message.LedgerNode{{NodeData: data}, {NodeData: rootData}}))

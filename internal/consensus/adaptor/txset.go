@@ -211,7 +211,7 @@ func (ts *TxSetImpl) shamap() *shamap.SHAMap {
 // computeTxID computes the SHA-512Half of a transaction blob with the
 // HashPrefix for transactions (TXN\x00).
 func computeTxID(blob []byte) consensus.TxID {
-	return consensus.TxID(common.Sha512Half(protocol.HashPrefixTransactionID[:], blob))
+	return consensus.TxID(common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), blob))
 }
 
 // txSetCacheTTL bounds how long a transaction set is retained. A set is

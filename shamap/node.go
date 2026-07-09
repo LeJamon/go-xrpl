@@ -108,7 +108,7 @@ func DeserializeNodeFromWire(data []byte) (Node, error) {
 		return nil, errors.New("empty wire data")
 	}
 
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 
 	switch wireType {
 	case protocol.WireTypeInner:

@@ -445,7 +445,7 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	// reverse arithmetic CalculateLedgerHash relies on. AddRaw re-emits the exact
 	// bytes a peer signs, so the byte-level hash is the only round-trip-safe
 	// invariant (same approach as the LedgerReplay path in replay_delta.go).
-	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(*h, false))
+	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(*h, false))
 	if computed != l.hash || (l.seq != 0 && l.seq != h.LedgerIndex) {
 		l.state = StateFailed
 		l.err = fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",

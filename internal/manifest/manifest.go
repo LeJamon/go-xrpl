@@ -256,7 +256,7 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	prefix := protocol.HashPrefixManifest
+	prefix := protocol.HashPrefixManifest()
 	out := make([]byte, 0, len(prefix)+len(body))
 	out = append(out, prefix[:]...)
 	out = append(out, body...)

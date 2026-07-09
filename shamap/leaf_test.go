@@ -54,7 +54,7 @@ func TestLeafFromWire_RejectsShortPayload(t *testing.T) {
 		w := make([]byte, 0, dataLen+33)
 		w = append(w, make([]byte, dataLen)...)
 		w = append(w, key...)
-		return append(w, protocol.WireTypeAccountState)
+		return append(w, byte(protocol.WireTypeAccountState))
 	}
 	if _, err := newAccountStateLeafFromWire(buildAS(11)); !errors.Is(err, ErrItemTooSmall) {
 		t.Fatalf("AS 11-byte payload: want ErrItemTooSmall, got %v", err)
@@ -65,7 +65,7 @@ func TestLeafFromWire_RejectsShortPayload(t *testing.T) {
 
 	// transaction (no meta) wire = txData | wireType(1)
 	buildTxn := func(dataLen int) []byte {
-		return append(make([]byte, dataLen), protocol.WireTypeTransaction)
+		return append(make([]byte, dataLen), byte(protocol.WireTypeTransaction))
 	}
 	if _, err := NewTransactionLeafFromWire(buildTxn(11)); !errors.Is(err, ErrItemTooSmall) {
 		t.Fatalf("TXN 11-byte payload: want ErrItemTooSmall, got %v", err)

@@ -193,5 +193,5 @@ func TestAdaptor_AddPendingTx_FailureNotInPool(t *testing.T) {
 // the canonical XRPL tx hash. Re-implemented here so the test file can
 // stay in the _test package.
 func computeTxIDForTest(blob []byte) [32]byte {
-	return common.Sha512Half(protocol.HashPrefixTransactionID[:], blob)
+	return common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), blob)
 }

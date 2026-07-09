@@ -323,7 +323,7 @@ func TestHash_LeafNodeFormula(t *testing.T) {
 		index[i] = byte(i + 1)
 	}
 
-	expected := common.Sha512Half(protocol.HashPrefixLeafNode[:], canonical, index[:])
+	expected := common.Sha512Half(protocol.HashPrefixLeafNode().Bytes(), canonical, index[:])
 
 	entry := New("AccountRoot")
 	if err := entry.Decode(canonical); err != nil {

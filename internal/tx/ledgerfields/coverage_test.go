@@ -532,7 +532,7 @@ func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Hash: %v", err)
 			}
-			want := common.Sha512Half(protocol.HashPrefixLeafNode[:], canonical, index[:])
+			want := common.Sha512Half(protocol.HashPrefixLeafNode().Bytes(), canonical, index[:])
 			if h != want {
 				t.Fatalf("hash mismatch:\n want %x\n got  %x", want, h)
 			}

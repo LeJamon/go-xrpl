@@ -174,7 +174,7 @@ func metaBlob(t *testing.T, txIndex uint32) []byte {
 func txWithMetaBlob(t *testing.T, txBytes []byte, txIndex uint32) (blob []byte, txID [32]byte) {
 	t.Helper()
 	meta := metaBlob(t, txIndex)
-	txID = common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+	txID = common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 	blob = append(blob, vlEncode(len(txBytes))...)
 	blob = append(blob, txBytes...)
 	blob = append(blob, vlEncode(len(meta))...)
@@ -501,7 +501,7 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 	require.NoError(t, err)
 	parsed.AccountHash[0] ^= 0xFF
 	hdrBytes := header.AddRaw(*parsed, false)
-	tampered := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), hdrBytes)
+	tampered := common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), hdrBytes)
 	resp.LedgerHash = tampered[:]
 	resp.LedgerHeader = hdrBytes
 

@@ -33,7 +33,7 @@ func driveToFailure(il *Ledger) {
 // driving a real acquisition must request the header's true byte-level hash.
 func encodeHeader(h header.LedgerHeader) (data []byte, hash [32]byte) {
 	data = header.AddRaw(h, false)
-	return data, common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), data)
+	return data, common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), data)
 }
 
 // buildSourceState returns a multi-level state SHAMap plus its root hash,

@@ -48,7 +48,7 @@ func makeTxMetaBlobForTest(t *testing.T, txBytes []byte, txIndex uint32) ([]byte
 	metaBytes, err := hex.DecodeString(metaHex)
 	require.NoError(t, err)
 
-	txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+	txID := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 
 	blob := make([]byte, 0, len(txBytes)+len(metaBytes)+4)
 	blob = append(blob, encodeVLForTest(len(txBytes))...)

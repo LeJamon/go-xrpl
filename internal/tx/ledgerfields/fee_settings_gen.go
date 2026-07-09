@@ -321,6 +321,6 @@ func (f *FeeSettings) Hash(index [32]byte) ([32]byte, error) {
 	if err != nil {
 		return [32]byte{}, err
 	}
-	prefix := protocol.HashPrefixLeafNode
+	prefix := protocol.HashPrefixLeafNode()
 	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

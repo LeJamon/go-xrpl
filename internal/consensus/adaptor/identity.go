@@ -288,8 +288,8 @@ func VerifyValidation(validation *consensus.Validation) error {
 // buildProposalSigningData constructs the data to be signed for a proposal.
 // Format: HashPrefixProposal + ProposeSeq(4) + CloseTime(4) + PreviousLedger(32) + TxSet(32)
 func buildProposalSigningData(p *consensus.Proposal) []byte {
-	buf := make([]byte, 0, len(protocol.HashPrefixProposal)+4+4+len(p.PreviousLedger)+len(p.TxSet))
-	buf = append(buf, protocol.HashPrefixProposal[:]...)
+	buf := make([]byte, 0, len(protocol.HashPrefixProposal())+4+4+len(p.PreviousLedger)+len(p.TxSet))
+	buf = append(buf, protocol.HashPrefixProposal().Bytes()...)
 
 	// ProposeSeq (4 bytes, big-endian)
 	buf = append(buf, byte(p.Position>>24), byte(p.Position>>16), byte(p.Position>>8), byte(p.Position))
@@ -323,7 +323,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 func buildValidationSigningData(v *consensus.Validation) []byte {
 	if len(v.SigningData) > 0 {
 		// Inbound: use the exact non-signing bytes from the wire.
-		hash := common.Sha512Half(protocol.HashPrefixValidation[:], v.SigningData)
+		hash := common.Sha512Half(protocol.HashPrefixValidation().Bytes(), v.SigningData)
 		return hash[:]
 	}
 
@@ -339,6 +339,6 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	// the same vfFullyCanonicalSig|vfFullValidation pair this used to build.
 	unsigned := *v
 	unsigned.Signature = nil
-	hash := common.Sha512Half(protocol.HashPrefixValidation[:], SerializeSTValidation(&unsigned))
+	hash := common.Sha512Half(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))
 	return hash[:]
 }
