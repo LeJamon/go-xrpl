@@ -74,14 +74,11 @@ func (e *EscrowFinish) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
-// GetFlagsMask returns the invalid-flags mask enforced at preflight0. fix1543
-// rejects any stray (non-universal) flag; before it, any flags are allowed.
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
 // Reference: rippled Escrow.cpp EscrowFinish::getFlagsMask.
 func (e *EscrowFinish) GetFlagsMask(rules *amendment.Rules) uint32 {
-	if rules.Enabled(amendment.FeatureFix1543) {
-		return tx.TfUniversalMask
-	}
-	return 0
+	return tx.TfUniversalMask
 }
 
 // CheckExtraFeatures gates the CredentialIDs field on the Credentials amendment.
@@ -213,24 +210,14 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	closeTime := ctx.Config.ParentCloseTime
 
 	// --- doApply: Time validation ---
-	// Reference: rippled Escrow.cpp doApply() lines 1030-1055
-	if rules.Enabled(amendment.FeatureFix1571) {
-		// fix1571: FinishAfter check — close time must be strictly after finish time
-		if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
-			return ter.TecNO_PERMISSION
-		}
-		// fix1571: CancelAfter check — if past cancel time, finish not allowed
-		if escrowEntry.CancelAfter > 0 && closeTime > escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
-	} else {
-		// Pre-fix1571: both use <= comparison (known bug in cancel check)
-		if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
-			return ter.TecNO_PERMISSION
-		}
-		if escrowEntry.CancelAfter > 0 && closeTime <= escrowEntry.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
+	// after() means strictly greater than: finish requires the close time to be
+	// strictly after FinishAfter and not strictly after CancelAfter.
+	// Reference: rippled EscrowFinish.cpp doApply().
+	if escrowEntry.FinishAfter > 0 && closeTime <= escrowEntry.FinishAfter {
+		return ter.TecNO_PERMISSION
+	}
+	if escrowEntry.CancelAfter > 0 && closeTime > escrowEntry.CancelAfter {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Crypto-condition verification
@@ -294,13 +281,10 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	// Deposit authorization check. Runs only under the DepositAuth amendment,
-	// matching rippled; expired-credential removal happens inside.
+	// Deposit authorization check; expired-credential removal happens inside.
 	// Reference: rippled Escrow.cpp doApply() — verifyDepositPreauth()
-	if rules.Enabled(amendment.FeatureDepositAuth) {
-		if result := credential.VerifyDepositPreauth(ctx, e.CredentialIDs, ctx.AccountID, escrowEntry.DestinationID, destAccount); result != ter.TesSUCCESS {
-			return result
-		}
+	if result := credential.VerifyDepositPreauth(ctx, e.CredentialIDs, ctx.AccountID, escrowEntry.DestinationID, destAccount); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Remove escrow from owner directory

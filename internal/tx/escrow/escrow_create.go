@@ -69,14 +69,11 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
-// GetFlagsMask returns the invalid-flags mask enforced at preflight0. fix1543
-// rejects any stray (non-universal) flag; before it, any flags are allowed.
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
 // Reference: rippled Escrow.cpp EscrowCreate::getFlagsMask.
 func (e *EscrowCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
-	if rules.Enabled(amendment.FeatureFix1543) {
-		return tx.TfUniversalMask
-	}
-	return 0
+	return tx.TfUniversalMask
 }
 
 // PreflightRules is the amendment-aware body of rippled's EscrowCreate::preflight.
@@ -111,12 +108,10 @@ func (e *EscrowCreate) PreflightRules(rules *amendment.Rules) error {
 		return ter.Errorf(ter.TemBAD_EXPIRATION, "CancelAfter must be after FinishAfter")
 	}
 
-	// fix1571: an escrow must specify a FinishAfter or a Condition, otherwise it
-	// could be finished immediately.
-	if rules.Enabled(amendment.FeatureFix1571) {
-		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
-			return ter.Errorf(ter.TemMALFORMED, "escrow must specify FinishAfter or Condition")
-		}
+	// An escrow must specify a FinishAfter or a Condition, otherwise it could be
+	// finished immediately.
+	if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
+		return ter.Errorf(ter.TemMALFORMED, "escrow must specify FinishAfter or Condition")
 	}
 
 	// Condition format.
@@ -188,24 +183,14 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		}
 	}
 
-	// Time validation against parent close time
-	// Reference: rippled Escrow.cpp:457-489
-	if rules.Enabled(amendment.FeatureFix1571) {
-		// fix1571: after() means strictly greater than
-		if e.CancelAfter != nil && closeTime > *e.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
-		if e.FinishAfter != nil && closeTime > *e.FinishAfter {
-			return ter.TecNO_PERMISSION
-		}
-	} else {
-		// pre-fix1571: >= comparison
-		if e.CancelAfter != nil && closeTime >= *e.CancelAfter {
-			return ter.TecNO_PERMISSION
-		}
-		if e.FinishAfter != nil && closeTime >= *e.FinishAfter {
-			return ter.TecNO_PERMISSION
-		}
+	// Time validation against parent close time. after() means strictly greater
+	// than.
+	// Reference: rippled EscrowCreate.cpp doApply().
+	if e.CancelAfter != nil && closeTime > *e.CancelAfter {
+		return ter.TecNO_PERMISSION
+	}
+	if e.FinishAfter != nil && closeTime > *e.FinishAfter {
+		return ter.TecNO_PERMISSION
 	}
 
 	return ter.TesSUCCESS
@@ -322,14 +307,6 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			"destination", e.Destination,
 		)
 		return ter.TecDST_TAG_NEEDED
-	}
-
-	// DisallowXRP check (only when DepositAuth amendment is NOT enabled)
-	// Reference: rippled Escrow.cpp:523-525
-	if !rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
-			return ter.TecNO_TARGET
-		}
 	}
 
 	accountID, _ := state.DecodeAccountID(e.Account)

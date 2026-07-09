@@ -83,14 +83,11 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
 }
 
-// GetFlagsMask returns the invalid-flags mask enforced at preflight0. fix1543
-// rejects any stray (non-universal) flag; before it, any flags are allowed.
+// GetFlagsMask returns the invalid-flags mask enforced at preflight0: any
+// non-universal flag is rejected.
 // Reference: rippled PayChan.cpp PayChanFund::getFlagsMask.
 func (p *PaymentChannelFund) GetFlagsMask(rules *amendment.Rules) uint32 {
-	if rules.Enabled(amendment.FeatureFix1543) {
-		return tx.TfUniversalMask
-	}
-	return 0
+	return tx.TfUniversalMask
 }
 
 // Reference: rippled PayChan.cpp PayChanFund::doApply()

@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -78,65 +77,35 @@ func TestComputeBaseFeeForTx_Multisign(t *testing.T) {
 }
 
 // TestComputeBaseFeeForTx_MaxMultiSigners verifies the rippled-faithful
-// fallback to baseFee when the supplied Signers count exceeds
-// STTx::maxMultiSigners (rippled TransactionSign.cpp:795-796 +
-// STTx.h:55-63): 8 when ExpandedSignerList is supplied AND disabled,
-// 32 otherwise (including when Rules is nil — rippled's permissive
-// default).
+// fallback to baseFee when the supplied Signers count exceeds the multi-signer
+// cap (STTx::kMaxMultiSigners = 32, unconditional since ExpandedSignerList
+// retired).
 func TestComputeBaseFeeForTx_MaxMultiSigners(t *testing.T) {
-	rulesDisabled := amendment.NewRules(nil)
-	rulesEnabled := amendment.NewRules([][32]byte{amendment.FeatureExpandedSignerList})
-
-	t.Run("maxMultiSigners returns 8 when ExpandedSignerList is disabled", func(t *testing.T) {
-		assert.Equal(t, 8, maxMultiSigners(rulesDisabled))
-	})
-
-	t.Run("maxMultiSigners returns 32 when Rules is nil", func(t *testing.T) {
-		// rippled STTx.h:55-56: "if rules are not supplied then the
-		// largest possible value is returned".
-		assert.Equal(t, 32, maxMultiSigners(nil))
-	})
-
-	t.Run("maxMultiSigners returns 32 when ExpandedSignerList is enabled", func(t *testing.T) {
-		assert.Equal(t, 32, maxMultiSigners(rulesEnabled))
-	})
-
-	t.Run("9 signers with ExpandedSignerList disabled falls back to baseFee", func(t *testing.T) {
-		cfg := tx.EngineConfig{BaseFee: 10, Rules: rulesDisabled}
+	t.Run("9 signers charges multisign fee", func(t *testing.T) {
+		cfg := tx.EngineConfig{BaseFee: 10}
 
 		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(100), computeBaseFeeForTx(nil, parsed, cfg),
+			"9 ≤ 32 ⇒ baseFee * (1 + 9) = 100")
+	})
+
+	t.Run("32 signers charges multisign fee", func(t *testing.T) {
+		cfg := tx.EngineConfig{BaseFee: 10}
+
+		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(32)))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(330), computeBaseFeeForTx(nil, parsed, cfg),
+			"32 ≤ 32 ⇒ baseFee * (1 + 32) = 330")
+	})
+
+	t.Run("33 signers falls back to baseFee", func(t *testing.T) {
+		cfg := tx.EngineConfig{BaseFee: 10}
+
+		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(33)))
 		require.NoError(t, err)
 		assert.Equal(t, uint64(10), computeBaseFeeForTx(nil, parsed, cfg),
-			"9 signers > maxMultiSigners(8) → reference_fee fallback per rippled TransactionSign.cpp:795")
-	})
-
-	t.Run("9 signers with nil Rules charges multisign fee", func(t *testing.T) {
-		// Permissive default: nil Rules ⇒ cap=32, so 9 signers still
-		// charge the full multisign fee (mirrors rippled STTx.h:55-56).
-		cfg := tx.EngineConfig{BaseFee: 10, Rules: nil}
-
-		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
-		require.NoError(t, err)
-		assert.Equal(t, uint64(100), computeBaseFeeForTx(nil, parsed, cfg),
-			"nil Rules ⇒ cap=32 ⇒ baseFee * (1 + 9) = 100")
-	})
-
-	t.Run("8 signers with ExpandedSignerList disabled charges multisign fee", func(t *testing.T) {
-		cfg := tx.EngineConfig{BaseFee: 10, Rules: rulesDisabled}
-
-		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(8)))
-		require.NoError(t, err)
-		assert.Equal(t, uint64(90), computeBaseFeeForTx(nil, parsed, cfg),
-			"baseFee * (1 + 8) = 90")
-	})
-
-	t.Run("9 signers with ExpandedSignerList enabled charges multisign fee", func(t *testing.T) {
-		cfg := tx.EngineConfig{BaseFee: 10, Rules: rulesEnabled}
-
-		parsed, err := tx.ParseJSON([]byte(buildSignersTxJSON(9)))
-		require.NoError(t, err)
-		assert.Equal(t, uint64(100), computeBaseFeeForTx(nil, parsed, cfg),
-			"9 ≤ maxMultiSigners(32) → baseFee * (1 + 9) = 100")
+			"33 > 32 → reference_fee fallback")
 	})
 }
 

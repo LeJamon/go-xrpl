@@ -235,7 +235,6 @@ func (a *Adaptor) runAmendmentVote(
 	maps.Copy(votes, rawVotes)
 
 	stances := a.currentAmendmentStances()
-	strict := enabled[amendment.FeatureFixAmendmentMajorityCalc]
 
 	// Restrict the vote walk to amendments this server supports,
 	// mirroring rippled's doVoting over amendmentMap_, which is seeded
@@ -255,7 +254,7 @@ func (a *Adaptor) runAmendmentVote(
 	if a.amendmentTable != nil {
 		snapshot := &amendment.LastVote{
 			TrustedValidations: available,
-			Threshold:          amendmentvote.Threshold(available, strict),
+			Threshold:          amendmentvote.Threshold(available),
 			Votes:              make(map[[32]byte]int, len(votes)),
 		}
 		maps.Copy(snapshot.Votes, votes)
@@ -272,7 +271,6 @@ func (a *Adaptor) runAmendmentVote(
 		Majority:           majority,
 		Stances:            stances,
 		Known:              known,
-		StrictMajority:     strict,
 	}
 	blobs, err := amendmentvote.DoVoting(in)
 	if err != nil {

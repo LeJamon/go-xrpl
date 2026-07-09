@@ -349,45 +349,23 @@ func TestEscrow_Tags(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestEscrow_DisallowXRP(t *testing.T) {
-	t.Run("WithoutDepositAuth", func(t *testing.T) {
-		// Respect the "asfDisallowXRP" account flag when DepositAuth is disabled
-		// Reference: rippled lines 266-275
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DepositAuth")
-		env.Close()
+	// Ignore the "asfDisallowXRP" account flag: escrow to an account with the
+	// flag set succeeds.
+	// Reference: rippled lines 276-285
+	env := jtx.NewTestEnv(t)
 
-		bob := jtx.NewAccount("bob")
-		george := jtx.NewAccount("george")
-		fund5000(env, bob, george)
+	bob := jtx.NewAccount("bob")
+	george := jtx.NewAccount("george")
+	fund5000(env, bob, george)
 
-		result := env.Submit(accountset.AccountSet(george).DisallowXRP().Build())
-		jtx.RequireTxSuccess(t, result)
+	result := env.Submit(accountset.AccountSet(george).DisallowXRP().Build())
+	jtx.RequireTxSuccess(t, result)
 
-		result = env.Submit(
-			escrow.EscrowCreate(bob, george, xrp(10)).
-				FinishTime(env.Now().Add(1 * time.Second)).
-				Build())
-		require.Equal(t, "tecNO_TARGET", result.Code)
-	})
-
-	t.Run("WithDepositAuth", func(t *testing.T) {
-		// Ignore the "asfDisallowXRP" account flag when DepositAuth is enabled
-		// Reference: rippled lines 276-285
-		env := jtx.NewTestEnv(t)
-
-		bob := jtx.NewAccount("bob")
-		george := jtx.NewAccount("george")
-		fund5000(env, bob, george)
-
-		result := env.Submit(accountset.AccountSet(george).DisallowXRP().Build())
-		jtx.RequireTxSuccess(t, result)
-
-		result = env.Submit(
-			escrow.EscrowCreate(bob, george, xrp(10)).
-				FinishTime(env.Now().Add(1 * time.Second)).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-	})
+	result = env.Submit(
+		escrow.EscrowCreate(bob, george, xrp(10)).
+			FinishTime(env.Now().Add(1 * time.Second)).
+			Build())
+	jtx.RequireTxSuccess(t, result)
 }
 
 // --------------------------------------------------------------------------
@@ -396,96 +374,41 @@ func TestEscrow_DisallowXRP(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestEscrow_Fix1571(t *testing.T) {
-	t.Run("WithoutFix1571", func(t *testing.T) {
-		// Reference: rippled lines 293-327
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("fix1571")
+	// Reference: rippled lines 329-357
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	fund5000(env, alice, bob, carol)
+	env.Close()
 
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-		carol := jtx.NewAccount("carol")
-		fund5000(env, alice, bob, carol)
-		env.Close()
+	// Creating an escrow with only a cancel time is not allowed
+	result := env.Submit(
+		escrow.EscrowCreate(alice, bob, xrp(100)).
+			CancelTime(env.Now().Add(90 * time.Second)).
+			Fee(baseFee * 150).
+			Build())
+	require.Equal(t, "temMALFORMED", result.Code)
 
-		// Creating an escrow without a finish time and finishing it
-		// is allowed without fix1571
-		seq1 := env.Seq(alice)
-		result := env.Submit(
-			escrow.EscrowCreate(alice, bob, xrp(100)).
-				CancelTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
+	// Creating an escrow with only a cancel time and a condition is allowed
+	seq := env.Seq(alice)
+	result = env.Submit(
+		escrow.EscrowCreate(alice, bob, xrp(100)).
+			CancelTime(env.Now().Add(90 * time.Second)).
+			Condition(escrow.TestCondition1).
+			Fee(baseFee * 150).
+			Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
 
-		result = env.Submit(
-			escrow.EscrowFinish(carol, alice, seq1).
-				Fee(baseFee * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		jtx.RequireBalance(t, env, bob, uint64(xrp(5000)+xrp(100)))
-
-		env.Close()
-
-		// Creating an escrow without a finish time and a condition is
-		// also allowed without fix1571
-		seq2 := env.Seq(alice)
-		result = env.Submit(
-			escrow.EscrowCreate(alice, bob, xrp(100)).
-				CancelTime(env.Now().Add(1 * time.Second)).
-				Condition(escrow.TestCondition1).
-				Fee(baseFee * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(
-			escrow.EscrowFinish(carol, alice, seq2).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		jtx.RequireBalance(t, env, bob, uint64(xrp(5000)+xrp(200)))
-	})
-
-	t.Run("WithFix1571", func(t *testing.T) {
-		// Reference: rippled lines 329-357
-		env := jtx.NewTestEnv(t)
-		alice := jtx.NewAccount("alice")
-		bob := jtx.NewAccount("bob")
-		carol := jtx.NewAccount("carol")
-		fund5000(env, alice, bob, carol)
-		env.Close()
-
-		// Creating an escrow with only a cancel time is not allowed
-		result := env.Submit(
-			escrow.EscrowCreate(alice, bob, xrp(100)).
-				CancelTime(env.Now().Add(90 * time.Second)).
-				Fee(baseFee * 150).
-				Build())
-		require.Equal(t, "temMALFORMED", result.Code)
-
-		// Creating an escrow with only a cancel time and a condition is allowed
-		seq := env.Seq(alice)
-		result = env.Submit(
-			escrow.EscrowCreate(alice, bob, xrp(100)).
-				CancelTime(env.Now().Add(90 * time.Second)).
-				Condition(escrow.TestCondition1).
-				Fee(baseFee * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		env.Close()
-
-		result = env.Submit(
-			escrow.EscrowFinish(carol, alice, seq).
-				Condition(escrow.TestCondition1).
-				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
-				Build())
-		jtx.RequireTxSuccess(t, result)
-		jtx.RequireBalance(t, env, bob, uint64(xrp(5000)+xrp(100)))
-	})
+	result = env.Submit(
+		escrow.EscrowFinish(carol, alice, seq).
+			Condition(escrow.TestCondition1).
+			Fulfillment(escrow.TestFulfillment1).
+			Fee(baseFee * 150).
+			Build())
+	jtx.RequireTxSuccess(t, result)
+	jtx.RequireBalance(t, env, bob, uint64(xrp(5000)+xrp(100)))
 }
 
 // --------------------------------------------------------------------------
@@ -2157,10 +2080,9 @@ func toUint32(v any) uint32 {
 	}
 }
 
-// TestEscrow_Fix1543FlagGate exercises both branches of the fix1543 gate on the
-// tfUniversalMask checks of EscrowCreate, EscrowFinish and EscrowCancel. With
-// fix1543 enabled (default) a stray flag is rejected with temINVALID_FLAG; with
-// it disabled the flag is ignored. Reference: rippled Escrow.cpp:124,630,1203.
+// TestEscrow_Fix1543FlagGate verifies the tfUniversalMask checks of
+// EscrowCreate, EscrowFinish and EscrowCancel reject a stray flag with
+// temINVALID_FLAG. Reference: rippled Escrow.cpp:124,630,1203.
 func TestEscrow_Fix1543FlagGate(t *testing.T) {
 	const strayFlag = uint32(0x00010000) // tfPassive — not a valid escrow flag
 
@@ -2170,80 +2092,56 @@ func TestEscrow_Fix1543FlagGate(t *testing.T) {
 	}
 
 	t.Run("create", func(t *testing.T) {
-		run := func(t *testing.T, disable bool, expect string) {
-			env := jtx.NewTestEnv(t)
-			if disable {
-				env.DisableFeature("fix1543")
-			}
-			alice := jtx.NewAccount("alice")
-			bob := jtx.NewAccount("bob")
-			fund5000(env, alice, bob)
-			env.Close()
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
 
-			result := env.Submit(
-				escrow.EscrowCreate(alice, bob, xrp(1000)).
-					FinishTime(env.Now().Add(5 * time.Second)).
-					Flags(strayFlag).
-					Build())
-			require.Equal(t, expect, result.Code)
-		}
-		t.Run("enabled rejects", func(t *testing.T) { run(t, false, "temINVALID_FLAG") })
-		t.Run("disabled accepts", func(t *testing.T) { run(t, true, "tesSUCCESS") })
+		result := env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).
+				FinishTime(env.Now().Add(5 * time.Second)).
+				Flags(strayFlag).
+				Build())
+		require.Equal(t, "temINVALID_FLAG", result.Code)
 	})
 
-	// For Finish/Cancel the stray-flag check (Preclaim) runs before the timing
-	// check, so an early submission against a not-yet-finishable escrow still
-	// surfaces temINVALID_FLAG when enabled, and tecNO_PERMISSION when disabled.
 	t.Run("finish", func(t *testing.T) {
-		run := func(t *testing.T, disable bool, expect string) {
-			env := jtx.NewTestEnv(t)
-			if disable {
-				env.DisableFeature("fix1543")
-			}
-			alice := jtx.NewAccount("alice")
-			bob := jtx.NewAccount("bob")
-			fund5000(env, alice, bob)
-			env.Close()
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
 
-			seq := env.Seq(alice)
-			jtx.RequireTxSuccess(t, env.Submit(
-				escrow.EscrowCreate(alice, bob, xrp(1000)).
-					FinishTime(env.Now().Add(100*time.Second)).
-					Build()))
-			env.Close()
+		seq := env.Seq(alice)
+		jtx.RequireTxSuccess(t, env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).
+				FinishTime(env.Now().Add(100*time.Second)).
+				Build()))
+		env.Close()
 
-			fin := withFlag(escrow.EscrowFinish(bob, alice, seq).Fee(baseFee*150).Build(), strayFlag)
-			require.Equal(t, expect, env.Submit(fin).Code)
-		}
-		t.Run("enabled rejects", func(t *testing.T) { run(t, false, "temINVALID_FLAG") })
-		t.Run("disabled ignores", func(t *testing.T) { run(t, true, "tecNO_PERMISSION") })
+		fin := withFlag(escrow.EscrowFinish(bob, alice, seq).Fee(baseFee*150).Build(), strayFlag)
+		require.Equal(t, "temINVALID_FLAG", env.Submit(fin).Code)
 	})
 
 	t.Run("cancel", func(t *testing.T) {
-		run := func(t *testing.T, disable bool, expect string) {
-			env := jtx.NewTestEnv(t)
-			if disable {
-				env.DisableFeature("fix1543")
-			}
-			alice := jtx.NewAccount("alice")
-			bob := jtx.NewAccount("bob")
-			fund5000(env, alice, bob)
-			env.Close()
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		fund5000(env, alice, bob)
+		env.Close()
 
-			seq := env.Seq(alice)
-			jtx.RequireTxSuccess(t, env.Submit(
-				escrow.EscrowCreate(alice, bob, xrp(1000)).
-					Condition(escrow.TestCondition1).
-					CancelTime(env.Now().Add(100*time.Second)).
-					FinishTime(env.Now().Add(5*time.Second)).
-					Fee(baseFee*150).
-					Build()))
-			env.Close()
+		seq := env.Seq(alice)
+		jtx.RequireTxSuccess(t, env.Submit(
+			escrow.EscrowCreate(alice, bob, xrp(1000)).
+				Condition(escrow.TestCondition1).
+				CancelTime(env.Now().Add(100*time.Second)).
+				FinishTime(env.Now().Add(5*time.Second)).
+				Fee(baseFee*150).
+				Build()))
+		env.Close()
 
-			cancel := withFlag(escrow.EscrowCancel(bob, alice, seq).Build(), strayFlag)
-			require.Equal(t, expect, env.Submit(cancel).Code)
-		}
-		t.Run("enabled rejects", func(t *testing.T) { run(t, false, "temINVALID_FLAG") })
-		t.Run("disabled ignores", func(t *testing.T) { run(t, true, "tecNO_PERMISSION") })
+		cancel := withFlag(escrow.EscrowCancel(bob, alice, seq).Build(), strayFlag)
+		require.Equal(t, "temINVALID_FLAG", env.Submit(cancel).Code)
 	})
 }

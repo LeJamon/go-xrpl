@@ -77,9 +77,9 @@ func (n *NFTokenModify) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(n)
 }
 
-// Reference: rippled NFTokenModify.cpp preflight — requires both NonFungibleTokensV1_1 and DynamicNFT.
+// Reference: rippled NFTokenModify.cpp — gated on DynamicNFT.
 func (n *NFTokenModify) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureNonFungibleTokensV1_1, amendment.FeatureDynamicNFT}
+	return [][32]byte{amendment.FeatureDynamicNFT}
 }
 
 // Reference: rippled NFTokenModify.cpp preclaim + doApply

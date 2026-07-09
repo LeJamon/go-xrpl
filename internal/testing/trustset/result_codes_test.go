@@ -45,43 +45,27 @@ func TestTrustSet_NoLineRedundant_QualityOneNotRedundant(t *testing.T) {
 	}
 }
 
-// TestTrustSet_NoRippleNegativeBalance verifies the fix1578 behavior: NoRipple
-// cannot be set on a trust line whose balance is negative from the sender's
-// perspective. With fix1578 enabled the transaction is rejected with
-// tecNO_PERMISSION; without it the flag is silently skipped and the tx succeeds.
+// TestTrustSet_NoRippleNegativeBalance verifies that NoRipple cannot be set on a
+// trust line whose balance is negative from the sender's perspective — the
+// transaction is rejected with tecNO_PERMISSION.
 //
 // Reference: rippled SetTrust.cpp lines 577-585.
 func TestTrustSet_NoRippleNegativeBalance(t *testing.T) {
-	for _, withFix := range []bool{true, false} {
-		name := "WithFix1578"
-		if !withFix {
-			name = "WithoutFix1578"
-		}
-		t.Run(name, func(t *testing.T) {
-			env := jtx.NewTestEnv(t)
-			if !withFix {
-				env.DisableFeature("fix1578")
-			}
+	env := jtx.NewTestEnv(t)
 
-			alice := jtx.NewAccount("alice")
-			bob := jtx.NewAccount("bob")
-			env.Fund(alice, bob)
-			env.Close()
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice, bob)
+	env.Close()
 
-			jtx.RequireTxSuccess(t, env.Submit(TrustLine(bob, "USD", alice, "10000").Build()))
-			env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(TrustLine(bob, "USD", alice, "10000").Build()))
+	env.Close()
 
-			// alice issues 100 USD to bob. From alice's perspective the line
-			// balance is now negative.
-			jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(alice, bob, alice.IOU("USD", 100)).Build()))
-			env.Close()
+	// alice issues 100 USD to bob. From alice's perspective the line
+	// balance is now negative.
+	jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(alice, bob, alice.IOU("USD", 100)).Build()))
+	env.Close()
 
-			result := env.Submit(TrustLine(alice, "USD", bob, "1000").NoRipple().Build())
-			if withFix {
-				jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
-			} else {
-				jtx.RequireTxSuccess(t, result)
-			}
-		})
-	}
+	result := env.Submit(TrustLine(alice, "USD", bob, "1000").NoRipple().Build())
+	jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 }

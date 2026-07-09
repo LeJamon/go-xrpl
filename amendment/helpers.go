@@ -5,6 +5,8 @@
 package amendment
 
 // NFTsWithDynamicEnabled returns true if NFTs with dynamic features are enabled.
+// NonFungibleTokensV1_1 is retired (permanently enabled), so this gates on
+// DynamicNFT alone.
 func (r *Rules) NFTsWithDynamicEnabled() bool {
-	return r.NFTsEnabled() && r.Enabled(FeatureDynamicNFT)
+	return r.Enabled(FeatureDynamicNFT)
 }

@@ -26,6 +26,7 @@ type Delegate struct {
 	Authorize         string // AccountID (base58)
 	Permissions       []any
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	DestinationNode   string // UInt64 (lowercase hex, no leading zeros)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -36,6 +37,7 @@ const (
 	delegateBitAuthorize
 	delegateBitPermissions
 	delegateBitOwnerNode
+	delegateBitDestinationNode
 	delegateBitFlags
 	delegateBitPreviousTxnID
 	delegateBitPreviousTxnLgrSeq
@@ -88,6 +90,13 @@ func (d *Delegate) Decode(data []byte) error {
 				}
 				d.OwnerNode = val
 				d.present |= delegateBitOwnerNode
+			case 9:
+				val, err := sr.readUint64Hex()
+				if err != nil {
+					return err
+				}
+				d.DestinationNode = val
+				d.present |= delegateBitDestinationNode
 			default:
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
@@ -153,6 +162,9 @@ func (d *Delegate) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&delegateBitOwnerNode != 0 && !(skipDefault && isZeroHexString(d.OwnerNode)) {
 		out["OwnerNode"] = d.OwnerNode
 	}
+	if d.present&delegateBitDestinationNode != 0 && !(skipDefault && isZeroHexString(d.DestinationNode)) {
+		out["DestinationNode"] = d.DestinationNode
+	}
 	if d.present&delegateBitFlags != 0 && !(skipDefault && d.Flags == 0) {
 		out["Flags"] = d.Flags
 	}
@@ -181,6 +193,7 @@ func (d *Delegate) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Authorize", prv.Authorize, d.Authorize, prv.present&delegateBitAuthorize, d.present&delegateBitAuthorize)
 	emitIfChangedDeep(out, "Permissions", prv.Permissions, d.Permissions, prv.present&delegateBitPermissions, d.present&delegateBitPermissions)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&delegateBitOwnerNode, d.present&delegateBitOwnerNode)
+	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, d.DestinationNode, prv.present&delegateBitDestinationNode, d.present&delegateBitDestinationNode)
 	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&delegateBitFlags, d.present&delegateBitFlags)
 }
 
@@ -201,6 +214,9 @@ func (d *Delegate) EmitChangeOrigFields(out map[string]any) {
 	}
 	if d.present&delegateBitOwnerNode != 0 {
 		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&delegateBitDestinationNode != 0 {
+		out["DestinationNode"] = d.DestinationNode
 	}
 	if d.present&delegateBitFlags != 0 {
 		out["Flags"] = d.Flags
@@ -257,6 +273,9 @@ func (d *Delegate) ToMap() map[string]any {
 	}
 	if d.present&delegateBitOwnerNode != 0 {
 		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&delegateBitDestinationNode != 0 {
+		out["DestinationNode"] = d.DestinationNode
 	}
 	if d.present&delegateBitFlags != 0 {
 		out["Flags"] = d.Flags

@@ -102,7 +102,7 @@ func (c *CheckCash) SetDeliverMin(amount tx.Amount) {
 }
 
 func (c *CheckCash) RequiredAmendments() [][32]byte {
-	return [][32]byte{amendment.FeatureChecks}
+	return nil
 }
 
 // CheckExtraFeatures gates an MPT-denominated Amount or DeliverMin on the
@@ -315,12 +315,9 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	if isDeliverMin {
 		cashAmount = min(srcLiquid, check.SendMax)
 
-		// Set delivered_amount metadata for the DeliverMin XRP path when fix1623
-		// is enabled. Reference: CashCheck.cpp L322-324.
-		if ctx.Rules().Enabled(amendment.FeatureFix1623) {
-			deliveredAmt := tx.NewXRPAmount(int64(cashAmount))
-			ctx.Metadata.DeliveredAmount = &deliveredAmt
-		}
+		// Set delivered_amount metadata for the DeliverMin XRP path.
+		deliveredAmt := tx.NewXRPAmount(int64(cashAmount))
+		ctx.Metadata.DeliveredAmount = &deliveredAmt
 	}
 
 	// Transfer XRP
@@ -422,13 +419,6 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
 		trustLineExists, _ := ctx.View.Exists(trustLineKey)
 
-		rules := ctx.Rules()
-		checkCashMakesTrustLine := rules.Enabled(amendment.FeatureCheckCashMakesTrustLine)
-
-		if !trustLineExists && !checkCashMakesTrustLine {
-			return ter.TecNO_LINE
-		}
-
 		// Check issuer existence
 		// Reference: CashCheck.cpp L201-208
 		issuerKey := keylet.Account(issuerID)
@@ -488,14 +478,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// --- doApply: Execute IOU transfer using flow engine ---
 	// Reference: CashCheck.cpp L252-end
 
-	// Handle trust line creation with CheckCashMakesTrustLine amendment
-	rules := ctx.Rules()
-	checkCashMakesTrustLine := rules.Enabled(amendment.FeatureCheckCashMakesTrustLine)
-
+	// Auto-create the destination's trust line if it does not yet exist.
 	// Determine the trust line key for destination ↔ issuer
 	destLow := state.CompareAccountIDs(issuerID, accountID) > 0
 
-	if accountID != issuerID && checkCashMakesTrustLine {
+	if accountID != issuerID {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
 		trustLineExists, _ := ctx.View.Exists(trustLineKey)
 
@@ -522,7 +509,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// then restores it via scope_exit.
 	// Reference: CashCheck.cpp L422-439
 	var savedLimit *state.Amount
-	if accountID != issuerID && checkCashMakesTrustLine {
+	if accountID != issuerID {
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
 		trustLineData, err := ctx.View.Read(trustLineKey)
 		if err != nil {
@@ -627,14 +614,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
 	}
 
-	// Set delivered_amount metadata. Reference: CashCheck.cpp L463-480.
-	// - DeliverMin without CheckCashMakesTrustLine: set when fix1623 enabled.
-	// - CheckCashMakesTrustLine: always set, regardless of fix1623/DeliverMin.
-	if checkCashMakesTrustLine ||
-		(isDeliverMin && ctx.Rules().Enabled(amendment.FeatureFix1623)) {
-		deliveredAmt := payment.FromEitherAmount(actualOut)
-		ctx.Metadata.DeliveredAmount = &deliveredAmt
-	}
+	// Set the delivered amount metadata in all cases, not just for DeliverMin.
+	deliveredAmt := payment.FromEitherAmount(actualOut)
+	ctx.Metadata.DeliveredAmount = &deliveredAmt
 
 	// Remove check from directories before erasing.
 	// Reference: CashCheck.cpp L487-508

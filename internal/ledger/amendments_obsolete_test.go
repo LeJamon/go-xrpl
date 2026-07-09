@@ -69,41 +69,13 @@ func TestLoadAmendments_NFTokenV1InjectedFromV1_1(t *testing.T) {
 	}
 }
 
-// Without NonFungibleTokensV1_1, the obsolete NFToken amendments must report
-// DISABLED — matching rippled, whose Rules::enabled returns false when neither
-// the amendment's own ID nor V1_1 is in the Amendments object. Force-enabling
-// them here would fork against rippled on any pre-activation ledger.
-func TestLoadAmendments_NFTokenDisabledWithoutV1_1(t *testing.T) {
-	data := encodeAmendmentsEntry(t, [][32]byte{amendment.FeatureAMM})
-
-	rules, err := LoadAmendmentsFromLedgerEntry(data)
-	if err != nil {
-		t.Fatalf("LoadAmendmentsFromLedgerEntry: %v", err)
-	}
-
-	for _, f := range []struct {
-		name string
-		id   [32]byte
-	}{
-		{"NonFungibleTokensV1", amendment.FeatureNonFungibleTokensV1},
-		{"fixNFTokenNegOffer", amendment.FeatureFixNFTokenNegOffer},
-		{"fixNFTokenDirV1", amendment.FeatureFixNFTokenDirV1},
-		{"CryptoConditionsSuite", amendment.FeatureCryptoConditionsSuite},
-	} {
-		if rules.Enabled(f.id) {
-			t.Errorf("%s must NOT be enabled without its subsuming amendment / SLE presence (rippled returns disabled here)", f.name)
-		}
-	}
-	// Sanity: the baseline must not over-enable an unsupported amendment.
-	if rules.Enabled(amendment.FeatureSingleAssetVault) {
-		t.Error("SingleAssetVault (SupportedNo) must NOT be enabled by the permanent baseline")
-	}
-}
-
 // Retired amendments (pre-amendment code gate removed in rippled, so the code
 // runs unconditionally) are permanently enabled even when absent from the
 // Amendments object. goXRPL still gates on them (e.g. PaymentChannel* require
-// FeaturePayChan), so the runtime rules must report them enabled.
+// FeaturePayChan), so the runtime rules must report them enabled. Since
+// NonFungibleTokensV1_1 is now retired (permanently enabled), the obsolete
+// NFToken amendments it subsumes (NonFungibleTokensV1, fixNFTokenNegOffer,
+// fixNFTokenDirV1) are always reported enabled via the injection.
 func TestLoadAmendments_RetiredPermanentlyEnabled(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -121,10 +93,12 @@ func TestLoadAmendments_RetiredPermanentlyEnabled(t *testing.T) {
 			if !rules.Enabled(amendment.FeaturePayChan) {
 				t.Error("retired PayChan must be permanently enabled even when absent from the Amendments object")
 			}
-			// A non-retired obsolete amendment must NOT be permanently enabled.
-			if rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
-				t.Error("obsolete-but-not-retired NonFungibleTokensV1 must not be permanently enabled (V1_1 is absent here)")
+			// NonFungibleTokensV1_1 is retired, so its subsumed obsolete IDs
+			// report enabled via the injection even when absent from the SLE.
+			if !rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
+				t.Error("NonFungibleTokensV1 must report enabled via the retired V1_1 injection")
 			}
+			// A genuinely unsupported amendment must NOT be enabled by the baseline.
 			if rules.Enabled(amendment.FeatureSingleAssetVault) {
 				t.Error("SingleAssetVault (SupportedNo) must NOT be enabled by the permanent baseline")
 			}

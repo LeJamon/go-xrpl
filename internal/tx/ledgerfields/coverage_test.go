@@ -374,6 +374,7 @@ var coverageFixtures = map[string]map[string]any{
 		"Authorize":         fxIssuer,
 		"Permissions":       []any{map[string]any{"Permission": map[string]any{"PermissionValue": uint32(1)}}},
 		"OwnerNode":         "0",
+		"DestinationNode":   "0",
 		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),

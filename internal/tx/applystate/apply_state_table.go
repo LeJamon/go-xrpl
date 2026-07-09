@@ -479,7 +479,6 @@ func (t *ApplyStateTable) applyThreading() {
 	// Check amendment state once for the entire threading pass.
 	// Reference: rippled ApplyStateTable.cpp passes to.rules() to isThreadedType().
 	fixPreviousTxnID := t.effectiveRules().Enabled(amendment.FeatureFixPreviousTxnID)
-	fixCheckThreading := t.effectiveRules().Enabled(amendment.FeatureFixCheckThreading)
 
 	for _, w := range work {
 		entryType := state.EntryType(w.entry.Current)
@@ -498,7 +497,7 @@ func (t *ApplyStateTable) applyThreading() {
 			}
 
 			// Thread owner accounts
-			t.threadOwners(w.key, w.entry.Current, entryType, fixCheckThreading)
+			t.threadOwners(w.key, w.entry.Current, entryType)
 
 		case ActionModify:
 			// Skip threading when the apply code wrote back the same bytes
@@ -530,26 +529,26 @@ func (t *ApplyStateTable) applyThreading() {
 			if data == nil {
 				data = w.entry.Original
 			}
-			t.threadOwners(w.key, data, entryType, fixCheckThreading)
+			t.threadOwners(w.key, data, entryType)
 		}
 	}
 }
 
 // threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
-// fixCheckThreading gates Check→Destination threading. sourceKey is the ledger
-// key of the created/deleted child whose owners are being threaded — it decides
-// the order-dependent FinalFields-vs-bare outcome described below.
+// sourceKey is the ledger key of the created/deleted child whose owners are
+// being threaded — it decides the order-dependent FinalFields-vs-bare outcome
+// described below.
 //
 // Owner SLEs the tx didn't otherwise mutate go into threadOnlyOwners
 // (NOT promoted to ActionModify), mirroring rippled's mods table at
 // ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
 // (no FinalFields / PreviousFields).
-func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType string, fixCheckThreading bool) {
+func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType string) {
 	if data == nil {
 		return
 	}
 
-	owners := getOwnerAccounts(data, entryType, fixCheckThreading)
+	owners := getOwnerAccounts(data, entryType)
 	for _, ownerID := range owners {
 		ownerKey := keylet.Account(ownerID)
 

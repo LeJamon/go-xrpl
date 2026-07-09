@@ -2,7 +2,6 @@ package nftoken
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -179,43 +178,6 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 	}
 
 	return result, ter.TesSUCCESS
-}
-
-// notTooManyOffers checks whether the total number of buy + sell offers
-// for a token exceeds maxDeletableTokenOfferEntries.
-// Reference: rippled NFTokenUtils.cpp notTooManyOffers
-func notTooManyOffers(view tx.LedgerView, tokenID [32]byte) ter.Result {
-	totalOffers := 0
-
-	// Count buy offers
-	buysKey := keylet.NFTBuys(tokenID)
-	if exists, _ := view.Exists(buysKey); exists {
-		state.DirForEach(view, buysKey, func(itemKey [32]byte) error {
-			totalOffers++
-			if totalOffers > maxDeletableTokenOfferEntries {
-				return fmt.Errorf("too many")
-			}
-			return nil
-		})
-	}
-
-	// Count sell offers
-	sellsKey := keylet.NFTSells(tokenID)
-	if exists, _ := view.Exists(sellsKey); exists {
-		state.DirForEach(view, sellsKey, func(itemKey [32]byte) error {
-			totalOffers++
-			if totalOffers > maxDeletableTokenOfferEntries {
-				return fmt.Errorf("too many")
-			}
-			return nil
-		})
-	}
-
-	if totalOffers > maxDeletableTokenOfferEntries {
-		return ter.TefTOO_BIG
-	}
-
-	return ter.TesSUCCESS
 }
 
 // adjustOwnerCountViaView adjusts an account's OwnerCount through the view.

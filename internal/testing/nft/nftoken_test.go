@@ -152,58 +152,7 @@ func TestDiagnosticPageLookup(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testEnabled
 // ===========================================================================
 func TestEnabled(t *testing.T) {
-	// Test 1: With amendment DISABLED, all NFT transactions should return temDISABLED
-	t.Run("Disabled", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-
-		alice := jtx.NewAccount("alice")
-		env.Fund(alice)
-		env.Close()
-
-		// Disable NFT amendments
-		env.DisableFeature("NonFungibleTokensV1")
-		env.DisableFeature("NonFungibleTokensV1_1")
-		env.Close()
-
-		// Verify initial counts
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireMintedCount(t, env, alice, 0)
-		jtx.RequireBurnedCount(t, env, alice, 0)
-
-		// NFTokenMint should fail
-		mintTx := nft.NFTokenMint(alice, 0).Build()
-		result := env.Submit(mintTx)
-		jtx.RequireTxFail(t, result, "temDISABLED")
-
-		// NFTokenBurn should fail
-		fakeNFTID := "0008000000000000000000000000000000000000000000000000000000000001"
-		burnTx := nft.NFTokenBurn(alice, fakeNFTID).Build()
-		result = env.Submit(burnTx)
-		jtx.RequireTxFail(t, result, "temDISABLED")
-
-		// NFTokenCreateOffer should fail
-		offerTx := nft.NFTokenCreateSellOffer(alice, fakeNFTID, tx.NewXRPAmount(1000000)).Build()
-		result = env.Submit(offerTx)
-		jtx.RequireTxFail(t, result, "temDISABLED")
-
-		// NFTokenCancelOffer should fail
-		fakeOfferID := "0000000000000000000000000000000000000000000000000000000000000001"
-		cancelTx := nft.NFTokenCancelOffer(alice, fakeOfferID).Build()
-		result = env.Submit(cancelTx)
-		jtx.RequireTxFail(t, result, "temDISABLED")
-
-		// NFTokenAcceptOffer should fail
-		acceptTx := nft.NFTokenAcceptBuyOffer(alice, fakeOfferID).Build()
-		result = env.Submit(acceptTx)
-		jtx.RequireTxFail(t, result, "temDISABLED")
-
-		// Verify counts still zero
-		jtx.RequireOwnerCount(t, env, alice, 0)
-		jtx.RequireMintedCount(t, env, alice, 0)
-		jtx.RequireBurnedCount(t, env, alice, 0)
-	})
-
-	// Test 2: With amendment ENABLED, basic NFT lifecycle works
+	// With the NFT amendment enabled, the basic NFT lifecycle works.
 	t.Run("Enabled", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 
@@ -1949,554 +1898,483 @@ func TestFixNFTokenNegOffer(t *testing.T) {
 // Reference: rippled NFToken_test.cpp testIOUWithTransferFee
 // ===========================================================================
 func TestIOUWithTransferFee(t *testing.T) {
-	for _, withFix := range []bool{false, true} {
-		name := "WithoutFix"
-		if withFix {
-			name = "WithFix"
+	t.Run("WithFix", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+
+		minter := jtx.NewAccount("minter")
+		secondarySeller := jtx.NewAccount("seller")
+		buyer := jtx.NewAccount("buyer")
+		gw := jtx.NewAccount("gateway")
+		broker := jtx.NewAccount("broker")
+
+		env.Fund(gw, minter, secondarySeller, buyer, broker)
+		env.Close()
+
+		// Helper for IOU amounts
+		XAU := func(v float64) tx.Amount { return gw.IOU("XAU", v) }
+		XPB := func(v float64) tx.Amount { return gw.IOU("XPB", v) }
+
+		// Create trust lines
+		env.Submit(trustset.TrustSet(minter, XAU(2000)).Build())
+		env.Submit(trustset.TrustSet(secondarySeller, XAU(2000)).Build())
+		env.Submit(trustset.TrustSet(broker, XAU(10000)).Build())
+		env.Submit(trustset.TrustSet(buyer, XAU(2000)).Build())
+		env.Submit(trustset.TrustSet(buyer, XPB(2000)).Build())
+		env.Close()
+
+		// 2% transfer rate
+		env.SetTransferRate(gw, 1_020_000_000)
+		env.Close()
+
+		// Fund initial balances: buyer 1000 XAU, broker 5000 XAU
+		env.Submit(payment.PayIssued(gw, buyer, XAU(1000)).Build())
+		env.Submit(payment.PayIssued(gw, broker, XAU(5000)).Build())
+		env.Close()
+
+		expectInitialState := func() {
+			t.Helper()
+			if bal := env.BalanceIOU(buyer, "XAU", gw); bal != 1000 {
+				t.Fatalf("buyer XAU: got %v, want 1000", bal)
+			}
+			if bal := env.BalanceIOU(minter, "XAU", gw); bal != 0 {
+				t.Fatalf("minter XAU: got %v, want 0", bal)
+			}
+			if bal := env.BalanceIOU(secondarySeller, "XAU", gw); bal != 0 {
+				t.Fatalf("secondarySeller XAU: got %v, want 0", bal)
+			}
+			if bal := env.BalanceIOU(broker, "XAU", gw); bal != 5000 {
+				t.Fatalf("broker XAU: got %v, want 5000", bal)
+			}
 		}
-		t.Run(name, func(t *testing.T) {
-			env := jtx.NewTestEnv(t)
-			if !withFix {
-				env.DisableFeature("fixNonFungibleTokensV1_2")
+		expectInitialState()
+
+		reinit := func() {
+			t.Helper()
+			// Reset buyer to 1000 XAU
+			diff := 1000 - env.BalanceIOU(buyer, "XAU", gw)
+			if diff > 0 {
+				env.Submit(payment.PayIssued(gw, buyer, XAU(diff)).Build())
 			}
-
-			minter := jtx.NewAccount("minter")
-			secondarySeller := jtx.NewAccount("seller")
-			buyer := jtx.NewAccount("buyer")
-			gw := jtx.NewAccount("gateway")
-			broker := jtx.NewAccount("broker")
-
-			env.Fund(gw, minter, secondarySeller, buyer, broker)
-			env.Close()
-
-			// Helper for IOU amounts
-			XAU := func(v float64) tx.Amount { return gw.IOU("XAU", v) }
-			XPB := func(v float64) tx.Amount { return gw.IOU("XPB", v) }
-
-			// Create trust lines
-			env.Submit(trustset.TrustSet(minter, XAU(2000)).Build())
-			env.Submit(trustset.TrustSet(secondarySeller, XAU(2000)).Build())
-			env.Submit(trustset.TrustSet(broker, XAU(10000)).Build())
-			env.Submit(trustset.TrustSet(buyer, XAU(2000)).Build())
-			env.Submit(trustset.TrustSet(buyer, XPB(2000)).Build())
-			env.Close()
-
-			// 2% transfer rate
-			env.SetTransferRate(gw, 1_020_000_000)
-			env.Close()
-
-			// Fund initial balances: buyer 1000 XAU, broker 5000 XAU
-			env.Submit(payment.PayIssued(gw, buyer, XAU(1000)).Build())
-			env.Submit(payment.PayIssued(gw, broker, XAU(5000)).Build())
-			env.Close()
-
-			expectInitialState := func() {
-				t.Helper()
-				if bal := env.BalanceIOU(buyer, "XAU", gw); bal != 1000 {
-					t.Fatalf("buyer XAU: got %v, want 1000", bal)
-				}
-				if bal := env.BalanceIOU(minter, "XAU", gw); bal != 0 {
-					t.Fatalf("minter XAU: got %v, want 0", bal)
-				}
-				if bal := env.BalanceIOU(secondarySeller, "XAU", gw); bal != 0 {
-					t.Fatalf("secondarySeller XAU: got %v, want 0", bal)
-				}
-				if bal := env.BalanceIOU(broker, "XAU", gw); bal != 5000 {
-					t.Fatalf("broker XAU: got %v, want 5000", bal)
-				}
+			// Reset buyer XPB to 0
+			if bal := env.BalanceIOU(buyer, "XPB", gw); bal > 0 {
+				env.Submit(payment.PayIssued(buyer, gw, XPB(bal)).Build())
 			}
+			// Reset minter XAU to 0
+			if bal := env.BalanceIOU(minter, "XAU", gw); bal > 0 {
+				env.Submit(payment.PayIssued(minter, gw, XAU(bal)).Build())
+			}
+			// Reset minter XPB to 0
+			if bal := env.BalanceIOU(minter, "XPB", gw); bal > 0 {
+				env.Submit(payment.PayIssued(minter, gw, XPB(bal)).Build())
+			}
+			// Reset secondarySeller XAU to 0
+			if bal := env.BalanceIOU(secondarySeller, "XAU", gw); bal > 0 {
+				env.Submit(payment.PayIssued(secondarySeller, gw, XAU(bal)).Build())
+			}
+			// Reset secondarySeller XPB to 0
+			if bal := env.BalanceIOU(secondarySeller, "XPB", gw); bal > 0 {
+				env.Submit(payment.PayIssued(secondarySeller, gw, XPB(bal)).Build())
+			}
+			// Reset broker to 5000 XAU
+			bdiff := 5000 - env.BalanceIOU(broker, "XAU", gw)
+			if bdiff > 0 {
+				env.Submit(payment.PayIssued(gw, broker, XAU(bdiff)).Build())
+			} else if bdiff < 0 {
+				env.Submit(payment.PayIssued(broker, gw, XAU(-bdiff)).Build())
+			}
+			// Reset broker XPB to 0
+			if bal := env.BalanceIOU(broker, "XPB", gw); bal > 0 {
+				env.Submit(payment.PayIssued(broker, gw, XPB(bal)).Build())
+			}
+			env.Close()
 			expectInitialState()
+		}
 
-			reinit := func() {
-				t.Helper()
-				// Reset buyer to 1000 XAU
-				diff := 1000 - env.BalanceIOU(buyer, "XAU", gw)
-				if diff > 0 {
-					env.Submit(payment.PayIssued(gw, buyer, XAU(diff)).Build())
-				}
-				// Reset buyer XPB to 0
-				if bal := env.BalanceIOU(buyer, "XPB", gw); bal > 0 {
-					env.Submit(payment.PayIssued(buyer, gw, XPB(bal)).Build())
-				}
-				// Reset minter XAU to 0
-				if bal := env.BalanceIOU(minter, "XAU", gw); bal > 0 {
-					env.Submit(payment.PayIssued(minter, gw, XAU(bal)).Build())
-				}
-				// Reset minter XPB to 0
-				if bal := env.BalanceIOU(minter, "XPB", gw); bal > 0 {
-					env.Submit(payment.PayIssued(minter, gw, XPB(bal)).Build())
-				}
-				// Reset secondarySeller XAU to 0
-				if bal := env.BalanceIOU(secondarySeller, "XAU", gw); bal > 0 {
-					env.Submit(payment.PayIssued(secondarySeller, gw, XAU(bal)).Build())
-				}
-				// Reset secondarySeller XPB to 0
-				if bal := env.BalanceIOU(secondarySeller, "XPB", gw); bal > 0 {
-					env.Submit(payment.PayIssued(secondarySeller, gw, XPB(bal)).Build())
-				}
-				// Reset broker to 5000 XAU
-				bdiff := 5000 - env.BalanceIOU(broker, "XAU", gw)
-				if bdiff > 0 {
-					env.Submit(payment.PayIssued(gw, broker, XAU(bdiff)).Build())
-				} else if bdiff < 0 {
-					env.Submit(payment.PayIssued(broker, gw, XAU(-bdiff)).Build())
-				}
-				// Reset broker XPB to 0
-				if bal := env.BalanceIOU(broker, "XPB", gw); bal > 0 {
-					env.Submit(payment.PayIssued(broker, gw, XPB(bal)).Build())
-				}
-				env.Close()
-				expectInitialState()
+		mintNFT := func(account *jtx.Account, transferFee ...uint16) string {
+			t.Helper()
+			var fee uint16
+			if len(transferFee) > 0 {
+				fee = transferFee[0]
 			}
-
-			mintNFT := func(account *jtx.Account, transferFee ...uint16) string {
-				t.Helper()
-				var fee uint16
-				if len(transferFee) > 0 {
-					fee = transferFee[0]
-				}
-				flags := nftoken.NFTokenFlagTransferable
-				nftID := nft.GetNextNFTokenID(env, account, 0, flags, fee)
-				builder := nft.NFTokenMint(account, 0).Transferable()
-				if fee > 0 {
-					builder = builder.TransferFee(fee)
-				}
-				env.Submit(builder.Build())
-				env.Close()
-				return nftID
+			flags := nftoken.NFTokenFlagTransferable
+			nftID := nft.GetNextNFTokenID(env, account, 0, flags, fee)
+			builder := nft.NFTokenMint(account, 0).Transferable()
+			if fee > 0 {
+				builder = builder.TransferFee(fee)
 			}
+			env.Submit(builder.Build())
+			env.Close()
+			return nftID
+		}
 
-			createSellOffer := func(offerer *jtx.Account, nftID string, amount tx.Amount) string {
-				t.Helper()
-				offerIdx := nft.GetOfferIndex(env, offerer)
-				env.Submit(nft.NFTokenCreateSellOffer(offerer, nftID, amount).Build())
-				env.Close()
-				return offerIdx
+		createSellOffer := func(offerer *jtx.Account, nftID string, amount tx.Amount) string {
+			t.Helper()
+			offerIdx := nft.GetOfferIndex(env, offerer)
+			env.Submit(nft.NFTokenCreateSellOffer(offerer, nftID, amount).Build())
+			env.Close()
+			return offerIdx
+		}
+
+		createBuyOffer := func(offerer, owner *jtx.Account, nftID string, amount tx.Amount) string {
+			t.Helper()
+			offerIdx := nft.GetOfferIndex(env, offerer)
+			env.Submit(nft.NFTokenCreateBuyOffer(offerer, nftID, amount, owner).Build())
+			env.Close()
+			return offerIdx
+		}
+
+		createBuyOfferWithExpectedError := func(offerer, owner *jtx.Account, nftID string, amount tx.Amount, expectedCode string) string {
+			t.Helper()
+			offerIdx := nft.GetOfferIndex(env, offerer)
+			result := env.Submit(nft.NFTokenCreateBuyOffer(offerer, nftID, amount, owner).Build())
+			if expectedCode != "" {
+				jtx.RequireTxFail(t, result, expectedCode)
 			}
+			env.Close()
+			return offerIdx
+		}
 
-			createBuyOffer := func(offerer, owner *jtx.Account, nftID string, amount tx.Amount) string {
-				t.Helper()
-				offerIdx := nft.GetOfferIndex(env, offerer)
-				env.Submit(nft.NFTokenCreateBuyOffer(offerer, nftID, amount, owner).Build())
-				env.Close()
-				return offerIdx
+		checkBalance := func(acc *jtx.Account, currency string, expected float64) {
+			t.Helper()
+			bal := env.BalanceIOU(acc, currency, gw)
+			if bal != expected {
+				t.Errorf("%s %s: got %v, want %v", acc.Name, currency, bal, expected)
 			}
+		}
 
-			createBuyOfferWithExpectedError := func(offerer, owner *jtx.Account, nftID string, amount tx.Amount, expectedCode string) string {
-				t.Helper()
-				offerIdx := nft.GetOfferIndex(env, offerer)
-				result := env.Submit(nft.NFTokenCreateBuyOffer(offerer, nftID, amount, owner).Build())
-				if expectedCode != "" {
-					jtx.RequireTxFail(t, result, expectedCode)
-				}
-				env.Close()
-				return offerIdx
-			}
-
-			checkBalance := func(acc *jtx.Account, currency string, expected float64) {
-				t.Helper()
-				bal := env.BalanceIOU(acc, currency, gw)
-				if bal != expected {
-					t.Errorf("%s %s: got %v, want %v", acc.Name, currency, bal, expected)
-				}
-			}
-
-			// 1. Sell 100% of balance (sellside)
-			t.Run("Sell100Pct", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				} else {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 1000)
-					checkBalance(buyer, "XAU", -20)
-				}
-			})
-
-			// 2. Buy 100% of balance (buyside)
-			t.Run("Buy100Pct", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createBuyOffer(buyer, minter, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				} else {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 1000)
-					checkBalance(buyer, "XAU", -20)
-				}
-			})
-
-			// 3. Sell 995 XAU (fee exceeds balance, sellside)
-			t.Run("Sell995", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XAU(995))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				} else {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 995)
-					checkBalance(buyer, "XAU", -14.9)
-				}
-			})
-
-			// 4. Buy 995 XAU (fee exceeds balance, buyside)
-			t.Run("Buy995", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createBuyOffer(buyer, minter, nftID, XAU(995))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				} else {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 995)
-					checkBalance(buyer, "XAU", -14.9)
-				}
-			})
-
-			// 5. Sell 900 XAU (fee fits in balance, sellside)
-			t.Run("Sell900", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XAU(900))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 900)
-				checkBalance(buyer, "XAU", 82) // 1000 - 900 - 18 fee
-			})
-
-			// 6. Buy 900 XAU (fee fits in balance, buyside)
-			t.Run("Buy900", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createBuyOffer(buyer, minter, nftID, XAU(900))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 900)
-				checkBalance(buyer, "XAU", 82)
-			})
-
-			// 7. Sell 1000 XAU with extra 20 to cover fee (sellside)
-			t.Run("SellExact", func(t *testing.T) {
-				reinit()
-				env.Submit(payment.PayIssued(gw, buyer, XAU(20)).Build())
-				env.Close()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 1000)
-				checkBalance(buyer, "XAU", 0)
-			})
-
-			// 8. Buy 1000 XAU with extra 20 to cover fee (buyside)
-			t.Run("BuyExact", func(t *testing.T) {
-				reinit()
-				env.Submit(payment.PayIssued(gw, buyer, XAU(20)).Build())
-				env.Close()
-				nftID := mintNFT(minter)
-				offerID := createBuyOffer(buyer, minter, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 1000)
-				checkBalance(buyer, "XAU", 0)
-			})
-
-			// 9. Gateway buys via sell offer (no transfer fee on own IOU)
-			t.Run("GWSellOffer1000", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(gw, offerID).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 1000)
-				} else {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				}
-			})
-
-			// 10. Gateway buys via buy offer (no transfer fee on own IOU)
-			t.Run("GWBuyOffer1000", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				if withFix {
-					offerID := createBuyOffer(gw, minter, nftID, XAU(1000))
-					result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-					env.Close()
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 1000)
-				} else {
-					createBuyOfferWithExpectedError(gw, minter, nftID, XAU(1000), "tecUNFUNDED_OFFER")
-					// Offer wasn't created, so accept will fail with object not found
-					result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, "0000000000000000000000000000000000000000000000000000000000000000").Build())
-					env.Close()
-					_ = result
-					expectInitialState()
-				}
-			})
-
-			// 11. Gateway buys via sell offer 5000 (exceeds trust limit)
-			t.Run("GWSellOffer5000", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XAU(5000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(gw, offerID).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 5000)
-				} else {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				}
-			})
-
-			// 12. Gateway buys via buy offer 5000
-			t.Run("GWBuyOffer5000", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				if withFix {
-					offerID := createBuyOffer(gw, minter, nftID, XAU(5000))
-					result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-					env.Close()
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 5000)
-				} else {
-					createBuyOfferWithExpectedError(gw, minter, nftID, XAU(5000), "tecUNFUNDED_OFFER")
-					expectInitialState()
-				}
-			})
-
-			// 13. Gateway mints and sells for 1000 XAU (sellside)
-			t.Run("GWSells1000Sell", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(gw)
-				offerID := createSellOffer(gw, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(buyer, "XAU", 0)
-			})
-
-			// 14. Gateway mints and sells for 1000 XAU (buyside)
-			t.Run("GWSells1000Buy", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(gw)
-				offerID := createBuyOffer(buyer, gw, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(gw, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(buyer, "XAU", 0)
-			})
-
-			// 15. Gateway sells for 2000 XAU (exceeds buyer balance, sellside)
-			t.Run("GWSells2000Sell", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(gw)
-				offerID := createSellOffer(gw, nftID, XAU(2000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-				expectInitialState()
-			})
-
-			// 16. Gateway sells for 2000 XAU (exceeds buyer balance, buyside)
-			t.Run("GWSells2000Buy", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(gw)
-				offerID := createBuyOffer(buyer, gw, nftID, XAU(2000))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(gw, offerID).Build())
-				env.Close()
-				jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-				expectInitialState()
-			})
-
-			// 17. Sell XPB 10 - minter has no trust line, buyer has no XPB (sellside)
-			t.Run("NoTrustLineSell", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XPB(10))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-				expectInitialState()
-			})
-
-			// 18. Buy XPB 10 - buyer has no XPB (buyside)
-			t.Run("NoTrustLineBuy", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				createBuyOfferWithExpectedError(buyer, minter, nftID, XPB(10), "tecUNFUNDED_OFFER")
-			})
-
-			// 19. Sell XPB 10 with buyer having XPB (auto-creates trust line for minter)
-			t.Run("SellXPBAutoTrust", func(t *testing.T) {
-				reinit()
-				env.Submit(payment.PayIssued(gw, buyer, XPB(100)).Build())
-				env.Close()
-				nftID := mintNFT(minter)
-				offerID := createSellOffer(minter, nftID, XPB(10))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XPB", 10)
-				checkBalance(buyer, "XPB", 89.8) // 100 - 10 - 0.2 fee
-			})
-
-			// 20. Buy XPB 10 with buyer having XPB (auto-creates trust line for minter)
-			t.Run("BuyXPBAutoTrust", func(t *testing.T) {
-				reinit()
-				env.Submit(payment.PayIssued(gw, buyer, XPB(100)).Build())
-				env.Close()
-				nftID := mintNFT(minter)
-				offerID := createBuyOffer(buyer, minter, nftID, XPB(10))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XPB", 10)
-				checkBalance(buyer, "XPB", 89.8)
-			})
-
-			// 21. NFT transfer fee 3% + sell 1000 (sellside)
-			t.Run("NFTFee3pctSell1000", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter, 3000) // 3% transfer fee
-				primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
-				env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
-				env.Close()
-
-				sellOffer := createSellOffer(secondarySeller, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, sellOffer).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				} else {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 30) // 3% of 1000
-					checkBalance(secondarySeller, "XAU", 970)
-					checkBalance(buyer, "XAU", -20)
-				}
-			})
-
-			// 22. NFT transfer fee 3% + buy 1000 (buyside)
-			t.Run("NFTFee3pctBuy1000", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter, 3000)
-				primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
-				env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
-				env.Close()
-
-				buyOffer := createBuyOffer(buyer, secondarySeller, nftID, XAU(1000))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(secondarySeller, buyOffer).Build())
-				env.Close()
-				if withFix {
-					jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
-					expectInitialState()
-				} else {
-					jtx.RequireTxSuccess(t, result)
-					checkBalance(minter, "XAU", 30)
-					checkBalance(secondarySeller, "XAU", 970)
-					checkBalance(buyer, "XAU", -20)
-				}
-			})
-
-			// 23. NFT transfer fee 3% + sell 900 (fits in balance, sellside)
-			t.Run("NFTFee3pctSell900", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter, 3000)
-				primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
-				env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
-				env.Close()
-
-				sellOffer := createSellOffer(secondarySeller, nftID, XAU(900))
-				result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, sellOffer).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 27)           // 3% of 900
-				checkBalance(secondarySeller, "XAU", 873) // 900 - 27
-				checkBalance(buyer, "XAU", 82)            // 1000 - 918
-			})
-
-			// 24. NFT transfer fee 3% + buy 900 (fits in balance, buyside)
-			t.Run("NFTFee3pctBuy900", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter, 3000)
-				primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
-				env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
-				env.Close()
-
-				buyOffer := createBuyOffer(buyer, secondarySeller, nftID, XAU(900))
-				result := env.Submit(nft.NFTokenAcceptBuyOffer(secondarySeller, buyOffer).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 27)
-				checkBalance(secondarySeller, "XAU", 873)
-				checkBalance(buyer, "XAU", 82)
-			})
-
-			// 25. Brokered sale with IOU fee (no NFT transfer fee)
-			t.Run("BrokeredIOUFee", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter)
-				sellOffer := createSellOffer(minter, nftID, XAU(300))
-				buyOffer := createBuyOffer(buyer, minter, nftID, XAU(500))
-				result := env.Submit(nft.NFTokenBrokeredSale(broker, sellOffer, buyOffer).
-					BrokerFee(XAU(100)).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				checkBalance(minter, "XAU", 400)  // 500 - 100 broker fee
-				checkBalance(buyer, "XAU", 490)   // 1000 - 510 (500 + 2% fee)
-				checkBalance(broker, "XAU", 5100) // 5000 + 100
-			})
-
-			// 26. Brokered sale with NFT + IOU fee
-			t.Run("BrokeredNFTAndIOUFee", func(t *testing.T) {
-				reinit()
-				nftID := mintNFT(minter, 3000) // 3% NFT transfer fee
-				primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
-				env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
-				env.Close()
-
-				sellOffer := createSellOffer(secondarySeller, nftID, XAU(300))
-				buyOffer := createBuyOffer(buyer, secondarySeller, nftID, XAU(500))
-				result := env.Submit(nft.NFTokenBrokeredSale(broker, sellOffer, buyOffer).
-					BrokerFee(XAU(100)).Build())
-				env.Close()
-				jtx.RequireTxSuccess(t, result)
-				// Buyer pays 510 (500 + 2% IOU fee)
-				// Broker gets 100
-				// Minter gets 3% of (510 - 10 - 100) = 3% of 400 = 12
-				// Seller gets 400 - 12 = 388
-				checkBalance(minter, "XAU", 12)
-				checkBalance(buyer, "XAU", 490)
-				checkBalance(secondarySeller, "XAU", 388)
-				checkBalance(broker, "XAU", 5100)
-			})
+		// 1. Sell 100% of balance (sellside)
+		t.Run("Sell100Pct", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
 		})
-	}
+
+		// 2. Buy 100% of balance (buyside)
+		t.Run("Buy100Pct", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(buyer, minter, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 3. Sell 995 XAU (fee exceeds balance, sellside)
+		t.Run("Sell995", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(995))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 4. Buy 995 XAU (fee exceeds balance, buyside)
+		t.Run("Buy995", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(buyer, minter, nftID, XAU(995))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 5. Sell 900 XAU (fee fits in balance, sellside)
+		t.Run("Sell900", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(900))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 900)
+			checkBalance(buyer, "XAU", 82) // 1000 - 900 - 18 fee
+		})
+
+		// 6. Buy 900 XAU (fee fits in balance, buyside)
+		t.Run("Buy900", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(buyer, minter, nftID, XAU(900))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 900)
+			checkBalance(buyer, "XAU", 82)
+		})
+
+		// 7. Sell 1000 XAU with extra 20 to cover fee (sellside)
+		t.Run("SellExact", func(t *testing.T) {
+			reinit()
+			env.Submit(payment.PayIssued(gw, buyer, XAU(20)).Build())
+			env.Close()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 1000)
+			checkBalance(buyer, "XAU", 0)
+		})
+
+		// 8. Buy 1000 XAU with extra 20 to cover fee (buyside)
+		t.Run("BuyExact", func(t *testing.T) {
+			reinit()
+			env.Submit(payment.PayIssued(gw, buyer, XAU(20)).Build())
+			env.Close()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(buyer, minter, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 1000)
+			checkBalance(buyer, "XAU", 0)
+		})
+
+		// 9. Gateway buys via sell offer (no transfer fee on own IOU)
+		t.Run("GWSellOffer1000", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(gw, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 1000)
+		})
+
+		// 10. Gateway buys via buy offer (no transfer fee on own IOU)
+		t.Run("GWBuyOffer1000", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(gw, minter, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 1000)
+		})
+
+		// 11. Gateway buys via sell offer 5000 (exceeds trust limit)
+		t.Run("GWSellOffer5000", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XAU(5000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(gw, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 5000)
+		})
+
+		// 12. Gateway buys via buy offer 5000
+		t.Run("GWBuyOffer5000", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(gw, minter, nftID, XAU(5000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 5000)
+		})
+
+		// 13. Gateway mints and sells for 1000 XAU (sellside)
+		t.Run("GWSells1000Sell", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(gw)
+			offerID := createSellOffer(gw, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(buyer, "XAU", 0)
+		})
+
+		// 14. Gateway mints and sells for 1000 XAU (buyside)
+		t.Run("GWSells1000Buy", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(gw)
+			offerID := createBuyOffer(buyer, gw, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(gw, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(buyer, "XAU", 0)
+		})
+
+		// 15. Gateway sells for 2000 XAU (exceeds buyer balance, sellside)
+		t.Run("GWSells2000Sell", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(gw)
+			offerID := createSellOffer(gw, nftID, XAU(2000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 16. Gateway sells for 2000 XAU (exceeds buyer balance, buyside)
+		t.Run("GWSells2000Buy", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(gw)
+			offerID := createBuyOffer(buyer, gw, nftID, XAU(2000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(gw, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 17. Sell XPB 10 - minter has no trust line, buyer has no XPB (sellside)
+		t.Run("NoTrustLineSell", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XPB(10))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 18. Buy XPB 10 - buyer has no XPB (buyside)
+		t.Run("NoTrustLineBuy", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			createBuyOfferWithExpectedError(buyer, minter, nftID, XPB(10), "tecUNFUNDED_OFFER")
+		})
+
+		// 19. Sell XPB 10 with buyer having XPB (auto-creates trust line for minter)
+		t.Run("SellXPBAutoTrust", func(t *testing.T) {
+			reinit()
+			env.Submit(payment.PayIssued(gw, buyer, XPB(100)).Build())
+			env.Close()
+			nftID := mintNFT(minter)
+			offerID := createSellOffer(minter, nftID, XPB(10))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XPB", 10)
+			checkBalance(buyer, "XPB", 89.8) // 100 - 10 - 0.2 fee
+		})
+
+		// 20. Buy XPB 10 with buyer having XPB (auto-creates trust line for minter)
+		t.Run("BuyXPBAutoTrust", func(t *testing.T) {
+			reinit()
+			env.Submit(payment.PayIssued(gw, buyer, XPB(100)).Build())
+			env.Close()
+			nftID := mintNFT(minter)
+			offerID := createBuyOffer(buyer, minter, nftID, XPB(10))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(minter, offerID).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XPB", 10)
+			checkBalance(buyer, "XPB", 89.8)
+		})
+
+		// 21. NFT transfer fee 3% + sell 1000 (sellside)
+		t.Run("NFTFee3pctSell1000", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter, 3000) // 3% transfer fee
+			primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
+			env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
+			env.Close()
+
+			sellOffer := createSellOffer(secondarySeller, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, sellOffer).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 22. NFT transfer fee 3% + buy 1000 (buyside)
+		t.Run("NFTFee3pctBuy1000", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter, 3000)
+			primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
+			env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
+			env.Close()
+
+			buyOffer := createBuyOffer(buyer, secondarySeller, nftID, XAU(1000))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(secondarySeller, buyOffer).Build())
+			env.Close()
+			jtx.RequireTxFail(t, result, "tecINSUFFICIENT_FUNDS")
+			expectInitialState()
+		})
+
+		// 23. NFT transfer fee 3% + sell 900 (fits in balance, sellside)
+		t.Run("NFTFee3pctSell900", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter, 3000)
+			primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
+			env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
+			env.Close()
+
+			sellOffer := createSellOffer(secondarySeller, nftID, XAU(900))
+			result := env.Submit(nft.NFTokenAcceptSellOffer(buyer, sellOffer).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 27)           // 3% of 900
+			checkBalance(secondarySeller, "XAU", 873) // 900 - 27
+			checkBalance(buyer, "XAU", 82)            // 1000 - 918
+		})
+
+		// 24. NFT transfer fee 3% + buy 900 (fits in balance, buyside)
+		t.Run("NFTFee3pctBuy900", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter, 3000)
+			primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
+			env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
+			env.Close()
+
+			buyOffer := createBuyOffer(buyer, secondarySeller, nftID, XAU(900))
+			result := env.Submit(nft.NFTokenAcceptBuyOffer(secondarySeller, buyOffer).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 27)
+			checkBalance(secondarySeller, "XAU", 873)
+			checkBalance(buyer, "XAU", 82)
+		})
+
+		// 25. Brokered sale with IOU fee (no NFT transfer fee)
+		t.Run("BrokeredIOUFee", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter)
+			sellOffer := createSellOffer(minter, nftID, XAU(300))
+			buyOffer := createBuyOffer(buyer, minter, nftID, XAU(500))
+			result := env.Submit(nft.NFTokenBrokeredSale(broker, sellOffer, buyOffer).
+				BrokerFee(XAU(100)).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			checkBalance(minter, "XAU", 400)  // 500 - 100 broker fee
+			checkBalance(buyer, "XAU", 490)   // 1000 - 510 (500 + 2% fee)
+			checkBalance(broker, "XAU", 5100) // 5000 + 100
+		})
+
+		// 26. Brokered sale with NFT + IOU fee
+		t.Run("BrokeredNFTAndIOUFee", func(t *testing.T) {
+			reinit()
+			nftID := mintNFT(minter, 3000) // 3% NFT transfer fee
+			primaryOffer := createSellOffer(minter, nftID, tx.NewXRPAmount(0))
+			env.Submit(nft.NFTokenAcceptSellOffer(secondarySeller, primaryOffer).Build())
+			env.Close()
+
+			sellOffer := createSellOffer(secondarySeller, nftID, XAU(300))
+			buyOffer := createBuyOffer(buyer, secondarySeller, nftID, XAU(500))
+			result := env.Submit(nft.NFTokenBrokeredSale(broker, sellOffer, buyOffer).
+				BrokerFee(XAU(100)).Build())
+			env.Close()
+			jtx.RequireTxSuccess(t, result)
+			// Buyer pays 510 (500 + 2% IOU fee)
+			// Broker gets 100
+			// Minter gets 3% of (510 - 10 - 100) = 3% of 400 = 12
+			// Seller gets 400 - 12 = 388
+			checkBalance(minter, "XAU", 12)
+			checkBalance(buyer, "XAU", 490)
+			checkBalance(secondarySeller, "XAU", 388)
+			checkBalance(broker, "XAU", 5100)
+		})
+	})
 }
 
 // ===========================================================================
@@ -2598,412 +2476,293 @@ func TestFixNFTokenRemint(t *testing.T) {
 
 	// Block 1: Test if NFTokenIDs can be duplicated by re-creation of an account.
 	// Run with and without fixNFTokenRemint.
-	for _, withFix := range []bool{false, true} {
-		name := "WithoutFixNFTokenRemint"
-		if withFix {
-			name = "WithFixNFTokenRemint"
+	t.Run("WithFixNFTokenRemint/DuplicateByReCreation", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+
+		alice := jtx.NewAccount("alice")
+		becky := jtx.NewAccount("becky")
+
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(becky, uint64(jtx.XRP(10000)))
+		env.Close()
+
+		// alice mints and burns a NFT
+		prevNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+		result := env.Submit(nft.NFTokenMint(alice, 0).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		result = env.Submit(nft.NFTokenBurn(alice, prevNFTokenID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// alice has minted 1 NFToken
+		if env.MintedCount(alice) != 1 {
+			t.Fatalf("expected MintedNFTokens == 1, got %d", env.MintedCount(alice))
 		}
-		t.Run(name+"/DuplicateByReCreation", func(t *testing.T) {
-			env := jtx.NewTestEnv(t)
-			if !withFix {
-				env.DisableFeature("fixNFTokenRemint")
-			} else {
-				env.EnableFeature("fixNFTokenRemint")
-			}
 
-			alice := jtx.NewAccount("alice")
-			becky := jtx.NewAccount("becky")
+		// Close enough ledgers to delete alice's account
+		env.IncLedgerSeqForAccDel(alice)
 
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.FundAmount(becky, uint64(jtx.XRP(10000)))
-			env.Close()
+		// alice's account is deleted
+		acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+		delTx := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx.Fee = acctDelFee
+		result = env.Submit(delTx)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// alice mints and burns a NFT
-			prevNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-			result := env.Submit(nft.NFTokenMint(alice, 0).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-			result = env.Submit(nft.NFTokenBurn(alice, prevNFTokenID).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// alice's account root is gone
+		jtx.RequireAccountNotExists(t, env, alice)
 
-			// alice has minted 1 NFToken
-			if env.MintedCount(alice) != 1 {
-				t.Fatalf("expected MintedNFTokens == 1, got %d", env.MintedCount(alice))
-			}
+		// Fund alice to re-create her account
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.Close()
 
-			// Close enough ledgers to delete alice's account
-			env.IncLedgerSeqForAccDel(alice)
+		// alice's account now exists and has minted 0 NFTokens
+		jtx.RequireAccountExists(t, env, alice)
+		if env.MintedCount(alice) != 0 {
+			t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+		}
 
-			// alice's account is deleted
-			acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
-			delTx := account.NewAccountDelete(alice.Address, becky.Address)
-			delTx.Fee = acctDelFee
-			result = env.Submit(delTx)
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		// alice mints a NFT with same params as prevNFTokenID
+		remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+		result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// alice's account root is gone
-			jtx.RequireAccountNotExists(t, env, alice)
+		// burn the NFT to make sure alice owns remintNFTokenID
+		result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			// Fund alice to re-create her account
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.Close()
-
-			// alice's account now exists and has minted 0 NFTokens
-			jtx.RequireAccountExists(t, env, alice)
-			if env.MintedCount(alice) != 0 {
-				t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
-			}
-
-			// alice mints a NFT with same params as prevNFTokenID
-			remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-			result = env.Submit(nft.NFTokenMint(alice, 0).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			// burn the NFT to make sure alice owns remintNFTokenID
-			result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
-			jtx.RequireTxSuccess(t, result)
-			env.Close()
-
-			if withFix {
-				// With fixNFTokenRemint, two NFTs should NOT have the same ID
-				if remintNFTokenID == prevNFTokenID {
-					t.Fatalf("with fixNFTokenRemint, reminted NFT should have different ID: prev=%s remint=%s",
-						prevNFTokenID, remintNFTokenID)
-				}
-			} else {
-				// Without fixNFTokenRemint, two NFTs SHOULD have the same ID
-				if remintNFTokenID != prevNFTokenID {
-					t.Fatalf("without fixNFTokenRemint, reminted NFT should have same ID: prev=%s remint=%s",
-						prevNFTokenID, remintNFTokenID)
-				}
-			}
-		})
-	}
+		// With fixNFTokenRemint, two NFTs should NOT have the same ID
+		if remintNFTokenID == prevNFTokenID {
+			t.Fatalf("with fixNFTokenRemint, reminted NFT should have different ID: prev=%s remint=%s",
+				prevNFTokenID, remintNFTokenID)
+		}
+	})
 
 	// Block 2: Test if the issuer account can be deleted after an authorized
 	// minter mints and burns a batch of NFTokens.
 	// Run with and without fixNFTokenRemint.
-	for _, withFix := range []bool{false, true} {
-		name := "WithoutFixNFTokenRemint"
-		if withFix {
-			name = "WithFixNFTokenRemint"
-		}
-		t.Run(name+"/AuthorizedMinterBatch", func(t *testing.T) {
-			env := jtx.NewTestEnv(t)
-			if !withFix {
-				env.DisableFeature("fixNFTokenRemint")
-			} else {
-				env.EnableFeature("fixNFTokenRemint")
-			}
+	t.Run("WithFixNFTokenRemint/AuthorizedMinterBatch", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
 
-			alice := jtx.NewAccount("alice")
-			becky := jtx.NewAccount("becky")
-			minter := jtx.NewAccount("minter")
+		alice := jtx.NewAccount("alice")
+		becky := jtx.NewAccount("becky")
+		minter := jtx.NewAccount("minter")
 
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.FundAmount(becky, uint64(jtx.XRP(10000)))
-			env.FundAmount(minter, uint64(jtx.XRP(10000)))
-			env.Close()
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(becky, uint64(jtx.XRP(10000)))
+		env.FundAmount(minter, uint64(jtx.XRP(10000)))
+		env.Close()
 
-			// alice sets minter as her authorized minter
-			result := env.Submit(accountset.AccountSet(alice).AuthorizedMinter(minter).Build())
+		// alice sets minter as her authorized minter
+		result := env.Submit(accountset.AccountSet(alice).AuthorizedMinter(minter).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// minter mints 500 NFTs for alice
+		nftIDs := make([]string, 0, 500)
+		for range 500 {
+			nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+			nftIDs = append(nftIDs, nftokenID)
+			result = env.Submit(nft.NFTokenMint(minter, 0).Issuer(alice).Build())
 			jtx.RequireTxSuccess(t, result)
-			env.Close()
+		}
+		env.Close()
 
-			// minter mints 500 NFTs for alice
-			nftIDs := make([]string, 0, 500)
-			for range 500 {
-				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-				nftIDs = append(nftIDs, nftokenID)
-				result = env.Submit(nft.NFTokenMint(minter, 0).Issuer(alice).Build())
-				jtx.RequireTxSuccess(t, result)
-			}
-			env.Close()
+		// minter burns 500 NFTs
+		for _, nftokenID := range nftIDs {
+			result = env.Submit(nft.NFTokenBurn(minter, nftokenID).Build())
+			jtx.RequireTxSuccess(t, result)
+		}
+		env.Close()
 
-			// minter burns 500 NFTs
-			for _, nftokenID := range nftIDs {
-				result = env.Submit(nft.NFTokenBurn(minter, nftokenID).Build())
-				jtx.RequireTxSuccess(t, result)
-			}
-			env.Close()
+		// Increment ledger sequence to the number that is
+		// enforced by the featureDeletableAccounts amendment
+		env.IncLedgerSeqForAccDel(alice)
 
-			// Increment ledger sequence to the number that is
-			// enforced by the featureDeletableAccounts amendment
-			env.IncLedgerSeqForAccDel(alice)
+		// Verify that alice's account root is present
+		jtx.RequireAccountExists(t, env, alice)
 
-			// Verify that alice's account root is present
-			jtx.RequireAccountExists(t, env, alice)
+		acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
 
-			acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+		// alice tries to delete her account, but is unsuccessful.
+		// Due to authorized minting, alice's account sequence does not
+		// advance while minter mints NFTokens for her.
+		// The new account deletion restriction <FirstNFTokenSequence +
+		// MintedNFTokens + 256> enabled by this amendment will enforce
+		// alice to wait for more ledgers to close before she can
+		// delete her account, to prevent duplicate NFTokenIDs
+		delTx := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx.Fee = acctDelFee
+		result = env.Submit(delTx)
+		jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
+		env.Close()
 
-			if !withFix {
-				// alice's account can be successfully deleted
-				delTx := account.NewAccountDelete(alice.Address, becky.Address)
-				delTx.Fee = acctDelFee
-				result = env.Submit(delTx)
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-				jtx.RequireAccountNotExists(t, env, alice)
+		// alice's account is still present
+		jtx.RequireAccountExists(t, env, alice)
 
-				// Fund alice to re-create her account
-				env.FundAmount(alice, uint64(jtx.XRP(10000)))
-				env.Close()
+		// Close more ledgers until it is no longer within
+		// <FirstNFTokenSequence + MintedNFTokens + 256>
+		// to be able to delete alice's account
+		incLgrSeqForFixNftRemint(env, alice)
 
-				// alice's account now exists and has minted 0 NFTokens
-				jtx.RequireAccountExists(t, env, alice)
-				if env.MintedCount(alice) != 0 {
-					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
-				}
+		// alice's account is deleted
+		delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx2.Fee = acctDelFee
+		result = env.Submit(delTx2)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-				// alice mints a NFT with same params as the first one before
-				// the account delete
-				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+		// alice's account root is gone
+		jtx.RequireAccountNotExists(t, env, alice)
 
-				// burn the NFT to make sure alice owns remintNFTokenID
-				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+		// Fund alice to re-create her account
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.Close()
 
-				// The new NFT minted has the same ID as one of the NFTs
-				// authorized minter minted for alice
-				if !containsID(nftIDs, remintNFTokenID) {
-					t.Fatalf("without fixNFTokenRemint, reminted NFT should have same ID as one of the authorized minter's NFTs")
-				}
-			} else {
-				// alice tries to delete her account, but is unsuccessful.
-				// Due to authorized minting, alice's account sequence does not
-				// advance while minter mints NFTokens for her.
-				// The new account deletion restriction <FirstNFTokenSequence +
-				// MintedNFTokens + 256> enabled by this amendment will enforce
-				// alice to wait for more ledgers to close before she can
-				// delete her account, to prevent duplicate NFTokenIDs
-				delTx := account.NewAccountDelete(alice.Address, becky.Address)
-				delTx.Fee = acctDelFee
-				result = env.Submit(delTx)
-				jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
-				env.Close()
+		// alice's account now exists and has minted 0 NFTokens
+		jtx.RequireAccountExists(t, env, alice)
+		if env.MintedCount(alice) != 0 {
+			t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+		}
 
-				// alice's account is still present
-				jtx.RequireAccountExists(t, env, alice)
+		// alice mints a NFT with same params as the first one before
+		// the account delete
+		remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+		result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-				// Close more ledgers until it is no longer within
-				// <FirstNFTokenSequence + MintedNFTokens + 256>
-				// to be able to delete alice's account
-				incLgrSeqForFixNftRemint(env, alice)
+		// burn the NFT to make sure alice owns remintNFTokenID
+		result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-				// alice's account is deleted
-				delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
-				delTx2.Fee = acctDelFee
-				result = env.Submit(delTx2)
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// alice's account root is gone
-				jtx.RequireAccountNotExists(t, env, alice)
-
-				// Fund alice to re-create her account
-				env.FundAmount(alice, uint64(jtx.XRP(10000)))
-				env.Close()
-
-				// alice's account now exists and has minted 0 NFTokens
-				jtx.RequireAccountExists(t, env, alice)
-				if env.MintedCount(alice) != 0 {
-					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
-				}
-
-				// alice mints a NFT with same params as the first one before
-				// the account delete
-				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// burn the NFT to make sure alice owns remintNFTokenID
-				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// The new NFT minted will not have the same ID
-				// as any of the NFTs authorized minter minted
-				if containsID(nftIDs, remintNFTokenID) {
-					t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any authorized minter's NFT")
-				}
-			}
-		})
-	}
+		// The new NFT minted will not have the same ID
+		// as any of the NFTs authorized minter minted
+		if containsID(nftIDs, remintNFTokenID) {
+			t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any authorized minter's NFT")
+		}
+	})
 
 	// Block 3: When an account mints and burns a batch of NFTokens using tickets,
 	// see if the account can be deleted.
 	// Run with and without fixNFTokenRemint.
-	for _, withFix := range []bool{false, true} {
-		name := "WithoutFixNFTokenRemint"
-		if withFix {
-			name = "WithFixNFTokenRemint"
+	t.Run("WithFixNFTokenRemint/TicketMintAndBurn", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+
+		alice := jtx.NewAccount("alice")
+		becky := jtx.NewAccount("becky")
+
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(becky, uint64(jtx.XRP(10000)))
+		env.Close()
+
+		// alice grabs enough tickets for all of the following transactions.
+		// Note that once the tickets are acquired alice's account sequence
+		// number should not advance.
+		aliceTicketSeq := env.CreateTickets(alice, 100)
+		env.Close()
+
+		jtx.RequireTicketCount(t, env, alice, 100)
+		jtx.RequireOwnerCount(t, env, alice, 100)
+
+		// alice mints 50 NFTs using tickets
+		nftIDs := make([]string, 0, 50)
+		for range 50 {
+			nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+			nftIDs = append(nftIDs, nftokenID)
+			mintTx := nft.NFTokenMint(alice, 0).Build()
+			jtx.WithTicketSeq(mintTx, aliceTicketSeq)
+			aliceTicketSeq++
+			result := env.Submit(mintTx)
+			jtx.RequireTxSuccess(t, result)
+			env.Close()
 		}
-		t.Run(name+"/TicketMintAndBurn", func(t *testing.T) {
-			env := jtx.NewTestEnv(t)
-			if !withFix {
-				env.DisableFeature("fixNFTokenRemint")
-			} else {
-				env.EnableFeature("fixNFTokenRemint")
-			}
 
-			alice := jtx.NewAccount("alice")
-			becky := jtx.NewAccount("becky")
+		// alice burns 50 NFTs using tickets
+		for _, nftokenID := range nftIDs {
+			burnTx := nft.NFTokenBurn(alice, nftokenID).Build()
+			jtx.WithTicketSeq(burnTx, aliceTicketSeq)
+			aliceTicketSeq++
+			result := env.Submit(burnTx)
+			jtx.RequireTxSuccess(t, result)
+		}
+		env.Close()
 
-			env.FundAmount(alice, uint64(jtx.XRP(10000)))
-			env.FundAmount(becky, uint64(jtx.XRP(10000)))
-			env.Close()
+		jtx.RequireTicketCount(t, env, alice, 0)
 
-			// alice grabs enough tickets for all of the following transactions.
-			// Note that once the tickets are acquired alice's account sequence
-			// number should not advance.
-			aliceTicketSeq := env.CreateTickets(alice, 100)
-			env.Close()
+		// Increment ledger sequence to the number that is
+		// enforced by the featureDeletableAccounts amendment
+		env.IncLedgerSeqForAccDel(alice)
 
-			jtx.RequireTicketCount(t, env, alice, 100)
-			jtx.RequireOwnerCount(t, env, alice, 100)
+		// Verify that alice's account root is present
+		jtx.RequireAccountExists(t, env, alice)
 
-			// alice mints 50 NFTs using tickets
-			nftIDs := make([]string, 0, 50)
-			for range 50 {
-				nftokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-				nftIDs = append(nftIDs, nftokenID)
-				mintTx := nft.NFTokenMint(alice, 0).Build()
-				jtx.WithTicketSeq(mintTx, aliceTicketSeq)
-				aliceTicketSeq++
-				result := env.Submit(mintTx)
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-			}
+		acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
 
-			// alice burns 50 NFTs using tickets
-			for _, nftokenID := range nftIDs {
-				burnTx := nft.NFTokenBurn(alice, nftokenID).Build()
-				jtx.WithTicketSeq(burnTx, aliceTicketSeq)
-				aliceTicketSeq++
-				result := env.Submit(burnTx)
-				jtx.RequireTxSuccess(t, result)
-			}
-			env.Close()
+		// alice tries to delete her account, but is unsuccessful.
+		// Due to ticket minting, alice's account sequence does not
+		// advance while minting NFTokens using tickets.
+		// The new account deletion restriction <FirstNFTokenSequence +
+		// MintedNFTokens + 256> enabled by this amendment will enforce
+		// alice to wait for more ledgers to close before she can
+		// delete her account, to prevent duplicate NFTokenIDs
+		delTx := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx.Fee = acctDelFee
+		result := env.Submit(delTx)
+		jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
+		env.Close()
 
-			jtx.RequireTicketCount(t, env, alice, 0)
+		// alice's account is still present
+		jtx.RequireAccountExists(t, env, alice)
 
-			// Increment ledger sequence to the number that is
-			// enforced by the featureDeletableAccounts amendment
-			env.IncLedgerSeqForAccDel(alice)
+		// Close more ledgers until it is no longer within
+		// <FirstNFTokenSequence + MintedNFTokens + 256>
+		// to be able to delete alice's account
+		incLgrSeqForFixNftRemint(env, alice)
 
-			// Verify that alice's account root is present
-			jtx.RequireAccountExists(t, env, alice)
+		// alice's account is deleted
+		delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
+		delTx2.Fee = acctDelFee
+		result = env.Submit(delTx2)
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-			acctDelFee := fmt.Sprintf("%d", env.ReserveIncrement())
+		// alice's account root is gone
+		jtx.RequireAccountNotExists(t, env, alice)
 
-			if !withFix {
-				// alice tries to delete her account, and is successful
-				delTx := account.NewAccountDelete(alice.Address, becky.Address)
-				delTx.Fee = acctDelFee
-				result := env.Submit(delTx)
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
+		// Fund alice to re-create her account
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.Close()
 
-				// alice's account root is gone
-				jtx.RequireAccountNotExists(t, env, alice)
+		// alice's account now exists and has minted 0 NFTokens
+		jtx.RequireAccountExists(t, env, alice)
+		if env.MintedCount(alice) != 0 {
+			t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
+		}
 
-				// Fund alice to re-create her account
-				env.FundAmount(alice, uint64(jtx.XRP(10000)))
-				env.Close()
+		// alice mints a NFT with same params as the first one before
+		// the account delete
+		remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
+		result = env.Submit(nft.NFTokenMint(alice, 0).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-				// alice's account now exists and has minted 0 NFTokens
-				jtx.RequireAccountExists(t, env, alice)
-				if env.MintedCount(alice) != 0 {
-					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
-				}
+		// burn the NFT to make sure alice owns remintNFTokenID
+		result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
 
-				// alice mints a NFT with same params as the first one before
-				// the account delete
-				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// burn the NFT to make sure alice owns remintNFTokenID
-				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// The new NFT minted will have the same ID
-				// as one of NFTs minted using tickets
-				if !containsID(nftIDs, remintNFTokenID) {
-					t.Fatalf("without fixNFTokenRemint, reminted NFT should have same ID as one of the ticket-minted NFTs")
-				}
-			} else {
-				// alice tries to delete her account, but is unsuccessful.
-				// Due to ticket minting, alice's account sequence does not
-				// advance while minting NFTokens using tickets.
-				// The new account deletion restriction <FirstNFTokenSequence +
-				// MintedNFTokens + 256> enabled by this amendment will enforce
-				// alice to wait for more ledgers to close before she can
-				// delete her account, to prevent duplicate NFTokenIDs
-				delTx := account.NewAccountDelete(alice.Address, becky.Address)
-				delTx.Fee = acctDelFee
-				result := env.Submit(delTx)
-				jtx.RequireTxClaimed(t, result, "tecTOO_SOON")
-				env.Close()
-
-				// alice's account is still present
-				jtx.RequireAccountExists(t, env, alice)
-
-				// Close more ledgers until it is no longer within
-				// <FirstNFTokenSequence + MintedNFTokens + 256>
-				// to be able to delete alice's account
-				incLgrSeqForFixNftRemint(env, alice)
-
-				// alice's account is deleted
-				delTx2 := account.NewAccountDelete(alice.Address, becky.Address)
-				delTx2.Fee = acctDelFee
-				result = env.Submit(delTx2)
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// alice's account root is gone
-				jtx.RequireAccountNotExists(t, env, alice)
-
-				// Fund alice to re-create her account
-				env.FundAmount(alice, uint64(jtx.XRP(10000)))
-				env.Close()
-
-				// alice's account now exists and has minted 0 NFTokens
-				jtx.RequireAccountExists(t, env, alice)
-				if env.MintedCount(alice) != 0 {
-					t.Fatalf("expected MintedNFTokens == 0 after re-create, got %d", env.MintedCount(alice))
-				}
-
-				// alice mints a NFT with same params as the first one before
-				// the account delete
-				remintNFTokenID := nft.GetNextNFTokenID(env, alice, 0, 0, 0)
-				result = env.Submit(nft.NFTokenMint(alice, 0).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// burn the NFT to make sure alice owns remintNFTokenID
-				result = env.Submit(nft.NFTokenBurn(alice, remintNFTokenID).Build())
-				jtx.RequireTxSuccess(t, result)
-				env.Close()
-
-				// The new NFT minted will not have the same ID
-				// as any of the NFTs minted using tickets
-				if containsID(nftIDs, remintNFTokenID) {
-					t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any ticket-minted NFT")
-				}
-			}
-		})
-	}
+		// The new NFT minted will not have the same ID
+		// as any of the NFTs minted using tickets
+		if containsID(nftIDs, remintNFTokenID) {
+			t.Fatalf("with fixNFTokenRemint, reminted NFT should NOT have same ID as any ticket-minted NFT")
+		}
+	})
 
 	// Block 4: If fixNFTokenRemint is enabled,
 	// when an authorized minter mints and burns a batch of NFTokens using tickets,

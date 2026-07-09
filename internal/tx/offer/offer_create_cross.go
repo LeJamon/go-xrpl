@@ -66,22 +66,18 @@ func (o *OfferCreate) invokeFlowCross(
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 		payment.FlowCrossParams{
-			Passive:                    bPassive,    // For passive offers, only cross against strictly better quality
-			Sell:                       bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
-			FillOrKill:                 bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
-			ParentCloseTime:            ctx.Config.ParentCloseTime,
-			ReserveBase:                ctx.Config.ReserveBase,
-			ReserveIncrement:           ctx.Config.ReserveIncrement,
-			FixReducedOffersV1:         rules.Enabled(amendment.FeatureFixReducedOffersV1),
-			FixReducedOffersV2:         rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			FixRmSmallIncreasedQOffers: rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
-			FixFillOrKill:              rules.Enabled(amendment.FeatureFixFillOrKill),
-			FlowSortStrands:            rules.Enabled(amendment.FeatureFlowSortStrands),
-			FixAMMv1_1:                 rules.Enabled(amendment.FeatureFixAMMv1_1),
-			FixAMMv1_2:                 rules.Enabled(amendment.FeatureFixAMMv1_2),
-			FixAMMOverflowOffer:        rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
-			Fix1781:                    rules.Enabled(amendment.FeatureFix1781),
-			DomainID:                   o.DomainID,
+			Passive:             bPassive,    // For passive offers, only cross against strictly better quality
+			Sell:                bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
+			FillOrKill:          bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
+			ParentCloseTime:     ctx.Config.ParentCloseTime,
+			ReserveBase:         ctx.Config.ReserveBase,
+			ReserveIncrement:    ctx.Config.ReserveIncrement,
+			FixReducedOffersV2:  rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			FixFillOrKill:       rules.Enabled(amendment.FeatureFixFillOrKill),
+			FixAMMv1_1:          rules.Enabled(amendment.FeatureFixAMMv1_1),
+			FixAMMv1_2:          rules.Enabled(amendment.FeatureFixAMMv1_2),
+			FixAMMOverflowOffer: rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+			DomainID:            o.DomainID,
 		},
 	)
 }
@@ -281,7 +277,7 @@ func (o *OfferCreate) takerCross(
 	}
 
 	remainingGets, remainingPays := computePostCrossAmounts(
-		ctx, saTakerPays, saTakerGets, placeOffer.in, placeOffer.out, takerInBalance, bSell,
+		saTakerPays, saTakerGets, placeOffer.in, placeOffer.out, takerInBalance, bSell,
 	)
 
 	if outcome, done := evaluatePostCrossTermination(rules, saTakerGets, grossPaid, remainingGets, remainingPays, bFillOrKill); done {
@@ -328,10 +324,7 @@ func evaluatePostCrossTermination(
 		remainingWithGross := subtractAmounts(saTakerGets, grossPaid)
 		if !isAmountZeroOrNegative(remainingWithGross) {
 			// FoK not satisfied: TakerGets not fully consumed by GROSS amount.
-			if rules.Enabled(amendment.FeatureFix1578) {
-				return crossOutcome{terminated: true, result: ter.TecKILLED, applyMain: false}, true
-			}
-			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: false}, true
+			return crossOutcome{terminated: true, result: ter.TecKILLED, applyMain: false}, true
 		}
 	}
 
@@ -348,14 +341,11 @@ func evaluatePostCrossTermination(
 //
 // Reference: rippled CreateOffer.cpp lines 429-504
 func computePostCrossAmounts(
-	ctx *tx.ApplyContext,
 	saTakerPays, saTakerGets tx.Amount,
 	placeIn, placeOut tx.Amount,
 	takerInBalance tx.Amount,
 	bSell bool,
 ) (remainingGets, remainingPays tx.Amount) {
-	rules := ctx.Rules()
-
 	noCrossingHappened := isAmountZeroOrNegative(placeIn) && isAmountZeroOrNegative(placeOut)
 
 	if isAmountZeroOrNegative(takerInBalance) {
@@ -385,11 +375,7 @@ func computePostCrossAmounts(
 		outNative := saTakerPays.IsNative()
 		outCurrency := saTakerPays.Currency
 		outIssuer := saTakerPays.Issuer
-		if rules.Enabled(amendment.FeatureFixReducedOffersV1) {
-			remainingPays = offerDivRoundStrict(remainingGets, rate, outNative, outCurrency, outIssuer, false)
-		} else {
-			remainingPays = offerDivRound(remainingGets, rate, outNative, outCurrency, outIssuer, true)
-		}
+		remainingPays = offerDivRoundStrict(remainingGets, rate, outNative, outCurrency, outIssuer, false)
 		return remainingGets, remainingPays
 	}
 	// Non-sell offer: subtract output received from TakerPays, compute TakerGets by quality
