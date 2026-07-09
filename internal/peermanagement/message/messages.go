@@ -153,10 +153,14 @@ type IndexedObject struct {
 }
 
 // GetObjectByHash requests objects by hash.
+//
+// The legacy top-level seq field (proto field 3, "used to match replies to
+// queries") was removed and reserved in the 3.2.0 peer protocol; a 3.2.0 peer
+// neither sends nor interprets it. Decoding an old peer's seq is tolerated
+// (protobuf skips the reserved field).
 type GetObjectByHash struct {
 	ObjType    ObjectType      `json:"type"`
 	Query      bool            `json:"query"`
-	Seq        uint32          `json:"seq,omitempty"`
 	LedgerHash []byte          `json:"ledger_hash,omitempty"`
 	Fat        bool            `json:"fat,omitempty"`
 	Objects    []IndexedObject `json:"objects,omitempty"`

@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -68,6 +70,149 @@ func TestVault_XRPLifecycle(t *testing.T) {
 	}
 	if env.VaultExists(id) {
 		t.Fatalf("vault still exists after delete")
+	}
+}
+
+// iouLineBalance returns the RippleState balance between a and b for currency,
+// expressed in a's perspective, and whether the trust line exists.
+func iouLineBalance(t *testing.T, env *jtx.TestEnv, a, b [20]byte, currency string) (float64, bool) {
+	t.Helper()
+	key := keylet.Line(a, b, currency)
+	if !env.LedgerEntryExists(key) {
+		return 0, false
+	}
+	data, err := env.LedgerEntry(key)
+	if err != nil {
+		t.Fatalf("read trust line: %v", err)
+	}
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		t.Fatalf("parse trust line: %v", err)
+	}
+	bal := rs.Balance
+	if !keylet.IsLowAccount(a, b) {
+		bal = bal.Negate()
+	}
+	return bal.Float64(), true
+}
+
+func approxEq(got, want float64) bool {
+	d := got - want
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-6
+}
+
+// TestVault_IOULifecycle exercises create → deposit → withdraw → clawback →
+// delete for an IOU vault, asserting that every asset movement ripples through
+// the issuer: it settles on the holder↔issuer and issuer↔pseudo trust lines and
+// never creates a direct holder↔pseudo line.
+func TestVault_IOULifecycle(t *testing.T) {
+	env := newVaultEnv(t)
+	issuer := jtx.NewAccount("issuer")
+	owner := jtx.NewAccount("owner")
+	depositor := jtx.NewAccount("depositor")
+
+	// The issuer must permit clawback before it owns any objects.
+	env.Fund(issuer)
+	if res := env.Submit(accountset.AccountSet(issuer).AllowClawback().Build()); res.Code != "tesSUCCESS" {
+		t.Fatalf("AccountSet AllowClawback: got %s", res.Code)
+	}
+	env.Fund(owner, depositor)
+
+	const cur = "USD"
+	env.Trust(depositor, tx.NewIssuedAmountFromFloat64(10000, cur, issuer.Address))
+	env.PayIOU(issuer, depositor, issuer, cur, 1000)
+
+	issuerID := issuer.ID
+	depID := depositor.ID
+
+	// Create the IOU vault.
+	createSeq := env.Seq(owner)
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: cur, Issuer: issuer.Address})
+	create.Common.Fee = createFee
+	if res := env.Submit(create); res.Code != "tesSUCCESS" {
+		t.Fatalf("VaultCreate(IOU): got %s, want tesSUCCESS", res.Code)
+	}
+	id := vaultID(owner, createSeq)
+
+	rawID, _ := hex.DecodeString(id)
+	var vkey [32]byte
+	copy(vkey[:], rawID)
+	vinfo, verr := vault.ReadVaultInfo(env.Ledger(), keylet.VaultByID(vkey))
+	if verr != nil || vinfo == nil {
+		t.Fatalf("ReadVaultInfo: %v", verr)
+	}
+	pseudoID := vinfo.Account
+
+	// The pseudo-account holds the asset via an issuer trust line, created at
+	// VaultCreate.
+	if _, ok := iouLineBalance(t, env, pseudoID, issuerID, cur); !ok {
+		t.Fatalf("pseudo<->issuer trust line missing after create")
+	}
+	depOwnerBefore := env.AccountInfo(depositor).OwnerCount
+
+	// Deposit 100 USD.
+	dep := vault.NewVaultDeposit(depositor.Address, id, tx.NewIssuedAmountFromFloat64(100, cur, issuer.Address))
+	if res := env.Submit(dep); res.Code != "tesSUCCESS" {
+		t.Fatalf("VaultDeposit: got %s, want tesSUCCESS", res.Code)
+	}
+
+	if env.LedgerEntryExists(keylet.Line(depID, pseudoID, cur)) {
+		t.Fatalf("direct depositor<->pseudo trust line created on deposit (fork bug)")
+	}
+	if bal, ok := iouLineBalance(t, env, depID, issuerID, cur); !ok || !approxEq(bal, 900) {
+		t.Fatalf("depositor<->issuer balance = %v (exists=%v), want 900", bal, ok)
+	}
+	if bal, ok := iouLineBalance(t, env, pseudoID, issuerID, cur); !ok || !approxEq(bal, 100) {
+		t.Fatalf("pseudo<->issuer balance = %v (exists=%v), want 100", bal, ok)
+	}
+	if got := env.AccountInfo(depositor).OwnerCount; got != depOwnerBefore+1 {
+		t.Fatalf("depositor owner count after deposit = %d, want %d", got, depOwnerBefore+1)
+	}
+
+	// Withdraw 40 USD back to the depositor.
+	wd := vault.NewVaultWithdraw(depositor.Address, id, tx.NewIssuedAmountFromFloat64(40, cur, issuer.Address))
+	if res := env.Submit(wd); res.Code != "tesSUCCESS" {
+		t.Fatalf("VaultWithdraw: got %s, want tesSUCCESS", res.Code)
+	}
+	if env.LedgerEntryExists(keylet.Line(depID, pseudoID, cur)) {
+		t.Fatalf("direct depositor<->pseudo trust line created on withdraw (fork bug)")
+	}
+	if bal, ok := iouLineBalance(t, env, depID, issuerID, cur); !ok || !approxEq(bal, 940) {
+		t.Fatalf("depositor<->issuer balance = %v, want 940", bal)
+	}
+	if bal, ok := iouLineBalance(t, env, pseudoID, issuerID, cur); !ok || !approxEq(bal, 60) {
+		t.Fatalf("pseudo<->issuer balance = %v, want 60", bal)
+	}
+
+	// Issuer claws back the depositor's remaining shares: the 60 USD still held
+	// by the vault is redeemed off the pseudo<->issuer line.
+	claw := vault.NewVaultClawback(issuer.Address, id, depositor.Address)
+	if res := env.Submit(claw); res.Code != "tesSUCCESS" {
+		t.Fatalf("VaultClawback: got %s, want tesSUCCESS", res.Code)
+	}
+	if bal, ok := iouLineBalance(t, env, pseudoID, issuerID, cur); !ok || !approxEq(bal, 0) {
+		t.Fatalf("pseudo<->issuer balance after clawback = %v (exists=%v), want 0", bal, ok)
+	}
+	if bal, _ := iouLineBalance(t, env, depID, issuerID, cur); !approxEq(bal, 940) {
+		t.Fatalf("depositor<->issuer balance after clawback = %v, want 940 (unchanged)", bal)
+	}
+	if got := env.AccountInfo(depositor).OwnerCount; got != depOwnerBefore {
+		t.Fatalf("depositor owner count after clawback = %d, want %d", got, depOwnerBefore)
+	}
+
+	// Delete the now-empty vault; the pseudo's issuer trust line is removed.
+	del := vault.NewVaultDelete(owner.Address, id)
+	if res := env.Submit(del); res.Code != "tesSUCCESS" {
+		t.Fatalf("VaultDelete: got %s, want tesSUCCESS", res.Code)
+	}
+	if env.VaultExists(id) {
+		t.Fatalf("vault still exists after delete")
+	}
+	if env.LedgerEntryExists(keylet.Line(pseudoID, issuerID, cur)) {
+		t.Fatalf("pseudo<->issuer trust line not removed on delete")
 	}
 }
 

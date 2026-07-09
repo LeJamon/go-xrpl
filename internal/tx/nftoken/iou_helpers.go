@@ -7,7 +7,6 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -119,49 +118,12 @@ func offerIOUToAmount(offer *state.NFTokenOfferData) (tx.Amount, error) {
 	return state.NewIssuedAmountFromDecimalString(offer.AmountIOU.Value, offer.AmountIOU.Currency, issuerAddr)
 }
 
-// accountSendIOU transfers IOU between accounts via trust lines.
-// Handles three cases:
-//  1. from == IOU issuer: issuer creates tokens → credit receiver
-//  2. to == IOU issuer: holder redeems tokens → debit sender
-//  3. third party: two trust line modifications with optional transfer rate
+// accountSendIOU transfers IOU between accounts via trust lines, applying the
+// issuer's transfer rate to the sender's leg on a third-party transfer.
 //
 // Reference: rippled View.cpp accountSend → rippleSendIOU → rippleCreditIOU
 func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
-	if amount.IsZero() || from == to {
-		return ter.TesSUCCESS
-	}
-
-	issuerID, err := state.DecodeAccountID(amount.Issuer)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-
-	if from == issuerID || to == issuerID {
-		// Direct: issuer is one side — no transfer fee
-		return tx.RippleCredit(view, from, to, amount)
-	}
-
-	// Third party: sender → issuer (with transfer rate) and issuer → receiver
-	transferRate := payment.GetTransferRate(view, issuerID)
-	if transferRate != payment.QualityOne {
-		// Charge the sender amount * transferRate, rounded to nearest. rippled's
-		// rippleSendIOU uses multiply() (round-to-nearest), not the round-up
-		// multiplyRound(), so MulRatio(..., roundUp=true) would diverge by 1 ulp.
-		rateAmount := state.NewIssuedAmountFromValue(int64(transferRate), -9, amount.Currency, amount.Issuer)
-		senderAmount := amount.Mul(rateAmount, false)
-		// Credit receiver the original amount
-		if r := tx.RippleCredit(view, issuerID, to, amount); r != ter.TesSUCCESS {
-			return r
-		}
-		// Debit sender the increased amount
-		return tx.RippleCredit(view, from, issuerID, senderAmount)
-	}
-
-	// No transfer rate — direct credit/debit
-	if r := tx.RippleCredit(view, issuerID, to, amount); r != ter.TesSUCCESS {
-		return r
-	}
-	return tx.RippleCredit(view, from, issuerID, amount)
+	return tx.RippleSendIOU(view, from, to, amount, false)
 }
 
 // payIOU wraps accountSendIOU with post-hoc balance validation: after the

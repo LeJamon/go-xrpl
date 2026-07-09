@@ -129,6 +129,10 @@ func (o *OfferCreate) CheckExtraFeatures(rules *amendment.Rules) error {
 	if o.DomainID != nil && !rules.PermissionedDEXEnabled() {
 		return ter.Errorf(ter.TemDISABLED, "DomainID requires PermissionedDEX amendment")
 	}
+	// MPT-denominated offers require MPTokensV2 (rippled checkExtraFeatures).
+	if !rules.MPTokensV2Enabled() && (o.TakerPays.IsMPT() || o.TakerGets.IsMPT()) {
+		return ter.Errorf(ter.TemDISABLED, "MPT amounts require MPTokensV2 amendment")
+	}
 	return nil
 }
 

@@ -201,3 +201,9 @@ func (r *Rules) DeepFreezeEnabled() bool {
 func (r *Rules) PermissionedDEXEnabled() bool {
 	return r.Enabled(FeaturePermissionedDEX)
 }
+
+// MPTokensV2Enabled returns true if the MPTokensV2 amendment is enabled — MPT
+// support in the DEX, AMM and Checks.
+func (r *Rules) MPTokensV2Enabled() bool {
+	return r.Enabled(FeatureMPTokensV2)
+}

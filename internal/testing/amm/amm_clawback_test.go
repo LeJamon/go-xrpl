@@ -1550,8 +1550,8 @@ func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
 func TestClawback_AMMAccountHolder(t *testing.T) {
 	run := func(t *testing.T, singleAssetVault bool, wantCode string) {
 		env := amm.NewAMMTestEnv(t)
-		if singleAssetVault {
-			env.EnableFeature("SingleAssetVault")
+		if !singleAssetVault {
+			env.DisableFeature("SingleAssetVault")
 		}
 		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000)))
 		env.Close()

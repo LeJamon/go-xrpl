@@ -92,6 +92,16 @@ func (c *CheckCreate) RequiredAmendments() [][32]byte {
 	return nil
 }
 
+// CheckExtraFeatures gates an MPT-denominated SendMax on the MPTokensV2
+// amendment, mirroring rippled CheckCreate::checkExtraFeatures. Runs before the
+// common preflight, so an MPT SendMax without the amendment surfaces temDISABLED.
+func (c *CheckCreate) CheckExtraFeatures(rules *amendment.Rules) error {
+	if !rules.MPTokensV2Enabled() && c.SendMax.IsMPT() {
+		return ter.Errorf(ter.TemDISABLED, "MPT SendMax requires MPTokensV2 amendment")
+	}
+	return nil
+}
+
 // Apply implements preclaim + doApply matching rippled's CreateCheck.
 func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check create apply",

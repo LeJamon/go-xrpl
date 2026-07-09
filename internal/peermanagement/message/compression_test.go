@@ -123,7 +123,6 @@ func buildGetObjectByHash(n int) *GetObjectByHash {
 	getObject := &GetObjectByHash{
 		ObjType:    ObjectTypeTransaction,
 		Query:      true,
-		Seq:        123456789,
 		LedgerHash: hash,
 		Fat:        true,
 		Objects:    make([]IndexedObject, n),
