@@ -9,6 +9,12 @@ import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 // unconsumed transfer) and is caught in ExecuteStrand, which discards those totals
 // and fails the whole strand — exactly as rippled's flow() catch does.
 //
+// ter carries the failing transfer's result code, faithfully mirroring rippled's
+// Throw<FlowException>(dr). Like rippled's catch (FlowException const&), which
+// returns Result{strand, ofrsToRm} without reading the exception's TER,
+// ExecuteStrand's recover discards it — the strand is simply treated as dry. The
+// field is retained for parity and diagnosability, not consumed.
+//
 // Reference: rippled Steps.h FlowException + StrandFlow.h flow() catch (lines 295-298).
 type flowError struct {
 	ter ter.Result
