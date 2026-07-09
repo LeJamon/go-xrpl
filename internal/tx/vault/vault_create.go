@@ -340,6 +340,29 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 	pseudo.OwnerCount = uint32(int32(pseudo.OwnerCount) + lineDelta)
 
+	// Post-fixCleanup3_2_0: surface the pseudo-account's holding of the underlying
+	// (its MPToken for an MPT asset, its trust line for an IOU) on the share
+	// issuance, so a share's transferability/tradability/freeze inherit from the
+	// underlying. XRP underlyings leave it unset.
+	if ctx.Rules().FixCleanup3_2_0Enabled() && !asset.IsNative() {
+		var holdingKey [32]byte
+		if asset.IsMPT() {
+			id, mok := assetMPTID(asset)
+			if !mok {
+				return ter.TefINTERNAL
+			}
+			holdingKey = keylet.MPTokenByID(id, pseudoID).Key
+		} else {
+			issuerID, derr := state.DecodeAccountID(asset.Issuer)
+			if derr != nil {
+				return ter.TefINTERNAL
+			}
+			holdingKey = keylet.Line(pseudoID, issuerID, asset.Currency).Key
+		}
+		refHex := strings.ToUpper(hex.EncodeToString(holdingKey[:]))
+		issuance.ReferenceHolding = &refHex
+	}
+
 	// Build and insert the vault entry.
 	policy := VaultStrategyFirstComeFirstServe
 	if v.WithdrawalPolicy != nil {
