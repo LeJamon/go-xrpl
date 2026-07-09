@@ -72,6 +72,12 @@ type Components struct {
 	manifestPeriodicCancel context.CancelFunc
 	sitePollerCancel       context.CancelFunc
 	vlTickCancel           context.CancelFunc
+
+	// routerDone is closed when the Router.Run loop returns, so Stop can join it
+	// rather than fire-and-forgetting: an in-process restart cycle would
+	// otherwise double-start Run loops, and a still-running loop could touch the
+	// engine Stop has already torn down.
+	routerDone chan struct{}
 }
 
 // validatorListTickInterval is how often Components.Start fires
@@ -129,7 +135,11 @@ func (c *Components) Start() error {
 	// Start message router
 	routerCtx, routerCancel := context.WithCancel(context.Background())
 	c.routerCancel = routerCancel
-	go c.Router.Run(routerCtx)
+	c.routerDone = make(chan struct{})
+	go func() {
+		defer close(c.routerDone)
+		c.Router.Run(routerCtx)
+	}()
 
 	// Periodic re-emission. Cheap when there's nothing to broadcast:
 	// the emission path short-circuits on an empty / unwired cache.
@@ -210,6 +220,19 @@ func (c *Components) Stop() {
 	}
 	if c.routerCancel != nil {
 		c.routerCancel()
+	}
+	// Join the router loop before tearing down the engine, so it can't be
+	// mid-handleMessage touching an already-stopped engine, and so a subsequent
+	// Start can't double-run it. Bounded so a wedged handler can't hang shutdown.
+	if c.routerDone != nil {
+		select {
+		case <-c.routerDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("router loop did not exit within shutdown budget", "t", "Components.Stop")
+		}
+	}
+	if c.Adaptor != nil {
+		c.Adaptor.StopConsensusPhaseDispatcher()
 	}
 	if c.Engine != nil {
 		_ = c.Engine.Stop()
