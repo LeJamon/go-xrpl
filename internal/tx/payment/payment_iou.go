@@ -15,27 +15,14 @@ import (
 // The destination-tag and credential-validity checks run earlier, in Preclaim.
 // Reference: rippled Payment.cpp:429-465 (ripple == true).
 func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) ter.Result {
-	depositAuth := ctx.Rules().Enabled(amendment.FeatureDepositAuth)
-	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
-	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0 && depositAuth
-
-	// Before DepositPreauth amendment: ALL ripple payments to accounts with
-	// DepositAuth are blocked (including self-payments). This was a bug that
-	// the DepositPreauth amendment fixed.
-	// Reference: rippled Payment.cpp:440-441
-	if !depositPreauth && reqDepositAuth {
-		return ter.TecNO_PERMISSION
+	// An account requiring authorization can receive an IOU/ripple payment only
+	// if it is the destination itself or has deposit-preauthorized the sender.
+	// The check runs regardless of the destination's flags so that expired
+	// credentials are removed (tecEXPIRED).
+	// Reference: rippled Payment.cpp ripple destination preamble (verifyDepositPreauth).
+	if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != ter.TesSUCCESS {
+		return result
 	}
-
-	// With DepositPreauth amendment: self-payments and preauthorized accounts
-	// are allowed. The check runs regardless of the destination's flags so
-	// that expired credentials are removed (tecEXPIRED).
-	if depositPreauth && depositAuth {
-		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != ter.TesSUCCESS {
-			return result
-		}
-	}
-
 	return ter.TesSUCCESS
 }
 
@@ -153,19 +140,13 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		}
 
 		// Create the destination account before running the flow engine, which
-		// credits the delivered XRP to it. With featureDeletableAccounts the new
-		// account's sequence is the current ledger sequence, otherwise 1.
-		// Reference: rippled Payment.cpp:407-419
-		var accountSequence uint32
-		if ctx.Rules().DeletableAccountsEnabled() {
-			accountSequence = ctx.Config.LedgerSequence
-		} else {
-			accountSequence = 1
-		}
+		// credits the delivered XRP to it. The new account's sequence is the
+		// current ledger sequence.
+		// Reference: rippled Payment.cpp:433 (setFieldU32(sfSequence, view().seq())).
 		newAccount := &state.AccountRoot{
 			Account:           p.Destination,
 			Balance:           0,
-			Sequence:          accountSequence,
+			Sequence:          ctx.Config.LedgerSequence,
 			Flags:             0,
 			PreviousTxnID:     ctx.TxHash,
 			PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
@@ -230,17 +211,13 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	rcOpts := []RippleCalculateOption{
 		WithAmendments(
 			ctx.Config.ParentCloseTime,
-			rules.Enabled(amendment.FeatureFixReducedOffersV1),
 			rules.Enabled(amendment.FeatureFixReducedOffersV2),
-			rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
-			rules.Enabled(amendment.FeatureFlowSortStrands),
 		),
 		WithAMMAmendments(
 			rules.Enabled(amendment.FeatureFixAMMv1_1),
 			rules.Enabled(amendment.FeatureFixAMMv1_2),
 			rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
 		),
-		WithFix1781(rules.Enabled(amendment.FeatureFix1781)),
 		WithOpenLedger(ctx.Config.IsViewOpen()),
 	}
 	// Thread domain ID to the flow engine for permissioned domain payments.

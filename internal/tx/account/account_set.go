@@ -435,13 +435,10 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// DepositAuth
-	// Reference: rippled SetAccount.cpp:488-503 — gated behind featureDepositAuth
-	if ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
-		if uSetFlag == AccountSetFlagDepositAuth {
-			uFlagsOut |= state.LsfDepositAuth
-		} else if uClearFlag == AccountSetFlagDepositAuth {
-			uFlagsOut &^= state.LsfDepositAuth
-		}
+	if uSetFlag == AccountSetFlagDepositAuth {
+		uFlagsOut |= state.LsfDepositAuth
+	} else if uClearFlag == AccountSetFlagDepositAuth {
+		uFlagsOut &^= state.LsfDepositAuth
 	}
 
 	// AuthorizedNFTokenMinter
@@ -454,32 +451,29 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		account.NFTokenMinter = ""
 	}
 
-	// Disallow Incoming flags - gated by featureDisallowIncoming amendment
-	// Reference: rippled SetAccount.cpp L630-651
-	if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
-		if uSetFlag == AccountSetFlagDisallowIncomingNFTokenOffer {
-			uFlagsOut |= state.LsfDisallowIncomingNFTokenOffer
-		} else if uClearFlag == AccountSetFlagDisallowIncomingNFTokenOffer {
-			uFlagsOut &^= state.LsfDisallowIncomingNFTokenOffer
-		}
+	// Disallow Incoming flags
+	if uSetFlag == AccountSetFlagDisallowIncomingNFTokenOffer {
+		uFlagsOut |= state.LsfDisallowIncomingNFTokenOffer
+	} else if uClearFlag == AccountSetFlagDisallowIncomingNFTokenOffer {
+		uFlagsOut &^= state.LsfDisallowIncomingNFTokenOffer
+	}
 
-		if uSetFlag == AccountSetFlagDisallowIncomingCheck {
-			uFlagsOut |= state.LsfDisallowIncomingCheck
-		} else if uClearFlag == AccountSetFlagDisallowIncomingCheck {
-			uFlagsOut &^= state.LsfDisallowIncomingCheck
-		}
+	if uSetFlag == AccountSetFlagDisallowIncomingCheck {
+		uFlagsOut |= state.LsfDisallowIncomingCheck
+	} else if uClearFlag == AccountSetFlagDisallowIncomingCheck {
+		uFlagsOut &^= state.LsfDisallowIncomingCheck
+	}
 
-		if uSetFlag == AccountSetFlagDisallowIncomingPayChan {
-			uFlagsOut |= state.LsfDisallowIncomingPayChan
-		} else if uClearFlag == AccountSetFlagDisallowIncomingPayChan {
-			uFlagsOut &^= state.LsfDisallowIncomingPayChan
-		}
+	if uSetFlag == AccountSetFlagDisallowIncomingPayChan {
+		uFlagsOut |= state.LsfDisallowIncomingPayChan
+	} else if uClearFlag == AccountSetFlagDisallowIncomingPayChan {
+		uFlagsOut &^= state.LsfDisallowIncomingPayChan
+	}
 
-		if uSetFlag == AccountSetFlagDisallowIncomingTrustline {
-			uFlagsOut |= state.LsfDisallowIncomingTrustline
-		} else if uClearFlag == AccountSetFlagDisallowIncomingTrustline {
-			uFlagsOut &^= state.LsfDisallowIncomingTrustline
-		}
+	if uSetFlag == AccountSetFlagDisallowIncomingTrustline {
+		uFlagsOut |= state.LsfDisallowIncomingTrustline
+	} else if uClearFlag == AccountSetFlagDisallowIncomingTrustline {
+		uFlagsOut &^= state.LsfDisallowIncomingTrustline
 	}
 
 	// AllowTrustLineClawback (cannot be cleared once set, gated by amendment)

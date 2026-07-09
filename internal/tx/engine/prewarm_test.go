@@ -56,7 +56,7 @@ func TestPrewarmSignature_SkipsRepeatVerify(t *testing.T) {
 	if txn.GetCommon().SignatureVerified() {
 		t.Fatal("a freshly built tx must not be marked verified")
 	}
-	PrewarmSignature(txn, rules)
+	PrewarmSignature(txn)
 	if !txn.GetCommon().SignatureVerified() {
 		t.Fatal("PrewarmSignature must cache a positive verdict for a valid single-signed tx")
 	}
@@ -88,7 +88,7 @@ func TestPrewarmSignature_NoNegativeCache(t *testing.T) {
 	txn := newSignedSingleSignTx(t)
 	txn.GetCommon().TxnSignature = "00" // invalidate before prewarming
 
-	PrewarmSignature(txn, amendment.AllSupportedRules())
+	PrewarmSignature(txn)
 	if txn.GetCommon().SignatureVerified() {
 		t.Fatal("PrewarmSignature must not cache a verdict for a bad signature")
 	}
@@ -105,7 +105,7 @@ func TestPrewarmSignature_SkipsMultiSignAndUnsigned(t *testing.T) {
 	txn.Common.Sequence = &seq
 	txn.Common.SigningPubKey = "" // multi-sign / unsigned marker
 
-	PrewarmSignature(txn, amendment.AllSupportedRules())
+	PrewarmSignature(txn)
 	if txn.GetCommon().SignatureVerified() {
 		t.Fatal("PrewarmSignature must not pre-verify a transaction with no single-sign key")
 	}
@@ -114,5 +114,5 @@ func TestPrewarmSignature_SkipsMultiSignAndUnsigned(t *testing.T) {
 // TestPrewarmSignature_NilTxn is a defensive guard: a nil transaction must be a
 // no-op rather than a panic.
 func TestPrewarmSignature_NilTxn(t *testing.T) {
-	PrewarmSignature(nil, amendment.AllSupportedRules())
+	PrewarmSignature(nil)
 }

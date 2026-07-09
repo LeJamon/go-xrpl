@@ -39,42 +39,20 @@ func reserve(env *jtx.TestEnv, count uint32) uint64 {
 func TestDepositAuth_Enable(t *testing.T) {
 	alice := jtx.NewAccount("alice")
 
-	// featureDepositAuth disabled.
-	t.Run("Disabled", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-		env.DisableFeature("DepositAuth")
+	env := jtx.NewTestEnv(t)
 
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.Close()
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.Close()
 
-		// Setting the flag should be silently ignored (old behaviour).
-		env.EnableDepositAuth(alice)
-		env.Close()
-		require.False(t, hasDepositAuth(t, env, alice),
-			"DepositAuth flag should not be set when amendment is disabled")
+	env.EnableDepositAuth(alice)
+	env.Close()
+	require.True(t, hasDepositAuth(t, env, alice),
+		"DepositAuth flag should be set")
 
-		env.DisableDepositAuth(alice)
-		env.Close()
-		require.False(t, hasDepositAuth(t, env, alice))
-	})
-
-	// featureDepositAuth enabled.
-	t.Run("Enabled", func(t *testing.T) {
-		env := jtx.NewTestEnv(t)
-
-		env.FundAmount(alice, uint64(jtx.XRP(10000)))
-		env.Close()
-
-		env.EnableDepositAuth(alice)
-		env.Close()
-		require.True(t, hasDepositAuth(t, env, alice),
-			"DepositAuth flag should be set")
-
-		env.DisableDepositAuth(alice)
-		env.Close()
-		require.False(t, hasDepositAuth(t, env, alice),
-			"DepositAuth flag should be cleared")
-	})
+	env.DisableDepositAuth(alice)
+	env.Close()
+	require.False(t, hasDepositAuth(t, env, alice),
+		"DepositAuth flag should be cleared")
 }
 
 // --------------------------------------------------------------------------

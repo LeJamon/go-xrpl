@@ -20,28 +20,16 @@ type featureSet struct {
 	disabled []string
 }
 
-// offerFeatureSets matches rippled's 6 feature combinations from Offer_test.cpp run() method.
-// Reference: Offer_test.cpp lines 5365-5391
+// offerFeatureSets matches rippled's feature combinations from Offer_test.cpp run() method:
+// allFeatures-PermissionedDEX, allFeatures-fixFillOrKill-PermissionedDEX, allFeatures.
 var offerFeatureSets = []featureSet{
 	{
 		name:     "base",
-		disabled: []string{"fixTakerDryOfferRemoval", "ImmediateOfferKilled", "PermissionedDEX"},
-	},
-	{
-		name:     "withTakerDry",
-		disabled: []string{"ImmediateOfferKilled", "PermissionedDEX"},
-	},
-	{
-		name:     "noSmallQ",
-		disabled: []string{"fixRmSmallIncreasedQOffers", "ImmediateOfferKilled", "fixFillOrKill", "PermissionedDEX"},
+		disabled: []string{"PermissionedDEX"},
 	},
 	{
 		name:     "noFoK",
 		disabled: []string{"fixFillOrKill", "PermissionedDEX"},
-	},
-	{
-		name:     "noPermDEX",
-		disabled: []string{"PermissionedDEX"},
 	},
 	{
 		name:     "all",

@@ -127,9 +127,7 @@ func (e *Engine) checkSeqProxy(common *txcore.Common, accountID [20]byte, accoun
 	// Check for both Sequence (non-zero) and TicketSequence set → temSEQ_AND_TICKET
 	// Reference: rippled Transactor::checkSeqProxy in Transactor.cpp line 375
 	if common.Sequence != nil && *common.Sequence != 0 && common.TicketSequence != nil {
-		if e.rules().Enabled(amendment.FeatureTicketBatch) {
-			return ter.TemSEQ_AND_TICKET
-		}
+		return ter.TemSEQ_AND_TICKET
 	}
 
 	// Check sequence number or ticket
@@ -449,48 +447,24 @@ func (e *Engine) checkSingleSign(common *txcore.Common) ter.Result {
 
 	isMasterDisabled := (idAccountRoot.Flags & state.LsfDisableMaster) != 0
 
-	if e.rules().Enabled(amendment.FeatureFixMasterKeyAsRegularKey) {
-		// With fixMasterKeyAsRegularKey: check regular key first, then master.
-		// This allows the master key to serve as a regular key even when
-		// master signing is disabled (e.g., regkey(alice, alice) + disable master).
-		// Reference: rippled Transactor::checkSingleSign lines 691-713
-		if signerAddress == idAccountRoot.RegularKey {
-			// Signed with regular key — allowed
-			return ter.TesSUCCESS
-		}
-		if !isMasterDisabled && signerAddress == idAccount {
-			// Signed with enabled master key — allowed
-			return ter.TesSUCCESS
-		}
-		if isMasterDisabled && signerAddress == idAccount {
-			// Signed with disabled master key
-			return ter.TefMASTER_DISABLED
-		}
-		// Signed with an unauthorized key
-		return ter.TefBAD_AUTH
-	}
-
-	// Without fixMasterKeyAsRegularKey: check master key first.
-	// If signer == account, it's a master key sign attempt.
-	// The regular key is only checked if signer != account.
-	// Reference: rippled Transactor::checkSingleSign lines 715-737
-	if signerAddress == idAccount {
-		// Signing with the master key. Continue if it is not disabled.
-		if isMasterDisabled {
-			return ter.TefMASTER_DISABLED
-		}
-		return ter.TesSUCCESS
-	}
+	// Check regular key first, then master. This allows the master key to serve
+	// as a regular key even when master signing is disabled (e.g., regkey(alice,
+	// alice) + disable master).
+	// Reference: rippled Transactor::checkSingleSign.
 	if signerAddress == idAccountRoot.RegularKey {
-		// Signing with the regular key. Continue.
+		// Signed with regular key — allowed
 		return ter.TesSUCCESS
 	}
-	if idAccountRoot.RegularKey != "" {
-		// Signing key does not match master or regular key.
-		return ter.TefBAD_AUTH
+	if !isMasterDisabled && signerAddress == idAccount {
+		// Signed with enabled master key — allowed
+		return ter.TesSUCCESS
 	}
-	// No regular key on account and signing key does not match master key.
-	return ter.TefBAD_AUTH_MASTER
+	if isMasterDisabled && signerAddress == idAccount {
+		// Signed with disabled master key
+		return ter.TefMASTER_DISABLED
+	}
+	// Signed with an unauthorized key
+	return ter.TefBAD_AUTH
 }
 
 // checkBatchSign verifies that each batch signer is authorized to sign for their account.

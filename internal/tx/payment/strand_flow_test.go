@@ -171,9 +171,9 @@ func TestExecuteStrand_FlowErrorReportsOffersUsed(t *testing.T) {
 }
 
 // TestFlow_DryStrandOffersConsideredReachesCap proves the M3 fix at the Flow level:
-// a dry strand's OffersUsed feeds offersConsidered, which (under FlowSortStrands)
-// caps the payment at maxOffersToConsider (1500). With a single dry strand reporting
-// 1500 offers used, Flow must stop after one pass with no liquidity delivered.
+// a dry strand's OffersUsed feeds offersConsidered, which caps the payment at
+// maxOffersToConsider (1500). With a single dry strand reporting 1500 offers used,
+// Flow must stop after one pass with no liquidity delivered.
 func TestFlow_DryStrandOffersConsideredReachesCap(t *testing.T) {
 	view := newPaymentMockLedgerView()
 	sandbox := NewPaymentSandbox(view)
@@ -186,8 +186,8 @@ func TestFlow_DryStrandOffersConsideredReachesCap(t *testing.T) {
 	}
 	strands := []Strand{{step}}
 
-	// FlowSortStrands enabled so offersConsidered >= maxOffersToConsider breaks.
-	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, true, false)
+	// Strands are sorted so offersConsidered >= maxOffersToConsider breaks.
+	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, false)
 
 	require.True(t, result.Out.IsZero(), "dry strand delivers nothing")
 	require.Equal(t, ter.TecPATH_PARTIAL, result.Result, "non-partial payment with no delivery is tecPATH_PARTIAL")
@@ -210,7 +210,7 @@ func TestFlow_MaxTriesFailedProcessing(t *testing.T) {
 	}
 	strands := []Strand{{step}}
 
-	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), true, nil, nil, nil, false, false)
+	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), true, nil, nil, nil, false)
 
 	require.Equal(t, ter.TelFAILED_PROCESSING, result.Result, "loop must bail with telFAILED_PROCESSING after maxTries")
 }
@@ -232,7 +232,7 @@ func TestFlow_OverDeliveryTefException(t *testing.T) {
 	}
 	strands := []Strand{{step}}
 
-	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, false, false)
+	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, false)
 
 	require.Equal(t, ter.TefEXCEPTION, result.Result, "over-delivery must surface tefEXCEPTION")
 	require.True(t, result.Out.IsZero(), "tefEXCEPTION discards delivered output")

@@ -87,33 +87,6 @@ func TestPreflightPrecedence_DelegateBeforeNetworkID(t *testing.T) {
 	})
 }
 
-// TestPreflightPrecedence_TicketAmendmentFirst pins finding E-ticket: the
-// TicketSequence-without-featureTicketBatch temMALFORMED is the first preflight1
-// check, ahead of NetworkID and the signing-key shape check.
-func TestPreflightPrecedence_TicketAmendmentFirst(t *testing.T) {
-	e := preflightEngine(rulesWithout("TicketBatch"))
-
-	t.Run("ticket-amendment beats NetworkID", func(t *testing.T) {
-		tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		tx.Fee = "10"
-		tx.TicketSequence = u32(7)
-		tx.NetworkID = u32(99)
-		if got := e.preflight(tx); got != ter.TemMALFORMED {
-			t.Fatalf("preflight = %v, want TemMALFORMED", got)
-		}
-	})
-
-	t.Run("ticket-amendment beats bad signing key", func(t *testing.T) {
-		tx := txcore.NewBaseTx(txcore.TypeAccountSet, precedenceSourceAddr)
-		tx.Fee = "10"
-		tx.TicketSequence = u32(7)
-		tx.SigningPubKey = "00" // invalid key type → temBAD_SIGNATURE if reached
-		if got := e.preflight(tx); got != ter.TemMALFORMED {
-			t.Fatalf("preflight = %v, want TemMALFORMED", got)
-		}
-	})
-}
-
 // TestPreflightPrecedence_NetworkIDBeforeAccount pins finding E-account: the
 // NetworkID checks (preflight0) run before the zero-account check (preflight1),
 // so a NetworkID violation wins over temBAD_SRC_ACCOUNT.

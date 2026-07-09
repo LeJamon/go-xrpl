@@ -41,8 +41,13 @@ func TestFeatureRegistry(t *testing.T) {
 	if flow.Supported != SupportedYes {
 		t.Error("Flow should be supported")
 	}
-	if flow.Vote != VoteDefaultYes {
-		t.Error("Flow should be VoteDefaultYes")
+	// Flow was retired in the rippled 3.2.0 wave: still supported, but voted
+	// Obsolete and permanently enabled.
+	if !flow.Retired {
+		t.Error("Flow should be retired")
+	}
+	if flow.Vote != VoteObsolete {
+		t.Error("Flow should vote Obsolete after retirement")
 	}
 
 	amm := GetFeatureByName("AMM")
@@ -281,9 +286,11 @@ func TestSupportedFeatures(t *testing.T) {
 func TestDefaultYesFeatures(t *testing.T) {
 	defaultYes := DefaultYesFeatures()
 
-	// Should have some default yes features
-	if len(defaultYes) < 25 {
-		t.Errorf("Expected at least 25 default yes features, got %d", len(defaultYes))
+	// After the 3.2.0 retirement wave, only a handful of active fixes still
+	// default to a yes vote (fixCleanup3_1_3, fixAMMOverflowOffer,
+	// fixRemoveNFTokenAutoTrustLine).
+	if len(defaultYes) < 3 {
+		t.Errorf("Expected at least 3 default yes features, got %d", len(defaultYes))
 	}
 
 	// All returned features should be default yes and not retired
@@ -306,11 +313,12 @@ func TestFeatureHelperMethods(t *testing.T) {
 	if !flow.IsSupported() {
 		t.Error("Flow.IsSupported() should return true")
 	}
-	if !flow.IsDefaultYes() {
-		t.Error("Flow.IsDefaultYes() should return true")
+	// Retired: no longer default-yes, now votes Obsolete.
+	if flow.IsDefaultYes() {
+		t.Error("Flow.IsDefaultYes() should return false after retirement")
 	}
-	if flow.IsObsolete() {
-		t.Error("Flow.IsObsolete() should return false")
+	if !flow.IsObsolete() {
+		t.Error("Flow.IsObsolete() should return true after retirement")
 	}
 	if flow.String() != "Flow" {
 		t.Errorf("Flow.String() should return 'Flow', got '%s'", flow.String())

@@ -26,20 +26,14 @@ func rulesDisabling(name string) *amendment.Rules {
 }
 
 // TestPayChan_GetFlagsMaskGating pins the mask-position finding for all three
-// payment-channel transactions: the mask is enforced at preflight0 and is
-// fix1543-gated (off → allow any flags).
+// payment-channel transactions: the mask is enforced at preflight0
+// unconditionally (fix1543 retired).
 func TestPayChan_GetFlagsMaskGating(t *testing.T) {
 	on := amendment.AllSupportedRules()
-	off := rulesDisabling("fix1543")
 
 	require.Equal(t, tx.TfUniversalMask, (&PaymentChannelCreate{}).GetFlagsMask(on))
-	require.Equal(t, uint32(0), (&PaymentChannelCreate{}).GetFlagsMask(off))
-
 	require.Equal(t, tx.TfUniversalMask, (&PaymentChannelFund{}).GetFlagsMask(on))
-	require.Equal(t, uint32(0), (&PaymentChannelFund{}).GetFlagsMask(off))
-
 	require.Equal(t, tfPayChanClaimMask, (&PaymentChannelClaim{}).GetFlagsMask(on))
-	require.Equal(t, uint32(0), (&PaymentChannelClaim{}).GetFlagsMask(off))
 }
 
 // TestPayChanClaim_CredentialsExtraFeature pins the CredentialIDs amendment gate:

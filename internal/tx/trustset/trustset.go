@@ -259,14 +259,11 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// temDST_IS_SRC — a trust line to self. With fixTrustLinesToSelf any self
-	// line is rejected; without it a pre-existing self line falls through to
-	// doApply, which cleans it up. rippled SetTrust::preclaim orders this after
-	// the tfSetfAuth check and before the destination read.
+	// temDST_IS_SRC — a trust line to self is always rejected. rippled
+	// SetTrust::preclaim orders this after the tfSetfAuth check and before the
+	// destination read.
 	if accountID == issuerAccountID {
-		if ctx.Rules().Enabled(amendment.FeatureFixTrustLinesToSelf) || !trustLineExists {
-			return ter.TemDST_IS_SRC
-		}
+		return ter.TemDST_IS_SRC
 	}
 
 	// Check issuer (destination) exists and load it for the flag checks below.
@@ -301,15 +298,12 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
 
 	// If the destination has opted to disallow incoming trustlines, honour that flag.
-	// Reference: rippled SetTrust.cpp lines 254-271
-	if ctx.Rules().DisallowIncomingEnabled() {
-		if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
-			// fixDisallowIncomingV1: if the trust line already exists, allow the TrustSet
-			if ctx.Rules().Enabled(amendment.FeatureFixDisallowIncomingV1) && trustLineExists {
-				// pass — existing trust lines are allowed
-			} else {
-				return ter.TecNO_PERMISSION
-			}
+	if issuerAccount.Flags&state.LsfDisallowIncomingTrustline != 0 {
+		// fixDisallowIncomingV1: if the trust line already exists, allow the TrustSet
+		if ctx.Rules().Enabled(amendment.FeatureFixDisallowIncomingV1) && trustLineExists {
+			// pass — existing trust lines are allowed
+		} else {
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -513,9 +507,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				} else {
 					rs.Flags |= state.LsfLowNoRipple
 				}
-			} else if ctx.Rules().Enabled(amendment.FeatureFix1578) {
+			} else {
 				// Cannot set noRipple on a negative balance.
-				// Reference: rippled SetTrust.cpp lines 582-584
 				return ter.TecNO_PERMISSION
 			}
 		} else if bClearNoRipple && !bSetNoRipple {

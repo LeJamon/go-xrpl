@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -132,14 +131,10 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 // the result as s.openLedger, returning the txs left in retry state. Shared by
 // the standalone and consensus close paths. Caller must hold s.mu.
 // applyFlagLedgerNegativeUNL applies the pending NegativeUNL transition on a
-// flag ledger when featureNegativeUNL is enabled; skipping it on the local
-// close path forks account_hash from the network. Caller must hold s.mu.
+// flag ledger; skipping it on the local close path forks account_hash from the
+// network. Caller must hold s.mu.
 func (s *Service) applyFlagLedgerNegativeUNL(l *ledger.Ledger) error {
 	if !protocol.IsFlagLedger(l.Sequence()) {
-		return nil
-	}
-	rules := rulesFromLedger(s.closedLedger, s.logger)
-	if rules == nil || !rules.Enabled(amendment.FeatureNegativeUNL) {
 		return nil
 	}
 	if err := l.UpdateNegativeUNL(); err != nil {

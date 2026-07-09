@@ -3,7 +3,6 @@ package payment
 import (
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -83,13 +82,10 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount
 		// AND destination balance are <= base reserve, deposit preauth is NOT
 		// checked at all (expired credentials are left untouched too).
-		if ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
-			dstReserve := ctx.Config.ReserveBase
-
-			if amountDrops > dstReserve || destAccount.Balance > dstReserve {
-				if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
-					return result
-				}
+		dstReserve := ctx.Config.ReserveBase
+		if amountDrops > dstReserve || destAccount.Balance > dstReserve {
+			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 
@@ -129,20 +125,13 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecNO_DST_INSUF_XRP
 	}
 
-	// Create new account
-	// With featureDeletableAccounts enabled, new accounts start with sequence
-	// equal to the current ledger sequence. Otherwise, sequence starts at 1.
-	// (see rippled Payment.cpp:409-411)
-	var accountSequence uint32
-	if ctx.Rules().DeletableAccountsEnabled() {
-		accountSequence = ctx.Config.LedgerSequence
-	} else {
-		accountSequence = 1
-	}
+	// Create new account. New accounts start with sequence equal to the current
+	// ledger sequence. Reference: rippled Payment.cpp:433 (setFieldU32(sfSequence,
+	// view().seq())).
 	newAccount := &state.AccountRoot{
 		Account:           p.Destination,
 		Balance:           amountDrops,
-		Sequence:          accountSequence,
+		Sequence:          ctx.Config.LedgerSequence,
 		Flags:             0,
 		PreviousTxnID:     ctx.TxHash,
 		PreviousTxnLgrSeq: ctx.Config.LedgerSequence,

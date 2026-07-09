@@ -104,12 +104,9 @@ func (o *AMMOffer) Consume() {
 // Multi-path: uses quality-based ceiling (proportional adjustment).
 // Single-path: uses swapAssetOut for exact pool conservation.
 // Reference: rippled AMMOffer.cpp limitOut()
-func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool, fixReducedV1 bool) (EitherAmount, EitherAmount) {
+func (o *AMMOffer) LimitOut(ofrIn, ofrOut, limit EitherAmount, roundUp bool) (EitherAmount, EitherAmount) {
 	if o.ammLiquidity.ammContext.MultiPath() {
-		if fixReducedV1 {
-			return o.quality.CeilOutStrict(ofrIn, ofrOut, limit, roundUp)
-		}
-		return o.quality.CeilOut(ofrIn, ofrOut, limit)
+		return o.quality.CeilOutStrict(ofrIn, ofrOut, limit, roundUp)
 	}
 	// Single path: use swap function for exact conservation
 	limitAmt := eitherToAmount(limit)

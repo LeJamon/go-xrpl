@@ -15,13 +15,9 @@ import (
 )
 
 const (
-	// pre-fixAmendmentMajorityCalc threshold fraction (204/256 ≈ 79.69%)
-	PreFixThresholdNum = 204
-	PreFixThresholdDen = 256
-
-	// post-fixAmendmentMajorityCalc threshold fraction (80/100)
-	PostFixThresholdNum = 80
-	PostFixThresholdDen = 100
+	// Amendment majority threshold fraction (80/100).
+	ThresholdNum = 80
+	ThresholdDen = 100
 
 	// EnableAmendment sfFlags for a state-change pseudo-tx (enable carries none)
 	TfGotMajority  uint32 = 0x00010000
@@ -74,9 +70,6 @@ type Inputs struct {
 	// supported-but-down amendment can still emit LostMajority. Nil walks
 	// the union of Stances/Votes/Majority (test-only; inputs assumed known).
 	Known map[Amendment]bool
-
-	// fixAmendmentMajorityCalc: post-fix fraction (80/100), switches ≥ to >
-	StrictMajority bool
 }
 
 // Decision is one voting outcome; Flags is 0 (enable), TfGotMajority, or TfLostMajority.
@@ -87,12 +80,8 @@ type Decision struct {
 
 // Threshold is the vote count an amendment needs to pass, clamped to a
 // minimum of 1 so the gate stays reachable on tiny validator sets.
-func Threshold(trustedValidations int, strict bool) int {
-	num, den := PreFixThresholdNum, PreFixThresholdDen
-	if strict {
-		num, den = PostFixThresholdNum, PostFixThresholdDen
-	}
-	t := (trustedValidations * num) / den
+func Threshold(trustedValidations int) int {
+	t := (trustedValidations * ThresholdNum) / ThresholdDen
 	if t < 1 {
 		return 1
 	}
@@ -100,9 +89,9 @@ func Threshold(trustedValidations int, strict bool) int {
 }
 
 // passes is the per-amendment quorum check. A single trusted validator
-// degrades to ≥ (else unreachable); otherwise post-fix uses strict >.
-func passes(votes, threshold, trustedValidations int, strict bool) bool {
-	if !strict || trustedValidations == 1 {
+// degrades to ≥ (else unreachable); otherwise it uses strict >.
+func passes(votes, threshold, trustedValidations int) bool {
+	if trustedValidations == 1 {
 		return votes >= threshold
 	}
 	return votes > threshold
@@ -111,7 +100,7 @@ func passes(votes, threshold, trustedValidations int, strict bool) bool {
 // Decide classifies each tracked amendment as gotMajority/lostMajority/
 // enable (or omits it). Hash-sorted so the tx-set hash is deterministic.
 func Decide(in Inputs) []Decision {
-	threshold := Threshold(in.TrustedValidations, in.StrictMajority)
+	threshold := Threshold(in.TrustedValidations)
 
 	// Walk domain: Known when supplied, else the union of the input maps.
 	var seen map[Amendment]struct{}
@@ -142,7 +131,7 @@ func Decide(in Inputs) []Decision {
 
 		stance := in.Stances[amendment]
 		votes := in.Votes[amendment]
-		hasValMajority := passes(votes, threshold, in.TrustedValidations, in.StrictMajority)
+		hasValMajority := passes(votes, threshold, in.TrustedValidations)
 		majoritySince, hasLedgerMajority := in.Majority[amendment]
 
 		switch {

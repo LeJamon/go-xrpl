@@ -1701,6 +1701,8 @@ func TestAmendment(t *testing.T) {
 // =============================================================================
 
 func TestMultisig(t *testing.T) {
+	// MultiSignReserve and ExpandedSignerList are retired (always enabled), so
+	// only the all-features configuration remains.
 	featureSets := []struct {
 		name    string
 		disable []string
@@ -1709,14 +1711,6 @@ func TestMultisig(t *testing.T) {
 		{
 			name:    "AllFeatures",
 			disable: nil,
-		},
-		{
-			name:    "NoMultiSignReserve_NoExpandedSignerList",
-			disable: []string{"MultiSignReserve", "ExpandedSignerList"},
-		},
-		{
-			name:    "NoExpandedSignerList",
-			disable: []string{"ExpandedSignerList"},
 		},
 	}
 
@@ -1759,20 +1753,8 @@ func TestMultisig(t *testing.T) {
 			})
 			env.Close()
 
-			// Verify signer list owners
-			// If multiSignReserve disabled: 2 + 1 per signer = 5
-			// If multiSignReserve enabled: 1
-			hasMultiSignReserve := true
-			for _, feat := range fs.disable {
-				if feat == "MultiSignReserve" {
-					hasMultiSignReserve = false
-				}
-			}
-			if hasMultiSignReserve {
-				require.Equal(t, uint32(1), env.OwnerCount(alice))
-			} else {
-				require.Equal(t, uint32(5), env.OwnerCount(alice))
-			}
+			// A signer list costs a flat 1 owner reserve (MultiSignReserve retired).
+			require.Equal(t, uint32(1), env.OwnerCount(alice))
 
 			lut := defaultLUT(env)
 

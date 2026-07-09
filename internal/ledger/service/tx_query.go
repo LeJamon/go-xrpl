@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math/bits"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
@@ -120,7 +119,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// in-strand check reuses the cached verdict (#1105). Skipped in standalone
 	// mode, matching cfg.SkipSignatureVerification above.
 	if !cfg.SkipSignatureVerification {
-		txengine.PrewarmSignature(ptx.Parsed, cfg.Rules)
+		txengine.PrewarmSignature(ptx.Parsed)
 	}
 
 	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
@@ -407,23 +406,10 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if signerCount == 0 {
 		return cfg.BaseFee
 	}
-	if signerCount > maxMultiSigners(cfg.Rules) {
+	if signerCount > sign.MaxMultiSigners {
 		return cfg.BaseFee
 	}
 	return sign.CalculateMultiSigFee(cfg.BaseFee, signerCount)
-}
-
-// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63).
-// rippled's contract is: "if rules are not supplied then the largest
-// possible value is returned" — i.e. be permissive on nil so callers
-// can't accidentally reject otherwise-valid signer arrays. Only when
-// rules are supplied AND ExpandedSignerList is disabled does the cap
-// fall to 8.
-func maxMultiSigners(rules *amendment.Rules) int {
-	if rules != nil && !rules.ExpandedSignerListEnabled() {
-		return 8
-	}
-	return 32
 }
 
 // mulDivU64 returns (a * b) / c; ok=false on uint64 overflow or c == 0.

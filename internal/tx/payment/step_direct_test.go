@@ -164,17 +164,14 @@ func (m *paymentMockLedgerView) putDirectTrustLine(low, high [20]byte, currency 
 	m.data[key.Key] = data
 }
 
-// TestDirectStepI_QualityUpperBound covers the four arms of
+// TestDirectStepI_QualityUpperBound covers the arms of
 // DirectStepI.QualityUpperBound with exact, formula-derived expected qualities:
 //
 //	(a) offer crossing  → identity quality (qualityOne), ignoring trust-line state.
-//	(b) legacy branch   → getRate(srcQOut, dstQIn) = dstQIn/srcQOut, with the
-//	                      transfer rate charged when prevStepDir redeems && src issues,
-//	                      and dstQIn capped at QualityOne when isLast.
-//	(c) post-fix issue  → getRate(dstQIn, srcQOut) = srcQOut/dstQIn via
-//	                      qualitiesSrcIssuesDir(prevStepDir).
-//	    post-fix redeem → qualitiesSrcRedeems (srcQOut=QualityOne with no prevStep) → 1.0.
-//	(d) post-fix issue with the propagated prevStepDir actually toggling srcQOut —
+//	(c) issue  → getRate(dstQIn, srcQOut) = srcQOut/dstQIn via
+//	             qualitiesSrcIssuesDir(prevStepDir).
+//	    redeem → qualitiesSrcRedeems (srcQOut=QualityOne with no prevStep) → 1.0.
+//	(d) issue with the propagated prevStepDir actually toggling srcQOut —
 //	    the direct proof that prevStepDir is honoured rather than ignored.
 //
 // alice < bob, so alice is the LOW account on the alice↔bob trust line; a
@@ -189,10 +186,6 @@ func TestDirectStepI_QualityUpperBound(t *testing.T) {
 	const qIn = uint32(2_000_000_000)  // 2.0 trust-line QualityIn
 
 	allSupported := amendment.AllSupportedRules()
-	legacyRules := amendment.NewRulesBuilder().
-		FromPreset(amendment.PresetAllSupported).
-		DisableByName("fixQualityUpperBound").
-		Build()
 
 	tests := []struct {
 		name          string
@@ -215,37 +208,6 @@ func TestDirectStepI_QualityUpperBound(t *testing.T) {
 			dstQIn:        qIn,
 			prevDir:       DebtDirectionRedeems,
 			want:          qualityOne,
-		},
-		{
-			// (b) Legacy, src issues, prevDir redeems → srcQOut = rate, dstQIn = qIn
-			// (not last, so not capped). Quality = dstQIn/srcQOut.
-			name:    "legacy issue, prev redeems, not last",
-			rules:   legacyRules,
-			redeem:  false,
-			dstQIn:  qIn,
-			prevDir: DebtDirectionRedeems,
-			want:    directQuality(qIn, rate),
-		},
-		{
-			// (b) Legacy, isLast caps dstQIn at QualityOne (qIn=2.0 > 1.0 → 1.0).
-			// srcQOut = rate (prev redeems, src issues). Quality = QualityOne/rate.
-			name:    "legacy issue, prev redeems, isLast caps dstQIn",
-			rules:   legacyRules,
-			isLast:  true,
-			redeem:  false,
-			dstQIn:  qIn,
-			prevDir: DebtDirectionRedeems,
-			want:    directQuality(QualityOne, rate),
-		},
-		{
-			// (b) Legacy, prevDir issues → srcQOut stays QualityOne even though src
-			// issues. Quality = dstQIn/QualityOne.
-			name:    "legacy issue, prev issues, no rate charged",
-			rules:   legacyRules,
-			redeem:  false,
-			dstQIn:  qIn,
-			prevDir: DebtDirectionIssues,
-			want:    directQuality(qIn, QualityOne),
 		},
 		{
 			// (c) Post-fix, src redeems → qualitiesSrcRedeems. With no prevStep,

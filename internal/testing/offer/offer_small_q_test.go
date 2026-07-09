@@ -92,27 +92,18 @@ func testRmSmallIncreasedQOffersXRP(t *testing.T, disabledFeatures []string) {
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			if featureEnabled(disabledFeatures, "fixRmSmallIncreasedQOffers") {
-				RequireOfferCount(t, env, carol, 0)
-				// Carol's offer is removed but not taken
-				jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0.499)
+			RequireOfferCount(t, env, carol, 0)
+			// Carol's offer is removed but not taken
+			jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0.499)
 
-				if crossBothOffers {
-					RequireOfferCount(t, env, alice, 0)
-					// Alice's offer is crossed
-					jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1)
-				} else {
-					RequireOfferCount(t, env, alice, 1)
-					// Alice's offer is not crossed
-					jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-				}
+			if crossBothOffers {
+				RequireOfferCount(t, env, alice, 0)
+				// Alice's offer is crossed
+				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1)
 			} else {
 				RequireOfferCount(t, env, alice, 1)
-				RequireOfferCount(t, env, bob, 1)
-				RequireOfferCount(t, env, carol, 1)
+				// Alice's offer is not crossed
 				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-				// Carol's offer is not crossed at all
-				jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0.499)
 			}
 		})
 	}
@@ -187,25 +178,14 @@ func testRmSmallIncreasedQOffersXRP(t *testing.T, disabledFeatures []string) {
 			}
 			env.Close()
 
-			if featureEnabled(disabledFeatures, "fixRmSmallIncreasedQOffers") {
-				if isPartialPayment {
-					// tesSUCCESS case
-					RequireOfferCount(t, env, carol, 0)
-					// Carol's offer is removed but not taken
-					jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0.999)
-				}
-				// else: TODO in rippled - offers are not removed when payments fail.
-				// If that is addressed, carol's offer should be removed but not taken.
-			} else {
-				if isPartialPayment {
-					RequireOfferCount(t, env, carol, 0)
-					// Carol's offer is removed and taken
-					jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0)
-				} else {
-					// Offer is not removed or taken
-					require.True(t, IsOffer(env, carol, tx.NewXRPAmount(1), USD(1)))
-				}
+			if isPartialPayment {
+				// tesSUCCESS case
+				RequireOfferCount(t, env, carol, 0)
+				// Carol's offer is removed but not taken
+				jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0.999)
 			}
+			// else: TODO in rippled - offers are not removed when payments fail.
+			// If that is addressed, carol's offer should be removed but not taken.
 		})
 	}
 }
@@ -291,33 +271,21 @@ func testRmSmallIncreasedQOffersIOU(t *testing.T, disabledFeatures []string) {
 			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
-			if featureEnabled(disabledFeatures, "fixRmSmallIncreasedQOffers") {
-				RequireOfferCount(t, env, carol, 0)
-				// Carol's offer is removed but not taken; balance should remain unchanged
-				carolBalance := env.IOUBalance(carol, gw, "USD")
-				require.NotNil(t, carolBalance)
-				require.Equal(t, 0, carolBalance.Compare(initialCarolUSD),
-					"Carol's USD balance should equal initialCarolUSD (1e-81)")
+			RequireOfferCount(t, env, carol, 0)
+			// Carol's offer is removed but not taken; balance should remain unchanged
+			carolBalance := env.IOUBalance(carol, gw, "USD")
+			require.NotNil(t, carolBalance)
+			require.Equal(t, 0, carolBalance.Compare(initialCarolUSD),
+				"Carol's USD balance should equal initialCarolUSD (1e-81)")
 
-				if crossBothOffers {
-					RequireOfferCount(t, env, alice, 0)
-					// Alice's offer is crossed
-					jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1)
-				} else {
-					RequireOfferCount(t, env, alice, 1)
-					// Alice's offer is not crossed
-					jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-				}
+			if crossBothOffers {
+				RequireOfferCount(t, env, alice, 0)
+				// Alice's offer is crossed
+				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 1)
 			} else {
 				RequireOfferCount(t, env, alice, 1)
-				RequireOfferCount(t, env, bob, 1)
-				RequireOfferCount(t, env, carol, 1)
+				// Alice's offer is not crossed
 				jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-				// Carol's offer is not crossed at all; balance unchanged
-				carolBalance := env.IOUBalance(carol, gw, "USD")
-				require.NotNil(t, carolBalance)
-				require.Equal(t, 0, carolBalance.Compare(initialCarolUSD),
-					"Carol's USD balance should equal initialCarolUSD (1e-81)")
 			}
 		})
 	}
@@ -398,28 +366,17 @@ func testRmSmallIncreasedQOffersIOU(t *testing.T, disabledFeatures []string) {
 			}
 			env.Close()
 
-			if featureEnabled(disabledFeatures, "fixRmSmallIncreasedQOffers") {
-				if isPartialPayment {
-					// tesSUCCESS case
-					RequireOfferCount(t, env, carol, 0)
-					// Carol's offer is removed but not taken
-					carolBalance := env.IOUBalance(carol, gw, "USD")
-					require.NotNil(t, carolBalance)
-					require.Equal(t, 0, carolBalance.Compare(initialCarolUSD),
-						"Carol's USD balance should equal initialCarolUSD (1e-81)")
-				}
-				// else: TODO in rippled - offers are not removed when payments fail.
-				// If that is addressed, carol's offer should be removed but not taken.
-			} else {
-				if isPartialPayment {
-					RequireOfferCount(t, env, carol, 0)
-					// Carol's offer is removed and taken
-					jtx.RequireIOUBalance(t, env, carol, gw, "USD", 0)
-				} else {
-					// Offer is not removed or taken
-					require.True(t, IsOffer(env, carol, EUR(1), USD(2)))
-				}
+			if isPartialPayment {
+				// tesSUCCESS case
+				RequireOfferCount(t, env, carol, 0)
+				// Carol's offer is removed but not taken
+				carolBalance := env.IOUBalance(carol, gw, "USD")
+				require.NotNil(t, carolBalance)
+				require.Equal(t, 0, carolBalance.Compare(initialCarolUSD),
+					"Carol's USD balance should equal initialCarolUSD (1e-81)")
 			}
+			// else: TODO in rippled - offers are not removed when payments fail.
+			// If that is addressed, carol's offer should be removed but not taken.
 		})
 	}
 }

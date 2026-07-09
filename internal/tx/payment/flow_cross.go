@@ -29,16 +29,11 @@ type FlowCrossParams struct {
 	ReserveIncrement uint64
 
 	// Amendment flags governing offer-quality and AMM behavior.
-	FixReducedOffersV1         bool
-	FixReducedOffersV2         bool
-	FixRmSmallIncreasedQOffers bool
-	FixFillOrKill              bool
-	FlowSortStrands            bool
-	FixAMMv1_1                 bool
-	FixAMMv1_2                 bool
-	FixAMMOverflowOffer        bool
-	// Fix1781 gates XRP-endpoint loop detection in strand building.
-	Fix1781 bool
+	FixReducedOffersV2  bool
+	FixFillOrKill       bool
+	FixAMMv1_1          bool
+	FixAMMv1_2          bool
+	FixAMMOverflowOffer bool
 
 	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
 	DomainID *[32]byte
@@ -204,14 +199,13 @@ func FlowCross(
 
 	strands, strandResult := ToStrands(
 		sandbox,
-		takerAccount,   // src (taker)
-		takerAccount,   // dst (taker - payment to self)
-		takerPays,      // dstAmt (what we want to receive / deliver to self)
-		&takerGets,     // srcAmt (what we're paying, for issue info)
-		paths,          // explicit paths (XRP bridge for IOU-IOU)
-		true,           // addDefaultPath
-		true,           // offerCrossing - skip trust line checks, create lines on demand
-		params.Fix1781, // fix1781 - gate XRP endpoint loop detection
+		takerAccount, // src (taker)
+		takerAccount, // dst (taker - payment to self)
+		takerPays,    // dstAmt (what we want to receive / deliver to self)
+		&takerGets,   // srcAmt (what we're paying, for issue info)
+		paths,        // explicit paths (XRP bridge for IOU-IOU)
+		true,         // addDefaultPath
+		true,         // offerCrossing - skip trust line checks, create lines on demand
 	)
 
 	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
@@ -243,7 +237,7 @@ func FlowCross(
 	// 2. Enable offer crossing mode on DirectSteps (ignores trust line limits/quality,
 	//    allows trust line creation during crossing)
 	// Reference: rippled uses DirectIOfferCrossingStep instead of DirectIPaymentStep
-	configureStrandsForOfferCrossing(strands, &takerQuality, params.ParentCloseTime, params.FixReducedOffersV1, params.FixReducedOffersV2, params.FixRmSmallIncreasedQOffers)
+	configureStrandsForOfferCrossing(strands, &takerQuality, params.ParentCloseTime, params.FixReducedOffersV2)
 
 	// For domain offers, set the domain on book steps so crossing uses the domain book directory.
 	// Reference: rippled CreateOffer.cpp flowCross() passes domainID to flow()
@@ -258,7 +252,7 @@ func FlowCross(
 	// grooming is discarded (see the apply gate below), leaving removableOffers
 	// out of the applied sandbox on a kill.
 	partialPayment := !params.FillOrKill
-	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands, true,
+	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, true,
 		WithFillOrKill(params.FixFillOrKill, params.Sell))
 
 	// Apply the flow sandbox changes to our root sandbox only on success.
@@ -334,7 +328,7 @@ func FlowCross(
 // of the bridge is what matters, not individual leg quality.
 //
 // Reference: rippled uses DirectIOfferCrossingStep + quality threshold on BookStep
-func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, parentCloseTime uint32, fixReducedOffersV1 bool, fixReducedOffersV2 bool, fixRmSmallIncreasedQOffers bool) {
+func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, parentCloseTime uint32, fixReducedOffersV2 bool) {
 	for _, strand := range strands {
 		// Count BookSteps in the strand
 		bookStepCount := 0
@@ -356,9 +350,7 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				// selection in tipQualityThreshold.
 				bookStep.crossLimit = qualityLimit
 				bookStep.parentCloseTime = parentCloseTime
-				bookStep.fixReducedOffersV1 = fixReducedOffersV1
 				bookStep.fixReducedOffersV2 = fixReducedOffersV2
-				bookStep.fixRmSmallIncreasedQOffers = fixRmSmallIncreasedQOffers
 				// In offer crossing, the offer owner pays the transfer fee (not the path sender).
 				// This makes DebtDirection() return Issues instead of Redeems, preventing the
 				// following DirectStepI from incorrectly deducting the transfer rate from the

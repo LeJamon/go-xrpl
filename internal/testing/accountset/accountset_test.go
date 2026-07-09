@@ -152,22 +152,7 @@ func TestAccountSet_MostFlags(t *testing.T) {
 		}
 	}
 
-	// Test with featureDepositAuth disabled.
-	// Reference: rippled AccountSet_test.cpp lines 137-144
-	env.DisableFeature("DepositAuth")
-	testFlags([]uint32{
-		accounttx.AccountSetFlagRequireDest,
-		accounttx.AccountSetFlagRequireAuth,
-		accounttx.AccountSetFlagDisallowXRP,
-		accounttx.AccountSetFlagGlobalFreeze,
-		accounttx.AccountSetFlagDisableMaster,
-		accounttx.AccountSetFlagDefaultRipple,
-	})
-
-	// Enable featureDepositAuth and retest.
-	// Reference: rippled AccountSet_test.cpp lines 146-157
-	env.EnableFeature("DepositAuth")
-	env.Close()
+	// DepositAuth is permanently enabled; asfDepositAuth is a settable flag.
 	testFlags([]uint32{
 		accounttx.AccountSetFlagRequireDest,
 		accounttx.AccountSetFlagRequireAuth,

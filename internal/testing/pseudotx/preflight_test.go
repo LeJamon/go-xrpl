@@ -150,23 +150,6 @@ func TestPseudoPreflight_SequenceMustBeZero(t *testing.T) {
 	require.Equal(t, "temBAD_SEQUENCE", result.Result.String())
 }
 
-// TestPseudoPreflight_UNLModifyDisabled rejects UNL_MODIFY when the
-// NegativeUNL amendment is not enabled.
-// Reference: rippled Change.cpp:72-77.
-func TestPseudoPreflight_UNLModifyDisabled(t *testing.T) {
-	rules := amendment.NewRules(nil) // no amendments enabled
-	engine, _ := closedEngine(t, rules)
-
-	unlTx := &pseudo.UNLModify{BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount)}
-	unlTx.Common.Fee = "0"
-	zero := uint32(0)
-	unlTx.Common.Sequence = &zero
-
-	result := engine.ApplyPseudo(unlTx)
-	require.False(t, result.Applied)
-	require.Equal(t, "temDISABLED", result.Result.String())
-}
-
 // TestPseudoPreflight_AcceptsCanonicalZeroAccount pins the canonical zero
 // address as the one and only Account value that passes the preflight gate.
 func TestPseudoPreflight_AcceptsCanonicalZeroAccount(t *testing.T) {
