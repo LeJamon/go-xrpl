@@ -140,7 +140,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	paymentInterval := valOr(l.PaymentInterval, minPaymentInterval)
 	paymentTotal := valOr(l.PaymentTotal, 1)
 
-	props := lmath.ComputeLoanProperties(mAsset, principal, interestRate, paymentInterval, paymentTotal, uint32(b.ManagementFeeRate), vaultScale)
+	props := lmath.ComputeLoanProperties(ctx.Rules().FixCleanup3_2_0Enabled(), mAsset, principal, interestRate, paymentInterval, paymentTotal, uint32(b.ManagementFeeRate), vaultScale)
 	loanState := lmath.ConstructLoanState(props.LoanState.ValueOutstanding, principal, props.LoanState.ManagementFeeDue)
 
 	vaultMaximum := lendNum(vinfo.AssetsMaximum)

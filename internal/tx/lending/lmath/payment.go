@@ -172,12 +172,12 @@ func ConstructLoanState(totalValue, principal, managementFee N) LoanState {
 
 // computeTheoreticalLoanState computes the full-precision loan state for a point
 // in the amortization schedule (rippled computeTheoreticalLoanState, eqs. 30-33).
-func computeTheoreticalLoanState(periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) LoanState {
+func computeTheoreticalLoanState(fix320 bool, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) LoanState {
 	if paymentRemaining == 0 {
 		return LoanState{zeroN(), zeroN(), zeroN(), zeroN()}
 	}
 	totalValueOutstanding := periodicPayment.Mul(numU(paymentRemaining))
-	principalOutstanding := loanPrincipalFromPeriodicPayment(periodicPayment, periodicRate, paymentRemaining)
+	principalOutstanding := loanPrincipalFromPeriodicPayment(fix320, periodicPayment, periodicRate, paymentRemaining)
 	interestGross := totalValueOutstanding.Sub(principalOutstanding)
 	managementFee := tenthBipsOfValue(interestGross, managementFeeRate)
 	interestNet := interestGross.Sub(managementFee)
@@ -191,8 +191,8 @@ func computeTheoreticalLoanState(periodicPayment, periodicRate N, paymentRemaini
 
 // ComputeLoanPropertiesRate derives a loan's properties from the periodic rate
 // (rippled computeLoanProperties, the Number-rate overload).
-func ComputeLoanPropertiesRate(asset Asset, principalOutstanding N, periodicRate N, paymentsRemaining uint32, managementFeeRate uint32, minimumScale int) LoanProperties {
-	periodicPayment := loanPeriodicPayment(principalOutstanding, periodicRate, paymentsRemaining)
+func ComputeLoanPropertiesRate(fix320 bool, asset Asset, principalOutstanding N, periodicRate N, paymentsRemaining uint32, managementFeeRate uint32, minimumScale int) LoanProperties {
+	periodicPayment := loanPeriodicPayment(fix320, principalOutstanding, periodicRate, paymentsRemaining)
 
 	// Guard block: round the total value upward when interest is charged,
 	// to-nearest for a zero-rate loan. The scale is derived from that value.
@@ -211,10 +211,10 @@ func ComputeLoanPropertiesRate(asset Asset, principalOutstanding N, periodicRate
 	totalInterest := totalValueOutstanding.Sub(roundedPrincipal)
 	feeOwed := computeManagementFee(asset, totalInterest, managementFeeRate, loanScale)
 
-	startingState := computeTheoreticalLoanState(periodicPayment, periodicRate, paymentsRemaining, managementFeeRate)
+	startingState := computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentsRemaining, managementFeeRate)
 	firstPaymentState := LoanState{zeroN(), zeroN(), zeroN(), zeroN()}
 	if paymentsRemaining >= 1 {
-		firstPaymentState = computeTheoreticalLoanState(periodicPayment, periodicRate, paymentsRemaining-1, managementFeeRate)
+		firstPaymentState = computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentsRemaining-1, managementFeeRate)
 	}
 	firstPaymentPrincipal := startingState.PrincipalOutstanding.Sub(firstPaymentState.PrincipalOutstanding)
 
@@ -228,9 +228,9 @@ func ComputeLoanPropertiesRate(asset Asset, principalOutstanding N, periodicRate
 
 // ComputeLoanProperties derives a loan's properties from the annualized interest
 // rate and payment interval (rippled computeLoanProperties, the rate overload).
-func ComputeLoanProperties(asset Asset, principalOutstanding N, interestRate uint32, paymentInterval uint32, paymentsRemaining uint32, managementFeeRate uint32, minimumScale int) LoanProperties {
+func ComputeLoanProperties(fix320 bool, asset Asset, principalOutstanding N, interestRate uint32, paymentInterval uint32, paymentsRemaining uint32, managementFeeRate uint32, minimumScale int) LoanProperties {
 	periodicRate := LoanPeriodicRate(interestRate, paymentInterval)
-	return ComputeLoanPropertiesRate(asset, principalOutstanding, periodicRate, paymentsRemaining, managementFeeRate, minimumScale)
+	return ComputeLoanPropertiesRate(fix320, asset, principalOutstanding, periodicRate, paymentsRemaining, managementFeeRate, minimumScale)
 }
 
 // CheckLoanGuards validates that a loan can be amortized as specified (rippled
@@ -277,7 +277,7 @@ func computeOverpaymentComponents(asset Asset, loanScale int, overpayment N, ove
 // computePaymentComponents splits a scheduled periodic payment into principal,
 // interest, and management-fee components, correcting accumulated rounding
 // (rippled computePaymentComponents).
-func computePaymentComponents(asset Asset, scale int, totalValueOutstanding, principalOutstanding, managementFeeOutstanding, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) PaymentComponents {
+func computePaymentComponents(fix320 bool, asset Asset, scale int, totalValueOutstanding, principalOutstanding, managementFeeOutstanding, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) PaymentComponents {
 	roundedPeriodicPayment := roundPeriodicPayment(asset, periodicPayment, scale)
 
 	if paymentRemaining == 1 || totalValueOutstanding.Cmp(roundedPeriodicPayment) <= 0 {
@@ -289,11 +289,18 @@ func computePaymentComponents(asset Asset, scale int, totalValueOutstanding, pri
 		}
 	}
 
-	trueTarget := computeTheoreticalLoanState(periodicPayment, periodicRate, paymentRemaining-1, managementFeeRate)
+	trueTarget := computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentRemaining-1, managementFeeRate)
+	// Post-fixCleanup3_2_0: round principal up and interest down so that at a
+	// coarse scale principal sticks at its floor (until the final payment clears
+	// it) while interest absorbs each payment. Pre-amendment both round to nearest.
+	principalMode, interestMode := state.RoundToNearest, state.RoundToNearest
+	if fix320 {
+		principalMode, interestMode = state.RoundUpward, state.RoundDownward
+	}
 	roundedTarget := LoanState{
 		ValueOutstanding:     roundToAssetNearest(asset, trueTarget.ValueOutstanding, scale),
-		PrincipalOutstanding: roundToAssetNearest(asset, trueTarget.PrincipalOutstanding, scale),
-		InterestDue:          roundToAssetNearest(asset, trueTarget.InterestDue, scale),
+		PrincipalOutstanding: roundToAsset(asset, trueTarget.PrincipalOutstanding, scale, principalMode),
+		InterestDue:          roundToAsset(asset, trueTarget.InterestDue, scale, interestMode),
 		ManagementFeeDue:     roundToAssetNearest(asset, trueTarget.ManagementFeeDue, scale),
 	}
 

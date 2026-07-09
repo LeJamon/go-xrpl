@@ -50,7 +50,7 @@ func TestComputePaymentFactor(t *testing.T) {
 		{"zero payments", num(5, -2), 0, num(0, 0)},
 	}
 	for _, tc := range cases {
-		eq(t, tc.name, computePaymentFactor(tc.rate, tc.n), tc.want)
+		eq(t, tc.name, computePaymentFactor(false, tc.rate, tc.n), tc.want)
 	}
 }
 
@@ -69,7 +69,7 @@ func TestLoanPeriodicPayment(t *testing.T) {
 		{"standard", num(1000, 0), stdRate, 3, num(389569066396123265, -15)},
 	}
 	for _, tc := range cases {
-		eq(t, tc.name, loanPeriodicPayment(tc.principal, tc.rate, tc.n), tc.want)
+		eq(t, tc.name, loanPeriodicPayment(false, tc.principal, tc.rate, tc.n), tc.want)
 	}
 }
 
@@ -88,7 +88,7 @@ func TestLoanPrincipalFromPeriodicPayment(t *testing.T) {
 		{"standard", num(389569066396123265, -15), stdRate, 3, num(1000, 0)},
 	}
 	for _, tc := range cases {
-		eq(t, tc.name, loanPrincipalFromPeriodicPayment(tc.payment, tc.rate, tc.n), tc.want)
+		eq(t, tc.name, loanPrincipalFromPeriodicPayment(false, tc.payment, tc.rate, tc.n), tc.want)
 	}
 }
 
@@ -191,4 +191,37 @@ func TestComputeOverpaymentComponents(t *testing.T) {
 	// all parts sum to the overpayment
 	sum := c.TrackedManagementFeeDelta.Add(c.UntrackedInterest).Add(c.TrackedPrincipalDelta).Add(c.UntrackedManagementFee)
 	eq(t, "sum", sum, num(1000, 0))
+}
+
+// TestComputePaymentFactor_HybridBothStates pins the fixCleanup3_2_0 payment
+// factor: above the near-zero threshold both amendment states agree, but for a
+// rate so small that r*n < 1e-9 the post-amendment path routes (1+r)^n - 1
+// through the binomial expansion, avoiding the catastrophic cancellation of the
+// direct closed form, so the two states diverge.
+func TestComputePaymentFactor_HybridBothStates(t *testing.T) {
+	rate := num(5, -2)
+	if off, on := computePaymentFactor(false, rate, 3), computePaymentFactor(true, rate, 3); !off.Equal(on) {
+		t.Fatalf("above threshold: off=%s on=%s must agree", off.String(), on.String())
+	}
+
+	tiny := num(1, -12)
+	const n = 100
+	off := computePaymentFactor(false, tiny, n)
+	on := computePaymentFactor(true, tiny, n)
+	if off.Equal(on) {
+		t.Fatalf("near-zero rate: states must diverge (off=%s on=%s)", off.String(), on.String())
+	}
+	if on.Signum() <= 0 {
+		t.Fatalf("near-zero factor must stay positive, got %s", on.String())
+	}
+}
+
+// TestComputePowerMinusOne checks the binomial evaluator: above the near-zero
+// regime the hybrid matches the closed form, and degenerate inputs are zero.
+func TestComputePowerMinusOne(t *testing.T) {
+	rate := num(5, -2)
+	eq(t, "hybrid matches closed form", computePowerMinusOneHybrid(rate, 4), computeRaisedRate(rate, 4).Sub(oneN()))
+	if !computePowerMinusOne(num(5, -2), 0).IsZero() || !computePowerMinusOne(num(0, 0), 5).IsZero() {
+		t.Fatalf("degenerate powerMinusOne must be zero")
+	}
 }

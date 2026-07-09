@@ -237,7 +237,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	acc := loanToAccount(loan)
-	parts, t := lmath.LoanMakePayment(mAsset, ctx.Config.ParentCloseTime, acc, uint32(b.ManagementFeeRate), amountToLendNum(l.Amount), l.paymentType(), ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3))
+	parts, t := lmath.LoanMakePayment(mAsset, ctx.Config.ParentCloseTime, acc, uint32(b.ManagementFeeRate), amountToLendNum(l.Amount), l.paymentType(), ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3), ctx.Rules().FixCleanup3_2_0Enabled())
 	if t != ter.TesSUCCESS {
 		return t
 	}

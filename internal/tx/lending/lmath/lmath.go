@@ -141,14 +141,53 @@ func computeRaisedRate(periodicRate N, paymentsRemaining uint32) N {
 	return oneN().Add(periodicRate).Power(paymentsRemaining)
 }
 
+// computePowerMinusOne evaluates (1 + r)^n - 1 by summing the binomial
+// expansion, a sum of positive terms for r >= 0 that avoids the catastrophic
+// cancellation of the direct closed form at near-zero rates. The loop stops once
+// a term falls below Number precision (rippled computePowerMinusOne).
+func computePowerMinusOne(periodicRate N, paymentsRemaining uint32) N {
+	if paymentsRemaining == 0 || periodicRate.IsZero() {
+		return zeroN()
+	}
+	term := numU(paymentsRemaining).Mul(periodicRate)
+	sum := term
+	for k := uint32(1); k < paymentsRemaining; k++ {
+		term = term.Mul(periodicRate).Mul(numU(paymentsRemaining - k)).Div(numU(k + 1))
+		next := sum.Add(term)
+		if next.Equal(sum) {
+			break
+		}
+		sum = next
+	}
+	return sum
+}
+
+// computePowerMinusOneHybrid evaluates (1 + r)^n - 1, routing the near-zero
+// regime (r*n below 1e-9) through the binomial expansion and everything else
+// through the faster closed form (rippled computePowerMinusOneHybrid).
+func computePowerMinusOneHybrid(periodicRate N, paymentsRemaining uint32) N {
+	if paymentsRemaining == 0 || periodicRate.IsZero() {
+		return zeroN()
+	}
+	if numU(paymentsRemaining).Mul(periodicRate).Cmp(num(1, -9)) >= 0 {
+		return computeRaisedRate(periodicRate, paymentsRemaining).Sub(oneN())
+	}
+	return computePowerMinusOne(periodicRate, paymentsRemaining)
+}
+
 // computePaymentFactor converts principal to a periodic payment amount (rippled
-// computePaymentFactor, eq. 6).
-func computePaymentFactor(periodicRate N, paymentsRemaining uint32) N {
+// computePaymentFactor, eq. 6). Post-fixCleanup3_2_0 the (1+r)^n - 1 denominator
+// uses the hybrid evaluator, avoiding cancellation at near-zero rates.
+func computePaymentFactor(fix320 bool, periodicRate N, paymentsRemaining uint32) N {
 	if paymentsRemaining == 0 {
 		return zeroN()
 	}
 	if periodicRate.IsZero() {
 		return oneN().Div(numU(paymentsRemaining))
+	}
+	if fix320 {
+		raisedMinusOne := computePowerMinusOneHybrid(periodicRate, paymentsRemaining)
+		return periodicRate.Mul(oneN().Add(raisedMinusOne)).Div(raisedMinusOne)
 	}
 	raised := computeRaisedRate(periodicRate, paymentsRemaining)
 	return periodicRate.Mul(raised).Div(raised.Sub(oneN()))
@@ -156,26 +195,26 @@ func computePaymentFactor(periodicRate N, paymentsRemaining uint32) N {
 
 // loanPeriodicPayment returns the standard amortized periodic payment (rippled
 // loanPeriodicPayment, eq. 7).
-func loanPeriodicPayment(principalOutstanding N, periodicRate N, paymentsRemaining uint32) N {
+func loanPeriodicPayment(fix320 bool, principalOutstanding N, periodicRate N, paymentsRemaining uint32) N {
 	if principalOutstanding.IsZero() || paymentsRemaining == 0 {
 		return zeroN()
 	}
 	if periodicRate.IsZero() {
 		return principalOutstanding.Div(numU(paymentsRemaining))
 	}
-	return principalOutstanding.Mul(computePaymentFactor(periodicRate, paymentsRemaining))
+	return principalOutstanding.Mul(computePaymentFactor(fix320, periodicRate, paymentsRemaining))
 }
 
 // loanPrincipalFromPeriodicPayment reverse-computes principal from a periodic
 // payment (rippled loanPrincipalFromPeriodicPayment, eq. 10).
-func loanPrincipalFromPeriodicPayment(periodicPayment N, periodicRate N, paymentsRemaining uint32) N {
+func loanPrincipalFromPeriodicPayment(fix320 bool, periodicPayment N, periodicRate N, paymentsRemaining uint32) N {
 	if paymentsRemaining == 0 {
 		return zeroN()
 	}
 	if periodicRate.IsZero() {
 		return periodicPayment.Mul(numU(paymentsRemaining))
 	}
-	return periodicPayment.Div(computePaymentFactor(periodicRate, paymentsRemaining))
+	return periodicPayment.Div(computePaymentFactor(fix320, periodicRate, paymentsRemaining))
 }
 
 // computeManagementFee returns the broker's fee on an interest amount, rounded
