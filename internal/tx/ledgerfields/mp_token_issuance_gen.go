@@ -33,6 +33,7 @@ type MPTokenIssuance struct {
 	MPTokenMetadata   string // Blob (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
 	MutableFlags      uint32
+	ReferenceHolding  string // Hash256 (uppercase hex)
 	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
@@ -50,6 +51,7 @@ const (
 	mptokenissuanceBitMPTokenMetadata
 	mptokenissuanceBitDomainID
 	mptokenissuanceBitMutableFlags
+	mptokenissuanceBitReferenceHolding
 	mptokenissuanceBitFlags
 	mptokenissuanceBitPreviousTxnID
 	mptokenissuanceBitPreviousTxnLgrSeq
@@ -147,6 +149,9 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 			case 34:
 				m.DomainID = val
 				m.present |= mptokenissuanceBitDomainID
+			case 39:
+				m.ReferenceHolding = val
+				m.present |= mptokenissuanceBitReferenceHolding
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -231,6 +236,9 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitMutableFlags != 0 && !(skipDefault && m.MutableFlags == 0) {
 		out["MutableFlags"] = m.MutableFlags
 	}
+	if m.present&mptokenissuanceBitReferenceHolding != 0 && !(skipDefault && isZeroHexString(m.ReferenceHolding)) {
+		out["ReferenceHolding"] = m.ReferenceHolding
+	}
 	if m.present&mptokenissuanceBitFlags != 0 && !(skipDefault && m.Flags == 0) {
 		out["Flags"] = m.Flags
 	}
@@ -266,6 +274,7 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "MPTokenMetadata", prv.MPTokenMetadata, m.MPTokenMetadata, prv.present&mptokenissuanceBitMPTokenMetadata, m.present&mptokenissuanceBitMPTokenMetadata)
 	emitIfChangedString(out, "DomainID", prv.DomainID, m.DomainID, prv.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
 	emitIfChangedUint32(out, "MutableFlags", prv.MutableFlags, m.MutableFlags, prv.present&mptokenissuanceBitMutableFlags, m.present&mptokenissuanceBitMutableFlags)
+	emitIfChangedString(out, "ReferenceHolding", prv.ReferenceHolding, m.ReferenceHolding, prv.present&mptokenissuanceBitReferenceHolding, m.present&mptokenissuanceBitReferenceHolding)
 	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
 }
 
@@ -307,6 +316,9 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenissuanceBitMutableFlags != 0 {
 		out["MutableFlags"] = m.MutableFlags
+	}
+	if m.present&mptokenissuanceBitReferenceHolding != 0 {
+		out["ReferenceHolding"] = m.ReferenceHolding
 	}
 	if m.present&mptokenissuanceBitFlags != 0 {
 		out["Flags"] = m.Flags
@@ -384,6 +396,9 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	}
 	if m.present&mptokenissuanceBitMutableFlags != 0 {
 		out["MutableFlags"] = m.MutableFlags
+	}
+	if m.present&mptokenissuanceBitReferenceHolding != 0 {
+		out["ReferenceHolding"] = m.ReferenceHolding
 	}
 	if m.present&mptokenissuanceBitFlags != 0 {
 		out["Flags"] = m.Flags

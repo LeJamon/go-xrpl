@@ -1,11 +1,90 @@
 package vault
 
 import (
+	"bytes"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// AssetReadView is the minimal read surface PseudoAssetHolds needs, satisfied by
+// both the apply view and the invariant framework's read-only view.
+type AssetReadView interface {
+	Read(k keylet.Keylet) ([]byte, error)
+}
+
+// PseudoAssetHolds returns how much of the vault's asset (decoded from vaultData)
+// the given pseudo-account holds. Pseudo-accounts have no XRP reserve, so the XRP
+// path returns the full balance (rippled xrpLiquid + isPseudoAccount). A missing
+// trust line / MPToken means zero holdings; ok is false only on a read/parse
+// error. Used by the ValidLoanBroker invariant.
+func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (state.XRPLNumber, bool) {
+	vd, err := parseVault(vaultData)
+	if err != nil {
+		return state.NewXRPLNumber(0, 0), false
+	}
+	if isNativeAsset(vd.Asset) {
+		data, rerr := view.Read(keylet.Account(account))
+		if rerr != nil || data == nil {
+			return state.NewXRPLNumber(0, 0), false
+		}
+		ar, perr := state.ParseAccountRoot(data)
+		if perr != nil {
+			return state.NewXRPLNumber(0, 0), false
+		}
+		return state.NewXRPLNumber(int64(ar.Balance), 0), true
+	}
+	if vd.AssetIsMPT {
+		data, rerr := view.Read(keylet.MPTokenByID(vd.AssetMPTID, account))
+		if rerr != nil {
+			return state.NewXRPLNumber(0, 0), false
+		}
+		if data == nil {
+			return state.NewXRPLNumber(0, 0), true
+		}
+		token, perr := state.ParseMPToken(data)
+		if perr != nil {
+			return state.NewXRPLNumber(0, 0), false
+		}
+		return state.NewXRPLNumber(int64(token.MPTAmount), 0), true
+	}
+	issuerID, derr := state.DecodeAccountID(vd.Asset.Issuer)
+	if derr != nil {
+		return state.NewXRPLNumber(0, 0), false
+	}
+	data, rerr := view.Read(keylet.Line(account, issuerID, vd.Asset.Currency))
+	if rerr != nil {
+		return state.NewXRPLNumber(0, 0), false
+	}
+	if data == nil {
+		return state.NewXRPLNumber(0, 0), true
+	}
+	rs, perr := state.ParseRippleState(data)
+	if perr != nil {
+		return state.NewXRPLNumber(0, 0), false
+	}
+	bal, berr := vaultNumber(rs.Balance.Value())
+	if berr != nil {
+		return state.NewXRPLNumber(0, 0), false
+	}
+	// Balance is stored in the low account's terms; negate for the high account.
+	if bytes.Compare(account[:], issuerID[:]) > 0 {
+		bal = bal.Negate()
+	}
+	return bal, true
+}
+
+// ParseLedgerNumber parses a serialized NUMBER field's string form into an
+// XRPLNumber; "" and "0" are zero. ok is false on a malformed value.
+func ParseLedgerNumber(s string) (state.XRPLNumber, bool) {
+	n, err := vaultNumber(s)
+	if err != nil {
+		return state.NewXRPLNumber(0, 0), false
+	}
+	return n, true
+}
 
 // Reuse surface for the lending package. A LoanBroker sits on a Vault and reuses
 // its pseudo-account derivation and asset-movement machinery; these thin wrappers
@@ -84,7 +163,7 @@ func SendAsset(ctx *tx.ApplyContext, from, to [20]byte, asset tx.Asset, amountN 
 		return sendMPTAsset(ctx, id, from, to, uint64(amountN.ToInt64WithMode(state.RoundTowardsZero)))
 	}
 	amt := state.NewIssuedAmountFromValue(amountN.Mantissa(), amountN.Exponent(), asset.Currency, asset.Issuer)
-	return tx.RippleCredit(ctx.View, from, to, amt)
+	return tx.RippleSendIOU(ctx.View, from, to, amt, true)
 }
 
 // adjustXRPBalance adds delta drops to an account, modifying ctx.Account for the

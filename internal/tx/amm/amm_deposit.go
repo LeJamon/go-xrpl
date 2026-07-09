@@ -181,6 +181,12 @@ func (a *AMMDeposit) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets/amounts on the MPTokensV2 amendment.
+func (a *AMMDeposit) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT() ||
+		amountIsMPT(a.Amount) || amountIsMPT(a.Amount2))
+}
+
 // Preclaim performs the stateful deposit validation against the unmodified
 // view: AMM existence and pool sanity, authorization/freeze, per-amount
 // funding (including the LP-token-trustline reserve), and the LPTokenOut issue.

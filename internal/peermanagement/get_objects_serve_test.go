@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // decodeGetObjectsReply pops the single frame the overlay queued for the
@@ -68,7 +69,6 @@ func TestServeGetObjects_FetchesAndReplies(t *testing.T) {
 	req := &message.GetObjectByHash{
 		ObjType: message.ObjectTypeUnknown,
 		Query:   true,
-		Seq:     7,
 		Objects: []message.IndexedObject{
 			{Hash: knownHash[:], NodeID: nodeID, LedgerSeq: 42},
 			{Hash: missingHash[:]},
@@ -84,7 +84,6 @@ func TestServeGetObjects_FetchesAndReplies(t *testing.T) {
 	reply := decodeGetObjectsReply(t, peer)
 	assert.False(t, reply.Query, "reply must have query=false")
 	assert.Equal(t, message.ObjectTypeUnknown, reply.ObjType, "reply must echo the request type")
-	assert.Equal(t, uint32(7), reply.Seq, "reply must echo the request seq")
 	require.Len(t, reply.Objects, 1, "only the found object belongs in the reply")
 	got := reply.Objects[0]
 	assert.Equal(t, knownHash[:], got.Hash)
@@ -97,10 +96,11 @@ func TestServeGetObjects_FetchesAndReplies(t *testing.T) {
 }
 
 // TestServeGetObjects_TruncatesAtReplyCap pins rippled PeerImp.cpp:2551-2562
-// (#6110): a query for more objects than Tuning::hardMaxReplyNodes is
-// truncated to the cap, closing a per-object NodeStore-fetch DoS. The
-// provider is consulted only up to the cap and the reply never exceeds it.
-func TestServeGetObjects_TruncatesAtReplyCap(t *testing.T) {
+// (3.2.0 DoS gate): a query for more objects than hardMaxReplyNodes is
+// rejected outright before any node-store lookup and charged feeInvalidData,
+// rather than being served-then-truncated. Closes the per-object
+// NodeStore-fetch DoS at the request boundary (PeerImp.cpp:2500-2506).
+func TestServeGetObjects_RejectsOversizedRequest(t *testing.T) {
 	lookups := 0
 	o := &Overlay{
 		peers: make(map[PeerID]*Peer),
@@ -122,10 +122,52 @@ func TestServeGetObjects_TruncatesAtReplyCap(t *testing.T) {
 	req := &message.GetObjectByHash{Query: true, Objects: objs}
 	o.serveGetObjects(peer.ID(), req)
 
-	reply := decodeGetObjectsReply(t, peer)
-	assert.Len(t, reply.Objects, hardMaxReplyNodes, "reply must be capped at hardMaxReplyNodes")
-	assert.Equal(t, hardMaxReplyNodes, lookups, "provider consulted only up to the cap")
-	assert.Positive(t, peer.Load(), "serving + truncation charge the peer")
+	assert.Zero(t, lookups, "an oversized request is rejected before any node-store lookup")
+	select {
+	case frame := <-peer.send:
+		t.Fatalf("no reply expected for an oversized request, got %d bytes", len(frame))
+	default:
+	}
+	assert.Positive(t, peer.Load(), "an oversized request must charge the peer")
+}
+
+// TestGetObjectByHashFee pins the 3.2.0 differential fee schedule: the first
+// getObjFreeObjects objects are free, billable objects cost per-hit/per-miss
+// (misses billed first), and a one-shot size-band surcharge applies. A single
+// all-miss max-size request must exceed the resource drop threshold.
+func TestGetObjectByHashFee(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested int
+		found     int
+		want      int
+	}{
+		{"empty", 0, 0, 0},
+		{"under free tier, all found", 8, 8, 0},
+		{"exactly free tier", 16, 16, 0},
+		// 20 requested, all found: 4 billable hits * 1 = 4, small band.
+		{"just over free tier, all hits", 20, 20, 4},
+		// 20 requested, 16 found: 4 misses within billable → 4*8 = 32.
+		{"just over free tier, all misses billable", 20, 16, 32},
+		// 65 requested (> small band max 64), all found:
+		// 49 billable hits * 1 + medium band 100 = 149.
+		{"medium band, all hits", 65, 65, 149},
+		// 1025 requested (> medium band max 1024), all found:
+		// 1009 billable hits * 1 + large band 1000 = 2009.
+		{"large band, all hits", 1025, 1025, 2009},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := getObjectByHashFee(tc.requested, tc.found)
+			assert.Equal(t, tc.want, got.Cost())
+		})
+	}
+
+	// A single all-miss max-size request must be expensive enough that one
+	// message trips the drop threshold, matching rippled's tuning intent.
+	maxMiss := getObjectByHashFee(hardMaxReplyNodes, 0)
+	assert.Greater(t, maxMiss.Cost(), resource.DropThreshold,
+		"one all-miss max-size request must exceed the drop threshold")
 }
 
 // TestServeGetObjects_AlwaysRepliesEvenWhenEmpty verifies the rippled

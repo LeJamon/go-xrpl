@@ -74,6 +74,7 @@ const (
 
 	// ltMPTOKEN
 	LsfMPTAuthorized uint32 = 0x00000002
+	LsfMPTAMM        uint32 = 0x00000004
 
 	// ltCREDENTIAL
 	LsfAccepted uint32 = 0x00010000

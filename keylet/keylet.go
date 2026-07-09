@@ -377,6 +377,63 @@ func BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, ta
 	}
 }
 
+// BookSide identifies one side of an order book: either an Issue (a currency
+// with an issuer — XRP being the zero currency and zero issuer) or an MPT (its
+// 192-bit MPTokenIssuanceID). Mirrors rippled's Asset = std::variant<Issue,
+// MPTIssue>. Construct with IssueSide / MPTSide.
+type BookSide struct {
+	Currency [20]byte
+	Issuer   [20]byte
+	MPTID    [24]byte
+	IsMPT    bool
+}
+
+// IssueSide builds an Issue book side (currency + issuer).
+func IssueSide(currency, issuer [20]byte) BookSide {
+	return BookSide{Currency: currency, Issuer: issuer}
+}
+
+// MPTSide builds an MPT book side from a 192-bit MPTokenIssuanceID.
+func MPTSide(mptID [24]byte) BookSide {
+	return BookSide{MPTID: mptID, IsMPT: true}
+}
+
+// BookBase returns the base keylet (quality 0) for an order book whose pays and
+// gets sides may each be an Issue or an MPT, mirroring rippled getBookBase
+// (Indexes.cpp). The hashed field layout depends on each side's kind: the two
+// "asset" fields come first (a side's currency if it is an Issue, else its MPT
+// id, which already embeds the issuer), followed by the issuer of any Issue
+// side (MPT sides contribute no separate issuer). An optional domain id is
+// appended for permissioned-domain books. For two Issue sides the layout is
+// (paysCurrency, getsCurrency, paysIssuer, getsIssuer) — byte-identical to
+// BookDir, so existing books keep their keys.
+func BookBase(pays, gets BookSide, domainID *[32]byte) Keylet {
+	data := make([][]byte, 0, 5)
+	if pays.IsMPT {
+		data = append(data, pays.MPTID[:])
+	} else {
+		data = append(data, pays.Currency[:])
+	}
+	if gets.IsMPT {
+		data = append(data, gets.MPTID[:])
+	} else {
+		data = append(data, gets.Currency[:])
+	}
+	if !pays.IsMPT {
+		data = append(data, pays.Issuer[:])
+	}
+	if !gets.IsMPT {
+		data = append(data, gets.Issuer[:])
+	}
+	if domainID != nil {
+		data = append(data, domainID[:])
+	}
+	return Keylet{
+		Type: entry.TypeDirectoryNode,
+		Key:  indexHash(spaceBookDir, data...),
+	}
+}
+
 // Quality returns a keylet with the quality (exchange rate) encoded in the last 8 bytes.
 // This is used for offer book directories where offers are sorted by quality.
 // The quality is stored in big-endian format in the rightmost 8 bytes.

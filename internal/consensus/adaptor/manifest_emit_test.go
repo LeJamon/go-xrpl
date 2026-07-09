@@ -305,10 +305,10 @@ func TestRouter_CachedManifestFrame_ReusedAcrossEmissions(t *testing.T) {
 	if first == nil {
 		t.Fatalf("frame cache empty after first Send")
 	}
-	if seq := router.manifestFrameSeq; seq != 0 {
-		// First-insert path doesn't bump cache.Sequence (rippled
-		// Manifest.cpp:507-518 parity), so the cursor stays at 0.
-		t.Fatalf("cached cursor: got %d want 0 (first-insert quirk)", seq)
+	if seq := router.manifestFrameSeq; seq != 1 {
+		// The setup's first-insert bumps cache.Sequence to 1 (rippled
+		// 3.2.0 #6059 bumps on first-insert), so the cursor tracks it.
+		t.Fatalf("cached cursor: got %d want 1", seq)
 	}
 
 	router.SendLocalManifestTo(peermanagement.PeerID(3))
@@ -329,8 +329,9 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	// Mint a higher-sequence manifest under the SAME master+ephemeral
 	// keypair (newTokenFixture is seed-deterministic — same seed byte
 	// = same keys; only the sequence differs). This hits the update
-	// branch in cache.ApplyManifest, which is the only path that bumps
-	// Sequence — matching rippled Manifest.cpp:538.
+	// branch in cache.ApplyManifest. Every accept bumps Sequence in
+	// rippled 3.2.0 (#6059), so after the setup first-insert (=1) this
+	// update takes it to 2.
 	rotated := newTokenFixture(t, 0xC2, 7)
 	rotatedID, err := NewValidatorIdentityFromToken(rotated.tokenBlock)
 	if err != nil {
@@ -339,8 +340,8 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	if d := cache.ApplyManifest(rotatedID.Manifest); d != manifest.Accepted {
 		t.Fatalf("apply rotated manifest: %s", d)
 	}
-	if seq := cache.Sequence(); seq != 1 {
-		t.Fatalf("cache.Sequence after update: got %d want 1", seq)
+	if seq := cache.Sequence(); seq != 2 {
+		t.Fatalf("cache.Sequence after update: got %d want 2", seq)
 	}
 
 	router.SendLocalManifestTo(peermanagement.PeerID(2))
@@ -350,8 +351,8 @@ func TestRouter_CachedManifestFrame_RebuiltOnSequenceAdvance(t *testing.T) {
 	if &router.manifestFrame[0] == &first[0] {
 		t.Errorf("frame NOT re-encoded after Sequence advance — cache cursor stuck")
 	}
-	if router.manifestFrameSeq != 1 {
-		t.Errorf("cached cursor: got %d want 1", router.manifestFrameSeq)
+	if router.manifestFrameSeq != 2 {
+		t.Errorf("cached cursor: got %d want 2", router.manifestFrameSeq)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	definitions "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // ServerDefinitionsMethod handles the server_definitions RPC method.
@@ -63,6 +64,14 @@ func buildServerDefinitions() {
 		"TRANSACTION_RESULTS": defs.TransactionResults,
 	}
 
+	// 3.2.0 (#6321): per-type field templates (with optionality) and flag maps.
+	// Added before the hash so the cache token covers them.
+	serverDefsBase["TRANSACTION_FORMATS"] = buildFormatsSection(tx.FormatCommonFields(), tx.FormatTemplates())
+	serverDefsBase["LEDGER_ENTRY_FORMATS"] = buildLedgerFormatsSection()
+	serverDefsBase["TRANSACTION_FLAGS"] = txFlagsTable
+	serverDefsBase["LEDGER_ENTRY_FLAGS"] = ledgerFlagsTable
+	serverDefsBase["ACCOUNT_SET_FLAGS"] = accountSetFlagsTable
+
 	// Hash follows rippled's approach (ServerInfo.cpp:288-293) — sha512Half over
 	// the serialized definitions document, emitted as the response `hash` field
 	// so clients can cache it and short-circuit on subsequent calls. encoding/json
@@ -99,6 +108,46 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawM
 	maps.Copy(response, serverDefsBase)
 	response["hash"] = serverDefsHash
 	return response, nil
+}
+
+// buildFormatsSection renders a FORMATS section: a "common" array plus one
+// array per type, each element {name, optionality}. Mirrors rippled's
+// TRANSACTION_FORMATS / LEDGER_ENTRY_FORMATS shape (ServerDefinitions.cpp).
+func buildFormatsSection(common []tx.FormatField, perType map[string][]tx.FormatField) map[string]any {
+	out := make(map[string]any, len(perType)+1)
+	out["common"] = txFormatFieldsToJSON(common)
+	for name, fields := range perType {
+		out[name] = txFormatFieldsToJSON(fields)
+	}
+	return out
+}
+
+func txFormatFieldsToJSON(fields []tx.FormatField) []any {
+	arr := make([]any, 0, len(fields))
+	for _, f := range fields {
+		arr = append(arr, map[string]any{"name": f.Name, "optionality": f.Style})
+	}
+	return arr
+}
+
+// buildLedgerFormatsSection renders LEDGER_ENTRY_FORMATS from the transcribed
+// ledger-entry SOTemplate tables (rippled has ledger optionality in
+// LedgerFormats; go-xrpl carries it in ledger_formats_data.go).
+func buildLedgerFormatsSection() map[string]any {
+	out := make(map[string]any, len(ledgerFormatTemplates)+1)
+	out["common"] = ledgerFormatFieldsToJSON(ledgerCommonFields)
+	for name, fields := range ledgerFormatTemplates {
+		out[name] = ledgerFormatFieldsToJSON(fields)
+	}
+	return out
+}
+
+func ledgerFormatFieldsToJSON(fields []ledgerFormatField) []any {
+	arr := make([]any, 0, len(fields))
+	for _, f := range fields {
+		arr = append(arr, map[string]any{"name": f.Name, "optionality": f.Style})
+	}
+	return arr
 }
 
 // isValidDefinitionsHash reports whether s is a 256-bit hash in hex form,

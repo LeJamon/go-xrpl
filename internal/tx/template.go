@@ -1,6 +1,10 @@
 package tx
 
-import "github.com/LeJamon/go-xrpl/internal/tx/ter"
+import (
+	"sort"
+
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+)
 
 // fieldStyle is a templated field's presence requirement (rippled's SOEStyle).
 type fieldStyle uint8
@@ -471,6 +475,40 @@ var txTemplates = map[Type]map[string]fieldStyle{
 		"LedgerSequence":     soeREQUIRED,
 		"UNLModifyValidator": soeREQUIRED,
 	},
+}
+
+// FormatField is one field of a transaction SOTemplate, exported for the
+// server_definitions RPC TRANSACTION_FORMATS section. Style is rippled's
+// SOEStyle int (0=required, 1=optional, 2=default).
+type FormatField struct {
+	Name  string
+	Style int
+}
+
+// FormatCommonFields returns the fields common to every transaction type
+// (rippled TxFormats::getCommonFields()), sorted by name for deterministic
+// output.
+func FormatCommonFields() []FormatField {
+	return sortedFormatFields(commonFields)
+}
+
+// FormatTemplates returns each transaction type's unique fields (common fields
+// excluded) keyed by the type's canonical name, for TRANSACTION_FORMATS.
+func FormatTemplates() map[string][]FormatField {
+	out := make(map[string][]FormatField, len(txTemplates))
+	for t, tmpl := range txTemplates {
+		out[t.String()] = sortedFormatFields(tmpl)
+	}
+	return out
+}
+
+func sortedFormatFields(m map[string]fieldStyle) []FormatField {
+	out := make([]FormatField, 0, len(m))
+	for name, style := range m {
+		out = append(out, FormatField{Name: name, Style: int(style)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // checkTemplate enforces a transaction type's field allowlist on the set of

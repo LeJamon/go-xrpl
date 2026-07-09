@@ -27,6 +27,12 @@ type RpcError struct {
 	Message        string `json:"error_message,omitempty"`
 	ErrorException string `json:"error_exception,omitempty"`
 
+	// Extra carries additional result fields merged into the error envelope
+	// alongside error/error_code/error_message. Mirrors rippled's
+	// RPC::injectError, which adds the error keys to an already-populated
+	// result (e.g. ledger_entry returns the computed `index` on entryNotFound).
+	Extra map[string]any `json:"-"`
+
 	// bareToken marks errors rippled emits as a lone `error` token via a direct
 	// jvResult[jss::error] = "..." assignment (e.g. VaultInfo.cpp:101,
 	// TransactionEntry.cpp:71) rather than RPC::inject_error. rippled's bare path
@@ -51,6 +57,18 @@ type RpcError struct {
 	// envelope. Transport writers special-case this flag the same way they do
 	// invalidApiVersion / forbidden.
 	overloaded bool
+}
+
+// WithExtra returns a copy of the error carrying additional result fields that
+// the response builder merges into the error envelope, mirroring rippled's
+// RPC::injectError (which adds error keys to an existing result).
+func (e *RpcError) WithExtra(fields map[string]any) *RpcError {
+	if e == nil {
+		return nil
+	}
+	cp := *e
+	cp.Extra = fields
+	return &cp
 }
 
 // IsBareToken reports whether this error mirrors a rippled bare-token response
