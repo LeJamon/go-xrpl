@@ -162,9 +162,9 @@ func verifyBatchSig(msg []byte, pubKeyHex, sigHex string) bool {
 	msgStr := string(msg)
 	switch pubKeyBytes[0] {
 	case 0xED:
-		return ed25519.ED25519().Validate(msgStr, pubKeyHex, sigHex)
+		return ed25519.Algorithm{}.Validate(msgStr, pubKeyHex, sigHex)
 	case 0x02, 0x03:
-		return secp256k1.SECP256K1().ValidateWithCanonicality(msgStr, pubKeyHex, sigHex, true)
+		return secp256k1.Algorithm{}.ValidateWithCanonicality(msgStr, pubKeyHex, sigHex, true)
 	default:
 		return false
 	}

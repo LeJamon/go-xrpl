@@ -39,7 +39,7 @@ func TestVerify_DispatchesByKeyType(t *testing.T) {
 	}
 
 	// --- secp256k1 path ---
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	secPriv := make([]byte, 32)
 	if _, err := rand.Read(secPriv); err != nil {
 		t.Fatalf("rand: %v", err)

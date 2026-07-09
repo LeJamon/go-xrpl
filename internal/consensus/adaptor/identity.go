@@ -89,7 +89,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 		return nil, ErrInvalidSeed
 	}
 
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	privKeyHex, pubKeyHex, err := algo.DeriveKeypair(decodedSeed, true)
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 		return nil, fmt.Errorf("validator_token: deserialize manifest: %w", err)
 	}
 
-	pub, err := secp256k1.SECP256K1().DerivePublicKeyFromSecret(tok.ValidationSecret[:])
+	pub, err := secp256k1.Algorithm{}.DerivePublicKeyFromSecret(tok.ValidationSecret[:])
 	if err != nil {
 		return nil, fmt.Errorf("validator_token: derive pubkey: %w", err)
 	}
@@ -196,7 +196,7 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
 		return nil, ErrNoValidatorKey
 	}
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	var digest [32]byte
 	copy(digest[:], data)
 	return algo.SignDigest(digest, vi.signingPriv)
@@ -217,7 +217,7 @@ func Verify(pubKey []byte, data []byte, signature []byte) bool {
 		}
 		return ed25519.Verify(ed25519.PublicKey(pubKey[1:]), data, signature)
 	case 0x02, 0x03:
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		var digest [32]byte
 		copy(digest[:], data)
 		return algo.ValidateDigest(digest, pubKey, signature)

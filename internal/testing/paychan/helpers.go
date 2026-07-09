@@ -52,7 +52,7 @@ func signClaimAuth(acc *jtx.Account, channelIDHex string, authAmtDrops uint64) s
 	//   msg: raw bytes as a string (NOT hex)
 	//   privKey: hex string, 66 chars with "00" prefix
 	privKeyHex := "00" + hex.EncodeToString(acc.PrivateKey)
-	signature, err := secp256k1.SECP256K1().Sign(string(messageBytes), privKeyHex)
+	signature, err := secp256k1.Algorithm{}.Sign(string(messageBytes), privKeyHex)
 	if err != nil {
 		panic(fmt.Sprintf("signClaimAuth: failed to sign: %v", err))
 	}

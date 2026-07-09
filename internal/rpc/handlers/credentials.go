@@ -124,7 +124,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 		}
 		// If key_type not specified, use the algorithm from the seed
 		if !hasKeyType {
-			_, isEd := algo.(ed25519.ED25519CryptoAlgorithm)
+			_, isEd := algo.(ed25519.Algorithm)
 			useEd25519 = isEd
 		}
 
@@ -152,7 +152,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
 		if err == nil {
 			// Successfully parsed as base58 seed
-			_, isEd := algo.(ed25519.ED25519CryptoAlgorithm)
+			_, isEd := algo.(ed25519.Algorithm)
 			useEd25519 = isEd
 		} else {
 			// Try as hex
@@ -167,10 +167,10 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 
 	// Derive keypair using the appropriate algorithm
 	if useEd25519 {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		privateKeyHex, publicKeyHex, err = algo.DeriveKeypair(seedBytes, false)
 	} else {
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		privateKeyHex, publicKeyHex, err = algo.DeriveKeypair(seedBytes, false)
 	}
 

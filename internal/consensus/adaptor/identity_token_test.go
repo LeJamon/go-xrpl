@@ -52,7 +52,7 @@ func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
 	for i := range sec {
 		sec[i] = seed ^ byte(i+1)
 	}
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	signingPubBytes, err := algo.DerivePublicKeyFromSecret(sec[:])
 	if err != nil {
 		t.Fatalf("derive ephemeral pubkey: %v", err)

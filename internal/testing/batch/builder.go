@@ -293,13 +293,13 @@ func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) {
 func signBatchMessage(acc *testing.Account, msg []byte) string {
 	priv := prefixedPrivateKeyHex(acc)
 	if acc.IsEd25519() {
-		sig, err := ed25519.ED25519().Sign(string(msg), priv)
+		sig, err := ed25519.Algorithm{}.Sign(string(msg), priv)
 		if err != nil {
 			return ""
 		}
 		return sig
 	}
-	sig, err := secp256k1.SECP256K1().Sign(string(msg), priv)
+	sig, err := secp256k1.Algorithm{}.Sign(string(msg), priv)
 	if err != nil {
 		return ""
 	}

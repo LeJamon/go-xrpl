@@ -274,13 +274,13 @@ func VerifyKeyTypeSignature(pubKey [33]byte, message []byte, sigHex string) bool
 	pubHex := hex.EncodeToString(pubKey[:])
 	switch crypto.PublicKeyType(pubKey[:]) {
 	case crypto.KeyTypeEd25519:
-		return ed25519.ED25519().Validate(string(message), pubHex, sigHex)
+		return ed25519.Algorithm{}.Validate(string(message), pubHex, sigHex)
 	case crypto.KeyTypeSecp256k1:
 		// rippled's manifest verify path Sign.cpp:47-62 → PublicKey::verify
 		// uses the header-default mustBeFullyCanonical=true
 		// (PublicKey.h:256), so non-low-S manifest signatures must be
 		// rejected.
-		return secp256k1.SECP256K1().Validate(string(message), pubHex, sigHex)
+		return secp256k1.Algorithm{}.Validate(string(message), pubHex, sigHex)
 	default:
 		return false
 	}

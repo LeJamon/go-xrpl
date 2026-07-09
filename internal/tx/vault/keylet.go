@@ -23,7 +23,7 @@ func pseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, pseudoOwnerKe
 		hash := common.Sha512Half(iBytes[:], parentHash[:], pseudoOwnerKey[:])
 
 		var accountID [20]byte
-		copy(accountID[:], addresscodec.Sha256RipeMD160(hash[:]))
+		copy(accountID[:], addresscodec.SHA256RIPEMD160(hash[:]))
 
 		if exists, _ := view.Exists(keylet.Account(accountID)); !exists {
 			return accountID

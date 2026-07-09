@@ -47,7 +47,7 @@ func TestRippledSeedEncodingVectors(t *testing.T) {
 			seedBytes := seedHash[:16]
 
 			// Encode the seed using secp256k1 algorithm
-			encodedSeed, err := EncodeSeed(seedBytes, secp256k1.SECP256K1())
+			encodedSeed, err := EncodeSeed(seedBytes, secp256k1.Algorithm{})
 			require.NoError(t, err, "EncodeSeed should not return an error")
 			require.Equal(t, tc.expectedSeed, encodedSeed, "Encoded seed should match rippled test vector")
 		})
@@ -157,7 +157,7 @@ func TestRippledSecp256k1KeyDerivation(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	t.Run("seed encoding", func(t *testing.T) {
-		encodedSeed, err := EncodeSeed(seedBytes, secp256k1.SECP256K1())
+		encodedSeed, err := EncodeSeed(seedBytes, secp256k1.Algorithm{})
 		require.NoError(t, err)
 		require.Equal(t, expected.seed, encodedSeed, "Seed encoding should match rippled test vector")
 	})
@@ -167,7 +167,7 @@ func TestRippledSecp256k1KeyDerivation(t *testing.T) {
 		seedCopy := make([]byte, len(seedBytes))
 		copy(seedCopy, seedBytes)
 
-		privKeyHex, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedCopy, false)
+		privKeyHex, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedCopy, false)
 		require.NoError(t, err)
 
 		// Verify private key format (secp256k1 has 00 prefix)
@@ -243,7 +243,7 @@ func TestRippledED25519KeyDerivation(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	// Derive ED25519 keypair
-	privKeyHex, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+	privKeyHex, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
 	t.Run("public key format", func(t *testing.T) {
@@ -284,7 +284,7 @@ func TestRippledED25519KeyDerivation(t *testing.T) {
 	t.Run("node ID derivation", func(t *testing.T) {
 		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 		require.NoError(t, err)
-		nodeIDBytes := Sha256RipeMD160(pubKeyBytes)
+		nodeIDBytes := SHA256RIPEMD160(pubKeyBytes)
 		nodeID := strings.ToUpper(hex.EncodeToString(nodeIDBytes))
 		require.Equal(t, expected.nodeID, nodeID,
 			"Node ID should match rippled test vector")
@@ -336,13 +336,13 @@ func TestRippledSeedRoundTrip(t *testing.T) {
 			originalSeedBytes := seedHash[:16]
 
 			// Encode
-			encodedSeed, err := EncodeSeed(originalSeedBytes, secp256k1.SECP256K1())
+			encodedSeed, err := EncodeSeed(originalSeedBytes, secp256k1.Algorithm{})
 			require.NoError(t, err)
 
 			// Decode
 			decodedSeedBytes, algo, err := DecodeSeed(encodedSeed)
 			require.NoError(t, err)
-			require.Equal(t, secp256k1.SECP256K1(), algo)
+			require.Equal(t, secp256k1.Algorithm{}, algo)
 			require.Equal(t, originalSeedBytes, decodedSeedBytes,
 				"Decoded seed should match original")
 		})
@@ -353,13 +353,13 @@ func TestRippledSeedRoundTrip(t *testing.T) {
 			originalSeedBytes := seedHash[:16]
 
 			// Encode
-			encodedSeed, err := EncodeSeed(originalSeedBytes, ed25519.ED25519())
+			encodedSeed, err := EncodeSeed(originalSeedBytes, ed25519.Algorithm{})
 			require.NoError(t, err)
 
 			// Decode
 			decodedSeedBytes, algo, err := DecodeSeed(encodedSeed)
 			require.NoError(t, err)
-			require.Equal(t, ed25519.ED25519(), algo)
+			require.Equal(t, ed25519.Algorithm{}, algo)
 			require.Equal(t, originalSeedBytes, decodedSeedBytes,
 				"Decoded seed should match original")
 		})
@@ -416,7 +416,7 @@ func TestRippledPublicKeyEncoding(t *testing.T) {
 		seedCopy := make([]byte, len(seedBytes))
 		copy(seedCopy, seedBytes)
 
-		_, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedCopy, false)
+		_, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedCopy, false)
 		require.NoError(t, err)
 
 		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
@@ -437,7 +437,7 @@ func TestRippledPublicKeyEncoding(t *testing.T) {
 	})
 
 	t.Run("ed25519 public key encoding", func(t *testing.T) {
-		_, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+		_, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
@@ -466,7 +466,7 @@ func TestRippledPrivateKeyEncoding(t *testing.T) {
 		seedCopy := make([]byte, len(seedBytes))
 		copy(seedCopy, seedBytes)
 
-		privKeyHex, _, err := secp256k1.SECP256K1().DeriveKeypair(seedCopy, false)
+		privKeyHex, _, err := secp256k1.Algorithm{}.DeriveKeypair(seedCopy, false)
 		require.NoError(t, err)
 
 		privKeyBytes, err := hex.DecodeString(privKeyHex)
@@ -484,7 +484,7 @@ func TestRippledPrivateKeyEncoding(t *testing.T) {
 	})
 
 	t.Run("ed25519 private key encoding", func(t *testing.T) {
-		privKeyHex, _, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+		privKeyHex, _, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		privKeyBytes, err := hex.DecodeString(privKeyHex)
@@ -511,13 +511,13 @@ func TestRippledNodeIDDerivation(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	t.Run("ed25519 node ID", func(t *testing.T) {
-		_, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+		_, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 		require.NoError(t, err)
 
-		nodeIDBytes := Sha256RipeMD160(pubKeyBytes)
+		nodeIDBytes := SHA256RIPEMD160(pubKeyBytes)
 		nodeID := strings.ToUpper(hex.EncodeToString(nodeIDBytes))
 
 		require.Equal(t, "AA066C988C712815CC37AF71472B7CBBBD4E2A0A", nodeID,
@@ -547,7 +547,7 @@ func TestRippledKeyDerivationDeterminism(t *testing.T) {
 			seed := make([]byte, len(baseSeedBytes))
 			copy(seed, baseSeedBytes)
 
-			priv, pub, err := secp256k1.SECP256K1().DeriveKeypair(seed, false)
+			priv, pub, err := secp256k1.Algorithm{}.DeriveKeypair(seed, false)
 			require.NoError(t, err)
 
 			if i == 0 {
@@ -569,7 +569,7 @@ func TestRippledKeyDerivationDeterminism(t *testing.T) {
 			seed := make([]byte, len(baseSeedBytes))
 			copy(seed, baseSeedBytes)
 
-			priv, pub, err := ed25519.ED25519().DeriveKeypair(seed, false)
+			priv, pub, err := ed25519.Algorithm{}.DeriveKeypair(seed, false)
 			require.NoError(t, err)
 
 			if i == 0 {
@@ -666,10 +666,10 @@ func TestRippledSeedPrefixDetection(t *testing.T) {
 			require.NotNil(t, algo)
 
 			if tc.expectedAlgo == "ed25519" {
-				require.Equal(t, ed25519.ED25519(), algo,
+				require.Equal(t, ed25519.Algorithm{}, algo,
 					"Should detect ED25519 algorithm")
 			} else {
-				require.Equal(t, secp256k1.SECP256K1(), algo,
+				require.Equal(t, secp256k1.Algorithm{}, algo,
 					"Should detect SECP256K1 algorithm")
 			}
 		})
@@ -683,7 +683,7 @@ func TestRippledValidatorKeypairError(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	t.Run("ed25519 validator derivation", func(t *testing.T) {
-		_, _, err := ed25519.ED25519().DeriveKeypair(seedBytes, true)
+		_, _, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, true)
 		require.Error(t, err, "Validator keypair derivation should return error for ed25519")
 	})
 }

@@ -357,7 +357,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 
 	// First, generate the keypair for verification
 	seedBytes, _ := hex.DecodeString("DEDCE9CE67B451D852FD4E846FCDE31C")
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	_, pubKeyHex, err := algo.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
@@ -409,7 +409,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 
 	// First, generate the keypair for verification
 	seedBytes, _ := hex.DecodeString("DEDCE9CE67B451D852FD4E846FCDE31C")
-	algo := ed25519.ED25519()
+	algo := ed25519.Algorithm{}
 	_, pubKeyHex, err := algo.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 

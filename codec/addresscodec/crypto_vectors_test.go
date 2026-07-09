@@ -43,7 +43,7 @@ func TestSeedFromPassphraseRippledVectors(t *testing.T) {
 			seedBytes := seedHash[:16]
 
 			// Encode the seed using secp256k1 algorithm
-			encodedSeed, err := EncodeSeed(seedBytes, secp256k1.SECP256K1())
+			encodedSeed, err := EncodeSeed(seedBytes, secp256k1.Algorithm{})
 			require.NoError(t, err, "EncodeSeed should not return an error")
 			require.Equal(t, tc.expectedSeed, encodedSeed, "Encoded seed should match expected value")
 		})
@@ -112,12 +112,12 @@ func TestSecp256k1KeyDerivationFromMasterpassphrase(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	// Verify seed encoding
-	encodedSeed, err := EncodeSeed(seedBytes, secp256k1.SECP256K1())
+	encodedSeed, err := EncodeSeed(seedBytes, secp256k1.Algorithm{})
 	require.NoError(t, err)
 	require.Equal(t, "snoPBrXtMeMyMHUVTgbuqAfg1SUTb", encodedSeed)
 
 	// Derive keypair from seed (this derives ACCOUNT keys, not node/root keys)
-	privKeyHex, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedBytes, false)
+	privKeyHex, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
 	// Test account address derivation from public key
@@ -156,7 +156,7 @@ func TestED25519KeyDerivationFromMasterpassphrase(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	// Derive ED25519 keypair from seed
-	privKeyHex, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+	privKeyHex, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
 	// Test account address derivation from public key
@@ -202,24 +202,24 @@ func TestSeedEncodingRoundTripAllAlgorithms(t *testing.T) {
 
 			// Test secp256k1 round trip
 			t.Run("secp256k1", func(t *testing.T) {
-				encoded, err := EncodeSeed(originalSeedBytes, secp256k1.SECP256K1())
+				encoded, err := EncodeSeed(originalSeedBytes, secp256k1.Algorithm{})
 				require.NoError(t, err)
 
 				decoded, algo, err := DecodeSeed(encoded)
 				require.NoError(t, err)
 				require.Equal(t, originalSeedBytes, decoded)
-				require.Equal(t, secp256k1.SECP256K1(), algo)
+				require.Equal(t, secp256k1.Algorithm{}, algo)
 			})
 
 			// Test ed25519 round trip
 			t.Run("ed25519", func(t *testing.T) {
-				encoded, err := EncodeSeed(originalSeedBytes, ed25519.ED25519())
+				encoded, err := EncodeSeed(originalSeedBytes, ed25519.Algorithm{})
 				require.NoError(t, err)
 
 				decoded, algo, err := DecodeSeed(encoded)
 				require.NoError(t, err)
 				require.Equal(t, originalSeedBytes, decoded)
-				require.Equal(t, ed25519.ED25519(), algo)
+				require.Equal(t, ed25519.Algorithm{}, algo)
 			})
 		})
 	}
@@ -242,10 +242,10 @@ func TestKeyDerivationConsistency(t *testing.T) {
 			copy(seed1, baseSeedBytes)
 			copy(seed2, baseSeedBytes)
 
-			priv1, pub1, err := secp256k1.SECP256K1().DeriveKeypair(seed1, false)
+			priv1, pub1, err := secp256k1.Algorithm{}.DeriveKeypair(seed1, false)
 			require.NoError(t, err)
 
-			priv2, pub2, err := secp256k1.SECP256K1().DeriveKeypair(seed2, false)
+			priv2, pub2, err := secp256k1.Algorithm{}.DeriveKeypair(seed2, false)
 			require.NoError(t, err)
 
 			require.Equal(t, priv1, priv2, "Private key derivation should be deterministic")
@@ -259,10 +259,10 @@ func TestKeyDerivationConsistency(t *testing.T) {
 			copy(seed1, baseSeedBytes)
 			copy(seed2, baseSeedBytes)
 
-			priv1, pub1, err := ed25519.ED25519().DeriveKeypair(seed1, false)
+			priv1, pub1, err := ed25519.Algorithm{}.DeriveKeypair(seed1, false)
 			require.NoError(t, err)
 
-			priv2, pub2, err := ed25519.ED25519().DeriveKeypair(seed2, false)
+			priv2, pub2, err := ed25519.Algorithm{}.DeriveKeypair(seed2, false)
 			require.NoError(t, err)
 
 			require.Equal(t, priv1, priv2, "Private key derivation should be deterministic")
@@ -283,7 +283,7 @@ func TestAddressDerivationFromKnownPublicKeys(t *testing.T) {
 		seedBytes := make([]byte, 16)
 		copy(seedBytes, seedHash[:16])
 
-		_, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedBytes, false)
+		_, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		// Derive address from the public key
@@ -299,7 +299,7 @@ func TestAddressDerivationFromKnownPublicKeys(t *testing.T) {
 		seedBytes := make([]byte, 16)
 		copy(seedBytes, seedHash[:16])
 
-		_, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+		_, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		// Derive address from the public key
@@ -323,14 +323,14 @@ func TestNodeIDFromPublicKey(t *testing.T) {
 		seedBytes := make([]byte, 16)
 		copy(seedBytes, seedHash[:16])
 
-		_, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedBytes, false)
+		_, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 		require.NoError(t, err)
 
 		// Compute node ID (SHA256-RIPEMD160 of the public key)
-		nodeIDBytes := Sha256RipeMD160(pubKeyBytes)
+		nodeIDBytes := SHA256RIPEMD160(pubKeyBytes)
 		nodeID := strings.ToUpper(hex.EncodeToString(nodeIDBytes))
 
 		// Verify the node ID matches what we would expect for the derived public key
@@ -349,14 +349,14 @@ func TestNodeIDFromPublicKey(t *testing.T) {
 		seedBytes := make([]byte, 16)
 		copy(seedBytes, seedHash[:16])
 
-		_, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+		_, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 		require.NoError(t, err)
 
 		pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 		require.NoError(t, err)
 
 		// Compute node ID (SHA256-RIPEMD160 of the public key)
-		nodeIDBytes := Sha256RipeMD160(pubKeyBytes)
+		nodeIDBytes := SHA256RIPEMD160(pubKeyBytes)
 		nodeID := strings.ToUpper(hex.EncodeToString(nodeIDBytes))
 
 		// For ED25519, the same key is used for node and account purposes
@@ -379,7 +379,7 @@ func TestPublicKeyEncodingWithDifferentPrefixes(t *testing.T) {
 	seedBytes := make([]byte, 16)
 	copy(seedBytes, seedHash[:16])
 
-	_, publicKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedBytes, false)
+	_, publicKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
 	pubKeyBytes, err := hex.DecodeString(publicKeyHex)
@@ -429,12 +429,12 @@ func TestFullKeyDerivationChainSecp256k1(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	// Step 2: Verify seed encoding
-	encodedSeed, err := EncodeSeed(seedBytes, secp256k1.SECP256K1())
+	encodedSeed, err := EncodeSeed(seedBytes, secp256k1.Algorithm{})
 	require.NoError(t, err)
 	require.Equal(t, expected.seed, encodedSeed, "Seed encoding should match")
 
 	// Step 3: Derive keypair (this derives ACCOUNT keys)
-	privKeyHex, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seedBytes, false)
+	privKeyHex, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
 	// Step 4: Verify account address
@@ -477,7 +477,7 @@ func TestFullKeyDerivationChainED25519(t *testing.T) {
 	seedBytes := seedHash[:16]
 
 	// Step 2: Derive ED25519 keypair
-	privKeyHex, pubKeyHex, err := ed25519.ED25519().DeriveKeypair(seedBytes, false)
+	privKeyHex, pubKeyHex, err := ed25519.Algorithm{}.DeriveKeypair(seedBytes, false)
 	require.NoError(t, err)
 
 	// Step 3: Verify account address
@@ -498,7 +498,7 @@ func TestFullKeyDerivationChainED25519(t *testing.T) {
 	require.Equal(t, expected.nodePublic, nodePublic, "Node public key should match")
 
 	// Step 6: Verify node ID
-	nodeIDBytes := Sha256RipeMD160(pubKeyBytes)
+	nodeIDBytes := SHA256RIPEMD160(pubKeyBytes)
 	nodeID := strings.ToUpper(hex.EncodeToString(nodeIDBytes))
 	require.Equal(t, expected.nodeID, nodeID, "Node ID should match")
 
@@ -533,9 +533,9 @@ func TestSeedAlgorithmDetection(t *testing.T) {
 			require.NotNil(t, algo)
 
 			if tc.expectedAlgo == "ed25519" {
-				require.Equal(t, ed25519.ED25519(), algo)
+				require.Equal(t, ed25519.Algorithm{}, algo)
 			} else {
-				require.Equal(t, secp256k1.SECP256K1(), algo)
+				require.Equal(t, secp256k1.Algorithm{}, algo)
 			}
 		})
 	}

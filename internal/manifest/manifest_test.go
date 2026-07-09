@@ -365,7 +365,7 @@ func TestManifest_Revoked_WithEphemeral_Rejected(t *testing.T) {
 func buildManifestSecpMaster(t *testing.T, seq uint32, masterSeed byte, ephemeralSeed byte) (serialized []byte, masterPub [33]byte, ephemeralPub [33]byte) {
 	t.Helper()
 
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	seedBytes := bytes.Repeat([]byte{masterSeed}, 16)
 	masterPrivHex, masterPubHex, err := algo.DeriveKeypair(seedBytes, false)
 	if err != nil {
@@ -403,7 +403,7 @@ func buildManifestSecpMaster(t *testing.T, seq uint32, masterSeed byte, ephemera
 	}
 	// algo.Sign always emits a low-S (fully canonical) secp256k1 signature, so
 	// the master sig is already canonical; the high-S flip below depends on that.
-	if rootcrypto.ECDSACanonicality(masterSigBytes) != rootcrypto.CanonicityFullyCanonical {
+	if rootcrypto.ECDSACanonicality(masterSigBytes) != rootcrypto.CanonicalityFullyCanonical {
 		t.Fatalf("expected fully-canonical master signature from Sign")
 	}
 	json["MasterSignature"] = strings.ToUpper(hex.EncodeToString(masterSigBytes))
@@ -453,8 +453,8 @@ func TestManifest_Secp256k1MasterSig_HighS_Rejected(t *testing.T) {
 	}
 	highS := new(big.Int).Sub(secp256k1CurveOrderN, new(big.Int).SetBytes(s))
 	highSDER := rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
-	if got := rootcrypto.ECDSACanonicality(highSDER); got != rootcrypto.CanonicityCanonical {
-		t.Fatalf("flipped sig canonicality: got %v want %v (high-S but otherwise valid)", got, rootcrypto.CanonicityCanonical)
+	if got := rootcrypto.ECDSACanonicality(highSDER); got != rootcrypto.CanonicalityCanonical {
+		t.Fatalf("flipped sig canonicality: got %v want %v (high-S but otherwise valid)", got, rootcrypto.CanonicalityCanonical)
 	}
 	decoded["MasterSignature"] = strings.ToUpper(hex.EncodeToString(highSDER))
 

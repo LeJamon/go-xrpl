@@ -107,7 +107,7 @@ func TestSignDigestBytes_AcceptedByBtcecdsa(t *testing.T) {
 	}
 }
 
-// Cross-impl: a signature produced by the existing SECP256K1().SignDigest
+// Cross-impl: a signature produced by the existing Algorithm{}.SignDigest
 // (hex API) must verify via VerifyDigestBytes. Confirms the byte-form
 // API is interchangeable with the legacy hex one.
 func TestVerifyDigestBytes_AcceptsLegacyHexSign(t *testing.T) {
@@ -116,7 +116,7 @@ func TestVerifyDigestBytes_AcceptsLegacyHexSign(t *testing.T) {
 
 	var d [32]byte
 	copy(d[:], digest)
-	sig, err := SECP256K1().SignDigest(d, strings.ToUpper(hex.EncodeToString(privBytes)))
+	sig, err := Algorithm{}.SignDigest(d, strings.ToUpper(hex.EncodeToString(privBytes)))
 	if err != nil {
 		t.Fatalf("SECP256K1.SignDigest: %v", err)
 	}

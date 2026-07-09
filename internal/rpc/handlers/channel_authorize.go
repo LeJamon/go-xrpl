@@ -146,12 +146,12 @@ func signMessage(message []byte, privateKeyHex string, keyType string) (string, 
 	isEd25519 := strings.ToLower(keyType) == "ed25519"
 
 	if isEd25519 {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		return algo.Sign(msgStr, privateKeyHex)
 	}
 
 	// Default to secp256k1
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	return algo.Sign(msgStr, privateKeyHex)
 }
 

@@ -515,12 +515,12 @@ func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string, mustBeFul
 	switch keyType {
 	case 0xED:
 		// ED25519
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		return algo.Validate(msgStr, pubKeyHex, signatureHex)
 
 	case 0x02, 0x03:
 		// SECP256K1 (compressed public key)
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		return algo.ValidateWithCanonicality(msgStr, pubKeyHex, signatureHex, mustBeFullyCanonical)
 
 	default:
@@ -560,7 +560,7 @@ func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error
 	switch keyType {
 	case 0xED:
 		// ED25519
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("ED25519 signing failed: %w", err)
@@ -568,7 +568,7 @@ func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error
 
 	case 0x00:
 		// SECP256K1
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)
@@ -627,7 +627,7 @@ func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, pr
 	switch keyType {
 	case 0xED:
 		// ED25519
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("ED25519 signing failed: %w", err)
@@ -635,7 +635,7 @@ func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, pr
 
 	case 0x00:
 		// SECP256K1
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		signature, err = algo.Sign(msgStr, privateKeyHex)
 		if err != nil {
 			return "", fmt.Errorf("SECP256K1 signing failed: %w", err)

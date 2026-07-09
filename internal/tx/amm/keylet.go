@@ -82,7 +82,7 @@ func pseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, pseudoOwnerKe
 
 // sha256Ripemd160 computes SHA256(data) then RIPEMD160 of the result, returning a 20-byte AccountID.
 func sha256Ripemd160(data []byte) [20]byte {
-	result := addresscodec.Sha256RipeMD160(data)
+	result := addresscodec.SHA256RIPEMD160(data)
 	var id [20]byte
 	copy(id[:], result)
 	return id

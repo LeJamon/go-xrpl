@@ -131,7 +131,7 @@ func GenerateAccountIDFromPassphrase(passphrase string) ([20]byte, string, error
 	seedHash := common.Sha512Half([]byte(passphrase))
 	seed := seedHash[:16]
 
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	_, pubKeyHex, err := algo.DeriveKeypair(seed, false)
 	if err != nil {
 		return [20]byte{}, "", err

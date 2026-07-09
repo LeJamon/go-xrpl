@@ -44,7 +44,7 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	// Validator keys are always secp256k1, derived directly from the root
 	// generator (rippled ValidationCreate.cpp:54).
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	privHex, pubHex, err := algo.DeriveKeypair(seed, true)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive validator keypair: %v", err))

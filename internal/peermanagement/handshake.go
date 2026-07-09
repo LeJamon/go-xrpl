@@ -475,7 +475,7 @@ func VerifyPeerHandshake(headers http.Header, sharedValue []byte, localPubKey st
 }
 
 func verifySessionSignature(pubKey *PublicKeyToken, sharedValue, signature []byte) error {
-	if rootcrypto.ECDSACanonicality(signature) == rootcrypto.CanonicityNone {
+	if rootcrypto.ECDSACanonicality(signature) == rootcrypto.CanonicalityNone {
 		return fmt.Errorf("%w: malformed DER signature", ErrInvalidSignature)
 	}
 	if !secp256k1.VerifyDigestBytes(sharedValue, pubKey.Bytes(), signature) {

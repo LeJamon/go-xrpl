@@ -27,5 +27,5 @@ func VerifyDigestBytes(digest, pubKey, sig []byte) bool {
 	}
 	var d [32]byte
 	copy(d[:], digest)
-	return SECP256K1().ValidateDigest(d, pubKey, sig)
+	return Algorithm{}.ValidateDigest(d, pubKey, sig)
 }
