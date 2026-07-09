@@ -49,7 +49,7 @@ func (m *mockLedgerServiceTx) GetTransaction(txHash [32]byte) (*types.Transactio
 	return nil, errors.New("transaction not found")
 }
 
-func (m *mockLedgerServiceTx) GetNetworkID() uint16 {
+func (m *mockLedgerServiceTx) ResolvedNetworkID() uint16 {
 	return m.networkID
 }
 

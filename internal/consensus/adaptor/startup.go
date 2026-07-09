@@ -362,7 +362,7 @@ func NewFromConfig(
 		vlAgg, err = validatorlist.New(validatorlist.Config{
 			PublisherKeys: pkSlice,
 			SiteURIs:      append([]string(nil), appCfg.Validators.ValidatorListSites...),
-			Threshold:     appCfg.Validators.GetValidatorListThreshold(),
+			Threshold:     appCfg.Validators.EffectiveListThreshold(),
 			Manifests:     manifestCache,
 			Logger:        slog.Default().With("component", "validator-list-aggregator"),
 		})
@@ -577,13 +577,13 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	var opts []peermanagement.Option
 
 	// Network ID
-	if networkID, err := appCfg.GetNetworkID(); err == nil {
+	if networkID, err := appCfg.ResolvedNetworkID(); err == nil {
 		opts = append(opts, peermanagement.WithNetworkID(uint32(networkID)))
 	}
 
 	// Listen address from peer port config
-	if _, peerPort, hasPeer := appCfg.GetPeerPort(); hasPeer {
-		opts = append(opts, peermanagement.WithListenAddr(peerPort.GetBindAddress()))
+	if _, peerPort, hasPeer := appCfg.PeerPort(); hasPeer {
+		opts = append(opts, peermanagement.WithListenAddr(peerPort.BindAddress()))
 	}
 
 	// Bootstrap peers (convert "host port" → "host:port")

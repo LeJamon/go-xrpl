@@ -190,7 +190,7 @@ func validateRippleProtocol(config *Config) []error {
 	}
 
 	if config.NetworkID.Set {
-		if _, err := config.GetNetworkID(); err != nil {
+		if _, err := config.ResolvedNetworkID(); err != nil {
 			errs = append(errs, fmt.Errorf("invalid network_id: %w", err))
 		}
 	}
@@ -235,10 +235,10 @@ func validateCrossReferences(config *Config) []error {
 	var errs []error
 
 	if config.ValidationSeed != "" && config.ValidatorToken != "" {
-		errs = append(errs, fmt.Errorf("cannot have both [validation_seed] and [validator_token] config sections"))
+		errs = append(errs, errors.New("cannot have both [validation_seed] and [validator_token] config sections"))
 	}
 
-	ledgerHistory := config.GetLedgerHistory()
+	ledgerHistory := config.ResolvedLedgerHistory()
 	if config.NodeDB.OnlineDelete > 0 && ledgerHistory > 0 && config.NodeDB.OnlineDelete < ledgerHistory {
 		if config.LedgerHistory.Full {
 			errs = append(errs, fmt.Errorf("online_delete (%d) must be greater than or equal to ledger_history (\"full\")",
@@ -250,8 +250,8 @@ func validateCrossReferences(config *Config) []error {
 	}
 
 	if config.IsValidator() {
-		if _, _, hasPeerPort := config.GetPeerPort(); !hasPeerPort {
-			errs = append(errs, fmt.Errorf("validator configuration requires a peer port to be configured"))
+		if _, _, hasPeerPort := config.PeerPort(); !hasPeerPort {
+			errs = append(errs, errors.New("validator configuration requires a peer port to be configured"))
 		}
 	}
 
@@ -261,16 +261,16 @@ func validateCrossReferences(config *Config) []error {
 // validateIPEntry validates an IP entry from the [ips] section
 func validateIPEntry(entry string) error {
 	if entry == "" {
-		return fmt.Errorf("IP entry cannot be empty")
+		return errors.New("IP entry cannot be empty")
 	}
 
 	parts := strings.Fields(entry)
 	if len(parts) > 2 || len(parts) == 0 {
-		return fmt.Errorf("invalid format, expected 'IP [port]'")
+		return errors.New("invalid format, expected 'IP [port]'")
 	}
 
 	if parts[0] == "" {
-		return fmt.Errorf("IP address cannot be empty")
+		return errors.New("IP address cannot be empty")
 	}
 
 	if len(parts) == 2 {
@@ -285,16 +285,16 @@ func validateIPEntry(entry string) error {
 // validateFixedIPEntry validates an IP entry from the [ips_fixed] section
 func validateFixedIPEntry(entry string) error {
 	if entry == "" {
-		return fmt.Errorf("fixed IP entry cannot be empty")
+		return errors.New("fixed IP entry cannot be empty")
 	}
 
 	parts := strings.Fields(entry)
 	if len(parts) != 2 {
-		return fmt.Errorf("fixed IP entries must include a port, expected 'IP port'")
+		return errors.New("fixed IP entries must include a port, expected 'IP port'")
 	}
 
 	if parts[0] == "" {
-		return fmt.Errorf("IP address cannot be empty")
+		return errors.New("IP address cannot be empty")
 	}
 
 	if err := validatePortString(parts[1]); err != nil {
@@ -307,7 +307,7 @@ func validateFixedIPEntry(entry string) error {
 // validatePortString validates a port number in string format
 func validatePortString(portStr string) error {
 	if portStr == "" {
-		return fmt.Errorf("port cannot be empty")
+		return errors.New("port cannot be empty")
 	}
 
 	port, err := strconv.Atoi(portStr)

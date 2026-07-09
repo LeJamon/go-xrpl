@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -56,8 +57,8 @@ func (v *ValidatorsConfig) Validate() error {
 	return nil
 }
 
-// GetValidatorListThreshold returns the effective threshold value
-func (v *ValidatorsConfig) GetValidatorListThreshold() int {
+// EffectiveListThreshold returns the effective threshold value
+func (v *ValidatorsConfig) EffectiveListThreshold() int {
 	if v.ValidatorListThreshold == 0 && len(v.ValidatorListKeys) > 0 {
 		// Calculate threshold as per rippled logic
 		if len(v.ValidatorListKeys) < 3 {
@@ -71,7 +72,7 @@ func (v *ValidatorsConfig) GetValidatorListThreshold() int {
 // validateValidatorKey validates a single validator public key
 func validateValidatorKey(key string) error {
 	if key == "" {
-		return fmt.Errorf("validator key cannot be empty")
+		return errors.New("validator key cannot be empty")
 	}
 
 	// Basic validation - should start with 'n' and be the right length
@@ -86,7 +87,7 @@ func validateValidatorKey(key string) error {
 
 	// Character set validation (base58)
 	if !isValidBase58(key) {
-		return fmt.Errorf("validator key contains invalid characters")
+		return errors.New("validator key contains invalid characters")
 	}
 
 	return nil
@@ -95,14 +96,14 @@ func validateValidatorKey(key string) error {
 // validateValidatorListSite validates a validator list site URL
 func validateValidatorListSite(site string) error {
 	if site == "" {
-		return fmt.Errorf("validator list site cannot be empty")
+		return errors.New("validator list site cannot be empty")
 	}
 
 	// Basic URL validation
 	if !strings.HasPrefix(site, "http://") &&
 		!strings.HasPrefix(site, "https://") &&
 		!strings.HasPrefix(site, "file://") {
-		return fmt.Errorf("validator list site must use http://, https://, or file:// scheme")
+		return errors.New("validator list site must use http://, https://, or file:// scheme")
 	}
 
 	return nil
@@ -115,7 +116,7 @@ func validateValidatorListSite(site string) error {
 // ed25519 — or 0x02/0x03 for secp256k1.
 func validateValidatorListKey(key string) error {
 	if key == "" {
-		return fmt.Errorf("validator list key cannot be empty")
+		return errors.New("validator list key cannot be empty")
 	}
 
 	if len(key) != 66 {
@@ -123,7 +124,7 @@ func validateValidatorListKey(key string) error {
 	}
 
 	if !isValidHex(key) {
-		return fmt.Errorf("validator list key contains invalid hex characters")
+		return errors.New("validator list key contains invalid hex characters")
 	}
 
 	// Sanity-check the key-type prefix byte.

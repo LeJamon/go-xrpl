@@ -71,8 +71,8 @@ type Config struct {
 	Validators ValidatorsConfig `toml:"-" mapstructure:"-"`
 }
 
-// ConfigPaths holds the paths to configuration files
-type ConfigPaths struct {
+// Paths holds the paths to configuration files
+type Paths struct {
 	Main       string // Path to main config file (xrpld.toml)
 	Validators string // Path to validators file (validators.toml)
 }
@@ -86,10 +86,10 @@ var networkIDByName = map[string]int{
 	"devnet":  2,
 }
 
-// GetNetworkID returns the network ID as an integer.
+// ResolvedNetworkID returns the network ID as an integer.
 // String network names ("main", "testnet", "devnet") are mapped to their
 // canonical IDs (0, 1, 2).
-func (c *Config) GetNetworkID() (int, error) {
+func (c *Config) ResolvedNetworkID() (int, error) {
 	if !c.NetworkID.Set {
 		return 0, fmt.Errorf("network_id is required but not set")
 	}
@@ -107,12 +107,12 @@ func (c *Config) GetNetworkID() (int, error) {
 // defaultLedgerHistory mirrors rippled's LEDGER_HISTORY default (Config.h).
 const defaultLedgerHistory = 256
 
-// GetLedgerHistory returns the configured ledger history as an integer.
+// ResolvedLedgerHistory returns the configured ledger history as an integer.
 // "full" maps to math.MaxInt32 (matching rippled's uint32 max sentinel)
 // so that downstream comparisons such as the online_delete cross-check
 // fire the same way they do in rippled. When the key is absent the
 // rippled default of 256 applies.
-func (c *Config) GetLedgerHistory() int {
+func (c *Config) ResolvedLedgerHistory() int {
 	if !c.LedgerHistory.Set {
 		return defaultLedgerHistory
 	}
@@ -122,14 +122,14 @@ func (c *Config) GetLedgerHistory() int {
 // defaultFetchDepth mirrors rippled's FETCH_DEPTH default (Config.h): the
 // unset value is 1e9, distinct from the "full" keyword which maps to the
 // uint32 max. Both are effectively unlimited, but matching the exact
-// sentinel keeps GetFetchDepth faithful to rippled.
+// sentinel keeps ResolvedFetchDepth faithful to rippled.
 const defaultFetchDepth = 1000000000
 
-// GetFetchDepth returns the configured fetch depth as an integer.
+// ResolvedFetchDepth returns the configured fetch depth as an integer.
 // "full" maps to math.MaxInt32, and any explicit count below 10 is
 // raised to 10 to mirror rippled's hard floor (Config.cpp:671-672).
 // When the key is absent the rippled default of 1e9 applies.
-func (c *Config) GetFetchDepth() int {
+func (c *Config) ResolvedFetchDepth() int {
 	if !c.FetchDepth.Set {
 		return defaultFetchDepth
 	}
@@ -141,8 +141,8 @@ func (c *Config) IsValidator() bool {
 	return c.ValidationSeed != "" || c.ValidatorToken != ""
 }
 
-// GetPeerPort returns the port configured for peer protocol
-func (c *Config) GetPeerPort() (string, PortConfig, bool) {
+// PeerPort returns the port configured for peer protocol
+func (c *Config) PeerPort() (string, PortConfig, bool) {
 	for name, port := range c.Ports {
 		if strings.Contains(port.Protocol, "peer") {
 			return name, port, true
@@ -151,11 +151,11 @@ func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 	return "", PortConfig{}, false
 }
 
-// GetGRPCPort returns the port configured for the gRPC protocol, if any.
+// GRPCPort returns the port configured for the gRPC protocol, if any.
 // gRPC is disabled by default: absent a [port_grpc] section the third
 // return value is false and no listener is started, matching rippled
 // (GRPCServer.cpp only serves when [port_grpc] exists with ip + port).
-func (c *Config) GetGRPCPort() (string, PortConfig, bool) {
+func (c *Config) GRPCPort() (string, PortConfig, bool) {
 	for name, port := range c.Ports {
 		if port.HasGRPC() {
 			return name, port, true
@@ -164,8 +164,8 @@ func (c *Config) GetGRPCPort() (string, PortConfig, bool) {
 	return "", PortConfig{}, false
 }
 
-// GetHTTPPorts returns all ports that support HTTP/HTTPS protocols
-func (c *Config) GetHTTPPorts() map[string]PortConfig {
+// HTTPPorts returns all ports that support HTTP/HTTPS protocols
+func (c *Config) HTTPPorts() map[string]PortConfig {
 	httpPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
 		if strings.Contains(port.Protocol, "http") {
@@ -175,8 +175,8 @@ func (c *Config) GetHTTPPorts() map[string]PortConfig {
 	return httpPorts
 }
 
-// GetWebSocketPorts returns all ports that support WebSocket protocols
-func (c *Config) GetWebSocketPorts() map[string]PortConfig {
+// WebSocketPorts returns all ports that support WebSocket protocols
+func (c *Config) WebSocketPorts() map[string]PortConfig {
 	wsPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
 		if strings.Contains(port.Protocol, "ws") {

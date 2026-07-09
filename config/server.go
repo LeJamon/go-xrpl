@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -59,17 +60,18 @@ type PortConfig struct {
 }
 
 // HasPeer returns true if the port supports peer protocol
-func (p *PortConfig) HasPeer() bool {
+func (p PortConfig) HasPeer() bool {
 	return strings.Contains(p.Protocol, "peer")
 }
 
 // HasGRPC returns true if the port supports the gRPC protocol
-func (p *PortConfig) HasGRPC() bool {
+func (p PortConfig) HasGRPC() bool {
 	return strings.Contains(p.Protocol, "grpc")
 }
 
-// GetBindAddress returns the full bind address (IP:Port)
-func (p *PortConfig) GetBindAddress() string {
+// BindAddress returns the full bind address (IP:Port). It uses a value
+// receiver so it is callable directly on map elements (config.Ports[name]).
+func (p PortConfig) BindAddress() string {
 	if p.IP == "" {
 		return ":0" // Invalid, but will be caught by validation
 	}
@@ -82,16 +84,16 @@ func (p *PortConfig) GetBindAddress() string {
 // Validate performs validation on the port configuration
 func (p *PortConfig) Validate() error {
 	if p.Port == 0 {
-		return fmt.Errorf("port number is required")
+		return errors.New("port number is required")
 	}
 	if p.Port < 1 || p.Port > 65535 {
 		return fmt.Errorf("port number must be between 1 and 65535, got %d", p.Port)
 	}
 	if p.IP == "" {
-		return fmt.Errorf("IP address is required")
+		return errors.New("IP address is required")
 	}
 	if p.Protocol == "" {
-		return fmt.Errorf("protocol is required")
+		return errors.New("protocol is required")
 	}
 
 	// Validate protocol combinations
@@ -143,18 +145,18 @@ func (p *PortConfig) validateProtocols() error {
 	}
 
 	if hasWebSocket && hasNonWebSocket {
-		return fmt.Errorf("websocket and non-websocket protocols cannot be combined on the same port")
+		return errors.New("websocket and non-websocket protocols cannot be combined on the same port")
 	}
 
 	if peerCount > 1 {
-		return fmt.Errorf("only one peer protocol can be specified per port")
+		return errors.New("only one peer protocol can be specified per port")
 	}
 
 	// gRPC has its own listener and wire framing, so it cannot share a
 	// port with HTTP/WS/peer — mirroring rippled's dedicated [port_grpc]
 	// section (GRPCServer.cpp).
 	if grpcCount > 0 && (hasWebSocket || hasNonWebSocket || peerCount > 0) {
-		return fmt.Errorf("grpc protocol cannot be combined with other protocols on the same port")
+		return errors.New("grpc protocol cannot be combined with other protocols on the same port")
 	}
 
 	return nil

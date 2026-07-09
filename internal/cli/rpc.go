@@ -140,7 +140,7 @@ func runRPC(cmd *cobra.Command, method string, params any) error {
 // config. An admin port is preferred so admin methods work; ports are sorted
 // by name for deterministic selection.
 func rpcEndpoint(cfg *config.Config) (string, *config.PortConfig, error) {
-	ports := cfg.GetHTTPPorts()
+	ports := cfg.HTTPPorts()
 	if len(ports) == 0 {
 		return "", nil, fmt.Errorf("no HTTP port configured in %s; 'xrpld rpc' forwards to a running node's JSON-RPC port", configFile)
 	}

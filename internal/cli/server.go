@@ -196,7 +196,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get network ID from config
-	networkID, err := globalConfig.GetNetworkID()
+	networkID, err := globalConfig.ResolvedNetworkID()
 	if err != nil {
 		return fmt.Errorf("get network ID: %w", err)
 	}
@@ -270,7 +270,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 			if prunable, ok := db.(shamapstore.NodePruner); ok {
 				var relPruner shamapstore.RelationalPruner
 				if repoManager != nil {
-					relPruner = relationaldb.NewLedgerPruner(repoManager, globalConfig.NodeDB.GetDeleteBatch())
+					relPruner = relationaldb.NewLedgerPruner(repoManager, globalConfig.NodeDB.DeleteBatch)
 				}
 				rotator = shamapstore.NewRotator(
 					advisoryStore,
@@ -278,7 +278,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 					relPruner,
 					shamapstore.RotationConfig{
 						DeleteInterval: uint32(globalConfig.NodeDB.OnlineDelete),
-						DeleteBatch:    globalConfig.NodeDB.GetDeleteBatch(),
+						DeleteBatch:    globalConfig.NodeDB.DeleteBatch,
 					},
 					serverLog,
 				)
@@ -969,7 +969,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// configured. Disabled by default: no section → no listener (mirrors
 	// rippled's GRPCServer). The ledger service already satisfies the
 	// grpc.LedgerLookup surface the service implementation needs.
-	if grpcName, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+	if grpcName, grpcPort, hasGRPC := globalConfig.GRPCPort(); hasGRPC {
 		srv, addr, err := startGRPCServer(grpcName, grpcPort, ledgerService, serverLog, listenerErrCh)
 		if err != nil {
 			return fmt.Errorf("start grpc server: %w", err)
@@ -1109,7 +1109,7 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	} else if dbPath != "" {
 		// Default: auto-create SQLite databases at the given directory
 		// path, applying the operator's [sqlite] tuning.
-		journalMode, synchronous, tempStore := cfg.SQLite.GetEffectiveSettings()
+		journalMode, synchronous, tempStore := cfg.SQLite.EffectiveSettings()
 		var err error
 		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
 			JournalMode:      journalMode,
@@ -1180,20 +1180,20 @@ func startListeners(
 		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
 	})
 
-	httpPorts := cfg.GetHTTPPorts()
-	wsPorts := cfg.GetWebSocketPorts()
+	httpPorts := cfg.HTTPPorts()
+	wsPorts := cfg.WebSocketPorts()
 
 	for name, p := range httpPorts {
-		log.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
+		log.Info("Port configured", "protocol", "http", "name", name, "addr", p.BindAddress())
 	}
 	for name, p := range wsPorts {
-		log.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
+		log.Info("Port configured", "protocol", "ws", "name", name, "addr", p.BindAddress())
 	}
-	if _, peerPort, hasPeer := cfg.GetPeerPort(); hasPeer {
-		log.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
+	if _, peerPort, hasPeer := cfg.PeerPort(); hasPeer {
+		log.Info("Port configured", "protocol", "peer", "addr", peerPort.BindAddress())
 	}
-	if _, grpcPort, hasGRPC := cfg.GetGRPCPort(); hasGRPC {
-		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.GetBindAddress())
+	if _, grpcPort, hasGRPC := cfg.GRPCPort(); hasGRPC {
+		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.BindAddress())
 	}
 
 	// listenerErrCh routes ListenAndServe failures back to the main
@@ -1209,7 +1209,7 @@ func startListeners(
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: p.BindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		wsSrvs = append(wsSrvs, srv)
 		go func(n string, s *http.Server) {
 			log.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
@@ -1242,7 +1242,7 @@ func startListeners(
 			name string
 			pc   *rpc.PortContext
 			addr string
-		}{name, pc, p.GetBindAddress()})
+		}{name, pc, p.BindAddress()})
 	}
 
 	if len(httpPortList) == 0 {
@@ -1364,7 +1364,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 		serverLog.Warn("SIGHUP received but no --conf path set; skipping UNL reload")
 		return
 	}
-	cfg, err := config.LoadConfig(config.ConfigPaths{Main: configPath})
+	cfg, err := config.LoadConfig(config.Paths{Main: configPath})
 	if err != nil {
 		serverLog.Error("SIGHUP UNL reload: re-load config failed", "err", err)
 		return

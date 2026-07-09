@@ -13,7 +13,7 @@ import (
 // LoadConfig loads configuration from the config file.
 // No defaults are applied — every required value must be present in the config file.
 // Returns an error listing ALL missing/invalid fields at once.
-func LoadConfig(paths ConfigPaths) (*Config, error) {
+func LoadConfig(paths Paths) (*Config, error) {
 	v := viper.New()
 
 	// Load main configuration file (required)
@@ -81,7 +81,7 @@ func loadMainConfig(v *viper.Viper, configPath string) error {
 // resolved against the main config file's directory, matching rippled's
 // handling of [validators_file]. Whichever path is selected MUST exist
 // — both sources are explicit requests for a validators file.
-func loadValidatorsConfig(paths ConfigPaths, validatorsFile string) (*ValidatorsConfig, error) {
+func loadValidatorsConfig(paths Paths, validatorsFile string) (*ValidatorsConfig, error) {
 	var filePath string
 	switch {
 	case validatorsFile != "":

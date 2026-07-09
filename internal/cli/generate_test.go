@@ -74,7 +74,7 @@ func TestGenerateConfigContent_LoadsCleanly(t *testing.T) {
 			if err := os.WriteFile(p, []byte(generateConfigContent(network)), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			cfg, err := config.LoadConfig(config.ConfigPaths{Main: p})
+			cfg, err := config.LoadConfig(config.Paths{Main: p})
 			if err != nil {
 				t.Fatalf("generated %s config failed to load: %v", network, err)
 			}
