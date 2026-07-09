@@ -79,11 +79,25 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	// Direct index lookup
 	if !keySet {
 		if raw, ok := rawParams["index"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "index")
-			if rpcErr != nil {
-				return nil, rpcErr
+			// API v3 accepts string shortcuts for fixed-location objects
+			// whose index needs no parameters (rippled LedgerEntry.cpp
+			// parseIndex, apiVersion > 2): amendments/fee/nunl/hashes.
+			if ctx.ApiVersion >= types.ApiVersion3 {
+				var s string
+				if err := json.Unmarshal(raw, &s); err == nil {
+					if k, ok := fixedIndexShortcut(s); ok {
+						entryKey = k
+						keySet = true
+					}
+				}
 			}
-			keySet = true
+			if !keySet {
+				entryKey, rpcErr = parseHex256(raw, "index")
+				if rpcErr != nil {
+					return nil, rpcErr
+				}
+				keySet = true
+			}
 		}
 	}
 
@@ -437,10 +451,14 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	// "" means the `index` alias (ltANY), which accepts any entry type.
 	expectedType := expectedLedgerEntryType(rawParams)
 
+	// rippled 3.2.0 returns the computed index regardless of whether the object
+	// exists (LedgerEntry.cpp: jss::index set before the read, then injectError).
+	indexExtra := map[string]any{"index": strings.ToUpper(hex.EncodeToString(entryKey[:]))}
+
 	result, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
-			return nil, types.RpcErrorEntryNotFound("")
+			return nil, types.RpcErrorEntryNotFound("").WithExtra(indexExtra)
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
@@ -457,7 +475,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	// opts out via expectedType == "".
 	if expectedType != "" && decodeErr == nil {
 		if actual, _ := decoded["LedgerEntryType"].(string); actual != "" && actual != expectedType {
-			return nil, types.RpcErrorUnexpectedLedgerType()
+			return nil, types.RpcErrorUnexpectedLedgerType().WithExtra(indexExtra)
 		}
 	}
 
@@ -557,6 +575,23 @@ func decodeAccountID(address string) ([20]byte, error) {
 	}
 	copy(accountID[:], idBytes)
 	return accountID, nil
+}
+
+// fixedIndexShortcut resolves an API v3 `index` string shortcut to the key of
+// the corresponding fixed-location ledger object (rippled LedgerEntry.cpp
+// parseIndex). "hashes" is the short skip list (keylet::skip()).
+func fixedIndexShortcut(s string) ([32]byte, bool) {
+	switch s {
+	case "amendments":
+		return keylet.Amendments().Key, true
+	case "fee":
+		return keylet.Fees().Key, true
+	case "nunl":
+		return keylet.NegativeUNL().Key, true
+	case "hashes":
+		return keylet.LedgerHashes().Key, true
+	}
+	return [32]byte{}, false
 }
 
 // parseHex256 parses a JSON value as a 64-character hex string (32 bytes)

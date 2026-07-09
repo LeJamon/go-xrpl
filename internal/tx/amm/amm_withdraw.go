@@ -171,6 +171,12 @@ func (a *AMMWithdraw) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets/amounts on the MPTokensV2 amendment.
+func (a *AMMWithdraw) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT() ||
+		amountIsMPT(a.Amount) || amountIsMPT(a.Amount2))
+}
+
 // Preclaim performs the stateful withdraw validation against the unmodified
 // view: AMM existence and pool sanity, per-amount balance/authorization/freeze,
 // the withdrawer's LP holdings, and the LPTokenIn / EPrice issues.

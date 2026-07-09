@@ -1290,6 +1290,74 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 	assert.Equal(t, "Entry not found.", rpcErr.Message)
 }
 
+// TestLedgerEntryV3IndexShortcuts pins the API v3 fixed-object `index` string
+// shortcuts (rippled 3.2.0 #5644): amendments/fee/nunl/hashes resolve to their
+// well-known keylets under api_version 3, and are treated as (invalid) hex under
+// v1/v2.
+func TestLedgerEntryV3IndexShortcuts(t *testing.T) {
+	shortcuts := []struct {
+		name string
+		key  [32]byte
+	}{
+		{"amendments", keylet.Amendments().Key},
+		{"fee", keylet.Fees().Key},
+		{"nunl", keylet.NegativeUNL().Key},
+		{"hashes", keylet.LedgerHashes().Key},
+	}
+	for _, sc := range shortcuts {
+		t.Run("v3 "+sc.name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			method := &handlers.LedgerEntryMethod{}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion3,
+				Services:   newLedgerEntryTestServices(mock),
+			}
+			paramsJSON, _ := json.Marshal(map[string]any{"index": sc.name, "ledger_index": "validated"})
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, sc.key, mock.lastRequestedKey,
+				"%q shortcut must resolve to its fixed keylet", sc.name)
+		})
+		t.Run("v2 rejects "+sc.name, func(t *testing.T) {
+			mock := newMockLedgerEntryService()
+			method := &handlers.LedgerEntryMethod{}
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   newLedgerEntryTestServices(mock),
+			}
+			paramsJSON, _ := json.Marshal(map[string]any{"index": sc.name, "ledger_index": "validated"})
+			_, rpcErr := method.Handle(ctx, paramsJSON)
+			require.NotNil(t, rpcErr, "string shortcut is v3-only; v2 treats it as a bad hex index")
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		})
+	}
+}
+
+// TestLedgerEntryNotFoundReturnsIndex pins the rippled 3.2.0 change to return
+// the computed index alongside entryNotFound, regardless of api version.
+func TestLedgerEntryNotFoundReturnsIndex(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion2,
+		Services:   newLedgerEntryTestServices(mock),
+	}
+	const idx = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+	paramsJSON, _ := json.Marshal(map[string]any{"index": idx, "ledger_index": "validated"})
+	_, rpcErr := method.Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code)
+	require.NotNil(t, rpcErr.Extra, "entryNotFound must carry the computed index")
+	assert.Equal(t, idx, rpcErr.Extra["index"])
+}
+
 // AccountRoot Entry Tests
 
 // TestLedgerEntryAccountRoot tests account_root lookup by address and by index

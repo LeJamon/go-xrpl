@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 107 amendments.
+Total: 108 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -38,8 +38,9 @@ Total: 107 amendments.
 | `HardenedValidations` | yes | yes |
 | `ImmediateOfferKilled` | yes | no |
 | `InvariantsV1_1` | no | no |
-| `LendingProtocol` | no | no |
+| `LendingProtocol` | yes | no |
 | `MPTokensV1` | yes | no |
+| `MPTokensV2` | no | no |
 | `MultiSign` | yes | no |
 | `MultiSignReserve` | yes | yes |
 | `NFTokenMintOffer` | yes | no |
@@ -52,7 +53,7 @@ Total: 107 amendments.
 | `PermissionedDomains` | yes | no |
 | `PriceOracle` | yes | no |
 | `RequireFullyCanonicalSig` | yes | yes |
-| `SingleAssetVault` | no | no |
+| `SingleAssetVault` | yes | no |
 | `SortedDirectories` | yes | no |
 | `TickSize` | yes | no |
 | `TicketBatch` | yes | yes |

@@ -30,8 +30,10 @@ type DirectoryNode struct {
 	Owner             string // AccountID (base58)
 	TakerPaysCurrency string // Hash160 (uppercase hex)
 	TakerPaysIssuer   string // Hash160 (uppercase hex)
+	TakerPaysMPT      string
 	TakerGetsCurrency string // Hash160 (uppercase hex)
 	TakerGetsIssuer   string // Hash160 (uppercase hex)
+	TakerGetsMPT      string
 	ExchangeRate      string // UInt64 (lowercase hex, no leading zeros)
 	NFTokenID         string // Hash256 (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
@@ -48,8 +50,10 @@ const (
 	directorynodeBitOwner
 	directorynodeBitTakerPaysCurrency
 	directorynodeBitTakerPaysIssuer
+	directorynodeBitTakerPaysMPT
 	directorynodeBitTakerGetsCurrency
 	directorynodeBitTakerGetsIssuer
+	directorynodeBitTakerGetsMPT
 	directorynodeBitExchangeRate
 	directorynodeBitNFTokenID
 	directorynodeBitDomainID
@@ -187,6 +191,21 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
+		case 21: // Hash192
+			val, err := sr.readHash(24)
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 3:
+				d.TakerPaysMPT = val
+				d.present |= directorynodeBitTakerPaysMPT
+			case 4:
+				d.TakerGetsMPT = val
+				d.present |= directorynodeBitTakerGetsMPT
+			default:
+				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
+			}
 		default:
 			return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 		}
@@ -216,11 +235,17 @@ func (d *DirectoryNode) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&directorynodeBitTakerPaysIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerPaysIssuer)) {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 && !(skipDefault && isZeroHexString(d.TakerPaysMPT)) {
+		out["TakerPaysMPT"] = d.TakerPaysMPT
+	}
 	if d.present&directorynodeBitTakerGetsCurrency != 0 && !(skipDefault && isZeroHexString(d.TakerGetsCurrency)) {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
 	if d.present&directorynodeBitTakerGetsIssuer != 0 && !(skipDefault && isZeroHexString(d.TakerGetsIssuer)) {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 && !(skipDefault && isZeroHexString(d.TakerGetsMPT)) {
+		out["TakerGetsMPT"] = d.TakerGetsMPT
 	}
 	if d.present&directorynodeBitExchangeRate != 0 && !(skipDefault && isZeroHexString(d.ExchangeRate)) {
 		out["ExchangeRate"] = d.ExchangeRate
@@ -261,8 +286,10 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Owner", prv.Owner, d.Owner, prv.present&directorynodeBitOwner, d.present&directorynodeBitOwner)
 	emitIfChangedString(out, "TakerPaysCurrency", prv.TakerPaysCurrency, d.TakerPaysCurrency, prv.present&directorynodeBitTakerPaysCurrency, d.present&directorynodeBitTakerPaysCurrency)
 	emitIfChangedString(out, "TakerPaysIssuer", prv.TakerPaysIssuer, d.TakerPaysIssuer, prv.present&directorynodeBitTakerPaysIssuer, d.present&directorynodeBitTakerPaysIssuer)
+	emitIfChangedString(out, "TakerPaysMPT", prv.TakerPaysMPT, d.TakerPaysMPT, prv.present&directorynodeBitTakerPaysMPT, d.present&directorynodeBitTakerPaysMPT)
 	emitIfChangedString(out, "TakerGetsCurrency", prv.TakerGetsCurrency, d.TakerGetsCurrency, prv.present&directorynodeBitTakerGetsCurrency, d.present&directorynodeBitTakerGetsCurrency)
 	emitIfChangedString(out, "TakerGetsIssuer", prv.TakerGetsIssuer, d.TakerGetsIssuer, prv.present&directorynodeBitTakerGetsIssuer, d.present&directorynodeBitTakerGetsIssuer)
+	emitIfChangedString(out, "TakerGetsMPT", prv.TakerGetsMPT, d.TakerGetsMPT, prv.present&directorynodeBitTakerGetsMPT, d.present&directorynodeBitTakerGetsMPT)
 	emitIfChangedString(out, "ExchangeRate", prv.ExchangeRate, d.ExchangeRate, prv.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
 	emitIfChangedString(out, "NFTokenID", prv.NFTokenID, d.NFTokenID, prv.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
 	emitIfChangedString(out, "DomainID", prv.DomainID, d.DomainID, prv.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
@@ -292,11 +319,17 @@ func (d *DirectoryNode) EmitChangeOrigFields(out map[string]any) {
 	if d.present&directorynodeBitTakerPaysIssuer != 0 {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 {
+		out["TakerPaysMPT"] = d.TakerPaysMPT
+	}
 	if d.present&directorynodeBitTakerGetsCurrency != 0 {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
 	if d.present&directorynodeBitTakerGetsIssuer != 0 {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 {
+		out["TakerGetsMPT"] = d.TakerGetsMPT
 	}
 	if d.present&directorynodeBitExchangeRate != 0 {
 		out["ExchangeRate"] = d.ExchangeRate
@@ -372,11 +405,17 @@ func (d *DirectoryNode) ToMap() map[string]any {
 	if d.present&directorynodeBitTakerPaysIssuer != 0 {
 		out["TakerPaysIssuer"] = d.TakerPaysIssuer
 	}
+	if d.present&directorynodeBitTakerPaysMPT != 0 {
+		out["TakerPaysMPT"] = d.TakerPaysMPT
+	}
 	if d.present&directorynodeBitTakerGetsCurrency != 0 {
 		out["TakerGetsCurrency"] = d.TakerGetsCurrency
 	}
 	if d.present&directorynodeBitTakerGetsIssuer != 0 {
 		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitTakerGetsMPT != 0 {
+		out["TakerGetsMPT"] = d.TakerGetsMPT
 	}
 	if d.present&directorynodeBitExchangeRate != 0 {
 		out["ExchangeRate"] = d.ExchangeRate

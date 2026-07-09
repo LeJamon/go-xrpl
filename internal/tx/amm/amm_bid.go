@@ -110,6 +110,11 @@ func (a *AMMBid) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
+func (a *AMMBid) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT())
+}
+
 // Preclaim validates the AMM, the bidder's LP holdings, and the bid bounds.
 // Reference: rippled AMMBid.cpp preclaim (plus the fixAMMv1_3-gated AuthAccounts
 // duplicate/self check that rippled performs in preflight).

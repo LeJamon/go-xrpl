@@ -325,12 +325,13 @@ type FeeVoteStance struct {
 }
 
 // defaultFeeVote returns the fee setup a validator votes toward with no
-// [voting] config (reference_fee=10, account_reserve=10 XRP, owner_reserve=2 XRP).
+// [voting] config (reference_fee=10, account_reserve=1 XRP, owner_reserve=0.2 XRP).
+// rippled 3.2.0 (#6382) lowered the default voted reserves from 10/2 XRP.
 func defaultFeeVote() FeeVoteStance {
 	return FeeVoteStance{
 		BaseFee:          10,
-		ReserveBase:      10_000_000,
-		ReserveIncrement: 2_000_000,
+		ReserveBase:      1_000_000,
+		ReserveIncrement: 200_000,
 	}
 }
 

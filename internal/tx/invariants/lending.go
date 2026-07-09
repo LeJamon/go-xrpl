@@ -7,18 +7,20 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/vault"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// XLS-66 lending invariants, ported from rippled 3.1.0 InvariantCheck.cpp
+// XLS-66 lending invariants, ported from rippled InvariantCheck.cpp
 // (ValidLoanBroker, ValidLoan). Both are enforcement-gated on
 // featureLendingProtocol: while it is off the objects cannot exist, so the checks
 // are inert.
 //
-// The 3.1.0 ValidLoanBroker also asserts CoverAvailable >= accountHolds(pseudo,
-// asset) — a lower bound revised into an exact match by the 3.1.3 fixCleanup.
-// That cross-asset balance comparison is deferred; the numeric and structural
-// checks below are the safe subset.
+// ValidLoanBroker also compares CoverAvailable against the pseudo-account's
+// holdings of the vault asset: a lower bound (>=, from 3.1.0), plus an exact upper
+// bound (==) added by fixCleanup3_1_3. Pseudo-accounts carry no XRP reserve, so
+// the XRP holdings are the full balance (rippled xrpLiquid + isPseudoAccount).
 
 const lsfLoanOverpaymentFlag uint32 = 0x00040000
 
@@ -132,11 +134,47 @@ func checkValidLoanBroker(entries []InvariantEntry, view ReadView, rules *amendm
 		if verr != nil {
 			return lendingViolation("ValidLoanBroker", "loan broker vault ID is malformed")
 		}
-		if data, rerr := view.Read(keylet.VaultByID(vid)); rerr != nil || data == nil {
+		vaultData, rerr := view.Read(keylet.VaultByID(vid))
+		if rerr != nil || vaultData == nil {
 			return lendingViolation("ValidLoanBroker", "loan broker vault ID is invalid")
+		}
+
+		// CoverAvailable must match the pseudo-account's holdings of the vault
+		// asset: a lower bound, plus (post-fixCleanup3_1_3) an exact upper bound.
+		// A deleted broker has After==nil and is skipped above, matching rippled's
+		// ttLOAN_BROKER_DELETE exclusion from the upper bound.
+		pseudoAddr, aok := after["Account"].(string)
+		if !aok {
+			return lendingViolation("ValidLoanBroker", "loan broker has no account")
+		}
+		pseudoID, aerr := state.DecodeAccountID(pseudoAddr)
+		if aerr != nil {
+			return lendingViolation("ValidLoanBroker", "loan broker account is malformed")
+		}
+		pseudoBalance, phOK := vault.PseudoAssetHolds(view, pseudoID, vaultData)
+		if !phOK {
+			return lendingViolation("ValidLoanBroker", "could not read pseudo-account asset balance")
+		}
+		coverAvailable := coverAvailableNumber(after)
+		if coverAvailable.Cmp(pseudoBalance) < 0 {
+			return lendingViolation("ValidLoanBroker", "cover available is less than pseudo-account asset balance")
+		}
+		if rules.Enabled(amendment.FeatureFixCleanup3_1_3) && coverAvailable.Cmp(pseudoBalance) > 0 {
+			return lendingViolation("ValidLoanBroker", "cover available is greater than pseudo-account asset balance")
 		}
 	}
 	return nil
+}
+
+// coverAvailableNumber parses the LoanBroker's CoverAvailable NUMBER field; an
+// absent or malformed value is treated as zero.
+func coverAvailableNumber(fields map[string]any) state.XRPLNumber {
+	s, ok := fields["CoverAvailable"].(string)
+	if !ok {
+		return state.NewXRPLNumber(0, 0)
+	}
+	n, _ := vault.ParseLedgerNumber(s)
+	return n
 }
 
 // hexDecode32 decodes a 64-char hex string to a [32]byte.

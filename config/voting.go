@@ -3,7 +3,7 @@ package config
 // VotingConfig represents the [voting] section: the fee/reserve values
 // this validator votes toward on flag ledgers. Zero values mean "not
 // configured" — the consensus adaptor substitutes the network defaults
-// (reference_fee=10, account_reserve=10 XRP, owner_reserve=2 XRP).
+// (reference_fee=10, account_reserve=1 XRP, owner_reserve=0.2 XRP).
 type VotingConfig struct {
 	ReferenceFee   int `toml:"reference_fee" mapstructure:"reference_fee"`
 	AccountReserve int `toml:"account_reserve" mapstructure:"account_reserve"`

@@ -396,6 +396,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 		"Credentials",
 		"AMMClawback",
 		"MPTokensV1",
+		"MPTokensV2",
 		"DeepFreeze",
 		"DynamicNFT",
 		"PermissionedDomains",

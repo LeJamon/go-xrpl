@@ -1379,7 +1379,6 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 	req := &message.GetObjectByHash{
 		ObjType:    objType,
 		Query:      true,
-		Seq:        seq,
 		LedgerHash: ledgerHash[:],
 		Objects:    objs,
 	}

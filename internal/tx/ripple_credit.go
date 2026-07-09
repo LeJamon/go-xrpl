@@ -150,6 +150,45 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) ter
 	return ter.TesSUCCESS
 }
 
+// RippleSendIOU moves `amount` of an IOU from sender to receiver, rippling
+// through the issuer when neither party is the issuer: it credits the
+// issuer→receiver trust line and debits the sender→issuer line, so the balance
+// settles on the canonical issuer lines rather than a direct sender↔receiver
+// line. When either party is the issuer, it is a single direct RippleCredit
+// (redeeming or issuing the asset). Unless the fee is waived, the sender is
+// additionally charged the issuer's transfer rate, rounded to nearest.
+//
+// Reference: rippled View.cpp rippleSendIOU.
+func RippleSendIOU(view LedgerView, sender, receiver [20]byte, amount Amount, waiveFee bool) ter.Result {
+	if amount.IsZero() || sender == receiver {
+		return ter.TesSUCCESS
+	}
+
+	issuerID, err := state.DecodeAccountID(amount.Issuer)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+
+	if sender == issuerID || receiver == issuerID {
+		return RippleCredit(view, sender, receiver, amount)
+	}
+
+	// Third-party transit: the receiver is credited the delivered amount while
+	// the sender is debited the (possibly fee-inflated) actual cost.
+	senderAmount := amount
+	if !waiveFee {
+		if rate := GetTransferRate(view, amount.Issuer); rate != TransferRateParity {
+			rateAmount := state.NewIssuedAmountFromValue(int64(rate), -9, amount.Currency, amount.Issuer)
+			senderAmount = amount.Mul(rateAmount, false)
+		}
+	}
+
+	if r := RippleCredit(view, issuerID, receiver, amount); r != ter.TesSUCCESS {
+		return r
+	}
+	return RippleCredit(view, sender, issuerID, senderAmount)
+}
+
 // rippleCreditCreate is RippleCredit's missing-line branch: it auto-creates the
 // trust line carrying the credited balance and bumps the receiver's owner count,
 // mirroring rippled's rippleCreditIOU create path.
