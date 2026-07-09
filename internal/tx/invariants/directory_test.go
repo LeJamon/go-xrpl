@@ -9,15 +9,15 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// mapView is a ReadView backed by an in-memory key→bytes map, for exercising the
+// bookMapView is a ReadView backed by an in-memory key→bytes map, for exercising the
 // directory-root existence check in finalize.
-type mapView struct {
+type bookMapView struct {
 	stubView
 	entries map[[32]byte][]byte
 }
 
-func (v mapView) Read(k keylet.Keylet) ([]byte, error) { return v.entries[k.Key], nil }
-func (v mapView) Exists(k keylet.Keylet) (bool, error) {
+func (v bookMapView) Read(k keylet.Keylet) ([]byte, error) { return v.entries[k.Key], nil }
+func (v bookMapView) Exists(k keylet.Keylet) (bool, error) {
 	_, ok := v.entries[k.Key]
 	return ok, nil
 }
@@ -79,12 +79,12 @@ func TestCheckValidBookDirectory_ChildRootMustExist(t *testing.T) {
 	childEntry := []InvariantEntry{{Key: childKey, EntryType: "DirectoryNode", After: childData}}
 
 	// Root missing from the view → violation.
-	if v := checkValidBookDirectory(childEntry, mapView{entries: map[[32]byte][]byte{}}, on); v == nil {
+	if v := checkValidBookDirectory(childEntry, bookMapView{entries: map[[32]byte][]byte{}}, on); v == nil {
 		t.Fatalf("missing root must fail")
 	}
 
 	// Root present → passes.
-	view := mapView{entries: map[[32]byte][]byte{rootKey: rootData}}
+	view := bookMapView{entries: map[[32]byte][]byte{rootKey: rootData}}
 	if v := checkValidBookDirectory(childEntry, view, on); v != nil {
 		t.Fatalf("present root must pass, got %v", v)
 	}
