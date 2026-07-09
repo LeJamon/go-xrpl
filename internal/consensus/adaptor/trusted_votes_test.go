@@ -136,7 +136,7 @@ func TestTrustedVotes_NewVotesReplacePrevious(t *testing.T) {
 
 // TestTrustedVotes_EmptyAmendmentsClearsUpvotes mirrors rippled's
 // "validator has no amendment votes" branch at
-// AmendmentTable.cpp:206-211: a validation with empty sfAmendments
+// Table.cpp:206-211: a validation with empty sfAmendments
 // resets the cached upVotes to nothing while still refreshing the
 // timeout.
 func TestTrustedVotes_EmptyAmendmentsClearsUpvotes(t *testing.T) {
@@ -159,7 +159,7 @@ func TestTrustedVotes_EmptyAmendmentsClearsUpvotes(t *testing.T) {
 }
 
 // TestTrustedVotes_TrustChangedPreservesExisting mirrors
-// AmendmentTable.cpp:130-143: validators retained across a UNL
+// Table.cpp:130-143: validators retained across a UNL
 // change keep their cached vote; new validators get a fresh
 // empty entry.
 func TestTrustedVotes_TrustChangedPreservesExisting(t *testing.T) {
@@ -184,7 +184,7 @@ func TestTrustedVotes_TrustChangedPreservesExisting(t *testing.T) {
 
 // TestTrustedVotes_TrustChangedDropsRemoved verifies that votes
 // from validators no longer trusted are evicted entirely. Mirrors
-// the swap at AmendmentTable.cpp:146.
+// the swap at Table.cpp:146.
 func TestTrustedVotes_TrustChangedDropsRemoved(t *testing.T) {
 	v1 := makeNodeID(1)
 	v2 := makeNodeID(2)

@@ -64,10 +64,10 @@ type Config struct {
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
 
-	// AmendmentTable, when supplied, is the live amendment table the service
+	// Table, when supplied, is the live amendment table the service
 	// folds each validated flag ledger into (enabled set + majority projection +
 	// blocked state). Optional — nil disables amendment-table resync.
-	AmendmentTable *amendment.AmendmentTable
+	Table *amendment.Table
 
 	// TxQ optionally overrides the transaction-queue configuration
 	// (built from the operator's [transaction_queue] stanza via
@@ -105,7 +105,7 @@ type Service struct {
 
 	// amendmentTable is the live amendment table folded by each validated flag
 	// ledger (nil disables resync). Has its own internal mutex.
-	amendmentTable *amendment.AmendmentTable
+	amendmentTable *amendment.Table
 
 	// Current open ledger (accepting transactions)
 	openLedger *ledger.Ledger
@@ -259,7 +259,7 @@ func New(cfg Config) (*Service, error) {
 		logger:                   logger.Named(xrpllog.PartitionLedger),
 		nodeStore:                cfg.NodeStore,
 		relationalDB:             cfg.RelationalDB,
-		amendmentTable:           cfg.AmendmentTable,
+		amendmentTable:           cfg.Table,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		ledgerByHash:             make(map[[32]byte]uint32),
 		txIndex:                  make(map[[32]byte]uint32),
@@ -275,10 +275,10 @@ func New(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// syncAmendmentTable folds a newly-validated ledger into the live amendment
+// syncTable folds a newly-validated ledger into the live amendment
 // table (enabled set + majority projection + block detection). Gated to
 // flag-ledger windows by NeedValidatedLedger; no-op when no table is configured.
-func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
+func (s *Service) syncTable(l *ledger.Ledger) {
 	if s.amendmentTable == nil || l == nil {
 		return
 	}
@@ -311,9 +311,9 @@ func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
 	}
 }
 
-// AmendmentTable returns the live amendment table shared with the consensus
+// Table returns the live amendment table shared with the consensus
 // adaptor, or nil when none is configured.
-func (s *Service) AmendmentTable() *amendment.AmendmentTable {
+func (s *Service) Table() *amendment.Table {
 	return s.amendmentTable
 }
 
@@ -335,7 +335,7 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 		return nil
 	}
 	name := ""
-	if f := amendment.GetFeature(id); f != nil {
+	if f := amendment.FeatureByID(id); f != nil {
 		name = f.Name
 	}
 	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{

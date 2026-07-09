@@ -52,10 +52,10 @@ func (v *stubAmendmentsView) LedgerSeq() uint32                    { return 0 }
 // buildAmendmentWarnings can read firstUnsupportedExpected.
 type mockServerInfoWarnings struct {
 	*mockLedgerServiceServerInfo
-	table *amendment.AmendmentTable
+	table *amendment.Table
 }
 
-func (m *mockServerInfoWarnings) AmendmentTable() *amendment.AmendmentTable { return m.table }
+func (m *mockServerInfoWarnings) Table() *amendment.Table { return m.table }
 
 // serverInfoWarnings runs server_info and returns the parsed warnings array.
 func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool) []map[string]any {
@@ -105,7 +105,7 @@ func warningByID(warnings []map[string]any, id int) map[string]any {
 func TestServerInfoAmendmentWarnings(t *testing.T) {
 	// Build a table holding an unsupported amendment in majority (not enabled),
 	// so firstUnsupportedExpected is set but the node is not blocked.
-	tbl := amendment.NewAmendmentTable()
+	tbl := amendment.NewTable()
 	const majorityClose uint32 = 800_000_000
 	tbl.DoValidatedLedger(256, nil, map[[32]byte]uint32{unsupportedAmendmentID: majorityClose})
 	expDate, ok := tbl.FirstUnsupportedExpected()
@@ -158,7 +158,7 @@ func TestServerInfoAmendmentWarnings(t *testing.T) {
 	})
 
 	t.Run("healthy node emits no amendment warnings", func(t *testing.T) {
-		mock := &mockServerInfoWarnings{mockLedgerServiceServerInfo: newMockLedgerServiceServerInfo(), table: amendment.NewAmendmentTable()}
+		mock := &mockServerInfoWarnings{mockLedgerServiceServerInfo: newMockLedgerServiceServerInfo(), table: amendment.NewTable()}
 		warnings := serverInfoWarnings(t, mock, true)
 		assert.Nil(t, warningByID(warnings, types.WarningUnsupportedAmendmentsMajority))
 		assert.Nil(t, warningByID(warnings, types.WarningAmendmentBlocked))
@@ -180,7 +180,7 @@ func (m *mockFeatureLedger) GetClosedLedgerView() (types.LedgerStateView, error)
 // whose Amendments SLE lists an amendment in majority, and asserts the `majority`
 // close time is surfaced. Mirrors rippled doFeature (Feature1.cpp:52,62,95).
 func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
-	did := amendment.GetFeatureByName("DID")
+	did := amendment.FeatureByName("DID")
 	require.NotNil(t, did)
 
 	const majorityClose uint32 = 700_000_000

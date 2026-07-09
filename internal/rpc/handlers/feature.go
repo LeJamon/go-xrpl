@@ -24,7 +24,7 @@ type FeatureMethod struct{ BaseHandler }
 // adapter implements to expose the amendment table and accept vote mutations.
 // Test mocks don't implement it, so handlers degrade gracefully.
 type amendmentVoteController interface {
-	AmendmentTable() *amendment.AmendmentTable
+	Table() *amendment.Table
 	SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error
 }
 
@@ -39,9 +39,9 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	enabledSet, majorities := m.getAmendmentState(ctx.Services)
 	ctrl := amendmentController(ctx.Services)
-	var tbl *amendment.AmendmentTable
+	var tbl *amendment.Table
 	if ctrl != nil {
-		tbl = ctrl.AmendmentTable()
+		tbl = ctrl.Table()
 	}
 	var lastVote *amendment.LastVote
 	if tbl != nil {
@@ -98,13 +98,13 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 // resolveFeature looks up an amendment by registry name or 64-char hex ID.
 func resolveFeature(feature string) *amendment.Feature {
-	if f := amendment.GetFeatureByName(feature); f != nil {
+	if f := amendment.FeatureByName(feature); f != nil {
 		return f
 	}
 	if idBytes, err := hex.DecodeString(feature); err == nil && len(idBytes) == 32 {
 		var id [32]byte
 		copy(id[:], idBytes)
-		return amendment.GetFeature(id)
+		return amendment.FeatureByID(id)
 	}
 	return nil
 }
@@ -171,7 +171,7 @@ func (m *FeatureMethod) getAmendmentState(services *types.ServiceContainer) (ena
 // AmendmentTableImpl::injectJson + doFeature: `name`/`enabled`/`supported` always;
 // `vetoed` and `count`/`validations`/`threshold` only for an admin viewing a
 // not-yet-enabled amendment; `majority` whenever the amendment is in the majority set.
-func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.AmendmentTable, lastVote *amendment.LastVote, isAdmin bool) map[string]any {
+func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.Table, lastVote *amendment.LastVote, isAdmin bool) map[string]any {
 	supported := f.Supported == amendment.SupportedYes
 
 	var enabled bool
@@ -216,7 +216,7 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majori
 
 // featureVetoed reports an amendment's veto status: "Obsolete", or a bool. The
 // operator table (when present) takes precedence over the registry default.
-func featureVetoed(f *amendment.Feature, tbl *amendment.AmendmentTable, supported bool) any {
+func featureVetoed(f *amendment.Feature, tbl *amendment.Table, supported bool) any {
 	if f.Vote == amendment.VoteObsolete {
 		return "Obsolete"
 	}

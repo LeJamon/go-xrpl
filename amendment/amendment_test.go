@@ -31,7 +31,7 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Errorf("Expected at least 80 features, got %d", count)
 	}
 
-	flow := GetFeatureByName("Flow")
+	flow := FeatureByName("Flow")
 	if flow == nil {
 		t.Fatal("Flow feature not found")
 	}
@@ -50,7 +50,7 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Error("Flow should vote Obsolete after retirement")
 	}
 
-	amm := GetFeatureByName("AMM")
+	amm := FeatureByName("AMM")
 	if amm == nil {
 		t.Fatal("AMM feature not found")
 	}
@@ -58,7 +58,7 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Error("AMM should be VoteDefaultNo")
 	}
 
-	multiSign := GetFeatureByName("MultiSign")
+	multiSign := FeatureByName("MultiSign")
 	if multiSign == nil {
 		t.Fatal("MultiSign feature not found")
 	}
@@ -66,7 +66,7 @@ func TestFeatureRegistry(t *testing.T) {
 		t.Error("MultiSign should be retired")
 	}
 
-	nftV1 := GetFeatureByName("NonFungibleTokensV1")
+	nftV1 := FeatureByName("NonFungibleTokensV1")
 	if nftV1 == nil {
 		t.Fatal("NonFungibleTokensV1 feature not found")
 	}
@@ -77,7 +77,7 @@ func TestFeatureRegistry(t *testing.T) {
 
 func TestFeatureIDMatches(t *testing.T) {
 	// Verify the global IDs match the registered features
-	flow := GetFeatureByName("Flow")
+	flow := FeatureByName("Flow")
 	if flow == nil {
 		t.Fatal("Flow feature not found")
 	}
@@ -85,7 +85,7 @@ func TestFeatureIDMatches(t *testing.T) {
 		t.Error("FeatureFlow ID mismatch")
 	}
 
-	amm := GetFeatureByName("AMM")
+	amm := FeatureByName("AMM")
 	if amm == nil {
 		t.Fatal("AMM feature not found")
 	}
@@ -94,8 +94,8 @@ func TestFeatureIDMatches(t *testing.T) {
 	}
 }
 
-func TestAmendmentTable(t *testing.T) {
-	table := NewAmendmentTable()
+func TestTable(t *testing.T) {
+	table := NewTable()
 
 	// Initially nothing should be enabled
 	if table.IsEnabled(FeatureFlow) {
@@ -123,8 +123,8 @@ func TestAmendmentTable(t *testing.T) {
 	}
 }
 
-func TestAmendmentTableVoting(t *testing.T) {
-	table := NewAmendmentTable()
+func TestTableVoting(t *testing.T) {
+	table := NewTable()
 
 	// Veto an amendment
 	table.Veto(FeatureAMM)
@@ -164,8 +164,8 @@ func TestRetiredFeaturesVoteObsolete(t *testing.T) {
 	}
 }
 
-func TestAmendmentTableClone(t *testing.T) {
-	table := NewAmendmentTable()
+func TestTableClone(t *testing.T) {
+	table := NewTable()
 	table.Enable(FeatureFlow)
 	table.Veto(FeatureAMM)
 
@@ -305,7 +305,7 @@ func TestDefaultYesFeatures(t *testing.T) {
 }
 
 func TestFeatureHelperMethods(t *testing.T) {
-	flow := GetFeatureByName("Flow")
+	flow := FeatureByName("Flow")
 	if flow == nil {
 		t.Fatal("Flow feature not found")
 	}
@@ -324,7 +324,7 @@ func TestFeatureHelperMethods(t *testing.T) {
 		t.Errorf("Flow.String() should return 'Flow', got '%s'", flow.String())
 	}
 
-	nftV1 := GetFeatureByName("NonFungibleTokensV1")
+	nftV1 := FeatureByName("NonFungibleTokensV1")
 	if nftV1 == nil {
 		t.Fatal("NonFungibleTokensV1 feature not found")
 	}
@@ -334,7 +334,7 @@ func TestFeatureHelperMethods(t *testing.T) {
 }
 
 func TestHasUnsupportedEnabled(t *testing.T) {
-	table := NewAmendmentTable()
+	table := NewTable()
 
 	// Initially no unsupported enabled
 	if table.HasUnsupportedEnabled() {
@@ -355,7 +355,7 @@ func TestHasUnsupportedEnabled(t *testing.T) {
 		t.Error("Should have unsupported enabled with unknown ID")
 	}
 
-	unsupported := table.GetUnsupportedEnabled()
+	unsupported := table.UnsupportedEnabledIDs()
 	if len(unsupported) != 1 {
 		t.Errorf("Expected 1 unsupported, got %d", len(unsupported))
 	}
@@ -427,7 +427,7 @@ func TestAllExpectedFeaturesExist(t *testing.T) {
 	}
 
 	for _, name := range expectedFeatures {
-		f := GetFeatureByName(name)
+		f := FeatureByName(name)
 		if f == nil {
 			t.Errorf("Expected feature '%s' not found", name)
 		}

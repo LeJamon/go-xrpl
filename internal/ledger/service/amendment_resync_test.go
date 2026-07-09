@@ -10,13 +10,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestService_AmendmentTableResync verifies that AcceptLedger folds the
+// TestService_TableResync verifies that AcceptLedger folds the
 // validated ledger's amendment set into the shared amendment table and that the
 // node is not blocked when every enabled amendment is supported.
-func TestService_AmendmentTableResync(t *testing.T) {
-	tbl := amendment.NewAmendmentTable()
+func TestService_TableResync(t *testing.T) {
+	tbl := amendment.NewTable()
 	cfg := DefaultConfig()
-	cfg.AmendmentTable = tbl
+	cfg.Table = tbl
 
 	svc, err := New(cfg)
 	require.NoError(t, err)
@@ -56,9 +56,9 @@ func TestService_AmendmentTableResync(t *testing.T) {
 // (Persistence is exercised by the relationaldb repository tests; here
 // RelationalDB is nil, so SetAmendmentVote applies in-memory and returns nil.)
 func TestService_SetAmendmentVote(t *testing.T) {
-	tbl := amendment.NewAmendmentTable()
+	tbl := amendment.NewTable()
 	cfg := DefaultConfig()
-	cfg.AmendmentTable = tbl
+	cfg.Table = tbl
 	svc, err := New(cfg)
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
@@ -77,13 +77,13 @@ func TestService_SetAmendmentVote(t *testing.T) {
 		"no table configured must error")
 }
 
-// TestService_NilAmendmentTable verifies the accessors are safe when no table
+// TestService_NilTable verifies the accessors are safe when no table
 // is configured.
-func TestService_NilAmendmentTable(t *testing.T) {
+func TestService_NilTable(t *testing.T) {
 	var s Service
 	require.False(t, s.IsAmendmentBlocked())
 	if _, ok := s.AmendmentFirstUnsupportedExpected(); ok {
 		t.Fatal("nil table must report no projection")
 	}
-	require.Nil(t, s.AmendmentTable())
+	require.Nil(t, s.Table())
 }

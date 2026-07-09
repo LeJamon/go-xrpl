@@ -975,10 +975,10 @@ func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
 	return a.svc.IsAmendmentBlocked()
 }
 
-// AmendmentTable exposes the live amendment table for RPC introspection
+// Table exposes the live amendment table for RPC introspection
 // (feature command, server_info warnings). May be nil.
-func (a *LedgerServiceAdapter) AmendmentTable() *amendment.AmendmentTable {
-	return a.svc.AmendmentTable()
+func (a *LedgerServiceAdapter) Table() *amendment.Table {
+	return a.svc.Table()
 }
 
 // SetAmendmentVote records an operator veto/upvote and persists it.

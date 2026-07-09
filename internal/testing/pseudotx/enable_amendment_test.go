@@ -29,7 +29,7 @@ func newAmendmentTestEnv(t *testing.T) *jtx.TestEnv {
 
 // makeAmendmentHash returns the uppercase hex hash for a known amendment name.
 func makeAmendmentHash(name string) string {
-	feat := amendment.GetFeatureByName(name)
+	feat := amendment.FeatureByName(name)
 	if feat != nil {
 		return strings.ToUpper(hex.EncodeToString(feat.ID[:]))
 	}

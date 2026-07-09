@@ -86,7 +86,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.evictOldHistoryLocked(closedSeq)
 
 	// Fold the validated ledger into the amendment table.
-	s.syncAmendmentTable(s.validatedLedger)
+	s.syncTable(s.validatedLedger)
 
 	// Drain any stashed validation at this seq so it can't match a later
 	// re-close (redundant here since standalone already validated). No-op if none.
@@ -636,7 +636,7 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	s.mu.Unlock()
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
-	s.syncAmendmentTable(l)
+	s.syncTable(l)
 
 	if pool != nil {
 		pool.Sweep(l)

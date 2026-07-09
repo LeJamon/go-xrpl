@@ -275,7 +275,7 @@ func NewFromConfig(
 		// Source vote stances from the same amendment table the ledger service
 		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
 		// config) drives consensus voting.
-		AmendmentTable: ledgerSvc.AmendmentTable(),
+		Table: ledgerSvc.Table(),
 		// The operator's [voting] stanza. Zero values mean unset —
 		// New() substitutes the network defaults.
 		FeeVote:          feeVoteFromConfig(appCfg.Voting),

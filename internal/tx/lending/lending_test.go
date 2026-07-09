@@ -22,7 +22,7 @@ func registerLending() { registerOnce.Do(lending.Register) }
 // registration: Supported::yes, VoteBehavior::DefaultNo. The Loan* transactors
 // are fully implemented, so the node applies them once the amendment activates.
 func TestLendingAmendmentSupported(t *testing.T) {
-	f := amendment.GetFeature(amendment.FeatureLendingProtocol)
+	f := amendment.FeatureByID(amendment.FeatureLendingProtocol)
 	if f == nil {
 		t.Fatal("LendingProtocol must be registered")
 	}

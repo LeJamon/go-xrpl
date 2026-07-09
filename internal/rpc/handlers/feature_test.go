@@ -7,11 +7,11 @@ import (
 )
 
 func TestBuildFeatureInfo_TableVetoOverride(t *testing.T) {
-	f := amendment.GetFeatureByName("DID") // supported, DefaultNo
+	f := amendment.FeatureByName("DID") // supported, DefaultNo
 	if f == nil {
 		t.Fatal("DID feature must exist")
 	}
-	tbl := amendment.NewAmendmentTable()
+	tbl := amendment.NewTable()
 
 	// vetoed is admin-only and only for not-yet-enabled amendments
 	// (rippled injectJson: `if (!fs.enabled && isAdmin)`).
@@ -49,8 +49,8 @@ func TestBuildFeatureInfo_TableVetoOverride(t *testing.T) {
 }
 
 func TestBuildFeatureInfo_AdminCounts(t *testing.T) {
-	f := amendment.GetFeatureByName("DID")
-	tbl := amendment.NewAmendmentTable()
+	f := amendment.FeatureByName("DID")
+	tbl := amendment.NewTable()
 	tbl.SetLastVote(&amendment.LastVote{
 		TrustedValidations: 10,
 		Threshold:          8,
@@ -78,7 +78,7 @@ func TestBuildFeatureInfo_AdminCounts(t *testing.T) {
 }
 
 func TestBuildFeatureInfo_Majority(t *testing.T) {
-	f := amendment.GetFeatureByName("DID")
+	f := amendment.FeatureByName("DID")
 
 	// Not in the majority set → no `majority` field.
 	info := buildFeatureInfo(f, map[[32]byte]bool{}, nil, nil, nil, false)

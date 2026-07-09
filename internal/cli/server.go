@@ -205,7 +205,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// One instance is shared between the ledger service (which folds validated
 	// flag ledgers into it) and the consensus adaptor (which sources vote
 	// stances from it).
-	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
+	amendmentTable := buildTable(globalConfig.Amendments, repoManager, serverLog)
 
 	// Build the transaction-queue config from the operator's
 	// [transaction_queue] stanza layered over the rippled defaults.
@@ -221,7 +221,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		NodeStore:      db,
 		RelationalDB:   repoManager,
 		Logger:         rootLogger,
-		AmendmentTable: amendmentTable,
+		Table: amendmentTable,
 		TxQ:            &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
@@ -1968,17 +1968,17 @@ func parseVLLength(data []byte) (int, int) {
 	return 12481 + ((b1 - 241) * 65536) + (int(data[1]) * 256) + int(data[2]), 3
 }
 
-// buildAmendmentTable constructs the live amendment table from the operator's
+// buildTable constructs the live amendment table from the operator's
 // [amendments] config and any persisted runtime votes. Config preferences are
 // applied first, then persisted votes (from the `feature` RPC) override them so
 // runtime changes win across restarts — mirroring rippled, where the FeatureVotes
 // DB takes precedence over the config stanzas. Unknown names are logged and
 // ignored. The returned table owns operator veto/upvote and the enabled/blocked
 // state, and is shared between the ledger service and the consensus adaptor.
-func buildAmendmentTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.AmendmentTable {
-	t := amendment.NewAmendmentTable()
+func buildTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
+	t := amendment.NewTable()
 	for _, name := range cfg.Upvote {
-		f := amendment.GetFeatureByName(name)
+		f := amendment.FeatureByName(name)
 		if f == nil {
 			log.Warn("unknown amendment in [amendments].upvote; ignoring", "name", name)
 			continue
@@ -1986,7 +1986,7 @@ func buildAmendmentTable(cfg config.AmendmentsConfig, repo relationaldb.Reposito
 		t.UpVote(f.ID)
 	}
 	for _, name := range cfg.Veto {
-		f := amendment.GetFeatureByName(name)
+		f := amendment.FeatureByName(name)
 		if f == nil {
 			log.Warn("unknown amendment in [amendments].veto; ignoring", "name", name)
 			continue

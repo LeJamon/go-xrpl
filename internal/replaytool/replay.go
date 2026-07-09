@@ -752,7 +752,7 @@ func buildRulesFromAmendments(amendments []string) *amendment.Rules {
 	builder := amendment.NewRulesBuilder()
 	for _, amendmentStr := range amendments {
 		// Try to find by name first
-		feature := amendment.GetFeatureByName(amendmentStr)
+		feature := amendment.FeatureByName(amendmentStr)
 		if feature != nil {
 			builder.Enable(feature.ID)
 			continue

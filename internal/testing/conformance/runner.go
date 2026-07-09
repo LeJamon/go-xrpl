@@ -185,7 +185,7 @@ func defaultEnvConfig() EnvConfig {
 func knownAmendments(names []string) []string {
 	out := make([]string, 0, len(names))
 	for _, name := range names {
-		if amendment.GetFeatureByName(name) != nil {
+		if amendment.FeatureByName(name) != nil {
 			out = append(out, name)
 		}
 	}
@@ -788,7 +788,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "env_reset":
 			r.execEnvReset(i, step)
 		case "enable_amendment":
-			if amendment.GetFeatureByName(step.Amendment) != nil {
+			if amendment.FeatureByName(step.Amendment) != nil {
 				r.env.EnableFeatureNow(step.Amendment)
 			}
 		case "modify_state":
@@ -900,7 +900,7 @@ func (r *runner) replaySteps(steps []Step, isContinuation bool) {
 			// During replay, the txns were already applied by Close().
 			// Nothing to do here.
 		case "enable_amendment":
-			if amendment.GetFeatureByName(step.Amendment) != nil {
+			if amendment.FeatureByName(step.Amendment) != nil {
 				r.env.EnableFeatureNow(step.Amendment)
 			}
 		case "modify_state":

@@ -48,8 +48,8 @@ func (r *Rules) EnabledCount() int {
 	return len(r.enabled)
 }
 
-// GetEnabled returns a slice of all enabled amendment IDs.
-func (r *Rules) GetEnabled() [][32]byte {
+// EnabledIDs returns a slice of all enabled amendment IDs.
+func (r *Rules) EnabledIDs() [][32]byte {
 	result := make([][32]byte, 0, len(r.enabled))
 	for id := range r.enabled {
 		result = append(result, id)
@@ -147,7 +147,7 @@ func (b *RulesBuilder) Enable(featureID [32]byte) *RulesBuilder {
 
 // EnableByName adds an amendment by name to the enabled set.
 func (b *RulesBuilder) EnableByName(name string) *RulesBuilder {
-	f := GetFeatureByName(name)
+	f := FeatureByName(name)
 	if f != nil {
 		b.enabled[f.ID] = true
 	}
@@ -162,7 +162,7 @@ func (b *RulesBuilder) Disable(featureID [32]byte) *RulesBuilder {
 
 // DisableByName removes an amendment by name from the enabled set.
 func (b *RulesBuilder) DisableByName(name string) *RulesBuilder {
-	f := GetFeatureByName(name)
+	f := FeatureByName(name)
 	if f != nil {
 		delete(b.enabled, f.ID)
 	}
