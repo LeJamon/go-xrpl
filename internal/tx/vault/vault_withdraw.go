@@ -221,6 +221,14 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	lossN, _ := vaultNumber(vd.LossUnrealized)
 	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
 
+	fix320 := ctx.Rules().FixCleanup3_2_0Enabled()
+	// The sole shareholder owns the future value too, so the unrealized-loss
+	// subtraction is waived — otherwise they could burn every share yet strand
+	// future value in the vault.
+	if fix320 && isSoleShareholder(ctx.View, ctx.AccountID, vd.ShareMPTID, issuance.OutstandingAmount) {
+		lossN = state.NewXRPLNumber(0, 0)
+	}
+
 	var sharesRedeemedN, assetsWithdrawnN state.XRPLNumber
 	if v.amountIsShares(vd) {
 		sharesRedeemedN, err = amountToNumber(v.Amount)
@@ -256,8 +264,18 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 
-	vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsWithdrawnN))
-	vd.AssetsAvailable = numberToString(availN.Sub(assetsWithdrawnN))
+	if fix320 && shares == issuance.OutstandingAmount {
+		// Burning every outstanding share drains the vault: pay out all remaining
+		// available assets and leave no dust behind. Reaching here with a non-zero
+		// unrealized loss is impossible — the available-assets guard above rejects
+		// it, since a waived loss makes assetsWithdrawn exceed the available total.
+		assetsWithdrawnN = availN
+		vd.AssetsTotal = ""
+		vd.AssetsAvailable = ""
+	} else {
+		vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsWithdrawnN))
+		vd.AssetsAvailable = numberToString(availN.Sub(assetsWithdrawnN))
+	}
 	newVault, serr := serializeVault(vd)
 	if serr != nil {
 		return ter.TefINTERNAL

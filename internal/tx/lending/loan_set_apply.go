@@ -140,7 +140,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	paymentInterval := valOr(l.PaymentInterval, minPaymentInterval)
 	paymentTotal := valOr(l.PaymentTotal, 1)
 
-	props := lmath.ComputeLoanProperties(mAsset, principal, interestRate, paymentInterval, paymentTotal, uint32(b.ManagementFeeRate), vaultScale)
+	props := lmath.ComputeLoanProperties(ctx.Rules().FixCleanup3_2_0Enabled(), mAsset, principal, interestRate, paymentInterval, paymentTotal, uint32(b.ManagementFeeRate), vaultScale)
 	loanState := lmath.ConstructLoanState(props.LoanState.ValueOutstanding, principal, props.LoanState.ManagementFeeDue)
 
 	vaultMaximum := lendNum(vinfo.AssetsMaximum)
@@ -170,7 +170,12 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if lendNum(b.DebtMaximum).Signum() != 0 && lendNum(b.DebtMaximum).Cmp(newDebtTotal) < 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
-	minCover := lmath.RoundAssetUpward(mAsset, lmath.TenthBipsOfValue(newDebtTotal, b.CoverRateMinimum), newDebtTotal.Exponent())
+	var minCover lmath.N
+	if ctx.Rules().FixCleanup3_2_0Enabled() {
+		minCover = minimumBrokerCover(newDebtTotal, b.CoverRateMinimum, vaultScale, integral)
+	} else {
+		minCover = brokerCoverRate(newDebtTotal, b.CoverRateMinimum)
+	}
 	if lendNum(b.CoverAvailable).Cmp(minCover) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}

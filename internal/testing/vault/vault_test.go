@@ -302,3 +302,97 @@ func TestVault_DeleteWrongOwner(t *testing.T) {
 		t.Fatalf("VaultDelete (wrong owner): got %s, want tecNO_PERMISSION", res.Code)
 	}
 }
+
+// readShareReference returns the share issuance's ReferenceHolding for the vault
+// created by owner at createSeq (nil when unset).
+func readShareReference(t *testing.T, env *jtx.TestEnv, id string) *string {
+	t.Helper()
+	rawID, _ := hex.DecodeString(id)
+	var vkey [32]byte
+	copy(vkey[:], rawID)
+	vinfo, err := vault.ReadVaultInfo(env.Ledger(), keylet.VaultByID(vkey))
+	if err != nil || vinfo == nil {
+		t.Fatalf("ReadVaultInfo: %v", err)
+	}
+	data, lerr := env.LedgerEntry(keylet.MPTIssuance(vinfo.ShareMPTID))
+	if lerr != nil {
+		t.Fatalf("read share issuance: %v", lerr)
+	}
+	iss, perr := state.ParseMPTokenIssuance(data)
+	if perr != nil {
+		t.Fatalf("parse share issuance: %v", perr)
+	}
+	return iss.ReferenceHolding
+}
+
+// TestVaultCreate_ReferenceHolding covers the fixCleanup3_2_0 sfReferenceHolding
+// site: an IOU/MPT vault's share issuance points to the pseudo-account's holding
+// of the underlying; XRP vaults and the pre-amendment path leave it unset.
+func TestVaultCreate_ReferenceHolding(t *testing.T) {
+	t.Run("IOU sets reference to the pseudo trust line", func(t *testing.T) {
+		env := newVaultEnv(t)
+		issuer := jtx.NewAccount("issuer")
+		owner := jtx.NewAccount("owner")
+		env.Fund(issuer, owner)
+		const cur = "USD"
+
+		seq := env.Seq(owner)
+		create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: cur, Issuer: issuer.Address})
+		create.Common.Fee = createFee
+		if res := env.Submit(create); res.Code != "tesSUCCESS" {
+			t.Fatalf("VaultCreate(IOU): got %s", res.Code)
+		}
+		id := vaultID(owner, seq)
+
+		rawID, _ := hex.DecodeString(id)
+		var vkey [32]byte
+		copy(vkey[:], rawID)
+		vinfo, _ := vault.ReadVaultInfo(env.Ledger(), keylet.VaultByID(vkey))
+		wantKey := keylet.Line(vinfo.Account, issuer.ID, cur).Key
+		want := strings.ToUpper(hex.EncodeToString(wantKey[:]))
+
+		got := readShareReference(t, env, id)
+		if got == nil {
+			t.Fatalf("ReferenceHolding unset for IOU vault")
+		}
+		if !strings.EqualFold(*got, want) {
+			t.Fatalf("ReferenceHolding = %s, want %s (pseudo trust line)", *got, want)
+		}
+	})
+
+	t.Run("XRP leaves reference unset", func(t *testing.T) {
+		env := newVaultEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+
+		seq := env.Seq(owner)
+		create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
+		create.Common.Fee = createFee
+		if res := env.Submit(create); res.Code != "tesSUCCESS" {
+			t.Fatalf("VaultCreate(XRP): got %s", res.Code)
+		}
+		if got := readShareReference(t, env, vaultID(owner, seq)); got != nil {
+			t.Fatalf("ReferenceHolding set for XRP vault: %s", *got)
+		}
+	})
+
+	t.Run("pre-amendment leaves reference unset", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("SingleAssetVault")
+		env.DisableFeature("fixCleanup3_2_0")
+		env.Close()
+		issuer := jtx.NewAccount("issuer")
+		owner := jtx.NewAccount("owner")
+		env.Fund(issuer, owner)
+
+		seq := env.Seq(owner)
+		create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: issuer.Address})
+		create.Common.Fee = createFee
+		if res := env.Submit(create); res.Code != "tesSUCCESS" {
+			t.Fatalf("VaultCreate(IOU, pre-amendment): got %s", res.Code)
+		}
+		if got := readShareReference(t, env, vaultID(owner, seq)); got != nil {
+			t.Fatalf("ReferenceHolding set pre-amendment: %s", *got)
+		}
+	})
+}

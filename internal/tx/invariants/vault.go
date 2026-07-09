@@ -130,7 +130,7 @@ func checkValidVault(tx Transaction, result Result, fee uint64, entries []Invari
 		return nil
 	}
 
-	c := &vvChecker{deltas: map[[32]byte]vvDelta{}, view: view, fee: fee, txType: tx.TxType()}
+	c := &vvChecker{deltas: map[[32]byte]vvDelta{}, view: view, fee: fee, txType: tx.TxType(), rules: rules}
 	if flat, err := tx.Flatten(); err == nil {
 		c.flat = flat
 	}
@@ -160,6 +160,19 @@ type vvChecker struct {
 	txType      TxType
 	flat        map[string]any
 	txAccountID [20]byte
+	rules       *amendment.Rules
+}
+
+// vaultMinScale is the decimal scale that balance deltas round to before the
+// deposit/withdraw reconciliation. Post-fixCleanup3_2_0 it is simply the
+// posterior AssetsTotal scale; pre-amendment it is the coarsest scale across the
+// supplied deltas. The two agree for the integral (XRP/MPT) assets this
+// reconciliation runs on, where the scale is always zero.
+func (c *vvChecker) vaultMinScale(vaultAsset vvAsset, afterVault vvVault, deltas ...vvDelta) int {
+	if c.rules != nil && c.rules.FixCleanup3_2_0Enabled() {
+		return vaultAsset.scaleOf(afterVault.assetsTotal)
+	}
+	return vvCoarsestScale(deltas...)
 }
 
 // visit is the visitEntry phase: it classifies every modified entry and records
@@ -555,7 +568,7 @@ func (c *vvChecker) reconcileDepositAssets(beforeVault, afterVault vvVault, vaul
 
 	totalDelta := vaultAsset.makeDelta(beforeVault.assetsTotal, afterVault.assetsTotal)
 	availableDelta := vaultAsset.makeDelta(beforeVault.assetsAvailable, afterVault.assetsAvailable)
-	minScale := vvCoarsestScale(maybeVaultDeltaAssets, totalDelta, availableDelta)
+	minScale := c.vaultMinScale(vaultAsset, afterVault, maybeVaultDeltaAssets, totalDelta, availableDelta)
 
 	vaultDeltaAssets := vaultAsset.round(maybeVaultDeltaAssets.delta, minScale)
 	txAmt, _ := c.flatAmount("Amount")
@@ -632,7 +645,7 @@ func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vau
 
 	totalDelta := vaultAsset.makeDelta(beforeVault.assetsTotal, afterVault.assetsTotal)
 	availableDelta := vaultAsset.makeDelta(beforeVault.assetsAvailable, afterVault.assetsAvailable)
-	minScale := vvCoarsestScale(maybeVaultDeltaAssets, totalDelta, availableDelta)
+	minScale := c.vaultMinScale(vaultAsset, afterVault, maybeVaultDeltaAssets, totalDelta, availableDelta)
 
 	vaultPseudoDeltaAssets := vaultAsset.round(maybeVaultDeltaAssets.delta, minScale)
 	if vaultPseudoDeltaAssets.Signum() >= 0 {

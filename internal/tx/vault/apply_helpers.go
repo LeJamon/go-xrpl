@@ -322,6 +322,19 @@ func readMPToken(view tx.LedgerView, tokenKey keylet.Keylet) (*state.MPTokenData
 	return state.ParseMPToken(data)
 }
 
+// isSoleShareholder reports whether account holds every outstanding share of the
+// vault, so it owns both the available and the future value.
+func isSoleShareholder(view tx.LedgerView, account [20]byte, shareMPTID [24]byte, outstanding uint64) bool {
+	if outstanding == 0 {
+		return false
+	}
+	token, err := readMPToken(view, keylet.MPTokenByID(shareMPTID, account))
+	if err != nil || token == nil {
+		return false
+	}
+	return token.MPTAmount == outstanding
+}
+
 // ensureHolderMPToken creates a zero-balance MPToken for holderID under the
 // share issuance if one does not already exist, charging the reserve and owner
 // count against the holder (which is ctx.Account when it is the tx submitter).

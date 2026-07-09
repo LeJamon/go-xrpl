@@ -147,8 +147,28 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	if aerr != nil {
 		return ter.TefINTERNAL
 	}
+	integral := asset.IsNative() || asset.IsMPT()
+	fix320 := config.GetRules().FixCleanup3_2_0Enabled()
+	if fix320 {
+		assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
+		assetsN = roundToVaultScale(assetsN, assetsTotalN, integral)
+		if assetsN.IsZero() {
+			return ter.TecPRECISION_LOSS
+		}
+	}
 	if holds.Cmp(assetsN) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
+	}
+	// IOU only: reject a deposit that canonicalizes to a no-op at the depositor's
+	// own trust-line scale. Issuer-as-depositor uses an unbounded balance, skip.
+	if fix320 && !integral {
+		if issuerID, ierr := state.DecodeAccountID(asset.Issuer); ierr == nil && accountID != issuerID {
+			origN, _ := amountToNumber(v.Amount)
+			balScale := holds.AssetExponent(false, state.RoundToNearest)
+			if origN.RoundToAssetScale(false, balScale, state.RoundToNearest).IsZero() {
+				return ter.TecPRECISION_LOSS
+			}
+		}
 	}
 
 	return ter.TesSUCCESS
@@ -193,6 +213,13 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
+	if ctx.Rules().FixCleanup3_2_0Enabled() {
+		asset := vaultAssetOf(vd)
+		assetsN = roundToVaultScale(assetsN, assetsTotalN, asset.IsNative() || asset.IsMPT())
+		if assetsN.IsZero() {
+			return ter.TefINTERNAL
+		}
+	}
 	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
 	sharesN := assetsToSharesDeposit(assetsTotalN, shareTotalN, assetsN, vd.Scale)
 	if sharesN.IsZero() {

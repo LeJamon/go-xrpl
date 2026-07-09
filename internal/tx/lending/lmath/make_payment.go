@@ -87,11 +87,11 @@ func computeLatePayment(asset Asset, now uint32, principalOutstanding N, nextDue
 // computeFullPayment builds the components for an early full payment (rippled
 // computeFullPayment). Returns tecKILLED (last payment can't be full) or
 // tecINSUFFICIENT_PAYMENT.
-func computeFullPayment(asset Asset, now uint32, principalOutstanding, managementFeeOutstanding, periodicPayment N, paymentRemaining, prevPaymentDate, startDate, paymentInterval, closeInterestRate uint32, loanScale int, totalInterestOutstanding, periodicRate, closePaymentFee, amount N, managementFeeRate uint32) (ExtendedPaymentComponents, ter.Result) {
+func computeFullPayment(fix320 bool, asset Asset, now uint32, principalOutstanding, managementFeeOutstanding, periodicPayment N, paymentRemaining, prevPaymentDate, startDate, paymentInterval, closeInterestRate uint32, loanScale int, totalInterestOutstanding, periodicRate, closePaymentFee, amount N, managementFeeRate uint32) (ExtendedPaymentComponents, ter.Result) {
 	if paymentRemaining <= 1 {
 		return ExtendedPaymentComponents{}, ter.TecKILLED
 	}
-	theoreticalPrincipal := loanPrincipalFromPeriodicPayment(periodicPayment, periodicRate, paymentRemaining)
+	theoreticalPrincipal := loanPrincipalFromPeriodicPayment(fix320, periodicPayment, periodicRate, paymentRemaining)
 	fullPaymentInterest := ComputeFullPaymentInterest(theoreticalPrincipal, periodicRate, now, paymentInterval, prevPaymentDate, startDate, closeInterestRate)
 	interest := roundToAsset(asset, fullPaymentInterest, loanScale, state.RoundDownward)
 	roundedFullInterest, roundedFullManagementFee := computeInterestAndFeeParts(asset, interest, managementFeeRate, loanScale)
@@ -113,14 +113,23 @@ func computeFullPayment(asset Asset, now uint32, principalOutstanding, managemen
 // tryOverpayment re-amortizes the loan in a sandbox to validate an overpayment
 // (rippled detail::tryOverpayment). ok=false with err==tesSUCCESS means the
 // overpayment is silently ignored; err!=tesSUCCESS propagates.
-func tryOverpayment(asset Asset, loanScale int, overpaymentComponents ExtendedPaymentComponents, roundedOldState LoanState, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) (parts LoanPaymentParts, props LoanProperties, ok bool, err ter.Result) {
-	theoreticalState := computeTheoreticalLoanState(periodicPayment, periodicRate, paymentRemaining, managementFeeRate)
+func tryOverpayment(fix320 bool, asset Asset, loanScale int, overpaymentComponents ExtendedPaymentComponents, roundedOldState LoanState, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) (parts LoanPaymentParts, props LoanProperties, ok bool, err ter.Result) {
+	theoreticalState := computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentRemaining, managementFeeRate)
 	errors := subStates(roundedOldState, theoreticalState)
 	newTheoreticalPrincipal := maxN(theoreticalState.PrincipalOutstanding.Sub(overpaymentComponents.TrackedPrincipalDelta), zeroN())
-	newLoanProperties := ComputeLoanPropertiesRate(asset, newTheoreticalPrincipal, periodicRate, paymentRemaining, managementFeeRate, loanScale)
+	newLoanProperties := ComputeLoanPropertiesRate(fix320, asset, newTheoreticalPrincipal, periodicRate, paymentRemaining, managementFeeRate, loanScale)
 	newTheoreticalState := addStateDeltas(
-		computeTheoreticalLoanState(newLoanProperties.PeriodicPayment, periodicRate, paymentRemaining, managementFeeRate),
+		computeTheoreticalLoanState(fix320, newLoanProperties.PeriodicPayment, periodicRate, paymentRemaining, managementFeeRate),
 		errors)
+	if fix320 {
+		// Pin the new principal to the exact reduction (old principal minus the
+		// overpayment's principal portion) and re-derive the management fee from
+		// the exact interest gross, instead of the lossy (P*factor)/factor
+		// round-trip computeTheoreticalLoanState would otherwise use.
+		principal := roundedOldState.PrincipalOutstanding.Sub(overpaymentComponents.TrackedPrincipalDelta)
+		managementFee := tenthBipsOfValue(newTheoreticalState.ValueOutstanding.Sub(principal), managementFeeRate)
+		newTheoreticalState = ConstructLoanState(newTheoreticalState.ValueOutstanding, principal, managementFee)
+	}
 
 	principalOutstanding := clampN(roundToAsset(asset, newTheoreticalState.PrincipalOutstanding, loanScale, state.RoundUpward), zeroN(), roundedOldState.PrincipalOutstanding)
 	totalValueOutstanding := clampN(roundToAsset(asset, principalOutstanding.Add(newTheoreticalState.InterestOutstanding()), loanScale, state.RoundUpward), zeroN(), roundedOldState.ValueOutstanding)
@@ -152,9 +161,9 @@ func tryOverpayment(asset Asset, loanScale int, overpaymentComponents ExtendedPa
 
 // doOverpayment validates and commits an overpayment to the loan (rippled
 // detail::doOverpayment).
-func doOverpayment(asset Asset, loanScale int, overpaymentComponents ExtendedPaymentComponents, loan *LoanAccount, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) (LoanPaymentParts, bool, ter.Result) {
+func doOverpayment(fix320 bool, asset Asset, loanScale int, overpaymentComponents ExtendedPaymentComponents, loan *LoanAccount, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) (LoanPaymentParts, bool, ter.Result) {
 	loanState := ConstructLoanState(loan.TotalValueOutstanding, loan.PrincipalOutstanding, loan.ManagementFeeOutstanding)
-	parts, newProps, ok, err := tryOverpayment(asset, loanScale, overpaymentComponents, loanState, loan.PeriodicPayment, periodicRate, paymentRemaining, managementFeeRate)
+	parts, newProps, ok, err := tryOverpayment(fix320, asset, loanScale, overpaymentComponents, loanState, loan.PeriodicPayment, periodicRate, paymentRemaining, managementFeeRate)
 	if !ok {
 		return LoanPaymentParts{}, false, err
 	}
@@ -175,7 +184,7 @@ func doOverpayment(asset Asset, loanScale int, overpaymentComponents ExtendedPay
 // failure; loan must not be persisted in that case. fixCleanupEnabled reflects
 // the fixCleanup3_1_3 amendment: when set, an overpayment Amount is truncated to
 // the loan scale so meaningless dust is not processed.
-func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRate uint32, amount N, paymentType LoanPaymentType, fixCleanupEnabled bool) (LoanPaymentParts, ter.Result) {
+func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRate uint32, amount N, paymentType LoanPaymentType, fixCleanupEnabled, fix320 bool) (LoanPaymentParts, ter.Result) {
 	if loan.PaymentRemaining == 0 || loan.PrincipalOutstanding.IsZero() {
 		return LoanPaymentParts{}, ter.TecKILLED
 	}
@@ -192,7 +201,7 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 	if paymentType == PaymentFull {
 		closePaymentFee := roundToAssetNearest(asset, loan.ClosePaymentFee, loanScale)
 		roundedLoanState := ConstructLoanState(loan.TotalValueOutstanding, loan.PrincipalOutstanding, loan.ManagementFeeOutstanding)
-		full, t := computeFullPayment(asset, now, loan.PrincipalOutstanding, loan.ManagementFeeOutstanding, loan.PeriodicPayment,
+		full, t := computeFullPayment(fix320, asset, now, loan.PrincipalOutstanding, loan.ManagementFeeOutstanding, loan.PeriodicPayment,
 			loan.PaymentRemaining, loan.PrevPaymentDueDate, loan.StartDate, loan.PaymentInterval, loan.CloseInterestRate,
 			loanScale, roundedLoanState.InterestDue, periodicRate, closePaymentFee, amount, managementFeeRate)
 		if t != ter.TesSUCCESS {
@@ -202,7 +211,7 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 	}
 
 	periodicOf := func() ExtendedPaymentComponents {
-		return newExtended(computePaymentComponents(asset, loanScale, loan.TotalValueOutstanding, loan.PrincipalOutstanding,
+		return newExtended(computePaymentComponents(fix320, asset, loanScale, loan.TotalValueOutstanding, loan.PrincipalOutstanding,
 			loan.ManagementFeeOutstanding, loan.PeriodicPayment, periodicRate, loan.PaymentRemaining, managementFeeRate),
 			loan.LoanServiceFee, zeroN())
 	}
@@ -242,14 +251,22 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 	}
 	if paymentType == PaymentOverpayment && loan.HasOverpaymentFlag && loan.PaymentRemaining > 0 &&
 		totalPaid.Cmp(roundedAmount) < 0 && numPayments < protocol.LoanMaximumPaymentsPerTransaction {
-		overpayment := minN(roundedAmount.Sub(totalPaid), loan.TotalValueOutstanding)
-		overpaymentComponents := computeOverpaymentComponents(asset, loanScale, overpayment, loan.OverpaymentInterestRate, loan.OverpaymentFee, managementFeeRate)
-		if gtZero(overpaymentComponents.TrackedPrincipalDelta) {
-			oParts, ok, err := doOverpayment(asset, loanScale, overpaymentComponents, loan, periodicRate, loan.PaymentRemaining, managementFeeRate)
-			if ok {
-				totalParts.add(oParts)
-			} else if err != ter.TesSUCCESS {
-				return LoanPaymentParts{}, err
+		overpaymentRaw := minN(roundedAmount.Sub(totalPaid), loan.TotalValueOutstanding)
+		// Post-fixCleanup3_2_0: round the overpayment down to the loan scale; the
+		// result can be zero, in which case there is nothing to process.
+		overpayment := overpaymentRaw
+		if fix320 {
+			overpayment = roundToAsset(asset, overpaymentRaw, loanScale, state.RoundDownward)
+		}
+		if !fix320 || gtZero(overpayment) {
+			overpaymentComponents := computeOverpaymentComponents(asset, loanScale, overpayment, loan.OverpaymentInterestRate, loan.OverpaymentFee, managementFeeRate)
+			if gtZero(overpaymentComponents.TrackedPrincipalDelta) {
+				oParts, ok, err := doOverpayment(fix320, asset, loanScale, overpaymentComponents, loan, periodicRate, loan.PaymentRemaining, managementFeeRate)
+				if ok {
+					totalParts.add(oParts)
+				} else if err != ter.TesSUCCESS {
+					return LoanPaymentParts{}, err
+				}
 			}
 		}
 	}

@@ -207,3 +207,34 @@ func TestValidVault_EnforceGate(t *testing.T) {
 		t.Fatalf("expected no enforcement with SingleAssetVault disabled, got %q", v.Message)
 	}
 }
+
+// TestVaultMinScale_AmendmentGate pins the fixCleanup3_2_0 computeVaultMinScale
+// site: post-amendment the reconciliation rounds deltas at the posterior
+// AssetsTotal scale; pre-amendment at the coarsest delta scale. For an IOU these
+// diverge; for the integral (XRP/MPT) assets ValidVault actually reconciles they
+// both collapse to zero, which is why the gate is a structural no-op in practice.
+func TestVaultMinScale_AmendmentGate(t *testing.T) {
+	fixOn := amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault, amendment.FeatureFixCleanup3_2_0})
+	fixOff := amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})
+
+	iou := vvAsset{currency: "USD", issuer: [20]byte{1}}
+	afterIOU := vvVault{asset: iou, assetsTotal: state.NewXRPLNumber(1000000, 0)}
+	iouDelta := iou.makeDelta(state.NewXRPLNumber(0, 0), state.NewXRPLNumber(25, -1))
+
+	on := (&vvChecker{rules: fixOn}).vaultMinScale(iou, afterIOU, iouDelta)
+	off := (&vvChecker{rules: fixOff}).vaultMinScale(iou, afterIOU, iouDelta)
+	if on == off {
+		t.Fatalf("IOU min-scale must differ by amendment: on=%d off=%d", on, off)
+	}
+	if want := iou.scaleOf(afterIOU.assetsTotal); on != want {
+		t.Fatalf("post-amendment IOU min-scale = %d, want AssetsTotal scale %d", on, want)
+	}
+
+	xrp := vvAsset{isXRP: true}
+	afterXRP := vvVault{asset: xrp, assetsTotal: state.NewXRPLNumber(100, 0)}
+	xrpDelta := xrp.makeDelta(state.NewXRPLNumber(0, 0), state.NewXRPLNumber(100, 0))
+	if on, off := (&vvChecker{rules: fixOn}).vaultMinScale(xrp, afterXRP, xrpDelta),
+		(&vvChecker{rules: fixOff}).vaultMinScale(xrp, afterXRP, xrpDelta); on != 0 || off != 0 {
+		t.Fatalf("integral min-scale must be 0 in both eras: on=%d off=%d", on, off)
+	}
+}
