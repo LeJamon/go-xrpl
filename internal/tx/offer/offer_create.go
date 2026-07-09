@@ -85,6 +85,14 @@ func (o *OfferCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(o)
 }
 
+// GetDomainID exposes the offer's DomainID to the ValidPermissionedDEX invariant.
+func (o *OfferCreate) GetDomainID() (*[32]byte, bool) {
+	if o.DomainID == nil {
+		return nil, false
+	}
+	return o.DomainID, true
+}
+
 // SetPassive makes the offer passive
 func (o *OfferCreate) SetPassive() {
 	flags := o.GetFlags() | OfferCreateFlagPassive

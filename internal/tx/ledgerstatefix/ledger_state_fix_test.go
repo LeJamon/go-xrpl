@@ -1,9 +1,12 @@
 package ledgerstatefix
 
 import (
+	"bytes"
+	"encoding/binary"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -154,4 +157,91 @@ func TestLedgerStateFixRequiredAmendments(t *testing.T) {
 
 func TestLedgerStateFixConstants(t *testing.T) {
 	assert.Equal(t, uint16(1), LedgerFixTypeNFTokenPageLink)
+	assert.Equal(t, uint16(2), LedgerFixTypeBookExchangeRate)
+}
+
+// BookExchangeRate preflight (amendment gate + field shape).
+
+func TestBookExchangeRatePreflightRules(t *testing.T) {
+	rulesOn := amendment.NewRules([][32]byte{amendment.FeatureFixCleanup3_2_0})
+	rulesOff := amendment.EmptyRules()
+	dir := "00000000000000000000000000000000000000000000000000000000ABCDABCD"
+
+	t.Run("disabled → temDISABLED", func(t *testing.T) {
+		l := NewBookExchangeRateFix("rAdmin", dir)
+		err := l.PreflightRules(rulesOff)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "temDISABLED")
+	})
+
+	t.Run("enabled well-formed → nil", func(t *testing.T) {
+		l := NewBookExchangeRateFix("rAdmin", dir)
+		assert.NoError(t, l.PreflightRules(rulesOn))
+	})
+
+	t.Run("enabled missing BookDirectory → temINVALID", func(t *testing.T) {
+		l := NewLedgerStateFix("rAdmin", LedgerFixTypeBookExchangeRate)
+		err := l.PreflightRules(rulesOn)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "BookDirectory is required")
+	})
+
+	t.Run("enabled with unexpected Owner → temINVALID", func(t *testing.T) {
+		l := NewBookExchangeRateFix("rAdmin", dir)
+		l.Owner = "rOwner"
+		err := l.PreflightRules(rulesOn)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unexpected field")
+	})
+
+	t.Run("amendment gate precedes shape check (disabled + malformed → temDISABLED)", func(t *testing.T) {
+		l := NewLedgerStateFix("rAdmin", LedgerFixTypeBookExchangeRate) // no BookDirectory
+		err := l.PreflightRules(rulesOff)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "temDISABLED")
+	})
+
+	t.Run("nfTokenPageLink is a no-op in PreflightRules", func(t *testing.T) {
+		l := NewNFTokenPageLinkFix("rAdmin", "rOwner")
+		assert.NoError(t, l.PreflightRules(rulesOn))
+	})
+}
+
+// The bookExchangeRate fix rewrites only sfExchangeRate; a Parse→Serialize
+// round-trip of a book directory must otherwise reproduce the entry byte for
+// byte, or the mutation would fork ledger state.
+func TestBookDirectoryRoundTripFidelity(t *testing.T) {
+	var key [32]byte
+	key[0] = 0xB0
+	binary.BigEndian.PutUint64(key[24:], 0x1234_5678)
+
+	dir := &state.DirectoryNode{
+		RootIndex:         key,
+		ExchangeRate:      0x9999_9999, // deliberately wrong
+		TakerPaysCurrency: [20]byte{0: 1},
+		TakerGetsCurrency: [20]byte{0: 2},
+	}
+	data1, err := state.SerializeDirectoryNode(dir, true)
+	require.NoError(t, err)
+
+	parsed, err := state.ParseDirectoryNode(data1)
+	require.NoError(t, err)
+	data2, err := state.SerializeDirectoryNode(parsed, true)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(data1, data2), "unmodified round-trip must be byte-identical")
+
+	// Rewriting only ExchangeRate leaves every other field intact.
+	got, present := directoryExchangeRate(data1)
+	require.True(t, present)
+	require.Equal(t, uint64(0x9999_9999), got)
+
+	parsed.ExchangeRate = binary.BigEndian.Uint64(key[24:])
+	fixed, err := state.SerializeDirectoryNode(parsed, true)
+	require.NoError(t, err)
+	reparsed, err := state.ParseDirectoryNode(fixed)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0x1234_5678), reparsed.ExchangeRate)
+	assert.Equal(t, dir.TakerPaysCurrency, reparsed.TakerPaysCurrency)
+	assert.Equal(t, dir.TakerGetsCurrency, reparsed.TakerGetsCurrency)
+	assert.Equal(t, dir.RootIndex, reparsed.RootIndex)
 }

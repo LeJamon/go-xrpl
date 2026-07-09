@@ -3,9 +3,11 @@ package paychan
 import (
 	"encoding/hex"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
@@ -16,6 +18,44 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// isChannelExpired reports whether a channel time field (CancelAfter or
+// Expiration) has passed relative to the parent close time. A zero field is
+// treated as absent. fixCleanup3_2_0 makes the comparison strict, fixing an
+// off-by-one where an exact match at the close-time instant was treated as
+// already expired.
+func isChannelExpired(rules *amendment.Rules, closeTime, timeField uint32) bool {
+	if timeField == 0 {
+		return false
+	}
+	if rules.FixCleanup3_2_0Enabled() {
+		return closeTime > timeField
+	}
+	return closeTime >= timeField
+}
+
+// saturatingAdd adds two uint32 values, clamping at math.MaxUint32 when
+// fixCleanup3_2_0 is enabled instead of wrapping around on overflow.
+func saturatingAdd(rules *amendment.Rules, lhs, rhs uint32) uint32 {
+	if rules.FixCleanup3_2_0Enabled() {
+		sum := uint64(lhs) + uint64(rhs)
+		if sum > math.MaxUint32 {
+			return math.MaxUint32
+		}
+		return uint32(sum)
+	}
+	return lhs + rhs
+}
+
+// isZeroChannel reports whether a channel ID hex string decodes to the zero
+// hash. A zero hash cannot be a ledger key.
+func isZeroChannel(channelHex string) bool {
+	b, err := hex.DecodeString(channelHex)
+	if err != nil || len(b) != 32 {
+		return false
+	}
+	return [32]byte(b) == [32]byte{}
+}
 
 // serializePayChannel serializes a PayChannel ledger entry from a PaymentChannelCreate transaction.
 // This is called during Create and produces the initial SLE bytes.

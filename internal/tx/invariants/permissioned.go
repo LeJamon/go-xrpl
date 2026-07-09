@@ -234,30 +234,35 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 	}
 
 	var (
-		regularOffers bool
-		badHybrids    bool
-		domains       = make(map[[32]byte]bool)
+		regularOffers    bool // post-fixCleanup3_2_0: only non-deleted regular offers
+		regularOffersOld bool // pre-fixCleanup3_2_0: any touched regular offer
+		badHybrids       bool
+		domains          = make(map[[32]byte]bool)
 	)
 
 	var zeroHash [32]byte
 
 	for _, e := range entries {
-		if e.After == nil {
+		// rippled visitEntry inspects the entry's final state (its "after"); for a
+		// delete that is the erased SLE, which goXRPL carries as Before.
+		image := e.After
+		if image == nil {
+			image = e.Before
+		}
+		if image == nil {
 			continue
 		}
 
-		afterType := state.EntryType(e.After)
-
-		switch afterType {
+		switch state.EntryType(image) {
 		case "DirectoryNode":
 			// Check if the DirNode has a DomainID field.
 			// Reference: rippled lines 1643-1647
-			if domainID, present := extractDomainIDFromBinary(e.After); present {
+			if domainID, present := extractDomainIDFromBinary(image); present {
 				domains[domainID] = true
 			}
 
 		case "Offer":
-			offer, err := state.ParseLedgerOffer(e.After)
+			offer, err := state.ParseLedgerOffer(image)
 			if err != nil {
 				return &InvariantViolation{
 					Name:    "ValidPermissionedDEX",
@@ -268,7 +273,13 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			if offer.DomainID != zeroHash {
 				domains[offer.DomainID] = true
 			} else {
-				regularOffers = true
+				// A deleted regular offer counts only for the pre-fixCleanup3_2_0
+				// set: the amendment stops the invariant firing on a domain
+				// transaction that legitimately deletes a regular offer.
+				regularOffersOld = true
+				if !e.IsDelete {
+					regularOffers = true
+				}
 			}
 
 			// A hybrid offer is malformed unless it carries both a present
@@ -279,8 +290,8 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			// must hold exactly one entry (size != 1 fails); before it, only a
 			// missing field or size > 1 failed.
 			if (offer.Flags & lsfHybridInvariant) != 0 {
-				_, domainPresent := extractDomainIDFromBinary(e.After)
-				abCount := countAdditionalBooksFromBinary(e.After)
+				_, domainPresent := extractDomainIDFromBinary(image)
+				abCount := countAdditionalBooksFromBinary(image)
 				var abBad bool
 				if hybridSizeStrict {
 					abBad = abCount != 1
@@ -359,9 +370,14 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 		}
 	}
 
-	// No regular offers should be affected by domain transactions.
-	// Reference: rippled lines 1710-1715
-	if regularOffers {
+	// No regular offers should be affected by domain transactions. Post
+	// fixCleanup3_2_0 a legitimately deleted regular offer no longer counts.
+	// Reference: rippled lines 1710-1715 (#7118).
+	hasRegularOffers := regularOffersOld
+	if rules != nil && rules.Enabled(amendment.FeatureFixCleanup3_2_0) {
+		hasRegularOffers = regularOffers
+	}
+	if hasRegularOffers {
 		return &InvariantViolation{
 			Name:    "ValidPermissionedDEX",
 			Message: "domain transaction affected regular offers",

@@ -202,14 +202,13 @@ func (r *Rules) PermissionedDEXEnabled() bool {
 	return r.Enabled(FeaturePermissionedDEX)
 }
 
+// FixCleanup3_2_0Enabled returns true if the fixCleanup3_2_0 amendment is enabled.
+func (r *Rules) FixCleanup3_2_0Enabled() bool {
+	return r.Enabled(FeatureFixCleanup3_2_0)
+}
+
 // MPTokensV2Enabled returns true if the MPTokensV2 amendment is enabled — MPT
 // support in the DEX, AMM and Checks.
 func (r *Rules) MPTokensV2Enabled() bool {
 	return r.Enabled(FeatureMPTokensV2)
-}
-
-// FixCleanup3_2_0Enabled returns true if the fixCleanup3_2_0 amendment is
-// enabled — vault/lending precision fixes and vault-share reference holdings.
-func (r *Rules) FixCleanup3_2_0Enabled() bool {
-	return r.Enabled(FeatureFixCleanup3_2_0)
 }

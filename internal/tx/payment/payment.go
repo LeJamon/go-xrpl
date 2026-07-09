@@ -103,6 +103,18 @@ func (p *Payment) TxType() tx.Type {
 	return tx.TypePayment
 }
 
+// GetDomainID exposes the payment's DomainID to the ValidPermissionedDEX invariant.
+func (p *Payment) GetDomainID() (*[32]byte, bool) {
+	if p.DomainID == nil {
+		return nil, false
+	}
+	id, err := permissioneddomain.ParseDomainID(*p.DomainID)
+	if err != nil {
+		return nil, false
+	}
+	return &id, true
+}
+
 // RequiredAmendments returns amendments required for this transaction. These
 // mirror rippled's checkExtraFeatures gates (sfCredentialIDs → featureCredentials,
 // sfDomainID → featurePermissionedDEX), which the engine evaluates before the
@@ -136,6 +148,13 @@ func (p *Payment) GetFlagsMask(*amendment.Rules) uint32 {
 func (p *Payment) PreflightRules(rules *amendment.Rules) error {
 	if p.isMPTDirect() && !rules.Enabled(amendment.FeatureMPTokensV1) {
 		return ter.Errorf(ter.TemDISABLED, "MPT payment requires MPTokensV1 amendment")
+	}
+	// A zero DomainID is invalid: keylet::permissionedDomain uses the DomainID
+	// as the ledger key, so a zero DomainID can never name a domain entry.
+	if p.DomainID != nil && rules.FixCleanup3_2_0Enabled() {
+		if id, err := permissioneddomain.ParseDomainID(*p.DomainID); err == nil && id == ([32]byte{}) {
+			return ter.Errorf(ter.TemMALFORMED, "DomainID cannot be zero")
+		}
 	}
 	return nil
 }

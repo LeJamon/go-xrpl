@@ -84,6 +84,26 @@ func (n *NFTokenCancelOffer) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(n)
 }
 
+// PreflightRules rejects a zero offer ID once fixCleanup3_2_0 is enabled: a zero
+// hash cannot be a ledger key. Before the amendment such an entry passed
+// preflight and was silently treated as an already-consumed offer at apply time.
+// Reference: rippled NFTokenCancelOffer.cpp preflight.
+func (n *NFTokenCancelOffer) PreflightRules(rules *amendment.Rules) error {
+	if !rules.FixCleanup3_2_0Enabled() {
+		return nil
+	}
+	for _, offerID := range n.NFTokenOffers {
+		offerBytes, err := hex.DecodeString(offerID)
+		if err != nil || len(offerBytes) != 32 {
+			continue // malformed length is rejected in Validate()
+		}
+		if [32]byte(offerBytes) == [32]byte{} {
+			return ter.Errorf(ter.TemMALFORMED, "zero offer ID in NFTokenOffers")
+		}
+	}
+	return nil
+}
+
 func (n *NFTokenCancelOffer) RequiredAmendments() [][32]byte {
 	return nil
 }

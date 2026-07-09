@@ -248,8 +248,12 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 }
 
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
+// openRate is the exchange rate for the open-book directory: pre-fixCleanup3_2_0
+// this was recomputed from the (post-crossing) amounts and could differ from the
+// domain-book rate due to rounding; the amendment passes the original placement
+// rate so the two directories agree.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount) ter.Result {
+func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, openRate uint64) ter.Result {
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
@@ -258,17 +262,15 @@ func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey
 	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
-	uRate := state.GetRate(takerGets, takerPays)
-
 	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
-	openBookDirKey := keylet.Quality(bookBase, uRate)
+	openBookDirKey := keylet.Quality(bookBase, openRate)
 
 	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
 		dir.TakerPaysIssuer = takerPaysIssuer
 		dir.TakerGetsCurrency = takerGetsCurrency
 		dir.TakerGetsIssuer = takerGetsIssuer
-		dir.ExchangeRate = uRate
+		dir.ExchangeRate = openRate
 		// No DomainID for open book
 	})
 	if err != nil {
