@@ -949,13 +949,14 @@ func TestVaultConstants(t *testing.T) {
 	assert.Equal(t, uint32(0x00020000), VaultFlagShareNonTransferable)
 }
 
-// TestVaultAmendmentRemainsUnsupported keeps SingleAssetVault SupportedNo. The
-// vault transactors are implemented here, but flipping the amendment to
-// SupportedYes (so nodes vote for and default-enable it) is a later phase.
-// Conformance fixtures enable it per-fixture, so the flag can stay SupportedNo.
-func TestVaultAmendmentRemainsUnsupported(t *testing.T) {
+// TestVaultAmendmentSupported pins SingleAssetVault to rippled 3.1.0's
+// registration: Supported::yes, VoteBehavior::DefaultNo. The vault transactors
+// are implemented, so the node applies them once the amendment activates.
+func TestVaultAmendmentSupported(t *testing.T) {
 	f := amendment.GetFeature(amendment.FeatureSingleAssetVault)
 	require.NotNil(t, f, "SingleAssetVault must be registered")
-	assert.Equal(t, amendment.SupportedNo, f.Supported,
-		"SingleAssetVault must stay SupportedNo while vault Apply is stubbed")
+	assert.Equal(t, amendment.SupportedYes, f.Supported,
+		"SingleAssetVault must be SupportedYes")
+	assert.Equal(t, amendment.VoteDefaultNo, f.Vote,
+		"SingleAssetVault must be VoteDefaultNo")
 }

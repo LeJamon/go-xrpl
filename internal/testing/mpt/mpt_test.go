@@ -686,6 +686,7 @@ func TestMPT_SetValidation(t *testing.T) {
 		// Reference: rippled lines 570-658
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.DisableFeature("SingleAssetVault")
 		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
@@ -844,10 +845,12 @@ func TestMPT_SetEnabled(t *testing.T) {
 	t.Run("LockUnlock", func(t *testing.T) {
 		// Reference: rippled lines 787-851
 		env := jtx.NewTestEnv(t)
+		env.DisableFeature("SingleAssetVault")
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
 		env.Fund(alice)
 		env.Fund(bob)
+		env.Close()
 
 		mptAlice := mpt.NewMPTTester(t, env, alice, mpt.MPTInit{Holders: []*jtx.Account{bob}})
 		mptAlice.Create(mpt.CreateOpts{

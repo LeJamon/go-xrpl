@@ -230,6 +230,7 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
 	var sharesDestroyed uint64
 	assetsRecoveredN := state.NewXRPLNumber(0, 0)
+	clampAssets := false
 
 	if v.clawsBackShares(vd, accountID) {
 		// Owner burns every share held by the holder; the assets are already gone.
@@ -237,6 +238,9 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	} else if v.Amount == nil || v.Amount.Signum() == 0 {
 		sharesDestroyed = held
 		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, state.NewXRPLNumber(int64(held), 0))
+		// Pre-fixCleanup3_1_3 the zero-amount path returned without clamping to
+		// AssetsAvailable, over-recovering when a loan was outstanding.
+		clampAssets = ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
 	} else {
 		amountN, aerr := amountToNumber(*v.Amount)
 		if aerr != nil {
@@ -249,6 +253,19 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 		sharesDestroyed = s
 		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, state.NewXRPLNumber(int64(s), 0))
+		clampAssets = true
+	}
+
+	// Clamp the recovered assets to what the vault has available, truncating the
+	// shares so the recovery cannot breach AssetsAvailable.
+	if clampAssets && assetsRecoveredN.Cmp(availN) > 0 {
+		assetsRecoveredN = availN
+		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, availN, true)
+		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
+		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, state.NewXRPLNumber(int64(sharesDestroyed), 0))
+		if assetsRecoveredN.Cmp(availN) > 0 {
+			return ter.TecINTERNAL
+		}
 	}
 
 	if sharesDestroyed == 0 {

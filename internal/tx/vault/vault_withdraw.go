@@ -145,10 +145,21 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	if derr != nil {
 		return ter.TemMALFORMED
 	}
-	// canWithdraw's trust-limit branch is exempt for MPT (and thus for a
-	// share-denominated withdrawal); the destination/tag/deposit-auth checks
-	// still apply. Reference: rippled withdrawToDestExceedsLimit.
-	if res := canWithdraw(view, accountID, dstID, v.Amount, v.DestinationTag != nil); res != ter.TesSUCCESS {
+	// canWithdraw's trust-limit branch is exempt for the share MPT, so a
+	// share-denominated withdrawal pre-amendment skipped the destination's IOU
+	// trust limit entirely. Post-fixCleanup3_1_3 the shares are converted to the
+	// equivalent asset amount so the limit is enforced. Integral (XRP/MPT) vault
+	// assets stay exempt either way — only an IOU asset needs the conversion.
+	limitAmount := v.Amount
+	if config.GetRules().Enabled(amendment.FeatureFixCleanup3_1_3) && v.amountIsShares(vd) &&
+		!isNativeAsset(vd.Asset) && !vd.AssetIsMPT {
+		assets, res := v.sharesToAssetAmount(view, vd)
+		if res != ter.TesSUCCESS {
+			return res
+		}
+		limitAmount = assets
+	}
+	if res := canWithdraw(view, accountID, dstID, limitAmount, v.DestinationTag != nil); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -158,6 +169,29 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	}
 
 	return ter.TesSUCCESS
+}
+
+// sharesToAssetAmount converts the share-denominated withdrawal Amount into the
+// equivalent IOU asset amount, so the destination trust-line limit can be
+// enforced. Reference: rippled VaultWithdraw::preclaim sharesToAssetsWithdraw.
+func (v *VaultWithdraw) sharesToAssetAmount(view tx.LedgerView, vd *vaultData) (tx.Amount, ter.Result) {
+	shareData, rerr := view.Read(keylet.MPTIssuance(vd.ShareMPTID))
+	if rerr != nil || shareData == nil {
+		return tx.Amount{}, ter.TefINTERNAL
+	}
+	issuance, perr := state.ParseMPTokenIssuance(shareData)
+	if perr != nil || issuance.OutstandingAmount == 0 {
+		return tx.Amount{}, ter.TefINTERNAL
+	}
+	sharesN, aerr := amountToNumber(v.Amount)
+	if aerr != nil {
+		return tx.Amount{}, ter.TefINTERNAL
+	}
+	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
+	lossN, _ := vaultNumber(vd.LossUnrealized)
+	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
+	assetsN := sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, sharesN)
+	return state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), vd.Asset.Currency, vd.Asset.Issuer), ter.TesSUCCESS
 }
 
 // Apply redeems the caller's shares for the underlying asset and delivers it to
