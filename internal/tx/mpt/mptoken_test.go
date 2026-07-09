@@ -344,8 +344,9 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Run the full preflight body: the flags mask and IssuanceID checks
 			// live in Validate(), the DomainID/Holder and lock/unlock shape checks
-			// in PreflightRules(). AllSupported has SAV/DynamicMPT off (both
-			// Supported::no), so the no-op check does not disturb these cases.
+			// in PreflightRules(). allRules() excludes SingleAssetVault (and
+			// DynamicMPT is unsupported), so the no-op check does not disturb
+			// these cases.
 			err := preflightMPTSet(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
@@ -410,7 +411,17 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 	})
 }
 
-func allRules() *amendment.Rules { return amendment.AllSupportedRules() }
+// allRules mirrors rippled's testSetValidation(all - featureSingleAssetVault):
+// every supported amendment except SingleAssetVault, so the SAV/DynamicMPT
+// "changes nothing" no-op rejection does not fire and the legacy Set-validation
+// shape checks are exercised in isolation. The SAV-on no-op behaviour has its
+// own coverage via a rules set that enables SingleAssetVault.
+func allRules() *amendment.Rules {
+	return amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("SingleAssetVault").
+		Build()
+}
 
 // TestMPTokenAuthorizeValidation tests MPTokenAuthorize transaction validation.
 // Reference: rippled MPTokenAuthorize.cpp preflight

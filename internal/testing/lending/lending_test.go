@@ -1,10 +1,9 @@
 package lending_test
 
-// Pre-activation surface tests for the XLS-66 LendingProtocol transaction
-// types. Mirrors the stub convention used for Vault/XChain: while
-// LendingProtocol is off (SupportedNo), every Loan* transaction is rejected at
-// preflight with temDISABLED; once force-enabled, the still-stubbed Apply
-// returns tefINTERNAL. Reference: rippled PR #5270; full semantics in #1245.
+// Surface tests for the XLS-66 LendingProtocol transaction types. With
+// LendingProtocol off every Loan* transaction is rejected at preflight with
+// temDISABLED; once enabled the fully-implemented transactors reach a stateful
+// result. Reference: rippled PR #5270; full semantics in #1245.
 
 import (
 	"testing"
@@ -38,6 +37,7 @@ func loanTxBuilders(account string) map[string]tx.Transaction {
 // temDISABLED while LendingProtocol is off — the surface a 3.0.0 node exposes.
 func TestLoanTransactionsDisabled(t *testing.T) {
 	env := jtx.NewTestEnv(t)
+	env.DisableFeature("LendingProtocol")
 	alice := jtx.NewAccount("alice")
 	env.Fund(alice)
 	env.Close()

@@ -436,6 +436,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 	// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7482)
 	t.Run("tecDUPLICATE", func(t *testing.T) {
 		env := amm.NewAMMTestEnv(t)
+		env.DisableFeature("SingleAssetVault")
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 

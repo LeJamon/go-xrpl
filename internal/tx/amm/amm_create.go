@@ -240,14 +240,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		lptCurrency, ammAccountAddr)
 
 	// Create the AMM pseudo-account.
-	// Reference: rippled View.cpp createPseudoAccount (line 1112-1133).
-	// Sequence: 0 when featureSingleAssetVault is enabled, else the current
-	// ledger sequence — mirrors the seqno selection at View.cpp:1120-1123.
-	// Flags: exactly the three bits rippled sets at View.cpp:1128-1129.
-	// Pseudo-account identification is by AMMID presence (state.AccountRoot.IsPseudoAccount),
-	// matching rippled's isPseudoAccount (View.cpp:1138-1150).
+	// Reference: rippled createPseudoAccount (libxrpl/ledger/View.cpp).
+	// Sequence: 0 when SingleAssetVault or LendingProtocol is enabled, else the
+	// current ledger sequence. Both amendments generalise the pseudo-account
+	// model, and the ValidNewAccountRoot invariant enforces the zero sequence
+	// whenever either is active — so the two conditions must match.
+	// Flags: exactly the three bits rippled sets (DisableMaster, DefaultRipple,
+	// DepositAuth). Pseudo-account identification is by AMMID presence.
 	var pseudoSeq uint32
-	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
+	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) &&
+		!ctx.Rules().Enabled(amendment.FeatureLendingProtocol) {
 		pseudoSeq = ctx.Config.LedgerSequence
 	}
 	// The AMM account's OwnerCount is the number of IOU pool trust lines it
