@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -180,5 +180,5 @@ func TestReplayDelta_Apply_BeforeComplete(t *testing.T) {
 // SHA-512/256). The test uses this to forge a self-consistent
 // header after tampering with one of the fields.
 func computeWireHeaderHash(headerBytes []byte) [32]byte {
-	return common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), headerBytes)
+	return sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), headerBytes)
 }

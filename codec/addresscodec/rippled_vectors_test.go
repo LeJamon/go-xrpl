@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/require"
@@ -43,7 +43,7 @@ func TestRippledSeedEncodingVectors(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Generate seed bytes from passphrase using SHA512-Half (first 16 bytes)
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			seedBytes := seedHash[:16]
 
 			// Encode the seed using secp256k1 algorithm
@@ -153,7 +153,7 @@ func TestRippledSecp256k1KeyDerivation(t *testing.T) {
 	}
 
 	// Generate seed bytes from masterpassphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	t.Run("seed encoding", func(t *testing.T) {
@@ -239,7 +239,7 @@ func TestRippledED25519KeyDerivation(t *testing.T) {
 	}
 
 	// Generate seed bytes from masterpassphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	// Derive ED25519 keypair
@@ -332,7 +332,7 @@ func TestRippledSeedRoundTrip(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name+" secp256k1", func(t *testing.T) {
 			// Generate original seed bytes
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			originalSeedBytes := seedHash[:16]
 
 			// Encode
@@ -349,7 +349,7 @@ func TestRippledSeedRoundTrip(t *testing.T) {
 
 		t.Run(tc.name+" ed25519", func(t *testing.T) {
 			// Generate original seed bytes
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			originalSeedBytes := seedHash[:16]
 
 			// Encode
@@ -409,7 +409,7 @@ func TestRippledAddressValidation(t *testing.T) {
 // prefixes matches rippled test vectors.
 func TestRippledPublicKeyEncoding(t *testing.T) {
 	// Generate keys from masterpassphrase for testing
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	t.Run("secp256k1 public key encoding", func(t *testing.T) {
@@ -459,7 +459,7 @@ func TestRippledPublicKeyEncoding(t *testing.T) {
 // different prefixes matches rippled test vectors.
 func TestRippledPrivateKeyEncoding(t *testing.T) {
 	// Generate keys from masterpassphrase for testing
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	t.Run("secp256k1 private key encoding", func(t *testing.T) {
@@ -507,7 +507,7 @@ func TestRippledPrivateKeyEncoding(t *testing.T) {
 // TestRippledNodeIDDerivation tests that node ID derivation matches rippled
 // test vectors. Node ID is SHA256-RIPEMD160 of the public key.
 func TestRippledNodeIDDerivation(t *testing.T) {
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	t.Run("ed25519 node ID", func(t *testing.T) {
@@ -534,7 +534,7 @@ func TestRippledNodeIDDerivation(t *testing.T) {
 // deterministic - same seed always produces same keys.
 func TestRippledKeyDerivationDeterminism(t *testing.T) {
 	passphrase := "masterpassphrase"
-	seedHash := common.Sha512Half([]byte(passphrase))
+	seedHash := sha512half.Sum([]byte(passphrase))
 	baseSeedBytes := seedHash[:16]
 
 	iterations := 10
@@ -679,7 +679,7 @@ func TestRippledSeedPrefixDetection(t *testing.T) {
 // TestRippledValidatorKeypairError tests that validator keypair derivation
 // returns appropriate errors (as it's not fully supported).
 func TestRippledValidatorKeypairError(t *testing.T) {
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	t.Run("ed25519 validator derivation", func(t *testing.T) {

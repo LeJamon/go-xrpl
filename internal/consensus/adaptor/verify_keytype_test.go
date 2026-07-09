@@ -5,7 +5,7 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
 
@@ -24,7 +24,7 @@ import (
 //  4. Garbage prefix rejects without panic.
 //  5. Non-33-byte input rejects without panic.
 func TestVerify_DispatchesByKeyType(t *testing.T) {
-	digest := common.Sha512Half([]byte("test message for both key types"))
+	digest := sha512half.Sum([]byte("test message for both key types"))
 
 	// --- ed25519 path ---
 	edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)

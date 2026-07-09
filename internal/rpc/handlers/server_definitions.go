@@ -9,7 +9,7 @@ import (
 	"sync"
 
 	definitions "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -80,7 +80,7 @@ func buildServerDefinitions() {
 	// server gave it), not a cross-implementation constant: it intentionally
 	// need not equal rippled's, whose Json::FastWriter serializes differently.
 	encoded, _ := json.Marshal(serverDefsBase)
-	sum := common.Sha512Half(encoded)
+	sum := sha512half.Sum(encoded)
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -323,7 +323,7 @@ func TestHash_LeafNodeFormula(t *testing.T) {
 		index[i] = byte(i + 1)
 	}
 
-	expected := common.Sha512Half(protocol.HashPrefixLeafNode().Bytes(), canonical, index[:])
+	expected := sha512half.Sum(protocol.HashPrefixLeafNode().Bytes(), canonical, index[:])
 
 	entry := New("AccountRoot")
 	if err := entry.Decode(canonical); err != nil {

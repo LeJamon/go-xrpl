@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // BenchmarkValidateDigest exercises the active backend (libsecp256k1
@@ -19,7 +19,7 @@ func BenchmarkValidateDigest(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	digest := common.Sha512Half([]byte("Hello World"))
+	digest := sha512half.Sum([]byte("Hello World"))
 
 	b.ReportAllocs()
 	b.ResetTimer()

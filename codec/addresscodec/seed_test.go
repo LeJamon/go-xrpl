@@ -3,7 +3,7 @@ package addresscodec
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/require"
@@ -37,7 +37,7 @@ func TestSeedFromPassphrase(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Generate seed bytes from passphrase using SHA512-Half (first 16 bytes)
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			seedBytes := seedHash[:16]
 
 			// Encode the seed using secp256k1 algorithm
@@ -203,7 +203,7 @@ func TestSeedRoundTrip(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Generate seed bytes from passphrase
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			originalSeedBytes := seedHash[:16]
 
 			// Encode the seed

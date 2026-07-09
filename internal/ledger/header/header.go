@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -104,7 +104,7 @@ func CalculateHash(h LedgerHeader) [32]byte {
 	data = binary.BigEndian.AppendUint32(data, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
 	data = append(data, byte(h.CloseTimeResolution))
 	data = append(data, h.CloseFlags)
-	return common.Sha512Half(data)
+	return sha512half.Sum(data)
 }
 
 // GetCloseAgree returns true if there was consensus on the close time

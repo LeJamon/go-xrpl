@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -142,7 +142,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 
 	case "passphrase":
 		// SHA512-Half of the passphrase, take first 16 bytes
-		hash := common.Sha512Half([]byte(secretValue))
+		hash := sha512half.Sum([]byte(secretValue))
 		seedBytes = hash[:16]
 
 	case "secret":
@@ -159,7 +159,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 			seedBytes, err = hex.DecodeString(secretValue)
 			if err != nil || len(seedBytes) != 16 {
 				// Treat as passphrase
-				hash := common.Sha512Half([]byte(secretValue))
+				hash := sha512half.Sum([]byte(secretValue))
 				seedBytes = hash[:16]
 			}
 		}

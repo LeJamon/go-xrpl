@@ -2,7 +2,7 @@
 // It offers content-addressable storage with features like caching and asynchronous I/O.
 //
 // Keys are SHA-512Half hashes computed by callers (the SHAMap and ledger layers)
-// over object-type-specific hash prefixes — see crypto/common and the HashPrefix
+// over object-type-specific hash prefixes — see crypto/sha512half and the HashPrefix
 // constants in protocol. The nodestore stores both the key and the serialized
 // payload verbatim and treats the payload as opaque: it never recomputes a key
 // from the payload, because the preimage (hash prefix plus field layout) is not

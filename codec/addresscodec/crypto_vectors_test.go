@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/require"
@@ -39,7 +39,7 @@ func TestSeedFromPassphraseRippledVectors(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Generate seed bytes from passphrase using SHA512-Half (first 16 bytes)
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			seedBytes := seedHash[:16]
 
 			// Encode the seed using secp256k1 algorithm
@@ -108,7 +108,7 @@ func TestSecp256k1KeyDerivationFromMasterpassphrase(t *testing.T) {
 	expectedAccountPublicKeyBase58 := "aBQG8RQAzjs1eTKFEAQXr2gS4utcDiEC9wmi7pfUPTi27VCahwgw"
 
 	// Generate seed bytes from masterpassphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	// Verify seed encoding
@@ -152,7 +152,7 @@ func TestED25519KeyDerivationFromMasterpassphrase(t *testing.T) {
 	expectedNodePublicKeyBase58 := "nHUeeJCSY2dM71oxM8Cgjouf5ekTuev2mwDpc374aLMxzDLXNmjf"
 
 	// Generate seed bytes from masterpassphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	// Derive ED25519 keypair from seed
@@ -197,7 +197,7 @@ func TestSeedEncodingRoundTripAllAlgorithms(t *testing.T) {
 	for _, passphrase := range passphrases {
 		t.Run(passphrase, func(t *testing.T) {
 			// Generate seed bytes
-			seedHash := common.Sha512Half([]byte(passphrase))
+			seedHash := sha512half.Sum([]byte(passphrase))
 			originalSeedBytes := seedHash[:16]
 
 			// Test secp256k1 round trip
@@ -230,7 +230,7 @@ func TestSeedEncodingRoundTripAllAlgorithms(t *testing.T) {
 // implementation has a bug that modifies the input slice. See deriveScalar function.
 func TestKeyDerivationConsistency(t *testing.T) {
 	passphrase := "masterpassphrase"
-	seedHash := common.Sha512Half([]byte(passphrase))
+	seedHash := sha512half.Sum([]byte(passphrase))
 	baseSeedBytes := seedHash[:16]
 
 	// Derive keys multiple times and ensure consistency
@@ -276,7 +276,7 @@ func TestKeyDerivationConsistency(t *testing.T) {
 // from arbitrary public keys.
 func TestAddressDerivationFromKnownPublicKeys(t *testing.T) {
 	// Test with dynamically derived keys to ensure address derivation works correctly
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 
 	t.Run("secp256k1", func(t *testing.T) {
 		// Make a copy since DeriveKeypair modifies the input
@@ -317,7 +317,7 @@ func TestAddressDerivationFromKnownPublicKeys(t *testing.T) {
 // Note: Node ID derived from account public key will differ from rippled's "Node ID"
 // because rippled's Node ID uses the root public key, not the account public key.
 func TestNodeIDFromPublicKey(t *testing.T) {
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 
 	t.Run("secp256k1", func(t *testing.T) {
 		seedBytes := make([]byte, 16)
@@ -375,7 +375,7 @@ func TestNodeIDFromPublicKey(t *testing.T) {
 // can be encoded with different prefixes for different purposes.
 func TestPublicKeyEncodingWithDifferentPrefixes(t *testing.T) {
 	// Derive a public key from masterpassphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := make([]byte, 16)
 	copy(seedBytes, seedHash[:16])
 
@@ -425,7 +425,7 @@ func TestFullKeyDerivationChainSecp256k1(t *testing.T) {
 	}
 
 	// Step 1: Generate seed from passphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	// Step 2: Verify seed encoding
@@ -473,7 +473,7 @@ func TestFullKeyDerivationChainED25519(t *testing.T) {
 	}
 
 	// Step 1: Generate seed from passphrase
-	seedHash := common.Sha512Half([]byte("masterpassphrase"))
+	seedHash := sha512half.Sum([]byte("masterpassphrase"))
 	seedBytes := seedHash[:16]
 
 	// Step 2: Derive ED25519 keypair

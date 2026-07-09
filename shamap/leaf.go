@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -260,7 +260,7 @@ func NewTransactionLeafFromWire(data []byte) (LeafNode, error) {
 		return nil, fmt.Errorf("invalid wire type for transaction: %d", wireType)
 	}
 	nodeData := data[:len(data)-1]
-	key := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), nodeData)
+	key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), nodeData)
 	item := NewItem(key, nodeData)
 	node, err := newLeafNode(leafTransaction, item)
 	if err != nil {

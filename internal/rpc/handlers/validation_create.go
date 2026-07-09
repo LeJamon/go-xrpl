@@ -7,7 +7,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -124,7 +124,7 @@ func parseGenericSeed(secret string) ([]byte, bool) {
 	if entropy, err := rfc1751.EnglishToSeed(secret); err == nil {
 		return entropy, true
 	}
-	hash := common.Sha512Half([]byte(secret))
+	hash := sha512half.Sum([]byte(secret))
 	return hash[:16], true
 }
 

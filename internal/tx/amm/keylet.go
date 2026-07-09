@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -66,7 +66,7 @@ func pseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, pseudoOwnerKe
 		// sha512Half(i, parentHash, pseudoOwnerKey)
 		iBytes := make([]byte, 2)
 		binary.BigEndian.PutUint16(iBytes, i)
-		hash := common.Sha512Half(iBytes, parentHash[:], pseudoOwnerKey[:])
+		hash := sha512half.Sum(iBytes, parentHash[:], pseudoOwnerKey[:])
 
 		// ripesha_hasher: SHA256 then RIPEMD160
 		accountID := sha256Ripemd160(hash[:])

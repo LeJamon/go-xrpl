@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
@@ -50,7 +50,7 @@ func (r *Router) handleValidatorList(msg *peermanagement.InboundMessage) {
 	// blob via different protobuf encodings both suppress on the second
 	// arrival.
 	if r.messageSeen != nil {
-		hash := common.Sha512Half(validatorListSemanticHash(vl))
+		hash := sha512half.Sum(validatorListSemanticHash(vl))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
 			// Stamp the sender on the existing hash entry so downstream
 			// rebroadcast paths skip them.
@@ -144,7 +144,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	}
 
 	if r.messageSeen != nil {
-		hash := common.Sha512Half(validatorListCollectionSemanticHash(coll))
+		hash := sha512half.Sum(validatorListCollectionSemanticHash(coll))
 		if firstSeen, _ := r.messageSeen.observe(hash); !firstSeen {
 			r.messageSeen.recordPeer(hash, uint64(msg.PeerID))
 			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "vl-coll-duplicate")
@@ -375,7 +375,7 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 	if err != nil {
 		return fmt.Errorf("encode TMValidatorList: %w", err)
 	}
-	hash := common.Sha512Half(validatorListSemanticHash(vl))
+	hash := sha512half.Sum(validatorListSemanticHash(vl))
 	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
 		// Peer already has this content. Skip the redundant send.
 		return nil
@@ -414,7 +414,7 @@ func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, 
 	if err != nil {
 		return fmt.Errorf("encode TMValidatorListCollection: %w", err)
 	}
-	hash := common.Sha512Half(validatorListCollectionSemanticHash(coll))
+	hash := sha512half.Sum(validatorListCollectionSemanticHash(coll))
 	if b.suppression != nil && b.suppression.peerHasHash(hash, peerID) {
 		return nil
 	}

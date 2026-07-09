@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -65,7 +65,7 @@ func indexHash(space uint16, data ...[]byte) [32]byte {
 	inputs = append(inputs, spaceBytes[:])
 	inputs = append(inputs, data...)
 
-	return common.Sha512Half(inputs...)
+	return sha512half.Sum(inputs...)
 }
 
 // Account returns the keylet for an account root entry.
@@ -209,7 +209,7 @@ type CredentialPair struct {
 func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Keylet {
 	hashes := make([][32]byte, len(sortedCreds))
 	for i, c := range sortedCreds {
-		hashes[i] = common.Sha512Half(c.Issuer[:], c.CredentialType)
+		hashes[i] = sha512half.Sum(c.Issuer[:], c.CredentialType)
 	}
 	data := make([][]byte, 0, 1+len(sortedCreds))
 	data = append(data, owner[:])

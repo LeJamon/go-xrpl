@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 const (
@@ -54,7 +54,7 @@ func (c Algorithm) DeriveKeypair(decodedSeed []byte, validator bool) (privHex, p
 	if validator {
 		return "", "", ErrValidatorNotSupported
 	}
-	rawPriv := common.Sha512Half(decodedSeed)
+	rawPriv := sha512half.Sum(decodedSeed)
 	privKey := ed25519.NewKeyFromSeed(rawPriv[:])
 	pubKey := privKey.Public().(ed25519.PublicKey)
 

@@ -3,7 +3,7 @@ package shamap
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -115,7 +115,7 @@ func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
 
 	txData := data[4:]
 
-	key := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), txData)
+	key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txData)
 	item := NewItem(key, txData)
 
 	node, err := newTransactionLeafNode(item)

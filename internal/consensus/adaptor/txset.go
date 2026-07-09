@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -211,7 +211,7 @@ func (ts *TxSetImpl) shamap() *shamap.SHAMap {
 // computeTxID computes the SHA-512Half of a transaction blob with the
 // HashPrefix for transactions (TXN\x00).
 func computeTxID(blob []byte) consensus.TxID {
-	return consensus.TxID(common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), blob))
+	return consensus.TxID(sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob))
 }
 
 // txSetCacheTTL bounds how long a transaction set is retained. A set is

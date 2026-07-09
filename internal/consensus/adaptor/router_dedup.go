@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -55,7 +55,7 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 	buf = appendVLPrefix(buf, len(p.Signature))
 	buf = append(buf, p.Signature...)
 
-	return common.Sha512Half(buf)
+	return sha512half.Sum(buf)
 }
 
 // hashValidationSuppression returns the suppression key for a
@@ -67,7 +67,7 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 // round-trip can produce different bytes for a semantically-identical
 // validation, which would desync suppression keys across peers.
 func hashValidationSuppression(serializedSTValidation []byte) [32]byte {
-	return common.Sha512Half(serializedSTValidation)
+	return sha512half.Sum(serializedSTValidation)
 }
 
 // appendVLPrefix writes the XRPL variable-length length prefix: for

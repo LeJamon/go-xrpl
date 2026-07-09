@@ -7,7 +7,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
@@ -304,7 +304,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	// TxSet (32 bytes)
 	buf = append(buf, p.TxSet[:]...)
 
-	hash := common.Sha512Half(buf)
+	hash := sha512half.Sum(buf)
 	return hash[:]
 }
 
@@ -323,7 +323,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 func buildValidationSigningData(v *consensus.Validation) []byte {
 	if len(v.SigningData) > 0 {
 		// Inbound: use the exact non-signing bytes from the wire.
-		hash := common.Sha512Half(protocol.HashPrefixValidation().Bytes(), v.SigningData)
+		hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), v.SigningData)
 		return hash[:]
 	}
 
@@ -339,6 +339,6 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	// the same vfFullyCanonicalSig|vfFullValidation pair this used to build.
 	unsigned := *v
 	unsigned.Signature = nil
-	hash := common.Sha512Half(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))
+	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))
 	return hash[:]
 }

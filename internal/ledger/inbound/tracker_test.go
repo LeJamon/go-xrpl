@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -33,7 +33,7 @@ func driveToFailure(il *Ledger) {
 // driving a real acquisition must request the header's true byte-level hash.
 func encodeHeader(h header.LedgerHeader) (data []byte, hash [32]byte) {
 	data = header.AddRaw(h, false)
-	return data, common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), data)
+	return data, sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), data)
 }
 
 // buildSourceState returns a multi-level state SHAMap plus its root hash,

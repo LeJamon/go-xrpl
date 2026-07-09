@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -252,5 +252,5 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 // hashWithTxnPrefix returns SHA512Half of the "TXN\x00" prefix + txBytes.
 func hashWithTxnPrefix(txBytes []byte) [32]byte {
 	prefix := []byte{0x54, 0x58, 0x4E, 0x00} //nolint:prealloc // static 4-byte composite literal followed by a single append
-	return common.Sha512Half(append(prefix, txBytes...))
+	return sha512half.Sum(append(prefix, txBytes...))
 }

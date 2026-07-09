@@ -9,7 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/protocol"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // NodeType defines the type of SHAMap node
@@ -83,7 +83,7 @@ func (b *baseNode) setHash(data ...[]byte) error {
 		return fmt.Errorf("no data provided for hash calculation")
 	}
 
-	hash := common.Sha512Half(data...)
+	hash := sha512half.Sum(data...)
 	b.hash = hash
 	return nil
 }

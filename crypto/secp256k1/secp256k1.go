@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -163,7 +163,7 @@ func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 		return nil, ErrInvalidMessage
 	}
 	secpPrivKey := secp256k1.PrivKeyFromBytes(privKey)
-	hash := common.Sha512Half(msg)
+	hash := sha512half.Sum(msg)
 	sig := ecdsa.Sign(secpPrivKey, hash[:])
 	return derFromRS(sig.R(), sig.S()), nil
 }
@@ -255,7 +255,7 @@ func (c Algorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, 
 	}
 	var digest [32]byte
 	if hashMsg {
-		digest = common.Sha512Half(msg)
+		digest = sha512half.Sum(msg)
 	} else {
 		if len(msg) != 32 {
 			return false

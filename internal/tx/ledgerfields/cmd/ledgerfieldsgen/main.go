@@ -391,7 +391,7 @@ package ledgerfields
 
 import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -708,6 +708,6 @@ func ({{ .Receiver }} *{{ .StructName }}) Hash(index [32]byte) ([32]byte, error)
 		return [32]byte{}, err
 	}
 	prefix := protocol.HashPrefixLeafNode()
-	return common.Sha512Half(prefix[:], data, index[:]), nil
+	return sha512half.Sum(prefix[:], data, index[:]), nil
 }
 `))

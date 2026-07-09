@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -169,8 +169,8 @@ func (n *innerNode) updateHashUnsafe() error {
 		return nil
 	}
 
-	h := common.AcquireSHA512()
-	defer common.ReleaseSHA512(h)
+	h := sha512half.Acquire()
+	defer sha512half.Release(h)
 	h.Write(protocol.HashPrefixInnerNode().Bytes())
 	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {

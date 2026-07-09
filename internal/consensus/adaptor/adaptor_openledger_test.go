@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -193,5 +193,5 @@ func TestAdaptor_AddPendingTx_FailureNotInPool(t *testing.T) {
 // the canonical XRPL tx hash. Re-implemented here so the test file can
 // stay in the _test package.
 func computeTxIDForTest(blob []byte) [32]byte {
-	return common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), blob)
+	return sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), blob)
 }

@@ -12,7 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -406,7 +406,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	if !ok {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
-	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster().Bytes(), resp.LedgerHeader)
+	computed := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), resp.LedgerHeader)
 	if computed != advertised {
 		return fmt.Errorf("header hash mismatch: computed %x advertised %x",
 			computed[:8], advertised[:8])
@@ -446,7 +446,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		if err != nil {
 			return fmt.Errorf("tx %d: split blob: %w", i, err)
 		}
-		txID := common.Sha512Half(protocol.HashPrefixTransactionID().Bytes(), txBytes)
+		txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 		txIndex, err := extractTransactionIndex(metaBytes)
 		if err != nil {
 			return fmt.Errorf("tx %d: extract index: %w", i, err)

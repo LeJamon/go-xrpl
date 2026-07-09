@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -58,7 +58,7 @@ func GenerateAMMLPTCurrency(currency1, currency2 string) string {
 	}
 
 	// sha512Half(minC, maxC)
-	hash := common.Sha512Half(minC[:], maxC[:])
+	hash := sha512half.Sum(minC[:], maxC[:])
 
 	// AMM LPToken currency: 0x03 + first 19 bytes of hash
 	var lptCurrency [20]byte

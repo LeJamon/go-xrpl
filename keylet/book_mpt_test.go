@@ -3,7 +3,7 @@ package keylet
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // TestBookBaseIssueMatchesBookDir asserts BookBase reproduces the existing
@@ -93,7 +93,7 @@ func TestBookBaseMPTDomainAppends(t *testing.T) {
 	var spaceBytes [2]byte
 	spaceBytes[0] = byte(spaceBookDir >> 8)
 	spaceBytes[1] = byte(spaceBookDir)
-	want := common.Sha512Half(spaceBytes[:], paysMPT[:], getsMPT[:], domain[:])
+	want := sha512half.Sum(spaceBytes[:], paysMPT[:], getsMPT[:], domain[:])
 	if got.Key != want {
 		t.Fatalf("key mismatch:\n want %x\n got  %x", want, got.Key)
 	}
