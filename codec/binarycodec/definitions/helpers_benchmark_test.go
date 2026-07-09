@@ -6,7 +6,7 @@ import (
 )
 
 // nolint
-func BenchmarkGetTypeCodeByTypeName(b *testing.B) {
+func BenchmarkTypeCode(b *testing.B) {
 
 	tt := []struct {
 		input string
@@ -22,14 +22,14 @@ func BenchmarkGetTypeCodeByTypeName(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetTypeCodeByTypeName(test.input)
+				definitions.TypeCode(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetFieldHeaderByFieldName(b *testing.B) {
+func BenchmarkFieldHeaderByName(b *testing.B) {
 	tt := []struct {
 		input string
 	}{
@@ -44,13 +44,13 @@ func BenchmarkGetFieldHeaderByFieldName(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetFieldHeaderByFieldName(test.input)
+				definitions.FieldHeaderByName(test.input)
 			}
 		})
 	}
 }
 
-// func BenchmarkGetFieldNameByFieldHeader(b *testing.B) {
+// func BenchmarkFieldNameByHeader(b *testing.B) {
 // 	tt := []struct {
 // 		input FieldHeader
 // 	}{
@@ -71,14 +71,14 @@ func BenchmarkGetFieldHeaderByFieldName(b *testing.B) {
 // 	for _, test := range tt {
 // 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 // 			for i := 0; i < b.N; i++ {
-// 				definitions.GetFieldNameByFieldHeader(test.input)
+// 				definitions.FieldNameByHeader(test.input)
 // 			}
 // 		})
 // 	}
 // }
 
 // nolint
-func BenchmarkGetFieldInstanceByFieldName(b *testing.B) {
+func BenchmarkFieldInstanceByName(b *testing.B) {
 	tt := []struct {
 		input string
 	}{
@@ -93,14 +93,14 @@ func BenchmarkGetFieldInstanceByFieldName(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetFieldInstanceByFieldName(test.input)
+				definitions.FieldInstanceByName(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetTransactionTypeCodeByTransactionTypeName(b *testing.B) {
+func BenchmarkTransactionTypeCode(b *testing.B) {
 	tt := []struct {
 		input string
 	}{
@@ -115,14 +115,14 @@ func BenchmarkGetTransactionTypeCodeByTransactionTypeName(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetTransactionTypeCodeByTransactionTypeName(test.input)
+				definitions.TransactionTypeCode(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetTransactionTypeNameByTransactionTypeCode(b *testing.B) {
+func BenchmarkTransactionTypeName(b *testing.B) {
 	tt := []struct {
 		input int32
 	}{
@@ -137,14 +137,14 @@ func BenchmarkGetTransactionTypeNameByTransactionTypeCode(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_code_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetTransactionTypeNameByTransactionTypeCode(test.input)
+				definitions.TransactionTypeName(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetTransactionResultNameByTransactionResultTypeCode(b *testing.B) {
+func BenchmarkTransactionResultName(b *testing.B) {
 	tt := []struct {
 		input int32
 	}{
@@ -159,14 +159,14 @@ func BenchmarkGetTransactionResultNameByTransactionResultTypeCode(b *testing.B) 
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_code_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetTransactionResultNameByTransactionResultTypeCode(test.input)
+				definitions.TransactionResultName(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetTransactionResultTypeCodeByTransactionResultName(b *testing.B) {
+func BenchmarkTransactionResultCode(b *testing.B) {
 	tt := []struct {
 		input string
 	}{
@@ -181,14 +181,14 @@ func BenchmarkGetTransactionResultTypeCodeByTransactionResultName(b *testing.B) 
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetTransactionResultTypeCodeByTransactionResultName(test.input)
+				definitions.TransactionResultCode(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetLedgerEntryTypeCodeByLedgerEntryTypeName(b *testing.B) {
+func BenchmarkLedgerEntryTypeCode(b *testing.B) {
 	tt := []struct {
 		input string
 	}{
@@ -203,14 +203,14 @@ func BenchmarkGetLedgerEntryTypeCodeByLedgerEntryTypeName(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetLedgerEntryTypeCodeByLedgerEntryTypeName(test.input)
+				definitions.LedgerEntryTypeCode(test.input)
 			}
 		})
 	}
 }
 
 // nolint
-func BenchmarkGetLedgerEntryTypeNameByLedgerEntryTypeCode(b *testing.B) {
+func BenchmarkLedgerEntryTypeName(b *testing.B) {
 	tt := []struct {
 		input int32
 	}{
@@ -225,7 +225,7 @@ func BenchmarkGetLedgerEntryTypeNameByLedgerEntryTypeCode(b *testing.B) {
 	for _, test := range tt {
 		b.Run(fmt.Sprintf("input_code_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				definitions.GetLedgerEntryTypeNameByLedgerEntryTypeCode(test.input)
+				definitions.LedgerEntryTypeName(test.input)
 			}
 		})
 	}

@@ -94,7 +94,7 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 			return nil, errMaxNestingDepth
 		}
 
-		st := GetSerializedType(fi.Type)
+		st := SerializedTypeFor(fi.Type)
 		res, err := st.ToJSON(p, childDepth)
 		if err != nil {
 			return nil, err

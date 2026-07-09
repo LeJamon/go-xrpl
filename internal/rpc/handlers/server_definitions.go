@@ -31,19 +31,20 @@ var (
 
 func buildServerDefinitions() {
 	defs := definitions.Get()
+	defsFields := defs.Fields()
 
 	// Collect field names for deterministic ordering.
-	fieldNames := make([]string, 0, len(defs.Fields))
-	for name := range defs.Fields {
+	fieldNames := make([]string, 0, len(defsFields))
+	for name := range defsFields {
 		fieldNames = append(fieldNames, name)
 	}
 	sort.Strings(fieldNames)
 
 	// Build FIELDS array matching rippled format:
 	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}]
-	fields := make([]any, 0, len(defs.Fields))
+	fields := make([]any, 0, len(defsFields))
 	for _, name := range fieldNames {
-		fi := defs.Fields[name]
+		fi := defsFields[name]
 		fields = append(fields, []any{
 			name,
 			map[string]any{
@@ -57,11 +58,11 @@ func buildServerDefinitions() {
 	}
 
 	serverDefsBase = map[string]any{
-		"TYPES":               defs.Types,
+		"TYPES":               defs.Types(),
 		"FIELDS":              fields,
-		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes,
-		"TRANSACTION_TYPES":   defs.TransactionTypes,
-		"TRANSACTION_RESULTS": defs.TransactionResults,
+		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes(),
+		"TRANSACTION_TYPES":   defs.TransactionTypes(),
+		"TRANSACTION_RESULTS": defs.TransactionResults(),
 	}
 
 	// 3.2.0 (#6321): per-type field templates (with optionality) and flag maps.

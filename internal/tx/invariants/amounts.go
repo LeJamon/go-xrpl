@@ -60,8 +60,8 @@ func hasInvalidAmountMap(m map[string]any, depth int) bool {
 	}
 	defs := definitions.Get()
 	for name, v := range m {
-		fi, ok := defs.Fields[name]
-		if !ok || fi == nil {
+		fi, err := defs.FieldInstanceByName(name)
+		if err != nil || fi == nil {
 			continue
 		}
 		switch fi.Type {

@@ -243,7 +243,7 @@ func (m *Manifest) Verify() error {
 // precedes st.addWithoutSigningFields(ss).
 func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	for k := range decoded {
-		fi, _ := definitions.Get().GetFieldInstanceByFieldName(k)
+		fi, _ := definitions.Get().FieldInstanceByName(k)
 		if fi != nil && !fi.IsSigningField {
 			delete(decoded, k)
 		}

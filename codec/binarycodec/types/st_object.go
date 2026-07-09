@@ -51,7 +51,7 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			continue
 		}
 
-		st := GetSerializedType(v.Type)
+		st := SerializedTypeFor(v.Type)
 		if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
 			return nil, err
 		}
@@ -64,7 +64,7 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 			return nil, err
 		}
 	}
-	return t.binarySerializer.GetSink(), nil
+	return t.binarySerializer.Bytes(), nil
 }
 
 // checkJSONArraySize enforces MaxJSONArrayElements on a JSON array field before
@@ -166,7 +166,7 @@ func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bo
 			return nil, false, fmt.Errorf("duplicate field detected: %q", fi.FieldName)
 		}
 
-		st := GetSerializedType(fi.Type)
+		st := SerializedTypeFor(fi.Type)
 		if st == nil {
 			return nil, false, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)
 		}
@@ -256,7 +256,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 	if !hasX {
 		m := make(map[definitions.FieldInstance]any, len(json))
 		for k, v := range json {
-			fi, err := defs.GetFieldInstanceByFieldName(k)
+			fi, err := defs.FieldInstanceByName(k)
 			if err != nil {
 				return nil, err
 			}
@@ -304,7 +304,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 
 	m := make(map[definitions.FieldInstance]any, len(processedJSON))
 	for k, v := range processedJSON {
-		fi, err := defs.GetFieldInstanceByFieldName(k)
+		fi, err := defs.FieldInstanceByName(k)
 		if err != nil {
 			return nil, err
 		}
@@ -321,7 +321,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 func parseSpecialFields(k string, v any) (any, error) {
 	if k == "PermissionValue" {
 		if strValue, ok := v.(string); ok {
-			if permissionValue, err := definitions.Get().GetDelegatablePermissionValueByName(strValue); err == nil {
+			if permissionValue, err := definitions.Get().DelegatablePermissionValue(strValue); err == nil {
 				return uint32(permissionValue), nil
 			}
 			// A value with no registered name may be supplied in its decimal form
@@ -341,7 +341,7 @@ func parseSpecialFields(k string, v any) (any, error) {
 	// entry type 112). By resolving here we guarantee the ledger entry map wins.
 	if k == "LedgerEntryType" {
 		if strValue, ok := v.(string); ok {
-			code, err := definitions.Get().GetLedgerEntryTypeCodeByLedgerEntryTypeName(strValue)
+			code, err := definitions.Get().LedgerEntryTypeCode(strValue)
 			if err != nil {
 				return nil, err
 			}
@@ -395,11 +395,11 @@ func enumToStr(fieldName string, value any) (any, error) {
 		}
 		switch fieldName {
 		case "TransactionType":
-			return definitions.Get().GetTransactionTypeNameByTransactionTypeCode(int32(code))
+			return definitions.Get().TransactionTypeName(int32(code))
 		case "TransactionResult":
-			return definitions.Get().GetTransactionResultNameByTransactionResultTypeCode(int32(code))
+			return definitions.Get().TransactionResultName(int32(code))
 		default:
-			return definitions.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(int32(code))
+			return definitions.Get().LedgerEntryTypeName(int32(code))
 		}
 	case "PermissionValue":
 		code, ok := value.(uint32)
@@ -407,7 +407,7 @@ func enumToStr(fieldName string, value any) (any, error) {
 			return nil, fmt.Errorf("PermissionValue: expected uint32 but got %T", value)
 		}
 		// Convert the permission value to its name when one is registered.
-		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(code)); err == nil {
+		if name, err := definitions.Get().DelegatablePermissionName(int32(code)); err == nil {
 			return name, nil
 		}
 		// sfPermissionValue is a plain UINT32; a value with no registered name is

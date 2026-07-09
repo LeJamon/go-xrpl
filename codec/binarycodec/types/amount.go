@@ -60,8 +60,9 @@ const (
 
 	// MinXRP is the minimum XRP amount in XRP units.
 	MinXRP = 1e-6
-	// MaxDrops is the maximum number of drops (100 billion XRP in drops).
-	MaxDrops = 1e17 // 100 billion XRP in drops aka 10^17
+	// MaxDrops is the maximum number of drops (100 billion XRP in drops). It is
+	// an untyped integer constant so drop counts never enter float arithmetic.
+	MaxDrops = 100_000_000_000_000_000 // 100 billion XRP in drops aka 10^17
 
 	// IOUCodeRegex is the regular expression pattern for IOU currency codes.
 	IOUCodeRegex = `[0-9A-Za-z?!@#$%^&*<>(){}\[\]|]{3}`

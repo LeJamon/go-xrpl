@@ -76,7 +76,7 @@ func hexUpper(src []byte) string {
 func EncodeBytes(json map[string]any) ([]byte, error) {
 	defs := definitions.Get()
 	for k := range json {
-		if _, ok := defs.Fields[k]; !ok {
+		if !defs.HasField(k) {
 			return nil, fmt.Errorf("%w: %q", ErrUnknownField, k)
 		}
 	}
@@ -231,7 +231,7 @@ func removeNonSigningFields(json map[string]any) map[string]any {
 	defs := definitions.Get()
 	out := make(map[string]any, len(json))
 	for k, v := range json {
-		fi, _ := defs.GetFieldInstanceByFieldName(k)
+		fi, _ := defs.FieldInstanceByName(k)
 		if fi != nil && !fi.IsSigningField {
 			continue
 		}

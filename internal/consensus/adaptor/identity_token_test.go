@@ -132,7 +132,7 @@ func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 	t.Helper()
 	filtered := make(map[string]any, len(src))
 	for k, v := range src {
-		fi, _ := definitions.Get().GetFieldInstanceByFieldName(k)
+		fi, _ := definitions.Get().FieldInstanceByName(k)
 		if fi != nil && !fi.IsSigningField {
 			continue
 		}

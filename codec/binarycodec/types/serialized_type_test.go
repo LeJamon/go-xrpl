@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetSerializedType(t *testing.T) {
+func TestSerializedTypeFor(t *testing.T) {
 	testcases := []struct {
 		name     string
 		input    string
@@ -98,7 +98,7 @@ func TestGetSerializedType(t *testing.T) {
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.expected, GetSerializedType(tc.input))
+			require.Equal(t, tc.expected, SerializedTypeFor(tc.input))
 		})
 	}
 }

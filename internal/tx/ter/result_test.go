@@ -23,7 +23,7 @@ var decodeOnlyResultExtras = map[string]int32{}
 // serialization with ledger state already mutated, producing a divergent
 // ledger (the PR #726 hazard class).
 func TestResultDefinitionsLockstep(t *testing.T) {
-	defs := definitions.Get().TransactionResults
+	defs := definitions.Get().TransactionResults()
 
 	// Every result.go constant must appear in definitions.json with the same value.
 	for code, name := range resultNames {

@@ -312,7 +312,7 @@ func TestBinaryParser_ReadFieldHeader(t *testing.T) {
 }
 
 func TestBinaryParser_ReadField(t *testing.T) {
-	flags, err := definitions.Get().GetFieldInstanceByFieldName("Flags")
+	flags, err := definitions.Get().FieldInstanceByName("Flags")
 	require.NoError(t, err)
 
 	testcases := []struct {

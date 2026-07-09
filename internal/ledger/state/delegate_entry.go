@@ -173,7 +173,7 @@ func (d *DelegateData) HasTxPermission(txType uint32) bool {
 // (see the codec's enumToStr); accepting it here lets those values round-trip
 // and reach the delegatability check. Returns 0 when neither form resolves.
 func LookupPermissionValue(name string) uint32 {
-	if pv, err := definitions.Get().GetDelegatablePermissionValueByName(name); err == nil {
+	if pv, err := definitions.Get().DelegatablePermissionValue(name); err == nil {
 		return uint32(pv)
 	}
 	if n, err := strconv.ParseUint(name, 10, 32); err == nil {
@@ -187,10 +187,5 @@ func LookupPermissionValue(name string) uint32 {
 // values in the granular range are not granular and must fall through to the
 // transaction-type delegatability path.
 func IsGranularPermissionValue(value uint32) bool {
-	for _, v := range definitions.Get().GranularPermissions {
-		if uint32(v) == value {
-			return true
-		}
-	}
-	return false
+	return definitions.Get().IsGranularPermission(int32(value))
 }

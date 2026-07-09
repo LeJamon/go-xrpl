@@ -16,15 +16,15 @@ import (
 // [minJSONInt, maxJSONUInt] must be supplied as a string.
 const minJSONInt = float64(math.MinInt32)
 
-// Int64Type is the binary codec for the Int64 field type, a 64-bit signed integer.
-type Int64Type struct{}
+// Int64 is the binary codec for the Int64 field type, a 64-bit signed integer.
+type Int64 struct{}
 
 // ErrInvalidInt64 is returned when a value cannot be converted to Int64.
 var ErrInvalidInt64 = errors.New("invalid Int64 value")
 
 // FromJSON converts a JSON value into a serialized byte slice representing a 64-bit signed integer.
 // The input value can be an int, int64, float64, or string representation of an integer.
-func (i *Int64Type) FromJSON(value any) ([]byte, error) {
+func (i *Int64) FromJSON(value any) ([]byte, error) {
 	var v int64
 
 	switch val := value.(type) {
@@ -54,7 +54,7 @@ func (i *Int64Type) FromJSON(value any) ([]byte, error) {
 
 // ToJSON takes a BinaryParser and converts the serialized byte data back to a JSON string value.
 // Int64 values are returned as strings to preserve precision in JSON.
-func (i *Int64Type) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
+func (i *Int64) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(8)
 	if err != nil {
 		return nil, err

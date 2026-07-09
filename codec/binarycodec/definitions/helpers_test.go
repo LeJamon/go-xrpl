@@ -6,7 +6,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetTypeCodeByTypeName(t *testing.T) {
+func TestTypeCode(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -38,7 +38,7 @@ func TestGetTypeCodeByTypeName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTypeCodeByTypeName(test.input)
+			got, err := definitions.TypeCode(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -50,7 +50,7 @@ func TestGetTypeCodeByTypeName(t *testing.T) {
 	}
 }
 
-func TestGetFieldHeaderByFieldName(t *testing.T) {
+func TestFieldHeaderByName(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -79,7 +79,7 @@ func TestGetFieldHeaderByFieldName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetFieldHeaderByFieldName(test.input)
+			got, err := definitions.FieldHeaderByName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Nil(t, got)
@@ -91,7 +91,7 @@ func TestGetFieldHeaderByFieldName(t *testing.T) {
 	}
 }
 
-func TestGetFieldNameByFieldHeader(t *testing.T) {
+func TestFieldNameByHeader(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         FieldHeader
@@ -135,7 +135,7 @@ func TestGetFieldNameByFieldHeader(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetFieldNameByFieldHeader(test.input)
+			got, err := definitions.FieldNameByHeader(test.input)
 			if test.expectedError != nil {
 				require.Error(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -147,7 +147,7 @@ func TestGetFieldNameByFieldHeader(t *testing.T) {
 	}
 }
 
-func TestGetFieldInstanceByFieldName(t *testing.T) {
+func TestFieldInstanceByName(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -186,7 +186,7 @@ func TestGetFieldInstanceByFieldName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetFieldInstanceByFieldName(test.input)
+			got, err := definitions.FieldInstanceByName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Nil(t, got)
@@ -198,7 +198,7 @@ func TestGetFieldInstanceByFieldName(t *testing.T) {
 	}
 }
 
-func TestGetTransactionTypeCodeByTransactionTypeName(t *testing.T) {
+func TestTransactionTypeCode(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -224,7 +224,7 @@ func TestGetTransactionTypeCodeByTransactionTypeName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTransactionTypeCodeByTransactionTypeName(test.input)
+			got, err := definitions.TransactionTypeCode(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -236,7 +236,7 @@ func TestGetTransactionTypeCodeByTransactionTypeName(t *testing.T) {
 	}
 }
 
-func TestGetTransactionTypeNameByTransactionTypeCode(t *testing.T) {
+func TestTransactionTypeName(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         int32
@@ -262,7 +262,7 @@ func TestGetTransactionTypeNameByTransactionTypeCode(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTransactionTypeNameByTransactionTypeCode(test.input)
+			got, err := definitions.TransactionTypeName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -274,7 +274,7 @@ func TestGetTransactionTypeNameByTransactionTypeCode(t *testing.T) {
 	}
 }
 
-func TestGetTransactionResultNameByTransactionResultTypeCode(t *testing.T) {
+func TestTransactionResultName(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         int32
@@ -300,7 +300,7 @@ func TestGetTransactionResultNameByTransactionResultTypeCode(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTransactionResultNameByTransactionResultTypeCode(test.input)
+			got, err := definitions.TransactionResultName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -312,7 +312,7 @@ func TestGetTransactionResultNameByTransactionResultTypeCode(t *testing.T) {
 	}
 }
 
-func TestGetTransactionResultTypeCodeByTransactionResultName(t *testing.T) {
+func TestTransactionResultCode(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -338,7 +338,7 @@ func TestGetTransactionResultTypeCodeByTransactionResultName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetTransactionResultTypeCodeByTransactionResultName(test.input)
+			got, err := definitions.TransactionResultCode(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -350,7 +350,7 @@ func TestGetTransactionResultTypeCodeByTransactionResultName(t *testing.T) {
 	}
 }
 
-func TestGetLedgerEntryTypeCodeByLedgerEntryTypeName(t *testing.T) {
+func TestLedgerEntryTypeCode(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -376,7 +376,7 @@ func TestGetLedgerEntryTypeCodeByLedgerEntryTypeName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetLedgerEntryTypeCodeByLedgerEntryTypeName(test.input)
+			got, err := definitions.LedgerEntryTypeCode(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -388,7 +388,7 @@ func TestGetLedgerEntryTypeCodeByLedgerEntryTypeName(t *testing.T) {
 	}
 }
 
-func TestGetLedgerEntryTypeNameByLedgerEntryTypeCode(t *testing.T) {
+func TestLedgerEntryTypeName(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         int32
@@ -414,7 +414,7 @@ func TestGetLedgerEntryTypeNameByLedgerEntryTypeCode(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetLedgerEntryTypeNameByLedgerEntryTypeCode(test.input)
+			got, err := definitions.LedgerEntryTypeName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -426,7 +426,7 @@ func TestGetLedgerEntryTypeNameByLedgerEntryTypeCode(t *testing.T) {
 	}
 }
 
-func TestGetDelegatablePermissionValueByName(t *testing.T) {
+func TestDelegatablePermissionValue(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         string
@@ -458,7 +458,7 @@ func TestGetDelegatablePermissionValueByName(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetDelegatablePermissionValueByName(test.input)
+			got, err := definitions.DelegatablePermissionValue(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)
@@ -470,7 +470,7 @@ func TestGetDelegatablePermissionValueByName(t *testing.T) {
 	}
 }
 
-func TestGetDelegatablePermissionNameByValue(t *testing.T) {
+func TestDelegatablePermissionName(t *testing.T) {
 	tt := []struct {
 		description   string
 		input         int32
@@ -502,7 +502,7 @@ func TestGetDelegatablePermissionNameByValue(t *testing.T) {
 
 	for _, test := range tt {
 		t.Run(test.description, func(t *testing.T) {
-			got, err := definitions.GetDelegatablePermissionNameByValue(test.input)
+			got, err := definitions.DelegatablePermissionName(test.input)
 			if test.expectedError != nil {
 				require.EqualError(t, err, test.expectedError.Error())
 				require.Zero(t, got)

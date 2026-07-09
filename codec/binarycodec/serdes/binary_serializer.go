@@ -28,8 +28,10 @@ func (s *BinarySerializer) put(v []byte) {
 	s.sink = append(s.sink, v...)
 }
 
-// GetSink returns the serialized binary data accumulated in the serializer.
-func (s *BinarySerializer) GetSink() []byte {
+// Bytes returns the serialized binary data accumulated in the serializer.
+// The returned slice aliases the serializer's internal buffer; callers must
+// not mutate it or retain it across further writes.
+func (s *BinarySerializer) Bytes() []byte {
 	return s.sink
 }
 

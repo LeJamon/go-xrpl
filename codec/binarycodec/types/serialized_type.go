@@ -15,12 +15,10 @@ type SerializedType interface {
 	ToJSON(parser *serdes.BinaryParser, opts ...int) (any, error)
 }
 
-// GetSerializedType is a function that returns the correct SerializedType instance
-// based on the string parameter.
-// It creates a new instance of the type described by the parameter, allowing
-// the appropriate methods of that type to be called.
-// If the input string does not match a known type, the function returns nil.
-func GetSerializedType(t string) SerializedType {
+// SerializedTypeFor returns a fresh SerializedType instance for the named XRPL
+// field type, so the appropriate methods of that type can be called. It returns
+// nil for an unknown type name; callers must nil-check the result.
+func SerializedTypeFor(t string) SerializedType {
 	switch t {
 	case "UInt8":
 		return &UInt8{}
@@ -63,7 +61,7 @@ func GetSerializedType(t string) SerializedType {
 	case "Int32":
 		return &Int32{}
 	case "Int64":
-		return &Int64Type{}
+		return &Int64{}
 	}
 	return nil
 }

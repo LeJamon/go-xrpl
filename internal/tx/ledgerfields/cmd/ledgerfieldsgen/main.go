@@ -122,7 +122,7 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 	}}
 
 	for _, f := range entry.Fields {
-		fi, err := defs.GetFieldInstanceByFieldName(f.Name)
+		fi, err := defs.FieldInstanceByName(f.Name)
 		if err != nil {
 			return "", nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
