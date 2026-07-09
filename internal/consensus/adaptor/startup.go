@@ -91,10 +91,34 @@ const periodicManifestBroadcastInterval = 5 * time.Minute
 
 // Start launches all background goroutines (overlay, engine, router).
 func (c *Components) Start() error {
-	// Start overlay
+	// Start overlay. Capture Run's error so a listener bind failure (a stale
+	// process on the peer port, EACCES on a privileged port, a bad [port_peer]
+	// address) is loud and fatal at boot instead of leaving the node running
+	// deaf with no diagnostics. Run binds the listener before signalling
+	// ListenerReady, so a bind failure returns before that signal fires; wait
+	// for whichever happens first. A later (post-ready) exit is logged by the
+	// goroutine and left buffered so it never blocks.
 	overlayCtx, overlayCancel := context.WithCancel(context.Background())
 	c.overlayCancel = overlayCancel
-	go c.Overlay.Run(overlayCtx) //nolint:errcheck
+	overlayErr := make(chan error, 1)
+	go func() {
+		err := c.Overlay.Run(overlayCtx)
+		if err != nil && overlayCtx.Err() == nil {
+			slog.Error("overlay Run exited with error", "t", "consensus", "err", err)
+		}
+		overlayErr <- err
+	}()
+
+	select {
+	case <-c.Overlay.ListenerReady():
+		// Listener bound (or none configured) — boot can proceed.
+	case err := <-overlayErr:
+		overlayCancel()
+		if err == nil {
+			err = fmt.Errorf("overlay exited before the listener was ready")
+		}
+		return fmt.Errorf("start overlay: %w", err)
+	}
 
 	// Start consensus engine
 	if err := c.Engine.Start(context.Background()); err != nil {

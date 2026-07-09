@@ -502,6 +502,29 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
+func TestStup_ComponentsStart_ListenerBindFailure(t *testing.T) {
+	// A listener bind failure must fail boot loudly rather than leaving the
+	// node running deaf. A malformed listen address makes startListener return
+	// before signalling ListenerReady, so Start must surface the error.
+	overlay, err := peermanagement.New(peermanagement.WithListenAddr("not-a-valid-listen-address"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = overlay.Stop() })
+
+	c := &Components{
+		Overlay: overlay,
+		Engine:  &mockEngine{},
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- c.Start() }()
+	select {
+	case startErr := <-done:
+		require.Error(t, startErr, "a listener bind failure must fail boot")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start hung on a listener bind failure instead of returning an error")
+	}
+}
+
 func TestStup_ComponentsStart_EngineStartError(t *testing.T) {
 	// A failing engine must cause Start to return an error and cancel
 	// the already-started overlay goroutine.

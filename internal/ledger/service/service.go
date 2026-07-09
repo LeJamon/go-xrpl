@@ -224,8 +224,19 @@ type Service struct {
 	lastConsensusRoundTime time.Duration
 
 	// persistCh feeds the single persistence worker (see enqueuePersist);
-	// nil until Start.
+	// nil until Start. It is never closed — the worker exits on persistQuit
+	// after draining the queue, so a concurrent enqueuePersist can never send
+	// on a closed channel.
 	persistCh chan persistJob
+
+	// persistQuit signals the persistence worker to drain the queue and exit.
+	// Closed by Stop. persistStopped (guarded by mu, like enqueuePersist's
+	// callers) short-circuits new enqueues once Stop has begun. persistWG joins
+	// the worker so Stop can guarantee every queued validated-ledger persist is
+	// durable before the caller closes the underlying stores.
+	persistQuit    chan struct{}
+	persistStopped bool
+	persistWG      sync.WaitGroup
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -372,6 +383,8 @@ func (s *Service) Start() error {
 
 	if s.persistCh == nil {
 		s.persistCh = make(chan persistJob, 32)
+		s.persistQuit = make(chan struct{})
+		s.persistWG.Add(1)
 		go s.runPersistWorker()
 	}
 

@@ -1442,8 +1442,14 @@ func doShutdown(
 		logger.Info("Consensus components stopped")
 	}
 
-	// Note: ledgerService has no Stop method; it is garbage collected
-	_ = ledgerService
+	// Drain and join the persistence worker before closing its stores, so
+	// queued validated-ledger persists become durable instead of being
+	// abandoned (and so no StoreBatch races kvDB.Close). Ordered after the
+	// consensus components stop, so no new ledger closes past this point.
+	if ledgerService != nil {
+		ledgerService.Stop()
+		logger.Info("Ledger service persistence drained")
+	}
 	if kvDB != nil {
 		if err := kvDB.Close(); err != nil {
 			logger.Warn("Node store close failed", "err", err)
