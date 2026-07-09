@@ -267,12 +267,22 @@ func (e *Engine) enqueueProposalBroadcastLocked(p *consensus.Proposal) {
 		return
 	}
 	if e.deferBroadcasts == 0 {
-		_ = e.adaptor.BroadcastProposal(p)
+		e.broadcastProposal(p)
 		return
 	}
 	e.pendingBroadcasts = append(e.pendingBroadcasts, func() {
-		_ = e.adaptor.BroadcastProposal(p)
+		e.broadcastProposal(p)
 	})
+}
+
+// broadcastProposal emits our own proposal, logging on failure. A silently
+// dropped own-proposal makes the node stop participating in consensus while
+// still appearing healthy — the invisible bow-out class the liveness audits
+// chased — so the emission stays fire-and-forget but is no longer silent.
+func (e *Engine) broadcastProposal(p *consensus.Proposal) {
+	if err := e.adaptor.BroadcastProposal(p); err != nil {
+		slog.Warn("failed to broadcast own proposal", "t", "consensus", "err", err)
+	}
 }
 
 // enqueueValidationBroadcastLocked stages a validation to be broadcast
@@ -282,12 +292,20 @@ func (e *Engine) enqueueValidationBroadcastLocked(v *consensus.Validation) {
 		return
 	}
 	if e.deferBroadcasts == 0 {
-		_ = e.adaptor.BroadcastValidation(v)
+		e.broadcastValidation(v)
 		return
 	}
 	e.pendingBroadcasts = append(e.pendingBroadcasts, func() {
-		_ = e.adaptor.BroadcastValidation(v)
+		e.broadcastValidation(v)
 	})
+}
+
+// broadcastValidation emits our own validation, logging on failure. Like
+// broadcastProposal, a silent drop is a liveness-critical invisible bow-out.
+func (e *Engine) broadcastValidation(v *consensus.Validation) {
+	if err := e.adaptor.BroadcastValidation(v); err != nil {
+		slog.Warn("failed to broadcast own validation", "t", "consensus", "err", err)
+	}
 }
 
 // takePendingBroadcastsLocked drains the queued broadcast closures.
@@ -519,7 +537,12 @@ func (e *Engine) Start(ctx context.Context) error {
 // before return so no stale validations are lost (modulo SaveBatch
 // failures, which the writer re-queues).
 func (e *Engine) Stop() error {
-	e.cancel()
+	// Guard against Stop before Start: e.cancel is nil until Start runs, and a
+	// defensive doShutdown / error-path stop must not nil-panic (same class as
+	// the fuzz-found doShutdown nil-panic).
+	if e.cancel != nil {
+		e.cancel()
+	}
 	e.wg.Wait()
 	e.eventBus.Stop()
 

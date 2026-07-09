@@ -2,6 +2,7 @@ package openledger
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -178,6 +179,9 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 
 	result, err := bp.ApplyTransaction(txn, blob)
 	if err != nil {
+		if a.cfg.Logger != nil {
+			a.cfg.Logger.Error("txq apply: ApplyTransaction failed", "err", err)
+		}
 		return ter.TefINTERNAL, false
 	}
 	applyRes := result.ApplyResult
@@ -185,7 +189,19 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	engineResult := applyRes.Result
 	applied := engineResult.IsSuccess() || engineResult.IsTec()
 	if applied {
-		_ = a.view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
+		if werr := a.view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob); werr != nil {
+			// The tx's state effects are already in the open view, but its blob
+			// is not in the tx map. Left silent, the next consensus round's
+			// proposal set omits it and the rebuilt open view loses the effects —
+			// a silently vanished transaction. Fail loudly and do not report it
+			// applied, so the caller doesn't treat effects-without-record as a
+			// committed tx.
+			if a.cfg.Logger != nil {
+				a.cfg.Logger.Error("txq apply: AddTransactionWithMeta failed; open view holds effects for an unrecorded tx",
+					"hash", fmt.Sprintf("%x", result.Hash[:8]), "ter", engineResult.String(), "err", werr)
+			}
+			return ter.TefINTERNAL, false
+		}
 	}
 	return engineResult, applied
 }
