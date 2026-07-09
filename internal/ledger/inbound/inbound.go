@@ -629,7 +629,7 @@ func (l *Ledger) applyKnownNodes(m *shamap.SHAMap, nodes []message.LedgerNode, l
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		parsedID, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {
 			l.logger.Debug("inbound ledger: malformed "+label+" node ID",
 				"node_id_len", len(node.NodeID),

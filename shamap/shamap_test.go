@@ -340,7 +340,7 @@ func TestSnapshot(t *testing.T) {
 		t.Fatalf("Failed to get map hash: %v", err)
 	}
 
-	snapShotMap, err := sMap.Snapshot(false) // immutable snapshot
+	snapShotMap, err := sMap.SnapshotImmutable() // immutable snapshot
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestSnapshot_StructuralSharing(t *testing.T) {
 		t.Fatalf("Hash: %v", err)
 	}
 
-	snap, err := src.Snapshot(false)
+	snap, err := src.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// Create immutable snapshot for concurrent reading
-	snapshot, err := sMap.Snapshot(false)
+	snapshot, err := sMap.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}
@@ -678,7 +678,7 @@ func BenchmarkSnapshot(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, err := sMap.Snapshot(false)
+		_, err := sMap.SnapshotImmutable()
 		if err != nil {
 			b.Fatalf("Failed to create snapshot: %v", err)
 		}

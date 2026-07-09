@@ -76,7 +76,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 	f.Add(txMeta)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := DeserializeNodeFromWire(data)
+		node, err := deserializeNodeFromWire(data)
 		if err != nil {
 			return
 		}
@@ -228,7 +228,7 @@ func FuzzNewTransactionLeafFromWire(f *testing.F) {
 	f.Add(larger)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := NewTransactionLeafFromWire(data)
+		node, err := newTransactionLeafFromWire(data)
 		if err != nil {
 			return
 		}
@@ -336,7 +336,7 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 	f.Add(innerBadSize)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := DeserializeFromPrefix(data)
+		node, err := deserializeFromPrefix(data)
 		if err != nil {
 			return
 		}

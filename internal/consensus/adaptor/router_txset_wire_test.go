@@ -187,7 +187,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 		reconstructed.AddRootNode([32]byte(wantID), resp.Nodes[0].NodeData),
 		"AddRootNode must accept the served root payload")
 	for i := 1; i < len(resp.Nodes); i++ {
-		nid, err := shamap.UnmarshalBinary(resp.Nodes[i].NodeID)
+		nid, err := shamap.ParseNodeID(resp.Nodes[i].NodeID)
 		require.NoError(t, err, "node[%d] NodeID must parse", i)
 		_, err = reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData)
 		require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)

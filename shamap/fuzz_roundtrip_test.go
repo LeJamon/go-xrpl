@@ -67,7 +67,7 @@ func FuzzAccountStateLeafRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeWithPrefix failed: %v", err)
 		}
-		node3, err := DeserializeFromPrefix(prefixData)
+		node3, err := deserializeFromPrefix(prefixData)
 		if err != nil {
 			t.Fatalf("DeserializeFromPrefix failed: %v", err)
 		}
@@ -115,7 +115,7 @@ func FuzzTransactionLeafRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeForWire failed: %v", err)
 		}
-		node2, err := NewTransactionLeafFromWire(wireData)
+		node2, err := newTransactionLeafFromWire(wireData)
 		if err != nil {
 			t.Fatalf("NewTransactionLeafFromWire failed: %v", err)
 		}
@@ -132,7 +132,7 @@ func FuzzTransactionLeafRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeWithPrefix failed: %v", err)
 		}
-		node3, err := DeserializeFromPrefix(prefixData)
+		node3, err := deserializeFromPrefix(prefixData)
 		if err != nil {
 			t.Fatalf("DeserializeFromPrefix failed: %v", err)
 		}
@@ -196,7 +196,7 @@ func FuzzTransactionWithMetaLeafRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeWithPrefix failed: %v", err)
 		}
-		node3, err := DeserializeFromPrefix(prefixData)
+		node3, err := deserializeFromPrefix(prefixData)
 		if err != nil {
 			t.Fatalf("DeserializeFromPrefix failed: %v", err)
 		}
@@ -288,7 +288,7 @@ func FuzzInnerNodeRoundTrip(f *testing.F) {
 		if err != nil {
 			t.Fatalf("SerializeWithPrefix failed: %v", err)
 		}
-		node3, err := DeserializeFromPrefix(prefixData)
+		node3, err := deserializeFromPrefix(prefixData)
 		if err != nil {
 			t.Fatalf("DeserializeFromPrefix failed: %v", err)
 		}

@@ -67,10 +67,10 @@ func TestLeafFromWire_RejectsShortPayload(t *testing.T) {
 	buildTxn := func(dataLen int) []byte {
 		return append(make([]byte, dataLen), byte(protocol.WireTypeTransaction))
 	}
-	if _, err := NewTransactionLeafFromWire(buildTxn(11)); !errors.Is(err, ErrItemTooSmall) {
+	if _, err := newTransactionLeafFromWire(buildTxn(11)); !errors.Is(err, ErrItemTooSmall) {
 		t.Fatalf("TXN 11-byte payload: want ErrItemTooSmall, got %v", err)
 	}
-	if _, err := NewTransactionLeafFromWire(buildTxn(12)); err != nil {
+	if _, err := newTransactionLeafFromWire(buildTxn(12)); err != nil {
 		t.Fatalf("TXN 12-byte payload: unexpected error %v", err)
 	}
 }

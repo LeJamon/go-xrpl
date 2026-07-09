@@ -30,7 +30,7 @@ func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
 		Complete:    true,
 	}
 	complete, err := sm.diffUnsafe(other, func(diff DifferenceItem) bool {
-		result.AddDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
+		result.addDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
 		return maxCount <= 0 || result.Len() < maxCount
 	})
 	if err != nil {
@@ -44,7 +44,7 @@ func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
 // This is a convenience method that returns just the keys of items that
 // differ (added, removed, or modified) between the two maps, without the
 // full DifferenceItem details.
-func (sm *SHAMap) FindDifference(other *SHAMap) ([]Key, error) {
+func (sm *SHAMap) FindDifference(other *SHAMap) ([][32]byte, error) {
 	if other == nil {
 		return nil, fmt.Errorf("cannot compare with nil map")
 	}
@@ -59,7 +59,7 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([]Key, error) {
 		return nil, fmt.Errorf("%w: cannot compare invalid SHAMaps", ErrInvalidState)
 	}
 
-	var keys []Key
+	var keys [][32]byte
 	if _, err := sm.diffUnsafe(other, func(diff DifferenceItem) bool {
 		keys = append(keys, diff.Key)
 		return true

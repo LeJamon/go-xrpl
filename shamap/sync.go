@@ -320,7 +320,7 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	}
 
 	// Deserialize the node from wire format
-	node, err := DeserializeNodeFromWire(data)
+	node, err := deserializeNodeFromWire(data)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 	}
@@ -362,7 +362,7 @@ func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) (AddNodeRes
 	}
 
 	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
-		return DeserializeFromPrefix(data)
+		return deserializeFromPrefix(data)
 	})
 }
 
@@ -397,7 +397,7 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) (AddNodeResult, e
 	}
 
 	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
-		return DeserializeNodeFromWire(data)
+		return deserializeNodeFromWire(data)
 	})
 }
 
@@ -546,7 +546,7 @@ func (sm *SHAMap) AddRootNode(hash [32]byte, data []byte) error {
 	}
 
 	// Deserialize the node from wire format
-	node, err := DeserializeNodeFromWire(data)
+	node, err := deserializeNodeFromWire(data)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 	}

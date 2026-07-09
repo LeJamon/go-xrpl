@@ -297,7 +297,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		parsedID, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {
 			replyValid = false
 			r.logger.Debug("tx-set sync: malformed node ID",

@@ -74,8 +74,8 @@ func (ds *DifferenceSet) String() string {
 	return result.String()
 }
 
-// AddDifference adds a difference to the set
-func (ds *DifferenceSet) AddDifference(key [32]byte, diffType DifferenceType, first, second *Item) {
+// addDifference adds a difference to the set
+func (ds *DifferenceSet) addDifference(key [32]byte, diffType DifferenceType, first, second *Item) {
 	ds.Differences = append(ds.Differences, DifferenceItem{
 		Key:        key,
 		Type:       diffType,

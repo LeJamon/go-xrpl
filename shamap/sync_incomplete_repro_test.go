@@ -38,7 +38,7 @@ func buildDeepBackedSource(t *testing.T, family *memoryFamily) (*SHAMap, [32]byt
 		}
 	}
 
-	batch, err := source.FlushDirty(false)
+	batch, err := source.FlushDirty()
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -69,7 +69,7 @@ func pickDeepInner(t *testing.T, source *SHAMap, family *memoryFamily, minDepth 
 		if int(w.NodeID[32]) < minDepth {
 			continue
 		}
-		n, err := DeserializeNodeFromWire(w.Data)
+		n, err := deserializeNodeFromWire(w.Data)
 		if err != nil {
 			continue
 		}
@@ -84,7 +84,7 @@ func pickDeepInner(t *testing.T, source *SHAMap, family *memoryFamily, minDepth 
 		if !ok {
 			continue
 		}
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary: %v", err)
 		}

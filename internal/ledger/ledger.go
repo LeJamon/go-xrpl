@@ -108,7 +108,7 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		return nil, errors.New("parent ledger cannot be nil")
 	}
 
-	stateMap, err := parent.stateMap.Snapshot(true)
+	stateMap, err := parent.stateMap.SnapshotMutable()
 	if err != nil {
 		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
 	}
@@ -605,12 +605,12 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	stateMapCopy, err := l.stateMap.Snapshot(false)
+	stateMapCopy, err := l.stateMap.SnapshotImmutable()
 	if err != nil {
 		return nil, err
 	}
 
-	txMapCopy, err := l.txMap.Snapshot(false)
+	txMapCopy, err := l.txMap.SnapshotImmutable()
 	if err != nil {
 		return nil, err
 	}
@@ -631,11 +631,11 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	stateMapCopy, err := l.stateMap.Snapshot(true)
+	stateMapCopy, err := l.stateMap.SnapshotMutable()
 	if err != nil {
 		return nil, err
 	}
-	txMapCopy, err := l.txMap.Snapshot(true)
+	txMapCopy, err := l.txMap.SnapshotMutable()
 	if err != nil {
 		return nil, err
 	}
@@ -757,7 +757,7 @@ func (l *Ledger) StateMapSnapshot() (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.stateMap.Snapshot(true)
+	return l.stateMap.SnapshotMutable()
 }
 
 // TxMapSnapshot returns a mutable snapshot of the transaction map.
@@ -765,7 +765,7 @@ func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 
-	return l.txMap.Snapshot(true)
+	return l.txMap.SnapshotMutable()
 }
 
 // SetStateMapFamily sets the Family on the state map, enabling backed mode

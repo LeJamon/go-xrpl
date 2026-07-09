@@ -18,11 +18,17 @@ type NodeBatch struct {
 	Entries []FlushEntry
 }
 
-// DeserializeFromPrefix creates a SHAMap node from prefix-format data.
+// DeserializeFromPrefix creates a SHAMap node from prefix-format data,
+// returning a read-only NodeReader.
+func DeserializeFromPrefix(data []byte) (NodeReader, error) {
+	return deserializeFromPrefix(data)
+}
+
+// deserializeFromPrefix creates a SHAMap node from prefix-format data.
 // The first 4 bytes are the hash prefix which identifies the node type.
 // Inner nodes are created with hashes set but children nil (lazy loading).
 // All deserialized nodes are marked as not dirty.
-func DeserializeFromPrefix(data []byte) (Node, error) {
+func deserializeFromPrefix(data []byte) (Node, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("data too short for prefix: %d bytes", len(data))
 	}

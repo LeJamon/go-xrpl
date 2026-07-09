@@ -54,6 +54,14 @@ var leafKinds = [...]leafKindInfo{
 	},
 }
 
+// LeafReader is the read-only view of a leaf node returned to callers outside
+// the package: the node's identity plus its stored Item, without the
+// item-replacement or hashing mutators of LeafNode.
+type LeafReader interface {
+	NodeReader
+	Item() *Item
+}
+
 // LeafNode interface extends Node with item-level access.
 type LeafNode interface {
 	Node
@@ -250,8 +258,13 @@ func newAccountStateLeafFromWire(data []byte) (*leafNode, error) {
 }
 
 // NewTransactionLeafFromWire creates a transaction leaf (without metadata)
-// from wire format data. The key is derived by hashing the data.
-func NewTransactionLeafFromWire(data []byte) (LeafNode, error) {
+// from wire format data. The key is derived by hashing the data. It returns a
+// read-only LeafReader; the mutable node is used only within the package.
+func NewTransactionLeafFromWire(data []byte) (LeafReader, error) {
+	return newTransactionLeafFromWire(data)
+}
+
+func newTransactionLeafFromWire(data []byte) (*leafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
