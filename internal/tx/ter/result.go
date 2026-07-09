@@ -229,6 +229,7 @@ const (
 	TemARRAY_TOO_LARGE                             Result = -252
 	TemBAD_TRANSFER_FEE                            Result = -251
 	TemINVALID_INNER_BATCH                         Result = -250
+	TemBAD_MPT                                     Result = -249
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
@@ -246,6 +247,7 @@ const (
 	TerPRE_TICKET        Result = -88
 	TerNO_AMM            Result = -87
 	TerADDRESS_COLLISION Result = -86
+	TerLOCKED            Result = -84
 )
 
 // resultNames maps every Result code to its canonical rippled string.
@@ -429,6 +431,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TemARRAY_TOO_LARGE:                             "temARRAY_TOO_LARGE",
 	TemBAD_TRANSFER_FEE:                            "temBAD_TRANSFER_FEE",
 	TemINVALID_INNER_BATCH:                         "temINVALID_INNER_BATCH",
+	TemBAD_MPT:                                     "temBAD_MPT",
 	TerRETRY:                                       "terRETRY",
 	TerFUNDS_SPENT:                                 "terFUNDS_SPENT",
 	TerINSUF_FEE_B:                                 "terINSUF_FEE_B",
@@ -443,6 +446,7 @@ var resultNames = map[Result]string{ //nolint:gosec // G101: TER result-code nam
 	TerPRE_TICKET:                                  "terPRE_TICKET",
 	TerNO_AMM:                                      "terNO_AMM",
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
+	TerLOCKED:                                      "terLOCKED",
 }
 
 // String returns the canonical rippled name for this result code, or "-" for
@@ -687,6 +691,7 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TemARRAY_TOO_LARGE:                             "Malformed: Array is too large.",
 	TemBAD_TRANSFER_FEE:                            "Malformed: Transfer fee is outside valid range.",
 	TemINVALID_INNER_BATCH:                         "Malformed: Invalid inner batch transaction.",
+	TemBAD_MPT:                                     "Malformed: Bad MPT.",
 	TerRETRY:                                       "Retry transaction.",
 	TerFUNDS_SPENT:                                 "DEPRECATED.",
 	TerINSUF_FEE_B:                                 "Account balance can't pay fee.",
@@ -701,5 +706,6 @@ var resultMessages = map[Result]string{ //nolint:gosec // G101: TER result-code 
 	TerPRE_TICKET:                                  "Ticket is not yet in ledger.",
 	TerNO_AMM:                                      "AMM doesn't exist for the asset pair.",
 	TerADDRESS_COLLISION:                           "Failed to allocate an unique account address.",
+	TerLOCKED:                                      "Fund is locked.",
 	TesSUCCESS:                                     "The transaction was applied. Only final in a validated ledger.",
 }

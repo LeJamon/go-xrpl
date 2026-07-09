@@ -65,6 +65,11 @@ func (a *AMMVote) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// CheckExtraFeatures gates MPT pool assets on the MPTokensV2 amendment.
+func (a *AMMVote) CheckExtraFeatures(rules *amendment.Rules) error {
+	return requireMPTokensV2(rules, a.Asset.IsMPT() || a.Asset2.IsMPT())
+}
+
 // Preclaim requires the AMM to exist, be non-empty, and the voter to hold LP
 // tokens. Reference: rippled AMMVote.cpp preclaim
 func (a *AMMVote) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
