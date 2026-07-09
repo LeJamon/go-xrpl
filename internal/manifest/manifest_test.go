@@ -480,16 +480,17 @@ func TestManifest_Secp256k1MasterSig_HighS_Rejected(t *testing.T) {
 	}
 }
 
-// Sequence() tracks rippled's seq_++ semantics: only the UPDATE branch
-// in ApplyManifest advances the counter (Manifest.cpp:538). First-
-// inserts and Stale re-applies leave it alone.
-func TestManifest_Sequence_AdvancesOnlyOnUpdate(t *testing.T) {
+// Sequence() tracks rippled 3.2.0's seq_++ semantics (#6059): EVERY
+// accepted manifest advances the counter — both a first-insert for a
+// newly-seen master key and an update replacing an existing one. Only a
+// Stale re-apply leaves it alone.
+func TestManifest_Sequence_AdvancesOnEveryAccept(t *testing.T) {
 	c := manifest.NewCache()
 	if got := c.Sequence(); got != 0 {
 		t.Fatalf("fresh cache Sequence: got %d want 0", got)
 	}
 
-	// First insert under master A.
+	// First insert under master A → bumps (rippled 3.2.0 first-insert).
 	aSeq1Bytes, _, _ := buildManifest(t, 1, false, 0x21, 0x22)
 	aSeq1, err := manifest.Deserialize(aSeq1Bytes)
 	if err != nil {
@@ -498,12 +499,11 @@ func TestManifest_Sequence_AdvancesOnlyOnUpdate(t *testing.T) {
 	if d := c.ApplyManifest(aSeq1); d != manifest.Accepted {
 		t.Fatalf("first insert: %s", d)
 	}
-	if got := c.Sequence(); got != 0 {
-		t.Errorf("Sequence after first insert: got %d want 0 (rippled first-insert quirk)", got)
+	if got := c.Sequence(); got != 1 {
+		t.Errorf("Sequence after first insert: got %d want 1", got)
 	}
 
-	// First insert under a SECOND master B — still a first-insert, so
-	// no bump.
+	// First insert under a SECOND master B → bumps again.
 	bSeq1Bytes, _, _ := buildManifest(t, 1, false, 0x23, 0x24)
 	bSeq1, err := manifest.Deserialize(bSeq1Bytes)
 	if err != nil {
@@ -512,11 +512,11 @@ func TestManifest_Sequence_AdvancesOnlyOnUpdate(t *testing.T) {
 	if d := c.ApplyManifest(bSeq1); d != manifest.Accepted {
 		t.Fatalf("second master first insert: %s", d)
 	}
-	if got := c.Sequence(); got != 0 {
-		t.Errorf("Sequence after second first-insert: got %d want 0", got)
+	if got := c.Sequence(); got != 2 {
+		t.Errorf("Sequence after second first-insert: got %d want 2", got)
 	}
 
-	// Update master A → seq must bump.
+	// Update master A → seq bumps.
 	aSeq2Bytes, _, _ := buildManifest(t, 2, false, 0x21, 0x25)
 	aSeq2, err := manifest.Deserialize(aSeq2Bytes)
 	if err != nil {
@@ -525,16 +525,16 @@ func TestManifest_Sequence_AdvancesOnlyOnUpdate(t *testing.T) {
 	if d := c.ApplyManifest(aSeq2); d != manifest.Accepted {
 		t.Fatalf("update aSeq2: %s", d)
 	}
-	if got := c.Sequence(); got != 1 {
-		t.Errorf("Sequence after update: got %d want 1", got)
+	if got := c.Sequence(); got != 3 {
+		t.Errorf("Sequence after update: got %d want 3", got)
 	}
 
 	// Stale re-apply must NOT bump.
 	if d := c.ApplyManifest(aSeq1); d != manifest.Stale {
 		t.Fatalf("stale re-apply: %s", d)
 	}
-	if got := c.Sequence(); got != 1 {
-		t.Errorf("Sequence after stale: got %d want 1", got)
+	if got := c.Sequence(); got != 3 {
+		t.Errorf("Sequence after stale: got %d want 3", got)
 	}
 }
 

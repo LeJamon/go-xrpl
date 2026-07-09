@@ -5,7 +5,22 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestValidateBook_MalformedTakerIsActMalformed pins the 3.2.0 #6529 change:
+// an unparseable books[].taker returns rpcACT_MALFORMED (was rpcBAD_ISSUER).
+func TestValidateBook_MalformedTakerIsActMalformed(t *testing.T) {
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	book := types.BookRequest{
+		TakerPays: []byte(`{"currency":"USD","issuer":"` + issuer + `"}`),
+		TakerGets: []byte(`{"currency":"XRP"}`),
+		Taker:     "not-a-valid-account",
+	}
+	err := validateBook(book, true)
+	require.NotNil(t, err, "malformed taker must be rejected")
+	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+}
 
 // TestBookKeyFoldsCurrencySpellings pins M7: a market subscribed with a 3-char
 // ISO currency and the same market spelled as its 40-hex form share one

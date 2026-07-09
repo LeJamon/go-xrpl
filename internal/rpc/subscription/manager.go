@@ -451,10 +451,10 @@ func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
 		return types.RpcErrorBadMarket()
 	}
 
-	// Optional taker — an unparseable account is rpcBAD_ISSUER
-	// (Subscribe.cpp:301-305).
+	// Optional taker — an unparseable account is rpcACT_MALFORMED
+	// (rippled 3.2.0 #6529 changed this from rpcBAD_ISSUER, Subscribe.cpp).
 	if includeTaker && book.Taker != "" && !isValidXRPLAddress(book.Taker) {
-		return types.RpcErrorBadIssuer()
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 
 	// Optional domain (Subscribe.cpp:308-315).
