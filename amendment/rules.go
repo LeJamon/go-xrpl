@@ -207,3 +207,9 @@ func (r *Rules) PermissionedDEXEnabled() bool {
 func (r *Rules) MPTokensV2Enabled() bool {
 	return r.Enabled(FeatureMPTokensV2)
 }
+
+// FixCleanup3_2_0Enabled returns true if the fixCleanup3_2_0 amendment is
+// enabled — vault/lending precision fixes and vault-share reference holdings.
+func (r *Rules) FixCleanup3_2_0Enabled() bool {
+	return r.Enabled(FeatureFixCleanup3_2_0)
+}
