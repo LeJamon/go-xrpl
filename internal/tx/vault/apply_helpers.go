@@ -607,7 +607,7 @@ func sendAssetToVault(ctx *tx.ApplyContext, vaultAccountID [20]byte, orig tx.Amo
 	}
 
 	amt := state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), orig.Currency, orig.Issuer)
-	return tx.RippleCredit(ctx.View, ctx.AccountID, vaultAccountID, amt)
+	return tx.RippleSendIOU(ctx.View, ctx.AccountID, vaultAccountID, amt, true)
 }
 
 // decodeMPTID decodes a 48-char hex MPT issuance ID.
@@ -670,7 +670,7 @@ func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, as
 	}
 
 	amt := state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), asset.Currency, asset.Issuer)
-	return tx.RippleCredit(ctx.View, vaultAccountID, dstID, amt)
+	return tx.RippleSendIOU(ctx.View, vaultAccountID, dstID, amt, true)
 }
 
 // burnShares decreases the share issuance's OutstandingAmount and debits the
