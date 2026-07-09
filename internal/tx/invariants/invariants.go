@@ -213,6 +213,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 			return checkValidPermissionedDEX(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
+			return checkValidBookDirectory(entries, view, rules)
+		},
+		func() *InvariantViolation {
 			return checkValidAMM(tx, result, entries, view, rules)
 		},
 		func() *InvariantViolation {
@@ -229,6 +232,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation {
 			return checkNoModifiedUnmodifiableFields(entries, rules)
+		},
+		func() *InvariantViolation {
+			return checkValidAmounts(entries, rules)
 		},
 	}
 	for _, check := range checks {
