@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -137,6 +138,21 @@ func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amoun
 	issuerID := mptIDIssuer(mptID)
 
 	if from == issuerID {
+		// The issuer is putting tokens into circulation: the new outstanding
+		// supply must not exceed MaximumAmount (default 2^63-1). Callers that
+		// disburse to several destinations issue one sendMPTAsset per leg and
+		// commit OutstandingAmount between them, so this per-leg cap on the
+		// freshly read supply enforces the aggregate cap across the whole
+		// disbursement (rippled's rippleSendMultiMPT aggregate check; the
+		// fixCleanup3_1_3 gate there only refines multi-leg precision, and the
+		// single-leg cap in rippleSendMPT is unconditional).
+		maxAmount := maxMPTokenAmount
+		if issuance.MaximumAmount != nil {
+			maxAmount = *issuance.MaximumAmount
+		}
+		if amount > maxAmount || issuance.OutstandingAmount > maxAmount-amount {
+			return ter.TecPATH_DRY
+		}
 		issuance.OutstandingAmount += amount
 	} else {
 		tokenKey := keylet.MPTokenByID(mptID, from)
@@ -762,6 +778,12 @@ func removeEmptyShareMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID
 		return ter.TesSUCCESS
 	}
 	if token.MPTAmount != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
+	// A holding with escrow-locked shares can no longer be deleted: the lock is
+	// an outstanding obligation. Gated on fixCleanup3_1_3.
+	if ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3) &&
+		token.LockedAmount != nil && *token.LockedAmount != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
 	if res, derr := state.DirRemove(ctx.View, keylet.OwnerDir(holderID), token.OwnerNode, tokenKey.Key, false); derr != nil || !res.Success {
