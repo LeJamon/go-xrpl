@@ -87,24 +87,9 @@ func ParseLedgerNumber(s string) (state.XRPLNumber, bool) {
 }
 
 // Reuse surface for the lending package. A LoanBroker sits on a Vault and reuses
-// its pseudo-account derivation and asset-movement machinery; these thin wrappers
-// share the tested vault-internal helpers instead of duplicating them.
-
-// PseudoAccountAddress derives an unoccupied pseudo-account ID from a ledger
-// keylet (the shared createPseudoAccount address search).
-func PseudoAccountAddress(view tx.LedgerView, parentHash, key [32]byte) [20]byte {
-	return pseudoAccountAddress(view, parentHash, key)
-}
-
-// ReadAccountRoot reads and parses an AccountRoot, returning (nil, nil) when absent.
-func ReadAccountRoot(view tx.LedgerView, id [20]byte) (*state.AccountRoot, error) {
-	return readAccountRoot(view, id)
-}
-
-// IsPseudoAccountID reports whether id is an existing pseudo-account.
-func IsPseudoAccountID(view tx.LedgerView, id [20]byte) bool {
-	return isPseudoAccountID(view, id)
-}
+// its holding-management machinery; these thin wrappers share the tested
+// vault-internal helpers instead of duplicating them. The family-generic
+// primitives (pseudo-account creation, AccountRoot reads) live in the tx root.
 
 // CanAddHolding reports whether accountID could hold asset (issuer/DefaultRipple
 // for IOU, issuance existence + CanTransfer for MPT).
@@ -177,7 +162,7 @@ func adjustXRPBalance(ctx *tx.ApplyContext, account [20]byte, delta int64) ter.R
 		ctx.Account.Balance = uint64(nb)
 		return ter.TesSUCCESS
 	}
-	ar, err := readAccountRoot(ctx.View, account)
+	ar, err := tx.ReadAccountRoot(ctx.View, account)
 	if err != nil || ar == nil {
 		return ter.TefINTERNAL
 	}

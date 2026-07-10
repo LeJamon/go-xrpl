@@ -76,7 +76,7 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if res != ter.TesSUCCESS {
 		return res
 	}
-	if br, aerr := vault.ReadAccountRoot(view, borrower); aerr != nil || br == nil {
+	if br, aerr := tx.ReadAccountRoot(view, borrower); aerr != nil || br == nil {
 		return ter.TerNO_ACCOUNT
 	}
 	vinfo, verr := vault.ReadVaultLending(view, keylet.VaultByID(b.VaultID))
@@ -309,7 +309,7 @@ func (l *LoanSet) chargeBorrower(ctx *tx.ApplyContext, borrower [20]byte) (bool,
 		ctx.Account.OwnerCount = newCount
 		return true, ter.TesSUCCESS
 	}
-	br, err := vault.ReadAccountRoot(ctx.View, borrower)
+	br, err := tx.ReadAccountRoot(ctx.View, borrower)
 	if err != nil || br == nil {
 		return false, ter.TefBAD_LEDGER
 	}

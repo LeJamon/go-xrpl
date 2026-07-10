@@ -128,7 +128,7 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	pseudo, perr := readAccountRoot(ctx.View, vd.Account)
+	pseudo, perr := tx.ReadAccountRoot(ctx.View, vd.Account)
 	if perr != nil || pseudo == nil {
 		return ter.TefBAD_LEDGER
 	}

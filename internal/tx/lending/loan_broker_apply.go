@@ -264,7 +264,7 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if res != ter.TesSUCCESS {
 		return res
 	}
-	pseudo, perr := vault.ReadAccountRoot(ctx.View, b.Account)
+	pseudo, perr := tx.ReadAccountRoot(ctx.View, b.Account)
 	if perr != nil || pseudo == nil {
 		return ter.TefBAD_LEDGER
 	}
@@ -393,7 +393,7 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 		}
 		dstID = id
 	}
-	if vault.IsPseudoAccountID(view, dstID) {
+	if tx.IsPseudoAccountID(view, dstID) {
 		return ter.TecPSEUDO_ACCOUNT
 	}
 	brokerID, ok := hashBytes(l.LoanBrokerID)
@@ -517,7 +517,7 @@ func (l *LoanBrokerCoverClawback) determineBrokerID(view tx.LedgerView) ([32]byt
 	if err != nil {
 		return [32]byte{}, ter.TefINTERNAL
 	}
-	ar, aerr := vault.ReadAccountRoot(view, issuerID)
+	ar, aerr := tx.ReadAccountRoot(view, issuerID)
 	if aerr != nil {
 		return [32]byte{}, ter.TefINTERNAL
 	}
@@ -608,7 +608,7 @@ func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineC
 	}
 	// Only IOU issuers with clawback enabled and no global freeze may claw.
 	issuerID, _ := state.DecodeAccountID(asset.Issuer)
-	iar, ierr := vault.ReadAccountRoot(view, issuerID)
+	iar, ierr := tx.ReadAccountRoot(view, issuerID)
 	if ierr != nil || iar == nil {
 		return ter.TefBAD_LEDGER
 	}

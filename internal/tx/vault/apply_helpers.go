@@ -192,25 +192,6 @@ func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amoun
 	return ter.TesSUCCESS
 }
 
-// readAccountRoot reads and parses an AccountRoot, returning (nil, nil) when the
-// account does not exist (view.Read reports a missing key via a nil payload).
-func readAccountRoot(view tx.LedgerView, id [20]byte) (*state.AccountRoot, error) {
-	data, err := view.Read(keylet.Account(id))
-	if err != nil || len(data) == 0 {
-		return nil, nil
-	}
-	return state.ParseAccountRoot(data)
-}
-
-// isPseudoAccountID reports whether id is an existing pseudo-account.
-func isPseudoAccountID(view tx.LedgerView, id [20]byte) bool {
-	ar, err := readAccountRoot(view, id)
-	if err != nil || ar == nil {
-		return false
-	}
-	return ar.IsPseudoAccount()
-}
-
 // canAddHoldingIssue mirrors rippled's canAddHolding for an IOU/XRP asset: XRP is
 // always addable; an IOU issuer must exist and have DefaultRipple set.
 func canAddHoldingIssue(view tx.LedgerView, asset tx.Asset) ter.Result {
@@ -221,7 +202,7 @@ func canAddHoldingIssue(view tx.LedgerView, asset tx.Asset) ter.Result {
 	if err != nil {
 		return ter.TerNO_ACCOUNT
 	}
-	ar, err := readAccountRoot(view, issuerID)
+	ar, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -262,7 +243,7 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 		return 0, ter.TecDUPLICATE
 	}
 
-	holder, err := readAccountRoot(ctx.View, accountID)
+	holder, err := tx.ReadAccountRoot(ctx.View, accountID)
 	if err != nil || holder == nil {
 		return 0, ter.TefINTERNAL
 	}
@@ -337,7 +318,7 @@ func ensureHolderMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID [24
 	if isSubmitter {
 		ownerCount = ctx.Account.OwnerCount
 	} else {
-		ar, err := readAccountRoot(ctx.View, holderID)
+		ar, err := tx.ReadAccountRoot(ctx.View, holderID)
 		if err != nil || ar == nil {
 			return ter.TefINTERNAL
 		}
@@ -404,7 +385,7 @@ func vaultAssetOf(vd *vaultData) tx.Asset {
 // requirement, and (for an IOU delivered to a third party) not exceed its trust
 // limit. Reference: rippled View.cpp canWithdraw.
 func canWithdraw(view tx.LedgerView, from, to [20]byte, amount tx.Amount, hasDestTag bool) ter.Result {
-	toAcct, err := readAccountRoot(view, to)
+	toAcct, err := tx.ReadAccountRoot(view, to)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
@@ -515,7 +496,7 @@ func assetMatches(amount tx.Amount, vd *vaultData) bool {
 // effectively unbounded when the account is the asset's issuer.
 func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]byte, asset tx.Asset) (state.XRPLNumber, error) {
 	if isNativeAsset(asset) {
-		ar, err := readAccountRoot(view, accountID)
+		ar, err := tx.ReadAccountRoot(view, accountID)
 		if err != nil || ar == nil {
 			return state.NewXRPLNumber(0, 0), err
 		}
@@ -583,7 +564,7 @@ func sendAssetToVault(ctx *tx.ApplyContext, vaultAccountID [20]byte, orig tx.Amo
 			return ter.TecINSUFFICIENT_FUNDS
 		}
 		ctx.Account.Balance -= drops
-		vaultAcct, err := readAccountRoot(ctx.View, vaultAccountID)
+		vaultAcct, err := tx.ReadAccountRoot(ctx.View, vaultAccountID)
 		if err != nil || vaultAcct == nil {
 			return ter.TefINTERNAL
 		}
@@ -627,7 +608,7 @@ func decodeMPTID(s string) ([24]byte, bool) {
 func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, asset tx.Asset, assetsN state.XRPLNumber) ter.Result {
 	if isNativeAsset(asset) {
 		drops := uint64(assetsN.ToInt64WithMode(state.RoundTowardsZero))
-		vaultAcct, err := readAccountRoot(ctx.View, vaultAccountID)
+		vaultAcct, err := tx.ReadAccountRoot(ctx.View, vaultAccountID)
 		if err != nil || vaultAcct == nil {
 			return ter.TefINTERNAL
 		}
@@ -645,7 +626,7 @@ func sendAssetFromVault(ctx *tx.ApplyContext, vaultAccountID, dstID [20]byte, as
 		if dstID == ctx.AccountID {
 			ctx.Account.Balance += drops
 		} else {
-			dst, derr := readAccountRoot(ctx.View, dstID)
+			dst, derr := tx.ReadAccountRoot(ctx.View, dstID)
 			if derr != nil || dst == nil {
 				return ter.TefINTERNAL
 			}
