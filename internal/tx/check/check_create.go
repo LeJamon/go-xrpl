@@ -255,8 +255,8 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 	if accountID == issuerID {
 		return false
 	}
-	tl, ok := readRippleState(view, accountID, issuerID, currency)
-	if !ok {
+	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
+	if err != nil || tl == nil {
 		return false
 	}
 	freezeFlag := state.LsfLowFreeze
@@ -264,21 +264,4 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 		freezeFlag = state.LsfHighFreeze
 	}
 	return tl.Flags&freezeFlag != 0
-}
-
-func readRippleState(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, bool) {
-	key := keylet.Line(accountID, issuerID, currency)
-	exists, _ := view.Exists(key)
-	if !exists {
-		return nil, false
-	}
-	data, err := view.Read(key)
-	if err != nil {
-		return nil, false
-	}
-	tl, err := state.ParseRippleState(data)
-	if err != nil {
-		return nil, false
-	}
-	return tl, true
 }

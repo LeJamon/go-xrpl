@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -37,6 +38,22 @@ func ReadAccountRoot(view LedgerView, accountID [20]byte) (*state.AccountRoot, e
 		return nil, nil
 	}
 	return state.ParseAccountRoot(data)
+}
+
+// ReadRippleState reads and parses the RippleState (trust line) between account
+// and issuer for currency. It mirrors ReadAccountRoot's missing-vs-error
+// contract: an absent line returns (nil, nil), while a storage or parse failure
+// returns (nil, err). Callers that treat "absent" and "error" the same can test
+// (rs == nil) after checking err.
+func ReadRippleState(view LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, error) {
+	data, err := view.Read(keylet.Line(accountID, issuerID, currency))
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, nil
+	}
+	return state.ParseRippleState(data)
 }
 
 // IsTrustlineFrozen checks if a specific trustline is frozen.
@@ -204,6 +221,12 @@ func GetTransferRate(view LedgerView, issuerAddress string) uint32 {
 	if err != nil {
 		return TransferRateParity
 	}
+	return GetTransferRateByID(view, issuerID)
+}
+
+// GetTransferRateByID is GetTransferRate for callers that already hold the
+// issuer's decoded [20]byte account ID, avoiding a re-encode/decode round-trip.
+func GetTransferRateByID(view LedgerView, issuerID [20]byte) uint32 {
 	account, err := ReadAccountRoot(view, issuerID)
 	if err != nil || account == nil {
 		return TransferRateParity
@@ -212,6 +235,25 @@ func GetTransferRate(view LedgerView, issuerAddress string) uint32 {
 		return TransferRateParity
 	}
 	return account.TransferRate
+}
+
+// IsMPTLocked reports whether the MPT identified by mptID is locked for account —
+// either globally (the issuance carries lsfMPTLocked) or individually (the
+// holder's MPToken carries lsfMPTLocked). Absent or unparseable entries are
+// treated as unlocked. Reference: rippled ledger/View.cpp isFrozen(view, account,
+// MPTIssue).
+func IsMPTLocked(view LedgerView, mptID [24]byte, accountID [20]byte) bool {
+	if data, err := view.Read(keylet.MPTIssuance(mptID)); err == nil && data != nil {
+		if iss, err := state.ParseMPTokenIssuance(data); err == nil && iss.Flags&entry.LsfMPTLocked != 0 {
+			return true
+		}
+	}
+	if data, err := view.Read(keylet.MPTokenByID(mptID, accountID)); err == nil && data != nil {
+		if tok, err := state.ParseMPToken(data); err == nil && tok.Flags&entry.LsfMPTLocked != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // IsGlobalFrozen checks if an issuer has globally frozen assets.

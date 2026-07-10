@@ -494,7 +494,7 @@ func escrowUnlockIOU(
 
 	// Compute transfer fee
 	// Get current rate from issuer, use min(lockedRate, currentRate)
-	currentRate := getTransferRateForIssuer(view, issuerID)
+	currentRate := tx.GetTransferRateByID(view, issuerID)
 	effectiveRate := lockedRate
 	if currentRate != 0 && currentRate < effectiveRate {
 		effectiveRate = currentRate
@@ -854,20 +854,6 @@ func canTransferMPT(issuance *state.MPTokenIssuanceData, fromID, toID [20]byte) 
 	}
 
 	return ter.TesSUCCESS
-}
-
-// getTransferRateForIssuer reads the transfer rate from an issuer's AccountRoot.
-// Returns parityRate if not set.
-// Reference: rippled View.cpp transferRate(view, issuer)
-func getTransferRateForIssuer(view tx.LedgerView, issuerID [20]byte) uint32 {
-	account, err := tx.ReadAccountRoot(view, issuerID)
-	if err != nil || account == nil {
-		return parityRate
-	}
-	if account.TransferRate == 0 {
-		return parityRate
-	}
-	return account.TransferRate
 }
 
 // getMPTTransferRate computes the transfer rate from an MPT transfer fee.

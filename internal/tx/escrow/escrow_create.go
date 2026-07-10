@@ -346,7 +346,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		} else {
 			// IOU: get rate from issuer account
 			issuerID, _ := state.DecodeAccountID(e.Amount.Issuer)
-			capturedTransferRate = getTransferRateForIssuer(ctx.View, issuerID)
+			capturedTransferRate = tx.GetTransferRateByID(ctx.View, issuerID)
 		}
 	}
 
