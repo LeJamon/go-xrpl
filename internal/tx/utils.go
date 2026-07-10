@@ -256,6 +256,35 @@ func IsMPTLocked(view LedgerView, mptID [24]byte, accountID [20]byte) bool {
 	return false
 }
 
+// AssetFrozen reports whether account is frozen or locked out of asset, returning
+// the matching TER (tecFROZEN for a frozen IOU, tecLOCKED for a locked MPT) or
+// tesSUCCESS. XRP is never frozen. This is the asset-kind dispatch over the
+// underlying [20]byte freeze primitives (IsFrozen for an Issue, IsMPTLocked for
+// an MPT). Reference: rippled ledger/View.cpp isFrozen dispatch.
+func AssetFrozen(view LedgerView, accountID [20]byte, asset Asset) ter.Result {
+	if asset.IsMPT() {
+		if id, ok := decodeAssetMPTID(asset); ok && IsMPTLocked(view, id, accountID) {
+			return ter.TecLOCKED
+		}
+		return ter.TesSUCCESS
+	}
+	if IsFrozen(view, accountID, asset) {
+		return ter.TecFROZEN
+	}
+	return ter.TesSUCCESS
+}
+
+// decodeAssetMPTID decodes an MPT asset's 24-byte issuance ID from its hex form.
+func decodeAssetMPTID(a Asset) ([24]byte, bool) {
+	var id [24]byte
+	b, err := hex.DecodeString(a.MPTIssuanceID)
+	if err != nil || len(b) != 24 {
+		return id, false
+	}
+	copy(id[:], b)
+	return id, true
+}
+
 // IsGlobalFrozen checks if an issuer has globally frozen assets.
 // Reference: rippled ledger/View.h isGlobalFrozen()
 func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {

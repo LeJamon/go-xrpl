@@ -187,18 +187,18 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	// A vault must not hold an asset issued by a pseudo-account (e.g. AMM LP
 	// tokens or other vault shares) — such an asset could never be clawed back.
 	if asset.IsMPT() {
-		if id, ok := assetMPTID(asset); ok && isPseudoAccountID(view, mptIDIssuer(id)) {
+		if id, ok := assetMPTID(asset); ok && tx.IsPseudoAccountID(view, mptIDIssuer(id)) {
 			return ter.TecWRONG_ASSET
 		}
 	} else if !isNativeAsset(asset) && asset.Issuer != "" {
 		if issuerID, derr := state.DecodeAccountID(asset.Issuer); derr == nil {
-			if isPseudoAccountID(view, issuerID) {
+			if tx.IsPseudoAccountID(view, issuerID) {
 				return ter.TecWRONG_ASSET
 			}
 		}
 	}
 
-	if res := assetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -215,7 +215,7 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	}
 
 	vaultKey := keylet.Vault(accountID, v.GetCommon().SeqProxy())
-	if pseudoAccountAddress(view, config.ParentHash, vaultKey.Key) == ([20]byte{}) {
+	if tx.PseudoAccountAddress(view, config.ParentHash, vaultKey.Key) == ([20]byte{}) {
 		return ter.TerADDRESS_COLLISION
 	}
 
@@ -233,14 +233,6 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	vaultKey := keylet.Vault(accountID, sequence)
 	if exists, _ := ctx.View.Exists(vaultKey); exists {
-		return ter.TecDUPLICATE
-	}
-
-	pseudoID := pseudoAccountAddress(ctx.View, ctx.Config.ParentHash, vaultKey.Key)
-	if pseudoID == ([20]byte{}) {
-		return ter.TecDUPLICATE
-	}
-	if exists, _ := ctx.View.Exists(keylet.Account(pseudoID)); exists {
 		return ter.TecDUPLICATE
 	}
 
@@ -279,32 +271,11 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		mptFlags |= entry.LsfMPTRequireAuth
 	}
 
-	// Create the pseudo-account.
-	pseudoAddr, err := state.EncodeAccountID(pseudoID)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	pseudoSeq := uint32(0)
-	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
-		pseudoSeq = ctx.Config.LedgerSequence
-	}
-	pseudo := &state.AccountRoot{
-		Account:    pseudoAddr,
-		Balance:    0,
-		Sequence:   pseudoSeq,
-		OwnerCount: 0,
-		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth,
-		VaultID:    vaultKey.Key,
-	}
-
-	// Insert the pseudo-account before adding holdings so trust-line creation
+	// Create the pseudo-account, inserted before holdings so trust-line creation
 	// can read it back.
-	pseudoBytes, err := state.SerializeAccountRoot(pseudo)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := ctx.View.Insert(keylet.Account(pseudoID), pseudoBytes); err != nil {
-		return ter.TefINTERNAL
+	pseudoID, pseudo, res := tx.CreatePseudoAccount(ctx, vaultKey.Key, tx.PseudoVaultID)
+	if res != ter.TesSUCCESS {
+		return res
 	}
 
 	// Create the share MPTokenIssuance held by the pseudo-account.
@@ -400,7 +371,7 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Persist the pseudo-account's final owner count.
-	pseudoBytes, err = state.SerializeAccountRoot(pseudo)
+	pseudoBytes, err := state.SerializeAccountRoot(pseudo)
 	if err != nil {
 		return ter.TefINTERNAL
 	}

@@ -134,6 +134,42 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) {
 	}
 }
 
+// Preclaim verifies the issuer account exists (tecNO_ISSUER), the credential
+// exists (tecNO_ENTRY), and it is not already accepted (tecDUPLICATE), matching
+// rippled CredentialAccept::preclaim. The expiry check (tecEXPIRED, with the
+// expired-credential deletion) and the reserve check stay in Apply, mirroring
+// rippled CredentialAccept::doApply — the deletion needs an ApplyView, so a
+// tecEXPIRED never escapes preclaim.
+func (c *CredentialAccept) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	subjectID, err := state.DecodeAccountID(c.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	issuerID, err := state.DecodeAccountID(c.Issuer)
+	if err != nil {
+		return ter.TecNO_TARGET
+	}
+	credTypeBytes, err := hex.DecodeString(c.CredentialType)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	if exists, _ := view.Exists(keylet.Account(issuerID)); !exists {
+		return ter.TecNO_ISSUER
+	}
+	credData, rerr := view.Read(keylet.Credential(subjectID, issuerID, credTypeBytes))
+	if rerr != nil || credData == nil {
+		return ter.TecNO_ENTRY
+	}
+	cred, perr := ParseCredentialEntry(credData)
+	if perr != nil {
+		return ter.TefINTERNAL
+	}
+	if cred.IsAccepted() {
+		return ter.TecDUPLICATE
+	}
+	return ter.TesSUCCESS
+}
+
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()
 func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("credential accept apply",
@@ -157,23 +193,16 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemINVALID
 	}
 
-	// Preclaim check: verify issuer account exists
 	issuerAccountKeylet := keylet.Account(issuerID)
-	issuerExists, err := ctx.View.Exists(issuerAccountKeylet)
-	if err != nil || !issuerExists {
-		ctx.Log.Warn("credential accept: no issuer", "issuer", c.Issuer)
-		return ter.TecNO_ISSUER
-	}
 
 	// Compute correct keylet: credential(subject, issuer, credType)
 	// where subject = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(ctx.AccountID, issuerID, credTypeBytes)
 
-	// Read the credential
+	// Read the credential (Preclaim guaranteed it exists and is unaccepted; the
+	// entry is needed here for the expiry check and the accept mutation).
 	credData, err := ctx.View.Read(credKeylet)
 	if err != nil || credData == nil {
-		ctx.Log.Warn("credential accept: no credential",
-			"subject", c.Account, "issuer", c.Issuer, "credentialType", c.CredentialType)
 		return ter.TecNO_ENTRY
 	}
 
@@ -181,12 +210,6 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	cred, err := ParseCredentialEntry(credData)
 	if err != nil {
 		return ter.TefINTERNAL
-	}
-
-	if cred.IsAccepted() {
-		ctx.Log.Warn("credential accept: credential already accepted",
-			"subject", c.Account, "issuer", c.Issuer, "credentialType", c.CredentialType)
-		return ter.TecDUPLICATE
 	}
 
 	closeTime := ctx.Config.ParentCloseTime

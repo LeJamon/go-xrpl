@@ -84,7 +84,101 @@ func (m *MPTokenAuthorize) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureMPTokensV1}
 }
 
-// Reference: rippled MPTokenAuthorize.cpp preclaim() + doApply() + View.cpp::authorizeMPToken()
+// Preclaim runs MPTokenAuthorize's ledger-aware checks in rippled
+// MPTokenAuthorize::preclaim order. Holder path (no Holder field): a delete
+// (tfMPTUnauthorize) requires the MPToken (tecOBJECT_NOT_FOUND) with a zero
+// balance and zero locked amount (tecHAS_OBLIGATIONS) and, under SingleAssetVault,
+// an unlocked token (tecNO_PERMISSION); an authorize requires the issuance
+// (tecOBJECT_NOT_FOUND), a non-issuer submitter (tecNO_PERMISSION), and no existing
+// MPToken (tecDUPLICATE). Issuer path (Holder present): holder account
+// (tecNO_DST), issuance (tecOBJECT_NOT_FOUND), issuer match (tecNO_PERMISSION),
+// RequireAuth (tecNO_AUTH), and the holder MPToken (tecOBJECT_NOT_FOUND). The
+// reserve check and the create/delete/toggle mutations stay in Apply. (The
+// pre-existing gap where rippled additionally rejects a pseudo-account holder on
+// the issuer path is left unchanged — that is a separate behaviour fix.)
+func (m *MPTokenAuthorize) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	var mptID [24]byte
+	b, err := hex.DecodeString(m.MPTokenIssuanceID)
+	if err != nil || len(b) != 24 {
+		return ter.TemINVALID
+	}
+	copy(mptID[:], b)
+	issuanceKey := keylet.MPTIssuance(mptID)
+	txFlags := m.GetFlags()
+	accountID, aerr := state.DecodeAccountID(m.Account)
+	if aerr != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+
+	if m.Holder == "" {
+		tokenKey := keylet.MPToken(issuanceKey.Key, accountID)
+		if txFlags&MPTokenAuthorizeFlagUnauthorize != 0 {
+			tokenRaw, rerr := view.Read(tokenKey)
+			if rerr != nil || tokenRaw == nil {
+				return ter.TecOBJECT_NOT_FOUND
+			}
+			token, perr := state.ParseMPToken(tokenRaw)
+			if perr != nil {
+				return ter.TefINTERNAL
+			}
+			if token.MPTAmount != 0 {
+				return ter.TecHAS_OBLIGATIONS
+			}
+			if token.LockedAmount != nil && *token.LockedAmount != 0 {
+				return ter.TecHAS_OBLIGATIONS
+			}
+			if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) &&
+				token.Flags&entry.LsfMPTLocked != 0 {
+				return ter.TecNO_PERMISSION
+			}
+			return ter.TesSUCCESS
+		}
+		issuanceRaw, rerr := view.Read(issuanceKey)
+		if rerr != nil || issuanceRaw == nil {
+			return ter.TecOBJECT_NOT_FOUND
+		}
+		issuance, perr := state.ParseMPTokenIssuance(issuanceRaw)
+		if perr != nil {
+			return ter.TefINTERNAL
+		}
+		if issuance.Issuer == accountID {
+			return ter.TecNO_PERMISSION
+		}
+		if exists, _ := view.Exists(tokenKey); exists {
+			return ter.TecDUPLICATE
+		}
+		return ter.TesSUCCESS
+	}
+
+	holderID, herr := state.DecodeAccountID(m.Holder)
+	if herr != nil {
+		return ter.TemINVALID
+	}
+	if exists, _ := view.Exists(keylet.Account(holderID)); !exists {
+		return ter.TecNO_DST
+	}
+	issuanceRaw, rerr := view.Read(issuanceKey)
+	if rerr != nil || issuanceRaw == nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	issuance, perr := state.ParseMPTokenIssuance(issuanceRaw)
+	if perr != nil {
+		return ter.TefINTERNAL
+	}
+	if issuance.Issuer != accountID {
+		return ter.TecNO_PERMISSION
+	}
+	if issuance.Flags&entry.LsfMPTRequireAuth == 0 {
+		return ter.TecNO_AUTH
+	}
+	if exists, _ := view.Exists(keylet.MPToken(issuanceKey.Key, holderID)); !exists {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled MPTokenAuthorize.cpp doApply() + View.cpp::authorizeMPToken();
+// the ledger-aware gates live in Preclaim.
 func (m *MPTokenAuthorize) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("mptoken authorize apply",
 		"account", m.Account,
@@ -123,12 +217,12 @@ func (m *MPTokenAuthorize) applyHolderPath(ctx *tx.ApplyContext, mptID [24]byte,
 	return m.holderAuthorize(ctx, mptID, issuanceKey, tokenKey)
 }
 
-// holderUnauthorize handles a holder deleting their MPToken.
+// holderUnauthorize handles a holder deleting their MPToken. The existence,
+// obligations, and lock gates run in Preclaim; the token is read here for its
+// OwnerNode.
 func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keylet.Keylet) ter.Result {
-	// MPToken must exist
 	tokenRaw, err := ctx.View.Read(tokenKey)
 	if err != nil || tokenRaw == nil {
-		ctx.Log.Warn("mptoken authorize: token not found for holder unauthorize")
 		return ter.TecOBJECT_NOT_FOUND
 	}
 
@@ -136,27 +230,6 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keyl
 	if err != nil {
 		ctx.Log.Error("mptoken authorize: failed to parse token", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	// Cannot delete with non-zero balance
-	if token.MPTAmount != 0 {
-		ctx.Log.Warn("mptoken authorize: cannot delete token with balance",
-			"amount", token.MPTAmount,
-		)
-		return ter.TecHAS_OBLIGATIONS
-	}
-	if token.LockedAmount != nil && *token.LockedAmount != 0 {
-		ctx.Log.Warn("mptoken authorize: cannot delete token with locked amount",
-			"lockedAmount", *token.LockedAmount,
-		)
-		return ter.TecHAS_OBLIGATIONS
-	}
-
-	// With featureSingleAssetVault, a locked MPToken cannot be deleted.
-	// Reference: rippled MPTokenAuthorize.cpp:95-97
-	if ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) &&
-		token.Flags&entry.LsfMPTLocked != 0 {
-		return ter.TecNO_PERMISSION
 	}
 
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
@@ -179,35 +252,8 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keyl
 }
 
 // holderAuthorize handles a holder creating a new MPToken (opting in to hold).
+// The issuance existence, non-issuer, and no-duplicate gates run in Preclaim.
 func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte, issuanceKey, tokenKey keylet.Keylet) ter.Result {
-	// Issuance must exist
-	issuanceRaw, err := ctx.View.Read(issuanceKey)
-	if err != nil || issuanceRaw == nil {
-		ctx.Log.Warn("mptoken authorize: issuance not found",
-			"issuanceID", m.MPTokenIssuanceID,
-		)
-		return ter.TecOBJECT_NOT_FOUND
-	}
-
-	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
-	if err != nil {
-		ctx.Log.Error("mptoken authorize: failed to parse issuance", "error", err)
-		return ter.TefINTERNAL
-	}
-
-	// Issuer cannot hold own token
-	if issuance.Issuer == ctx.AccountID {
-		ctx.Log.Warn("mptoken authorize: issuer cannot hold own token")
-		return ter.TecNO_PERMISSION
-	}
-
-	// MPToken must not already exist
-	exists, _ := ctx.View.Exists(tokenKey)
-	if exists {
-		ctx.Log.Warn("mptoken authorize: token already exists")
-		return ter.TecDUPLICATE
-	}
-
 	// Reserve check against the prior balance (before fee deduction).
 	// The first 2 MPT objects are free, like trust lines, so
 	// ReserveForNewObject returns 0 when fewer than 2 objects are owned.
@@ -257,57 +303,16 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 
 // applyIssuerPath handles when the issuer submits MPTokenAuthorize with Holder field.
 func (m *MPTokenAuthorize) applyIssuerPath(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, txFlags uint32) ter.Result {
-	// Decode holder account
+	// Decode holder account. Existence, issuance, issuer, RequireAuth, and holder
+	// MPToken gates run in Preclaim; the token is read here for the flag toggle.
 	holderID, err := state.DecodeAccountID(m.Holder)
 	if err != nil {
 		return ter.TemINVALID
 	}
 
-	// Holder account must exist
-	// Reference: rippled MPTokenAuthorize.cpp:119 — ctx.view.exists(keylet::account(...))
-	holderAcctKey := keylet.Account(holderID)
-	holderExists, err := ctx.View.Exists(holderAcctKey)
-	if err != nil || !holderExists {
-		ctx.Log.Warn("mptoken authorize: holder account does not exist",
-			"holder", m.Holder,
-		)
-		return ter.TecNO_DST
-	}
-
-	// Issuance must exist
-	issuanceRaw, err := ctx.View.Read(issuanceKey)
-	if err != nil || issuanceRaw == nil {
-		ctx.Log.Warn("mptoken authorize: issuance not found",
-			"issuanceID", m.MPTokenIssuanceID,
-		)
-		return ter.TecOBJECT_NOT_FOUND
-	}
-
-	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
-	if err != nil {
-		ctx.Log.Error("mptoken authorize: failed to parse issuance", "error", err)
-		return ter.TefINTERNAL
-	}
-
-	// Caller must be the issuer
-	if issuance.Issuer != ctx.AccountID {
-		ctx.Log.Warn("mptoken authorize: caller is not issuer")
-		return ter.TecNO_PERMISSION
-	}
-
-	// Issuance must have RequireAuth flag
-	if issuance.Flags&entry.LsfMPTRequireAuth == 0 {
-		ctx.Log.Warn("mptoken authorize: issuance does not require auth")
-		return ter.TecNO_AUTH
-	}
-
-	// Holder's MPToken must exist
 	tokenKey := keylet.MPToken(issuanceKey.Key, holderID)
 	tokenRaw, err := ctx.View.Read(tokenKey)
 	if err != nil || tokenRaw == nil {
-		ctx.Log.Warn("mptoken authorize: holder token not found",
-			"holder", m.Holder,
-		)
 		return ter.TecOBJECT_NOT_FOUND
 	}
 

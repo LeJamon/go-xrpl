@@ -121,7 +121,7 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	}
 
 	asset := vaultAssetOf(vd)
-	if res := assetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 		return res
 	}
 

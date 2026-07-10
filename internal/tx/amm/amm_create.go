@@ -169,7 +169,7 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	// clawback tecNO_PERMISSION (claimed, fee consumed).
 	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
 	if config.RequireRules().Enabled(amendment.FeatureSingleAssetVault) {
-		if pseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
+		if tx.PseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
 			return ter.TerADDRESS_COLLISION
 		}
 	}
@@ -204,20 +204,15 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	ammKey := computeAMMKeylet(asset1, asset2)
 
-	// Compute the AMM pseudo-account ID using SHA256-RIPEMD160 derivation.
-	// Reference: rippled View.cpp createPseudoAccount → pseudoAccountAddress
-	ammAccountID := pseudoAccountAddress(ctx.View, ctx.Config.ParentHash, ammKey.Key)
-	if ammAccountID == ([20]byte{}) {
-		return ter.TecDUPLICATE
+	// Create the AMM pseudo-account. This derives an unoccupied address, sets the
+	// pseudo-account flags/sequence, marks it with sfAMMID, and inserts it; the
+	// per-asset owner count and balances are layered on below.
+	ammAccountID, ammAccount, res := tx.CreatePseudoAccount(ctx, ammKey.Key, tx.PseudoAMMID)
+	if res != ter.TesSUCCESS {
+		return res
 	}
-	ammAccountAddr, _ := encodeAccountID(ammAccountID)
-
-	// Reference: rippled AMMCreate.cpp line 230-236
+	ammAccountAddr := ammAccount.Account
 	ammAccountKey := keylet.Account(ammAccountID)
-	acctExists, _ := ctx.View.Exists(ammAccountKey)
-	if acctExists {
-		return ter.TecDUPLICATE
-	}
 
 	// Reference: rippled AMMCreate.cpp line 262-264
 	sortedAsset1, sortedAsset2, sortedAmount1, sortedAmount2 := sortAssets(asset1, asset2, a.Amount, a.Amount2)
@@ -246,19 +241,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		lpTokenBalanceRaw.Mantissa(), lpTokenBalanceRaw.Exponent(),
 		lptCurrency, ammAccountAddr)
 
-	// Create the AMM pseudo-account.
-	// Reference: rippled createPseudoAccount (libxrpl/ledger/View.cpp).
-	// Sequence: 0 when SingleAssetVault or LendingProtocol is enabled, else the
-	// current ledger sequence. Both amendments generalise the pseudo-account
-	// model, and the ValidNewAccountRoot invariant enforces the zero sequence
-	// whenever either is active — so the two conditions must match.
-	// Flags: exactly the three bits rippled sets (DisableMaster, DefaultRipple,
-	// DepositAuth). Pseudo-account identification is by AMMID presence.
-	var pseudoSeq uint32
-	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) &&
-		!ctx.Rules().Enabled(amendment.FeatureLendingProtocol) {
-		pseudoSeq = ctx.Config.LedgerSequence
-	}
 	// The AMM account's OwnerCount is the number of IOU pool trust lines it
 	// holds (one per non-XRP asset): each is created with the reserve charged
 	// to the AMM side. The AMM ledger object and any XRP side are not counted.
@@ -269,14 +251,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	if !isXRPAsset(sortedAsset2) {
 		ammOwnerCount++
 	}
-	ammAccount := &state.AccountRoot{
-		Account:    ammAccountAddr,
-		Balance:    0,
-		Sequence:   pseudoSeq,
-		OwnerCount: ammOwnerCount,
-		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth,
-		AMMID:      ammKey.Key, // Links pseudo-account to AMM entry (rippled View.cpp:1131)
-	}
+	ammAccount.OwnerCount = ammOwnerCount
 
 	// Create the AMM entry with sorted assets
 	// Reference: rippled AMMCreate.cpp line 259-267
@@ -312,16 +287,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		Price:         zeroAmount(tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}),
 		DiscountedFee: discountedFee,
 		AuthAccounts:  make([][20]byte, 0),
-	}
-
-	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
-	if err != nil {
-		ctx.Log.Error("amm create: failed to create pseudo account")
-		return ter.TefINTERNAL
-	}
-	if err := ctx.View.Insert(ammAccountKey, ammAccountBytes); err != nil {
-		ctx.Log.Error("amm create: failed to insert pseudo account")
-		return ter.TefINTERNAL
 	}
 
 	// Link the AMM entry into the AMM pseudo-account's owner directory and
@@ -434,7 +399,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ammAccountBytes, err = state.SerializeAccountRoot(ammAccount)
+	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return ter.TefINTERNAL
 	}

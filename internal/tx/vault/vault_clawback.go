@@ -192,7 +192,7 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		if vd.AssetIsMPT {
 			return ter.TecNO_PERMISSION // MPT-asset clawback deferred
 		}
-		issuerAcct, ierr := readAccountRoot(view, accountID)
+		issuerAcct, ierr := tx.ReadAccountRoot(view, accountID)
 		if ierr != nil || issuerAcct == nil {
 			return ter.TefINTERNAL
 		}

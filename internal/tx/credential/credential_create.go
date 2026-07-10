@@ -115,6 +115,32 @@ func (c *CredentialCreate) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled Credentials.cpp CredentialCreate::doApply()
+// Preclaim verifies the subject account exists (tecNO_TARGET) and no credential
+// of this (subject, issuer, type) already exists (tecDUPLICATE), matching rippled
+// CredentialCreate::preclaim. The Expiration-in-the-past check (tecEXPIRED) and
+// the reserve check stay in Apply, mirroring rippled CredentialCreate::doApply.
+func (c *CredentialCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	subjectID, err := state.DecodeAccountID(c.Subject)
+	if err != nil {
+		return ter.TecNO_TARGET
+	}
+	issuerID, err := state.DecodeAccountID(c.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	credTypeBytes, err := hex.DecodeString(c.CredentialType)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	if exists, _ := view.Exists(keylet.Account(subjectID)); !exists {
+		return ter.TecNO_TARGET
+	}
+	if exists, _ := view.Exists(keylet.Credential(subjectID, issuerID, credTypeBytes)); exists {
+		return ter.TecDUPLICATE
+	}
+	return ter.TesSUCCESS
+}
+
 func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("credential create apply",
 		"issuer", c.Account,
@@ -140,22 +166,6 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Compute correct keylet: credential(subject, issuer, credType)
 	// where issuer = ctx.AccountID (the transaction sender)
 	credKeylet := keylet.Credential(subjectID, ctx.AccountID, credTypeBytes)
-
-	// Preclaim check: verify subject account exists
-	subjectAccountKeylet := keylet.Account(subjectID)
-	subjectExists, err := ctx.View.Exists(subjectAccountKeylet)
-	if err != nil || !subjectExists {
-		return ter.TecNO_TARGET
-	}
-
-	// Preclaim check: verify credential doesn't already exist
-	exists, err := ctx.View.Exists(credKeylet)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if exists {
-		return ter.TecDUPLICATE
-	}
 
 	// Check expiration (if set, must be in the future)
 	if c.Expiration != nil {

@@ -693,6 +693,39 @@ func TestAccountSet_DirIsEmpty_AnchorEmptyWithContinuation(t *testing.T) {
 	})
 }
 
+// TestAccountSet_PreclaimOrder_RequireAuthBeforeClawback pins rippled's
+// AccountSet::preclaim order: the RequireAuth owner-directory gate runs before
+// the Clawback / NoFreeze mutual-exclusion gate. An account that already carries
+// lsfNoFreeze and a non-empty owner directory, submitting a legacy tfRequireAuth
+// together with SetFlag=asfAllowTrustLineClawback, must fail tecOWNERS (the
+// RequireAuth gate) rather than tecNO_PERMISSION (the Clawback gate). go-xrpl
+// previously folded both into Apply Clawback-first and returned tecNO_PERMISSION.
+func TestAccountSet_PreclaimOrder_RequireAuthBeforeClawback(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.Fund(alice)
+	env.Fund(bob)
+	env.Close()
+
+	// Set NoFreeze on alice (this alone would make an AllowTrustLineClawback
+	// SetFlag fail tecNO_PERMISSION under the Clawback gate).
+	res := env.Submit(AccountSet(alice).SetFlag(accounttx.AccountSetFlagNoFreeze).Build())
+	jtx.RequireTxSuccess(t, res)
+	env.Close()
+
+	// Give alice a non-empty owner directory so the RequireAuth gate fires.
+	env.SetSignerList(alice, 1, []jtx.TestSigner{{Account: bob, Weight: 1}})
+	env.Close()
+
+	// Legacy tfRequireAuth + SetFlag=AllowTrustLineClawback: the RequireAuth gate
+	// runs first, so the result is tecOWNERS, not tecNO_PERMISSION.
+	res = env.Submit(AccountSet(alice).
+		TxFlags(accounttx.AccountSetTxFlagRequireAuth).
+		SetFlag(accounttx.AccountSetFlagAllowTrustLineClawback).Build())
+	jtx.RequireTxFail(t, res, "tecOWNERS")
+}
+
 // =========================================================================
 // DisableMaster requires the master key — issue 734.
 // =========================================================================
