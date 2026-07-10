@@ -69,9 +69,9 @@ type RulesPreflighter interface {
 // PermissionedDEX → temDISABLED) precedes any common-field TER. A non-nil error
 // should carry a temDISABLED-class code via ter.Errorf.
 //
-// This is the engine seam; no transaction type adopts it yet. A type opts in by
-// implementing it and moving the corresponding amendment gate out of its
-// Validate()/PreflightRules body. Reference: rippled Transactor.h invokePreflight.
+// A type opts in by implementing it and moving the corresponding amendment gate
+// out of its Validate()/PreflightRules body. Reference: rippled Transactor.h
+// invokePreflight.
 type ExtraFeaturesChecker interface {
 	CheckExtraFeatures(rules *amendment.Rules) error
 }
@@ -83,12 +83,14 @@ type ExtraFeaturesChecker interface {
 // mask may depend on the active amendments (e.g. a flag valid only once an
 // amendment is enabled).
 //
-// This is the engine seam; no transaction type adopts it yet. A type that does
-// not implement it keeps its per-Validate() flag check as the backstop — the
-// engine applies no mask, because the universal mask would reject every valid
-// type-specific flag (tfPartialPayment, tfPassive, …). A type opts in by
-// implementing GetFlagsMask (typically `tfUniversalMask | typeSpecificBits`) and
-// dropping the equivalent flag check from Validate().
+// A type that does not implement it gets no engine-level flag rejection, because
+// the universal mask would reject every valid type-specific flag
+// (tfPartialPayment, tfPassive, …). A type opts in by implementing GetFlagsMask
+// (typically `^(tfUniversal | typeSpecificBits)`, i.e. the base tfUniversalMask
+// for a type with no type-specific flags) and dropping the equivalent flag check
+// from Validate(). Nearly every transaction type adopts it; the pipeline stage
+// matters because the mask fires at preflight0, ahead of the fee/account/signing
+// checks, so a stray flag beats a bad fee — matching rippled.
 type FlagsMasker interface {
 	GetFlagsMask(rules *amendment.Rules) uint32
 }

@@ -6,6 +6,14 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
+// tfClearAccountCreateAmount is the sole XChainModifyBridge type-specific flag:
+// it clears the bridge's MinAccountCreateAmount.
+const tfClearAccountCreateAmount uint32 = 0x00010000
+
+// tfXChainModifyBridgeMask rejects every flag outside the universal set and
+// tfClearAccountCreateAmount (rippled BridgeModify::getFlagsMask).
+const tfXChainModifyBridgeMask uint32 = ^(tx.TfUniversal | tfClearAccountCreateAmount)
+
 // XChainBridge identifies a cross-chain bridge
 type XChainBridge struct {
 	LockingChainDoor  string   `json:"LockingChainDoor"`
@@ -39,6 +47,12 @@ func NewXChainCreateBridge(account string, bridge XChainBridge, signatureReward 
 
 func (x *XChainCreateBridge) TxType() tx.Type {
 	return tx.TypeXChainCreateBridge
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainCreateBridge defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (x *XChainCreateBridge) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 func (x *XChainCreateBridge) Validate() error {
@@ -87,6 +101,13 @@ func (x *XChainModifyBridge) TxType() tx.Type {
 	return tx.TypeXChainModifyBridge
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the XChainModifyBridge
+// invalid-flags mask (rippled BridgeModify::getFlagsMask =
+// tfXChainModifyBridgeMask), checked at preflight0.
+func (x *XChainModifyBridge) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfXChainModifyBridgeMask
+}
+
 func (x *XChainModifyBridge) Validate() error {
 	return x.BaseTx.Validate()
 }
@@ -125,6 +146,12 @@ func NewXChainCreateClaimID(account string, bridge XChainBridge, signatureReward
 
 func (x *XChainCreateClaimID) TxType() tx.Type {
 	return tx.TypeXChainCreateClaimID
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainCreateClaimID defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (x *XChainCreateClaimID) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 func (x *XChainCreateClaimID) Validate() error {
@@ -176,6 +203,12 @@ func NewXChainCommit(account string, bridge XChainBridge, claimID uint64, amount
 
 func (x *XChainCommit) TxType() tx.Type {
 	return tx.TypeXChainCommit
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainCommit defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (x *XChainCommit) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 func (x *XChainCommit) Validate() error {
@@ -233,6 +266,12 @@ func (x *XChainClaim) TxType() tx.Type {
 	return tx.TypeXChainClaim
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainClaim defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (x *XChainClaim) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (x *XChainClaim) Validate() error {
 	if err := x.BaseTx.Validate(); err != nil {
 		return err
@@ -287,6 +326,13 @@ func NewXChainAccountCreateCommit(account string, bridge XChainBridge, destinati
 
 func (x *XChainAccountCreateCommit) TxType() tx.Type {
 	return tx.TypeXChainAccountCreateCommit
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainAccountCreateCommit
+// defines no type-specific flags, so it uses the base universal mask, checked at
+// preflight0.
+func (x *XChainAccountCreateCommit) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 func (x *XChainAccountCreateCommit) Validate() error {
@@ -359,6 +405,13 @@ func NewXChainAddClaimAttestation(account string, bridge XChainBridge, claimID u
 
 func (x *XChainAddClaimAttestation) TxType() tx.Type {
 	return tx.TypeXChainAddClaimAttestation
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainAddClaimAttestation
+// defines no type-specific flags, so it uses the base universal mask, checked at
+// preflight0.
+func (x *XChainAddClaimAttestation) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 func (x *XChainAddClaimAttestation) Validate() error {
@@ -445,6 +498,13 @@ func NewXChainAddAccountCreateAttestation(account string, bridge XChainBridge) *
 
 func (x *XChainAddAccountCreateAttestation) TxType() tx.Type {
 	return tx.TypeXChainAddAccountCreateAttest
+}
+
+// GetFlagsMask adopts the engine FlagsMasker seam. XChainAddAccountCreateAttestation
+// defines no type-specific flags, so it uses the base universal mask, checked at
+// preflight0.
+func (x *XChainAddAccountCreateAttestation) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
 }
 
 func (x *XChainAddAccountCreateAttestation) Validate() error {
