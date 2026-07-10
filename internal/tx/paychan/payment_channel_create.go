@@ -192,8 +192,10 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	sequence := p.GetCommon().SeqProxy()
 	channelKey := keylet.PayChannel(accountID, destID, sequence)
 
-	// Serialize pay channel SLE
-	channelData, err := serializePayChannel(p, accountID, destID, amount)
+	// Build the channel SLE and insert its initial (pre-directory) form; the
+	// directory page fields are filled in and the entry re-serialized below.
+	channelSLE := newPayChannelData(p, accountID, destID, amount)
+	channelData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
 		ctx.Log.Error("payment channel create: failed to serialize channel", "error", err)
 		return ter.TefINTERNAL
@@ -216,11 +218,6 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDIR_FULL
 	}
 
-	// Re-read and update channel with OwnerNode from DirInsert
-	channelSLE, err := state.ParsePayChannel(channelData)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
 	channelSLE.OwnerNode = ownerResult.Page
 
 	// fixIncludeKeyletFields: store the creating sequence (tx or ticket) used
