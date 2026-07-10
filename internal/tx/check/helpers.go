@@ -60,4 +60,3 @@ func parseFee(fee string) uint64 {
 	}
 	return v
 }
-
