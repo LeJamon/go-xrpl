@@ -34,13 +34,15 @@ func (n *NFTokenBurn) TxType() tx.Type {
 }
 
 // Reference: rippled NFTokenBurn.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. NFTokenBurn defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (n *NFTokenBurn) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (n *NFTokenBurn) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if err := tx.CheckFlags(n.GetFlags(), tx.TfUniversalMask); err != nil {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenBurn flags")
 	}
 
 	if n.NFTokenID == "" {

@@ -72,12 +72,14 @@ func (o *OracleSet) TxType() tx.Type {
 }
 
 // Validate matches rippled's SetOracle::preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. OracleSet defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (o *OracleSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (o *OracleSet) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

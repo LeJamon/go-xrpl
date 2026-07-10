@@ -38,14 +38,14 @@ func (c *CheckCash) TxType() tx.Type {
 }
 
 // Validate implements preflight validation matching rippled's CashCheck::preflight().
+// GetFlagsMask adopts the engine FlagsMasker seam. CashCheck defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *CheckCash) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (c *CheckCash) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed except universal flags
-	// Reference: CashCheck.cpp L45-50
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

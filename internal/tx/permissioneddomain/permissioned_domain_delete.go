@@ -32,14 +32,15 @@ func (p *PermissionedDomainDelete) TxType() tx.Type {
 }
 
 // Reference: rippled PermissionedDomainDelete.cpp preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. PermissionedDomainDelete
+// defines no type-specific flags, so it uses the base universal mask, checked at
+// preflight0.
+func (p *PermissionedDomainDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (p *PermissionedDomainDelete) Validate() error {
 	if err := p.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Check for invalid flags (tfUniversalMask)
-	// Reference: rippled PermissionedDomainDelete.cpp:36-40
-	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

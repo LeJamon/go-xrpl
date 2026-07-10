@@ -3,6 +3,7 @@ package check
 import (
 	"encoding/hex"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -29,15 +30,15 @@ func (c *CheckCancel) TxType() tx.Type {
 	return tx.TypeCheckCancel
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. CancelCheck defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *CheckCancel) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 // Validate implements preflight validation matching rippled's CancelCheck::preflight().
 func (c *CheckCancel) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed except universal flags
-	// Reference: CancelCheck.cpp L42-47
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

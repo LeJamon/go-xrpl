@@ -29,16 +29,14 @@ func (o *OracleDelete) TxType() tx.Type {
 }
 
 // Validate matches rippled's DeleteOracle::preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. OracleDelete defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (o *OracleDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (o *OracleDelete) Validate() error {
-	if err := o.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
-
-	return nil
+	return o.BaseTx.Validate()
 }
 
 func (o *OracleDelete) Flatten() (map[string]any, error) {

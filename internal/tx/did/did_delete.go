@@ -25,17 +25,14 @@ func (d *DIDDelete) TxType() tx.Type {
 }
 
 // Reference: rippled DID.cpp DIDDelete::preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. DIDDelete defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (d *DIDDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (d *DIDDelete) Validate() error {
-	if err := d.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Check for invalid flags (tfUniversalMask)
-	if err := tx.CheckFlags(d.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
-
-	return nil
+	return d.BaseTx.Validate()
 }
 
 func (d *DIDDelete) Flatten() (map[string]any, error) {
