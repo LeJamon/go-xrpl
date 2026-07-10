@@ -4,7 +4,7 @@ package shim
 
 import "crypto/sha512"
 
-// Local mirror of common.Sha512Half so the shim has no non-stdlib deps.
+// Local mirror of sha512half.Sum so the shim has no non-stdlib deps.
 func sha512HalfBytes(b []byte) [32]byte {
 	sum := sha512.Sum512(b)
 	var out [32]byte

@@ -154,10 +154,10 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) ter.Result {
 		)
 		sle.Amendments = append(sle.Amendments, amendmentHash)
 
-		// The in-memory AmendmentTable.enable() notification (Change.cpp:327)
+		// The in-memory Table.enable() notification (Change.cpp:327)
 		// and setAmendmentBlocked() on unsupported activation (Change.cpp:329-334)
 		// are driven by the validated-ledger resync in the ledger service
-		// (AmendmentTable.DoValidatedLedger), not from the pseudo-tx — the
+		// (Table.DoValidatedLedger), not from the pseudo-tx — the
 		// ledger SLE remains the single source of truth for enabled amendments.
 	}
 

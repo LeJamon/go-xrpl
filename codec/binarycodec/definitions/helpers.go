@@ -1,8 +1,8 @@
 package definitions
 
-// GetTypeCodeByTypeName returns the type code associated with the given type name.
-func (d *Definitions) GetTypeCodeByTypeName(n string) (int32, error) {
-	typeCode, ok := d.Types[n]
+// TypeCode returns the type code associated with the given type name.
+func (d *Definitions) TypeCode(n string) (int32, error) {
+	typeCode, ok := d.types[n]
 
 	if !ok {
 		return 0, &NotFoundError{
@@ -13,9 +13,9 @@ func (d *Definitions) GetTypeCodeByTypeName(n string) (int32, error) {
 	return typeCode, nil
 }
 
-// GetFieldHeaderByFieldName returns the field header struct associated with the given field name.
-func (d *Definitions) GetFieldHeaderByFieldName(n string) (*FieldHeader, error) {
-	fi, ok := d.Fields[n]
+// FieldHeaderByName returns the field header struct associated with the given field name.
+func (d *Definitions) FieldHeaderByName(n string) (*FieldHeader, error) {
+	fi, ok := d.fields[n]
 
 	if !ok {
 		return nil, &NotFoundError{
@@ -27,9 +27,9 @@ func (d *Definitions) GetFieldHeaderByFieldName(n string) (*FieldHeader, error) 
 	return fi.FieldHeader, nil
 }
 
-// GetFieldNameByFieldHeader returns the field name associated with the given field header struct.
-func (d *Definitions) GetFieldNameByFieldHeader(fh FieldHeader) (string, error) {
-	fim, ok := d.FieldIDNameMap[fh]
+// FieldNameByHeader returns the field name associated with the given field header struct.
+func (d *Definitions) FieldNameByHeader(fh FieldHeader) (string, error) {
+	fim, ok := d.fieldIDNameMap[fh]
 
 	if !ok {
 		return "", &NotFoundErrorFieldHeader{
@@ -40,9 +40,9 @@ func (d *Definitions) GetFieldNameByFieldHeader(fh FieldHeader) (string, error) 
 	return fim, nil
 }
 
-// GetFieldInstanceByFieldName returns the field instance struct associated with the given field name.
-func (d *Definitions) GetFieldInstanceByFieldName(n string) (*FieldInstance, error) {
-	fi, ok := d.Fields[n]
+// FieldInstanceByName returns the field instance struct associated with the given field name.
+func (d *Definitions) FieldInstanceByName(n string) (*FieldInstance, error) {
+	fi, ok := d.fields[n]
 
 	if !ok {
 		return nil, &NotFoundError{
@@ -53,9 +53,9 @@ func (d *Definitions) GetFieldInstanceByFieldName(n string) (*FieldInstance, err
 	return fi, nil
 }
 
-// GetTransactionTypeCodeByTransactionTypeName returns the transaction type code associated with the transaction type name.
-func (d *Definitions) GetTransactionTypeCodeByTransactionTypeName(n string) (int32, error) {
-	txTypeCode, ok := d.TransactionTypes[n]
+// TransactionTypeCode returns the transaction type code associated with the transaction type name.
+func (d *Definitions) TransactionTypeCode(n string) (int32, error) {
+	txTypeCode, ok := d.transactionTypes[n]
 
 	if !ok {
 		return 0, &NotFoundError{
@@ -66,8 +66,8 @@ func (d *Definitions) GetTransactionTypeCodeByTransactionTypeName(n string) (int
 	return txTypeCode, nil
 }
 
-// GetTransactionTypeNameByTransactionTypeCode returns the transaction type name associated with the transaction type code.
-func (d *Definitions) GetTransactionTypeNameByTransactionTypeCode(c int32) (string, error) {
+// TransactionTypeName returns the transaction type name associated with the transaction type code.
+func (d *Definitions) TransactionTypeName(c int32) (string, error) {
 	if name, ok := d.transactionTypeNames[c]; ok {
 		return name, nil
 	}
@@ -77,8 +77,8 @@ func (d *Definitions) GetTransactionTypeNameByTransactionTypeCode(c int32) (stri
 	}
 }
 
-// GetTransactionResultNameByTransactionResultTypeCode returns the transaction result name associated with the transaction result type code.
-func (d *Definitions) GetTransactionResultNameByTransactionResultTypeCode(c int32) (string, error) {
+// TransactionResultName returns the transaction result name associated with the transaction result type code.
+func (d *Definitions) TransactionResultName(c int32) (string, error) {
 	if name, ok := d.transactionResultNames[c]; ok {
 		return name, nil
 	}
@@ -88,9 +88,9 @@ func (d *Definitions) GetTransactionResultNameByTransactionResultTypeCode(c int3
 	}
 }
 
-// GetTransactionResultTypeCodeByTransactionResultName returns the transaction result type code associated with the transaction result name.
-func (d *Definitions) GetTransactionResultTypeCodeByTransactionResultName(n string) (int32, error) {
-	txResultTypeCode, ok := d.TransactionResults[n]
+// TransactionResultCode returns the transaction result type code associated with the transaction result name.
+func (d *Definitions) TransactionResultCode(n string) (int32, error) {
+	txResultTypeCode, ok := d.transactionResults[n]
 
 	if !ok {
 		return 0, &NotFoundError{
@@ -101,9 +101,9 @@ func (d *Definitions) GetTransactionResultTypeCodeByTransactionResultName(n stri
 	return txResultTypeCode, nil
 }
 
-// GetLedgerEntryTypeCodeByLedgerEntryTypeName returns the ledger entry type code associated with the ledger entry type name.
-func (d *Definitions) GetLedgerEntryTypeCodeByLedgerEntryTypeName(n string) (int32, error) {
-	ledgerEntryTypeCode, ok := d.LedgerEntryTypes[n]
+// LedgerEntryTypeCode returns the ledger entry type code associated with the ledger entry type name.
+func (d *Definitions) LedgerEntryTypeCode(n string) (int32, error) {
+	ledgerEntryTypeCode, ok := d.ledgerEntryTypes[n]
 
 	if !ok {
 		return 0, &NotFoundError{
@@ -114,8 +114,8 @@ func (d *Definitions) GetLedgerEntryTypeCodeByLedgerEntryTypeName(n string) (int
 	return ledgerEntryTypeCode, nil
 }
 
-// GetLedgerEntryTypeNameByLedgerEntryTypeCode returns the ledger entry type name associated with the ledger entry type code.
-func (d *Definitions) GetLedgerEntryTypeNameByLedgerEntryTypeCode(c int32) (string, error) {
+// LedgerEntryTypeName returns the ledger entry type name associated with the ledger entry type code.
+func (d *Definitions) LedgerEntryTypeName(c int32) (string, error) {
 	if name, ok := d.ledgerEntryTypeNames[c]; ok {
 		return name, nil
 	}
@@ -125,9 +125,9 @@ func (d *Definitions) GetLedgerEntryTypeNameByLedgerEntryTypeCode(c int32) (stri
 	}
 }
 
-// GetDelegatablePermissionValueByName returns the delegatable permission value associated with the permission name.
-func (d *Definitions) GetDelegatablePermissionValueByName(n string) (int32, error) {
-	permissionValue, ok := d.DelegatablePermissions[n]
+// DelegatablePermissionValue returns the delegatable permission value associated with the permission name.
+func (d *Definitions) DelegatablePermissionValue(n string) (int32, error) {
+	permissionValue, ok := d.delegatablePermissions[n]
 
 	if !ok {
 		return 0, &NotFoundError{
@@ -138,8 +138,8 @@ func (d *Definitions) GetDelegatablePermissionValueByName(n string) (int32, erro
 	return permissionValue, nil
 }
 
-// GetDelegatablePermissionNameByValue returns the delegatable permission name associated with the permission value.
-func (d *Definitions) GetDelegatablePermissionNameByValue(v int32) (string, error) {
+// DelegatablePermissionName returns the delegatable permission name associated with the permission value.
+func (d *Definitions) DelegatablePermissionName(v int32) (string, error) {
 	if name, ok := d.delegatablePermissionNames[v]; ok {
 		return name, nil
 	}

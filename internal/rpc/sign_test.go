@@ -399,7 +399,7 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINTERNAL, err.Code)
-	assert.Contains(t, err.Message, "Ledger service not available")
+	assert.Contains(t, err.LogDetail(), "Ledger service not available")
 }
 
 func TestSign_OfflineMode(t *testing.T) {
@@ -1488,7 +1488,7 @@ func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Ledger service not available")
+	assert.Contains(t, err.LogDetail(), "Ledger service not available")
 }
 
 func TestSubmitMultisigned_Metadata(t *testing.T) {

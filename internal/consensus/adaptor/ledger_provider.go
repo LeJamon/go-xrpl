@@ -212,7 +212,7 @@ func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) 
 	// receivers already hold the header (via the acquisition's GotBase) and
 	// simply ignore it.
 	wantHash := want.Hash()
-	headerData := append(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(wantHdr, false)...)
+	headerData := append(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(wantHdr, false)...)
 	objects = append(objects, message.IndexedObject{
 		Hash:      append([]byte(nil), wantHash[:]...),
 		Data:      headerData,

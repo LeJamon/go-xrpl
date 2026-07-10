@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -48,7 +48,7 @@ func makeTxMetaBlobForTest(t *testing.T, txBytes []byte, txIndex uint32) ([]byte
 	metaBytes, err := hex.DecodeString(metaHex)
 	require.NoError(t, err)
 
-	txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+	txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 
 	blob := make([]byte, 0, len(txBytes)+len(metaBytes)+4)
 	blob = append(blob, encodeVLForTest(len(txBytes))...)

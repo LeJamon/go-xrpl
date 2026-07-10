@@ -9,14 +9,14 @@ import "testing"
 // canonical rules can't silently diverge from rippled's to_currency.
 
 func TestCurrencySentinels(t *testing.T) {
-	if NoCurrency != ([20]byte{19: 0x01}) {
-		t.Errorf("NoCurrency = %x, want trailing 0x01", NoCurrency)
+	if NoCurrency() != ([20]byte{19: 0x01}) {
+		t.Errorf("NoCurrency = %x, want trailing 0x01", NoCurrency())
 	}
-	if BadCurrency != ([20]byte{12: 'X', 13: 'R', 14: 'P'}) {
-		t.Errorf("BadCurrency = %x, want bytes 12-14 = XRP", BadCurrency)
+	if BadCurrency() != ([20]byte{12: 'X', 13: 'R', 14: 'P'}) {
+		t.Errorf("BadCurrency = %x, want bytes 12-14 = XRP", BadCurrency())
 	}
 	// to_currency yields NoCurrency for any malformed code.
-	if got := CurrencyBytes("!!"); got != NoCurrency {
+	if got := CurrencyBytes("!!"); got != NoCurrency() {
 		t.Errorf("CurrencyBytes(malformed) = %x, want NoCurrency", got)
 	}
 }

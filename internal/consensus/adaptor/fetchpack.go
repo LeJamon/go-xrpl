@@ -205,7 +205,7 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 // ledgerMaster hash prefix, not a SHAMap node prefix, so it never verifies as a
 // node and is dropped without being charged as poison.
 func isLedgerHeaderObject(data []byte) bool {
-	prefix := protocol.HashPrefixLedgerMaster.Bytes()
+	prefix := protocol.HashPrefixLedgerMaster().Bytes()
 	return len(data) >= len(prefix) && bytes.Equal(data[:len(prefix)], prefix)
 }
 

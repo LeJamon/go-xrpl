@@ -1,7 +1,9 @@
 package consensus
 
 import (
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -167,6 +169,9 @@ type EventBus struct {
 	subscribers []EventSubscriber
 	eventCh     chan Event
 	stopCh      chan struct{}
+	stopOnce    sync.Once
+	dropped     atomic.Uint64
+	lastDropLog atomic.Int64 // unix-nanos of the last drop warning, for rate limiting
 }
 
 // NewEventBus creates a new event bus.
@@ -188,23 +193,40 @@ func (eb *EventBus) Subscribe(sub EventSubscriber) {
 	eb.mu.Unlock()
 }
 
-// Publish sends an event to all subscribers.
+// Publish sends an event to all subscribers. On a full buffer the event is
+// dropped — but counted and (rate-limited) logged, so an operator debugging
+// "missing validations on the stream" has a signal instead of silence. This is
+// the one lossy consensus channel; every other shed in the tree is counted, and
+// now so is this one.
 func (eb *EventBus) Publish(event Event) {
 	select {
 	case eb.eventCh <- event:
 	default:
-		// Channel full, drop event (could log warning)
+		n := eb.dropped.Add(1)
+		// Rate-limit to at most one warning per second so a burst that overflows
+		// the buffer doesn't itself flood the log.
+		now := time.Now().UnixNano()
+		last := eb.lastDropLog.Load()
+		if now-last >= int64(time.Second) && eb.lastDropLog.CompareAndSwap(last, now) {
+			slog.Warn("consensus event bus buffer full; dropping events",
+				"t", "consensus", "eventType", event.Type(), "droppedTotal", n)
+		}
 	}
 }
+
+// DroppedEvents returns the cumulative count of events shed because the buffer
+// was full.
+func (eb *EventBus) DroppedEvents() uint64 { return eb.dropped.Load() }
 
 // Start begins processing events.
 func (eb *EventBus) Start() {
 	go eb.run()
 }
 
-// Stop stops the event bus.
+// Stop stops the event bus. Idempotent: a second call (defensive cleanup,
+// error-path + deferred stop) is a no-op rather than a close-of-closed panic.
 func (eb *EventBus) Stop() {
-	close(eb.stopCh)
+	eb.stopOnce.Do(func() { close(eb.stopCh) })
 }
 
 // Events returns the event channel for direct consumption.

@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -89,7 +89,7 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 		return nil, ErrInvalidSeed
 	}
 
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	privKeyHex, pubKeyHex, err := algo.DeriveKeypair(decodedSeed, true)
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 		return nil, fmt.Errorf("validator_token: deserialize manifest: %w", err)
 	}
 
-	pub, err := secp256k1.SECP256K1().DerivePublicKeyFromSecret(tok.ValidationSecret[:])
+	pub, err := secp256k1.Algorithm{}.DerivePublicKeyFromSecret(tok.ValidationSecret[:])
 	if err != nil {
 		return nil, fmt.Errorf("validator_token: derive pubkey: %w", err)
 	}
@@ -196,7 +196,7 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
 		return nil, ErrNoValidatorKey
 	}
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	var digest [32]byte
 	copy(digest[:], data)
 	return algo.SignDigest(digest, vi.signingPriv)
@@ -217,7 +217,7 @@ func Verify(pubKey []byte, data []byte, signature []byte) bool {
 		}
 		return ed25519.Verify(ed25519.PublicKey(pubKey[1:]), data, signature)
 	case 0x02, 0x03:
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		var digest [32]byte
 		copy(digest[:], data)
 		return algo.ValidateDigest(digest, pubKey, signature)
@@ -288,8 +288,8 @@ func VerifyValidation(validation *consensus.Validation) error {
 // buildProposalSigningData constructs the data to be signed for a proposal.
 // Format: HashPrefixProposal + ProposeSeq(4) + CloseTime(4) + PreviousLedger(32) + TxSet(32)
 func buildProposalSigningData(p *consensus.Proposal) []byte {
-	buf := make([]byte, 0, len(protocol.HashPrefixProposal)+4+4+len(p.PreviousLedger)+len(p.TxSet))
-	buf = append(buf, protocol.HashPrefixProposal[:]...)
+	buf := make([]byte, 0, len(protocol.HashPrefixProposal())+4+4+len(p.PreviousLedger)+len(p.TxSet))
+	buf = append(buf, protocol.HashPrefixProposal().Bytes()...)
 
 	// ProposeSeq (4 bytes, big-endian)
 	buf = append(buf, byte(p.Position>>24), byte(p.Position>>16), byte(p.Position>>8), byte(p.Position))
@@ -304,7 +304,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	// TxSet (32 bytes)
 	buf = append(buf, p.TxSet[:]...)
 
-	hash := common.Sha512Half(buf)
+	hash := sha512half.Sum(buf)
 	return hash[:]
 }
 
@@ -323,7 +323,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 func buildValidationSigningData(v *consensus.Validation) []byte {
 	if len(v.SigningData) > 0 {
 		// Inbound: use the exact non-signing bytes from the wire.
-		hash := common.Sha512Half(protocol.HashPrefixValidation[:], v.SigningData)
+		hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), v.SigningData)
 		return hash[:]
 	}
 
@@ -339,6 +339,6 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 	// the same vfFullyCanonicalSig|vfFullValidation pair this used to build.
 	unsigned := *v
 	unsigned.Signature = nil
-	hash := common.Sha512Half(protocol.HashPrefixValidation[:], SerializeSTValidation(&unsigned))
+	hash := sha512half.Sum(protocol.HashPrefixValidation().Bytes(), SerializeSTValidation(&unsigned))
 	return hash[:]
 }

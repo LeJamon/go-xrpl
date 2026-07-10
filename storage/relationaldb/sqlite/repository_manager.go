@@ -22,12 +22,12 @@ type RepositoryManager struct {
 	ledgerDB *sql.DB
 	txDB     *sql.DB
 
-	ledgerRepo             *LedgerRepository
-	transactionRepo        *TransactionRepository
-	accountTransactionRepo *AccountTransactionRepository
-	systemRepo             *SystemRepository
-	validationRepo         *ValidationRepository
-	amendmentVoteRepo      *AmendmentVoteRepository
+	ledgerRepo             *ledgerRepository
+	transactionRepo        *transactionRepository
+	accountTransactionRepo *accountTransactionRepository
+	systemRepo             *systemRepository
+	validationRepo         *validationRepository
+	amendmentVoteRepo      *amendmentVoteRepository
 }
 
 // Settings carries the operator's [sqlite] tuning. Zero values mean
@@ -119,12 +119,12 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 		return relationaldb.NewSchemaError("open", "failed to initialize transaction schema", err)
 	}
 
-	rm.ledgerRepo = NewLedgerRepository(rm.ledgerDB)
-	rm.transactionRepo = NewTransactionRepository(rm.txDB)
-	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.txDB)
-	rm.systemRepo = NewSystemRepository(rm.ledgerDB, rm.txDB)
-	rm.validationRepo = NewValidationRepository(rm.ledgerDB)
-	rm.amendmentVoteRepo = NewAmendmentVoteRepository(rm.ledgerDB)
+	rm.ledgerRepo = newLedgerRepository(rm.ledgerDB)
+	rm.transactionRepo = newTransactionRepository(rm.txDB)
+	rm.accountTransactionRepo = newAccountTransactionRepository(rm.txDB)
+	rm.systemRepo = newSystemRepository(rm.ledgerDB, rm.txDB)
+	rm.validationRepo = newValidationRepository(rm.ledgerDB)
+	rm.amendmentVoteRepo = newAmendmentVoteRepository(rm.ledgerDB)
 
 	return nil
 }
@@ -204,7 +204,7 @@ func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relati
 		return relationaldb.NewTransactionError("begin", "failed to begin transaction", err)
 	}
 
-	tc := NewTransactionContext(tx, rm.ledgerDB)
+	tc := newTransactionContext(tx, rm.ledgerDB)
 
 	defer func() {
 		if p := recover(); p != nil {
@@ -284,7 +284,7 @@ func (rm *RepositoryManager) initLedgerSchema(ctx context.Context) error {
 }
 
 // initValidationSchema installs the on-disk validation archive table.
-// Cohabits ledger.db — see ValidationRepository for the rationale.
+// Cohabits ledger.db — see validationRepository for the rationale.
 // Columns mirror rippled's historical Validations DDL (DBInit.h,
 // pre-May-2019) with SeenTime + Flags added for receive-side forensics.
 func (rm *RepositoryManager) initValidationSchema(ctx context.Context) error {

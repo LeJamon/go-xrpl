@@ -254,7 +254,7 @@ func TestInvariantsAfterSnapshot(t *testing.T) {
 	}
 
 	// Create snapshot
-	snapshot, err := sMap.Snapshot(false)
+	snapshot, err := sMap.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("Failed to create snapshot: %v", err)
 	}

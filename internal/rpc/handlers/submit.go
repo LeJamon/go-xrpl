@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -222,7 +222,7 @@ func CalculateTxHash(txBlobHex string) string {
 	}
 
 	data := append(prefix, txBytes...)
-	hash := common.Sha512Half(data)
+	hash := sha512half.Sum(data)
 	return strings.ToUpper(hex.EncodeToString(hash[:]))
 }
 

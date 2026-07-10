@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -93,8 +93,8 @@ func AddRaw(header LedgerHeader, includeHash bool) []byte {
 // substituted here. This is the single source of truth for the ledger hash; the
 // ledger and genesis packages both delegate to it.
 func CalculateHash(h LedgerHeader) [32]byte {
-	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster.Bytes())+SizeBase)
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
+	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster().Bytes())+SizeBase)
+	data = append(data, protocol.HashPrefixLedgerMaster().Bytes()...)
 	data = binary.BigEndian.AppendUint32(data, h.LedgerIndex)
 	data = binary.BigEndian.AppendUint64(data, h.Drops)
 	data = append(data, h.ParentHash[:]...)
@@ -104,7 +104,7 @@ func CalculateHash(h LedgerHeader) [32]byte {
 	data = binary.BigEndian.AppendUint32(data, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
 	data = append(data, byte(h.CloseTimeResolution))
 	data = append(data, h.CloseFlags)
-	return common.Sha512Half(data)
+	return sha512half.Sum(data)
 }
 
 // GetCloseAgree returns true if there was consensus on the close time

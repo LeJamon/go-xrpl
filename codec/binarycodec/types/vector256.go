@@ -12,12 +12,12 @@ import (
 // HashLengthBytes is the byte length of a hash in Vector256.
 const HashLengthBytes = 32
 
-// ErrInvalidVector256Type represents an error when a Vector256 is constructed from an unexpected type.
-type ErrInvalidVector256Type struct {
+// InvalidVector256TypeError represents an error when a Vector256 is constructed from an unexpected type.
+type InvalidVector256TypeError struct {
 	Got string
 }
 
-func (e *ErrInvalidVector256Type) Error() string {
+func (e *InvalidVector256TypeError) Error() string {
 	return fmt.Sprintf("Invalid type to construct Vector256 from. Expected []string, got %v", e.Got)
 }
 
@@ -39,12 +39,12 @@ func (v *Vector256) FromJSON(json any) ([]byte, error) {
 		for i, item := range val {
 			s, ok := item.(string)
 			if !ok {
-				return nil, &ErrInvalidVector256Type{fmt.Sprintf("%T (element %d is %T)", json, i, item)}
+				return nil, &InvalidVector256TypeError{fmt.Sprintf("%T (element %d is %T)", json, i, item)}
 			}
 			strSlice[i] = s
 		}
 	default:
-		return nil, &ErrInvalidVector256Type{fmt.Sprintf("%T", json)}
+		return nil, &InvalidVector256TypeError{fmt.Sprintf("%T", json)}
 	}
 
 	b, err := vector256FromValue(strSlice)

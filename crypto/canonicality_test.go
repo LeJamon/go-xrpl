@@ -18,39 +18,39 @@ func TestECDSACanonicality(t *testing.T) {
 			name: "Fully canonical signature",
 			// A valid DER signature with low S value
 			sig:      "304402206878b5690514437a2342405029426cc2b25b4a03fc396fef845d656cf62bad2c022018610a8d37f65ad02af907c8cb8f72becd0de43de7d5f42fefccb6c2a391a67c",
-			expected: CanonicityFullyCanonical,
+			expected: CanonicalityFullyCanonical,
 		},
 		{
 			name:     "Too short signature",
 			sig:      "3006020101020101",
-			expected: CanonicityFullyCanonical, // Actually this is minimal valid
+			expected: CanonicalityFullyCanonical, // Actually this is minimal valid
 		},
 		{
 			name:     "Invalid sequence tag",
 			sig:      "3106020100020100",
-			expected: CanonicityNone,
+			expected: CanonicalityNone,
 		},
 		{
 			name:     "Wrong total length",
 			sig:      "3007020100020100",
-			expected: CanonicityNone,
+			expected: CanonicalityNone,
 		},
 		{
 			name:     "Empty signature",
 			sig:      "",
-			expected: CanonicityNone,
+			expected: CanonicalityNone,
 		},
 		{
 			name:     "Just sequence tag",
 			sig:      "30",
-			expected: CanonicityNone,
+			expected: CanonicalityNone,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			sig, err := hex.DecodeString(tt.sig)
-			if err != nil && tt.expected == CanonicityNone {
+			if err != nil && tt.expected == CanonicalityNone {
 				// Invalid hex is also invalid signature
 				return
 			}
@@ -66,13 +66,13 @@ func TestECDSACanonicality_EdgeCases(t *testing.T) {
 	t.Run("Zero R value should be invalid", func(t *testing.T) {
 		// DER signature with R=0
 		sig, _ := hex.DecodeString("300602010002010a")
-		assert.Equal(t, CanonicityNone, ECDSACanonicality(sig))
+		assert.Equal(t, CanonicalityNone, ECDSACanonicality(sig))
 	})
 
 	t.Run("Negative R value (high bit set without padding)", func(t *testing.T) {
 		// The byte 0x80 has high bit set - should fail
 		sig, _ := hex.DecodeString("3006020180020101")
-		assert.Equal(t, CanonicityNone, ECDSACanonicality(sig))
+		assert.Equal(t, CanonicalityNone, ECDSACanonicality(sig))
 	})
 }
 

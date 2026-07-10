@@ -7,9 +7,9 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -44,7 +44,7 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	// Validator keys are always secp256k1, derived directly from the root
 	// generator (rippled ValidationCreate.cpp:54).
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	privHex, pubHex, err := algo.DeriveKeypair(seed, true)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive validator keypair: %v", err))
@@ -124,7 +124,7 @@ func parseGenericSeed(secret string) ([]byte, bool) {
 	if entropy, err := rfc1751.EnglishToSeed(secret); err == nil {
 		return entropy, true
 	}
-	hash := common.Sha512Half([]byte(secret))
+	hash := sha512half.Sum([]byte(secret))
 	return hash[:16], true
 }
 

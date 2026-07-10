@@ -1,4 +1,4 @@
-package common
+package sha512half
 
 import (
 	"testing"
@@ -21,7 +21,7 @@ func TestSha512Half(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
-			got := Sha512Half(tc.input)
+			got := Sum(tc.input)
 			require.Equal(t, tc.expected, got)
 		})
 	}

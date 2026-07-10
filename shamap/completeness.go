@@ -117,7 +117,7 @@ func (sm *SHAMap) checkNodeComplete(ctx context.Context, node Node, depth int, r
 			continue
 		}
 
-		child, err := DeserializeFromPrefix(data)
+		child, err := deserializeFromPrefix(data)
 		if err != nil {
 			res.Corrupt = append(res.Corrupt, miss)
 			continue

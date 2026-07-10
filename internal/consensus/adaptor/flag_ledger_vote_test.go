@@ -201,7 +201,7 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 // TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked pins the
 // walk-domain restriction to SUPPORTED amendments. rippled's doVoting
 // iterates amendmentMap_, which is seeded only from the Supported::yes set
-// (AmendmentTable.cpp:556); an amendment the binary knows about but does
+// (Table.cpp:556); an amendment the binary knows about but does
 // not support is never voted on. With the walk built from
 // amendment.AllFeatures() instead, a known-but-unsupported amendment that
 // reaches ledger majority and loses validator support would emit a
@@ -268,7 +268,7 @@ func TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked(t *testing.T)
 // TestAmendmentStances_SeededFromRegistry verifies the constructor
 // walks amendment.AllFeatures() and seeds the stance map from each
 // feature's registered VoteBehavior, mirroring rippled's
-// AmendmentTable.cpp:556-580 — DefaultYes amendments default to
+// Table.cpp:556-580 — DefaultYes amendments default to
 // VoteUp, Obsolete amendments default to VoteObsolete, DefaultNo
 // amendments are absent from the map (lookup returns VoteAbstain).
 // Without this, an unconfigured Go validator silently abstains on
@@ -310,13 +310,13 @@ func TestAmendmentStances_SeededFromRegistry(t *testing.T) {
 // TestAmendmentStances_ConfigOverridesUpvote verifies an operator
 // can promote a default-no amendment to VoteUp via
 // Config.AmendmentVote — the same role rippled's [amendments]
-// stanza plays at AmendmentTable.cpp:584-598.
+// stanza plays at Table.cpp:584-598.
 func TestAmendmentStances_ConfigOverridesUpvote(t *testing.T) {
 	// Pick a default-no, supported, non-retired feature from the
 	// registry. fixDirectoryLimit fits this profile in the current
 	// registry; if that ever flips we'll fail loudly here rather
 	// than silently testing the wrong branch.
-	target := amendment.GetFeatureByName("fixDirectoryLimit")
+	target := amendment.FeatureByName("fixDirectoryLimit")
 	require.NotNil(t, target)
 	require.Equal(t, amendment.VoteDefaultNo, target.Vote,
 		"test premise: target must be VoteDefaultNo (registry changed?)")
@@ -337,11 +337,11 @@ func TestAmendmentStances_ConfigOverridesUpvote(t *testing.T) {
 }
 
 // TestAmendmentStances_ConfigCannotOverrideObsolete pins rippled's
-// AmendmentTable.cpp:728-733 contract: persistVote refuses to flip
+// Table.cpp:728-733 contract: persistVote refuses to flip
 // an obsolete amendment's vote. Listing such an amendment in
 // Config.AmendmentVote must NOT promote it to VoteUp.
 func TestAmendmentStances_ConfigCannotOverrideObsolete(t *testing.T) {
-	target := amendment.GetFeatureByName("NonFungibleTokensV1")
+	target := amendment.FeatureByName("NonFungibleTokensV1")
 	require.NotNil(t, target)
 	require.Equal(t, amendment.VoteObsolete, target.Vote,
 		"test premise: target must be VoteObsolete (registry changed?)")
@@ -430,7 +430,7 @@ func TestParseAmendmentsSLEBytes_EmptyIsBootstrap(t *testing.T) {
 }
 
 // TestRunAmendmentVote_UsesParentCloseTime pins the rippled-parity
-// time choice at AmendmentTable.h:157: doVoting is invoked with
+// time choice at Table.h:157: doVoting is invoked with
 // lastClosedLedger->parentCloseTime() — the close time of the
 // ledger whose validations are being tallied — not the close time
 // of the flag ledger itself. Pairing the parent-validations with
@@ -469,7 +469,7 @@ func TestRunAmendmentVote_UsesParentCloseTime(t *testing.T) {
 	assert.True(t, entry.timeout.Equal(want),
 		"timeout must be ParentCloseTime+24h (got %s, want %s); "+
 			"if this drifts to flagClose+24h the producer regressed to "+
-			"prev.CloseTime, breaking AmendmentTable.h:157 parity",
+			"prev.CloseTime, breaking Table.h:157 parity",
 		entry.timeout, want)
 }
 

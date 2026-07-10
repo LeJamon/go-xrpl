@@ -72,6 +72,12 @@ type Components struct {
 	manifestPeriodicCancel context.CancelFunc
 	sitePollerCancel       context.CancelFunc
 	vlTickCancel           context.CancelFunc
+
+	// routerDone is closed when the Router.Run loop returns, so Stop can join it
+	// rather than fire-and-forgetting: an in-process restart cycle would
+	// otherwise double-start Run loops, and a still-running loop could touch the
+	// engine Stop has already torn down.
+	routerDone chan struct{}
 }
 
 // validatorListTickInterval is how often Components.Start fires
@@ -91,10 +97,34 @@ const periodicManifestBroadcastInterval = 5 * time.Minute
 
 // Start launches all background goroutines (overlay, engine, router).
 func (c *Components) Start() error {
-	// Start overlay
+	// Start overlay. Capture Run's error so a listener bind failure (a stale
+	// process on the peer port, EACCES on a privileged port, a bad [port_peer]
+	// address) is loud and fatal at boot instead of leaving the node running
+	// deaf with no diagnostics. Run binds the listener before signalling
+	// ListenerReady, so a bind failure returns before that signal fires; wait
+	// for whichever happens first. A later (post-ready) exit is logged by the
+	// goroutine and left buffered so it never blocks.
 	overlayCtx, overlayCancel := context.WithCancel(context.Background())
 	c.overlayCancel = overlayCancel
-	go c.Overlay.Run(overlayCtx) //nolint:errcheck
+	overlayErr := make(chan error, 1)
+	go func() {
+		err := c.Overlay.Run(overlayCtx)
+		if err != nil && overlayCtx.Err() == nil {
+			slog.Error("overlay Run exited with error", "t", "consensus", "err", err)
+		}
+		overlayErr <- err
+	}()
+
+	select {
+	case <-c.Overlay.ListenerReady():
+		// Listener bound (or none configured) — boot can proceed.
+	case err := <-overlayErr:
+		overlayCancel()
+		if err == nil {
+			err = fmt.Errorf("overlay exited before the listener was ready")
+		}
+		return fmt.Errorf("start overlay: %w", err)
+	}
 
 	// Start consensus engine
 	if err := c.Engine.Start(context.Background()); err != nil {
@@ -105,7 +135,11 @@ func (c *Components) Start() error {
 	// Start message router
 	routerCtx, routerCancel := context.WithCancel(context.Background())
 	c.routerCancel = routerCancel
-	go c.Router.Run(routerCtx)
+	c.routerDone = make(chan struct{})
+	go func() {
+		defer close(c.routerDone)
+		c.Router.Run(routerCtx)
+	}()
 
 	// Periodic re-emission. Cheap when there's nothing to broadcast:
 	// the emission path short-circuits on an empty / unwired cache.
@@ -186,6 +220,19 @@ func (c *Components) Stop() {
 	}
 	if c.routerCancel != nil {
 		c.routerCancel()
+	}
+	// Join the router loop before tearing down the engine, so it can't be
+	// mid-handleMessage touching an already-stopped engine, and so a subsequent
+	// Start can't double-run it. Bounded so a wedged handler can't hang shutdown.
+	if c.routerDone != nil {
+		select {
+		case <-c.routerDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("router loop did not exit within shutdown budget", "t", "Components.Stop")
+		}
+	}
+	if c.Adaptor != nil {
+		c.Adaptor.StopConsensusPhaseDispatcher()
 	}
 	if c.Engine != nil {
 		_ = c.Engine.Stop()
@@ -275,7 +322,7 @@ func NewFromConfig(
 		// Source vote stances from the same amendment table the ledger service
 		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
 		// config) drives consensus voting.
-		AmendmentTable: ledgerSvc.AmendmentTable(),
+		Table: ledgerSvc.Table(),
 		// The operator's [voting] stanza. Zero values mean unset —
 		// New() substitutes the network defaults.
 		FeeVote:          feeVoteFromConfig(appCfg.Voting),
@@ -362,7 +409,7 @@ func NewFromConfig(
 		vlAgg, err = validatorlist.New(validatorlist.Config{
 			PublisherKeys: pkSlice,
 			SiteURIs:      append([]string(nil), appCfg.Validators.ValidatorListSites...),
-			Threshold:     appCfg.Validators.GetValidatorListThreshold(),
+			Threshold:     appCfg.Validators.EffectiveListThreshold(),
 			Manifests:     manifestCache,
 			Logger:        slog.Default().With("component", "validator-list-aggregator"),
 		})
@@ -577,13 +624,13 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	var opts []peermanagement.Option
 
 	// Network ID
-	if networkID, err := appCfg.GetNetworkID(); err == nil {
+	if networkID, err := appCfg.ResolvedNetworkID(); err == nil {
 		opts = append(opts, peermanagement.WithNetworkID(uint32(networkID)))
 	}
 
 	// Listen address from peer port config
-	if _, peerPort, hasPeer := appCfg.GetPeerPort(); hasPeer {
-		opts = append(opts, peermanagement.WithListenAddr(peerPort.GetBindAddress()))
+	if _, peerPort, hasPeer := appCfg.PeerPort(); hasPeer {
+		opts = append(opts, peermanagement.WithListenAddr(peerPort.BindAddress()))
 	}
 
 	// Bootstrap peers (convert "host port" → "host:port")

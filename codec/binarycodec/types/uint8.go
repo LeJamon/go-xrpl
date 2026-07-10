@@ -16,7 +16,7 @@ type UInt8 struct{}
 // attempt to convert it into a transaction result type code. If the conversion fails, an error is returned.
 func (u *UInt8) FromJSON(value any) ([]byte, error) {
 	if s, ok := value.(string); ok {
-		tc, err := definitions.Get().GetTransactionResultTypeCodeByTransactionResultName(s)
+		tc, err := definitions.Get().TransactionResultCode(s)
 		if err != nil {
 			return nil, err
 		}

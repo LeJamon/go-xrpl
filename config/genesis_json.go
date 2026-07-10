@@ -43,8 +43,8 @@ type GenesisLedgerJSON struct {
 	Transactions        []json.RawMessage `json:"transactions"`
 }
 
-// StateEntryType is a helper struct to determine the type of state entry
-type StateEntryType struct {
+// stateEntryType is a helper struct to determine the type of state entry
+type stateEntryType struct {
 	LedgerEntryType string `json:"LedgerEntryType"`
 }
 
@@ -139,7 +139,7 @@ func (g *GenesisJSON) ParseState() (*ParsedGenesisState, error) {
 
 	for i, rawEntry := range g.Ledger.AccountState {
 		// First determine the entry type
-		var entryType StateEntryType
+		var entryType stateEntryType
 		if err := json.Unmarshal(rawEntry, &entryType); err != nil {
 			return nil, fmt.Errorf("failed to parse entry %d type: %w", i, err)
 		}

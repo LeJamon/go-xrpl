@@ -129,7 +129,7 @@ Path through tree determined by key nibbles:
 
 ### Items
 
-- `Put(key, data)` / `PutItem` / `PutWithNodeType` / `PutItemWithNodeType`
+- `Put(key, data)` / `PutItem` / `PutWithNodeType` / `putItemWithNodeType`
 - `Get(key)` / `Has(key)` / `Delete(key)`
 - `ForEach` / `ForEachCtx` — in-order leaf iteration.
 - `UpperBound(key)` — iterator at the first item with key > the argument.

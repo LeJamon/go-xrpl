@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -47,7 +48,7 @@ func (n *NodeDBConfig) Validate() error {
 
 	// Validate type
 	if n.Type == "" {
-		return fmt.Errorf("node_db type is required")
+		return errors.New("node_db type is required")
 	}
 	validTypes := []string{"pebble", "Pebble"}
 	if !slices.Contains(validTypes, n.Type) {
@@ -56,7 +57,7 @@ func (n *NodeDBConfig) Validate() error {
 
 	// Validate path
 	if n.Path == "" {
-		return fmt.Errorf("node_db path is required")
+		return errors.New("node_db path is required")
 	}
 
 	if err := validateNonNegative("cache_size", n.CacheSize); err != nil {
@@ -104,7 +105,7 @@ func (s *SQLiteConfig) Validate() error {
 
 		// If safety_level is set, other settings cannot be combined
 		if s.JournalMode != "" || s.Synchronous != "" || s.TempStore != "" {
-			return fmt.Errorf("safety_level cannot be combined with journal_mode, synchronous, or temp_store")
+			return errors.New("safety_level cannot be combined with journal_mode, synchronous, or temp_store")
 		}
 	}
 
@@ -158,16 +159,10 @@ func (n *NodeDBConfig) IsAdvisoryDeleteEnabled() bool {
 	return n.AdvisoryDelete == 1
 }
 
-// GetDeleteBatch returns the number of records removed per online-delete batch
-// (node_db delete_batch).
-func (n *NodeDBConfig) GetDeleteBatch() int {
-	return n.DeleteBatch
-}
-
-// GetEffectiveSettings returns the effective SQLite tuning based on
+// EffectiveSettings returns the effective SQLite tuning based on
 // safety_level or the individual settings. Empty strings mean "not
 // configured" — the storage backend applies its own defaults.
-func (s *SQLiteConfig) GetEffectiveSettings() (journalMode, synchronous, tempStore string) {
+func (s *SQLiteConfig) EffectiveSettings() (journalMode, synchronous, tempStore string) {
 	switch s.SafetyLevel {
 	case "low":
 		return "memory", "off", "memory"

@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -445,7 +445,7 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	// reverse arithmetic CalculateLedgerHash relies on. AddRaw re-emits the exact
 	// bytes a peer signs, so the byte-level hash is the only round-trip-safe
 	// invariant (same approach as the LedgerReplay path in replay_delta.go).
-	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(*h, false))
+	computed := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(*h, false))
 	if computed != l.hash || (l.seq != 0 && l.seq != h.LedgerIndex) {
 		l.state = StateFailed
 		l.err = fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",
@@ -629,7 +629,7 @@ func (l *Ledger) applyKnownNodes(m *shamap.SHAMap, nodes []message.LedgerNode, l
 		if len(node.NodeData) == 0 {
 			continue
 		}
-		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		parsedID, err := shamap.ParseNodeID(node.NodeID)
 		if err != nil {
 			l.logger.Debug("inbound ledger: malformed "+label+" node ID",
 				"node_id_len", len(node.NodeID),

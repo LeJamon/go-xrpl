@@ -64,7 +64,7 @@ type metaTx struct {
 // (tx_index) order. A second pass rebuilds directory page contents (sfIndexes),
 // which metadata never carries.
 func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32) (*shamap.SHAMap, error) {
-	corrected, err := preState.Snapshot(true)
+	corrected, err := preState.SnapshotMutable()
 	if err != nil {
 		return nil, fmt.Errorf("snapshotting pre-state: %w", err)
 	}

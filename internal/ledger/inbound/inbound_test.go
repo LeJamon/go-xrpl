@@ -60,7 +60,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		t.Fatalf("regression: NeedsMissingNodeIDs returned only rootID; deep nodes can never be requested")
 	}
 	for i, raw := range ids {
-		nid, err := shamap.UnmarshalBinary(raw)
+		nid, err := shamap.ParseNodeID(raw)
 		if err != nil {
 			t.Fatalf("nodeID %d: malformed: %v", i, err)
 		}

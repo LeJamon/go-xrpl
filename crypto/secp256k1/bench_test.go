@@ -4,13 +4,13 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // BenchmarkValidateDigest exercises the active backend (libsecp256k1
 // via cgo by default; decred pure-Go when built with CGO_ENABLED=0).
 func BenchmarkValidateDigest(b *testing.B) {
-	algo := SECP256K1()
+	algo := Algorithm{}
 	pub, err := hex.DecodeString("02950F4710101A25073BF37086D73FBBD00C7A6B0F91097D8F0BC6D268C400D56E")
 	if err != nil {
 		b.Fatal(err)
@@ -19,7 +19,7 @@ func BenchmarkValidateDigest(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	digest := common.Sha512Half([]byte("Hello World"))
+	digest := sha512half.Sum([]byte("Hello World"))
 
 	b.ReportAllocs()
 	b.ResetTimer()

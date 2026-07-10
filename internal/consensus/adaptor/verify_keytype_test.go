@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // TestVerify_DispatchesByKeyType pins the key-type-aware dispatch in
@@ -24,7 +24,7 @@ import (
 //  4. Garbage prefix rejects without panic.
 //  5. Non-33-byte input rejects without panic.
 func TestVerify_DispatchesByKeyType(t *testing.T) {
-	digest := common.Sha512Half([]byte("test message for both key types"))
+	digest := sha512half.Sum([]byte("test message for both key types"))
 
 	// --- ed25519 path ---
 	edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
@@ -39,7 +39,7 @@ func TestVerify_DispatchesByKeyType(t *testing.T) {
 	}
 
 	// --- secp256k1 path ---
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	secPriv := make([]byte, 32)
 	if _, err := rand.Read(secPriv); err != nil {
 		t.Fatalf("rand: %v", err)

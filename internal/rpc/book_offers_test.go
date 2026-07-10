@@ -1308,7 +1308,7 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 	})
 
 	t.Run("Ledger is nil", func(t *testing.T) {
@@ -1324,7 +1324,7 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 	})
 }
 
@@ -1362,7 +1362,7 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Failed to get book offers")
+	assert.Contains(t, rpcErr.LogDetail(), "Failed to get book offers")
 }
 
 // TestBookOffersMarkerPassthrough exercises the handler's marker handling:

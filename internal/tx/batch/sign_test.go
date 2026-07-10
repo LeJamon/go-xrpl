@@ -22,7 +22,7 @@ func TestSerializeBatchDigest(t *testing.T) {
 	got := serializeBatch(flags, txids)
 
 	require.Len(t, got, 4+4+4+len(txids)*32)
-	require.Equal(t, protocol.HashPrefixBatch.Bytes(), got[0:4])
+	require.Equal(t, protocol.HashPrefixBatch().Bytes(), got[0:4])
 	require.Equal(t, flags, binary.BigEndian.Uint32(got[4:8]))
 	require.Equal(t, uint32(len(txids)), binary.BigEndian.Uint32(got[8:12]))
 	require.Equal(t, txids[0][:], got[12:44])

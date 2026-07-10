@@ -35,7 +35,7 @@ func (e *TestEnv) signHighS(txn tx.Transaction, signer *Account) {
 	e.signReal(txn, signer)
 	common := txn.GetCommon()
 	common.TxnSignature = flipSToHighS(e.t, common.TxnSignature)
-	require.Equal(e.t, rootcrypto.CanonicityCanonical,
+	require.Equal(e.t, rootcrypto.CanonicalityCanonical,
 		ecdsaCanonicalityOf(e.t, common.TxnSignature),
 		"prepared signature must be high-S (canonical but not fully canonical)")
 }

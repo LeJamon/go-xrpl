@@ -1213,7 +1213,7 @@ func TestAccountLinesServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 }
 
 // TestAccountLinesServiceNilLedger tests behavior when ledger service is nil
@@ -1237,7 +1237,7 @@ func TestAccountLinesServiceNilLedger(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 }
 
 // TestAccountLinesMethodMetadata tests the method's metadata functions

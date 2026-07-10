@@ -953,7 +953,7 @@ func TestVaultConstants(t *testing.T) {
 // registration: Supported::yes, VoteBehavior::DefaultNo. The vault transactors
 // are implemented, so the node applies them once the amendment activates.
 func TestVaultAmendmentSupported(t *testing.T) {
-	f := amendment.GetFeature(amendment.FeatureSingleAssetVault)
+	f := amendment.FeatureByID(amendment.FeatureSingleAssetVault)
 	require.NotNil(t, f, "SingleAssetVault must be registered")
 	assert.Equal(t, amendment.SupportedYes, f.Supported,
 		"SingleAssetVault must be SupportedYes")

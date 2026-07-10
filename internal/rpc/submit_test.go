@@ -687,7 +687,7 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 }
 
 // TestSubmitMethodServiceNilLedger tests behavior when ledger service is nil
@@ -716,7 +716,7 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 }
 
 // TestSubmitMethodSubmitError tests handling of ledger service errors
@@ -773,7 +773,7 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.Message, tc.expectedError)
+			assert.Contains(t, rpcErr.LogDetail(), tc.expectedError)
 		})
 	}
 }

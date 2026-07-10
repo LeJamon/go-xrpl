@@ -30,7 +30,7 @@ func DefaultFieldIDCodec() *FieldIDCodec {
 // This field ID consists of the type code and field code, in 1 to 3 bytes
 // depending on whether those values are "common" (<16) or "uncommon" (>16).
 func (f *FieldIDCodec) Encode(fieldName string) ([]byte, error) {
-	fh, err := f.definitions.GetFieldHeaderByFieldName(fieldName)
+	fh, err := f.definitions.FieldHeaderByName(fieldName)
 	if err != nil {
 		return nil, err
 	}

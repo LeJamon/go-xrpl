@@ -155,7 +155,7 @@ func FuzzDecodeXAddress(f *testing.F) {
 	f.Add("X7AcgcsBL6XDcUb289X4mJ8djcdyKaB5hJDWMArnXr61cq")
 
 	f.Fuzz(func(t *testing.T, addr string) {
-		accountID, tag, testnet, err := DecodeXAddress(addr)
+		accountID, tag, network, err := DecodeXAddress(addr)
 		if err != nil {
 			return
 		}
@@ -171,7 +171,11 @@ func FuzzDecodeXAddress(f *testing.F) {
 			tagFlag = xAddrBytes[22] == 1
 		}
 
-		reEncoded, err := EncodeXAddress(accountID, tag, tagFlag, testnet)
+		var tagPtr *uint32
+		if tagFlag {
+			tagPtr = &tag
+		}
+		reEncoded, err := EncodeXAddress(accountID, tagPtr, network)
 		if err != nil {
 			t.Fatalf("EncodeXAddress failed on successfully decoded x-address: %v", err)
 		}

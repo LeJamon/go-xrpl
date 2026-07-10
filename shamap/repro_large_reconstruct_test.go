@@ -66,14 +66,14 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 
 	innerCount := 0
 	for i, w := range wireNodes {
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary[%d]: %v", i, err)
 		}
 		if nid.IsRoot() {
 			continue
 		}
-		node, err := DeserializeNodeFromWire(w.Data)
+		node, err := deserializeNodeFromWire(w.Data)
 		if err != nil {
 			continue
 		}
@@ -83,7 +83,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Logf("AddKnownNodeByID[%d] depth=%d nodeID=%x dataLen=%d wireType=0x%02x", i, nid.Depth(), w.NodeID, len(w.Data), w.Data[len(w.Data)-1])
 			t.Logf("  data: %x", w.Data)
-			parsedNode, _ := DeserializeNodeFromWire(w.Data)
+			parsedNode, _ := deserializeNodeFromWire(w.Data)
 			if parsedNode != nil {
 				parsedNode.UpdateHash()
 				ph := parsedNode.Hash()

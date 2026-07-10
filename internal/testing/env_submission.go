@@ -335,7 +335,7 @@ func (e *TestEnv) pendingRulesBuilder() *amendment.RulesBuilder {
 			b.EnableByName(name)
 		}
 	} else {
-		for _, id := range e.rulesBuilder.Build().GetEnabled() {
+		for _, id := range e.rulesBuilder.Build().EnabledIDs() {
 			b.Enable(id)
 		}
 	}

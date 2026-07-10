@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -66,7 +66,7 @@ func makeTxWithMetaBlob(t *testing.T, txBytes []byte, txIndex uint32) ([]byte, [
 	t.Helper()
 	metaBytes := makeMetadataBlob(t, txIndex)
 
-	txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], txBytes)
+	txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), txBytes)
 
 	blob := make([]byte, 0, len(txBytes)+len(metaBytes)+4)
 	blob = append(blob, encodeVL(len(txBytes))...)

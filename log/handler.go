@@ -21,7 +21,7 @@ type configDynamic struct {
 //
 // Once NewHandler (or any SetLevel / SetPartitionLevel call) has initialised
 // the dynamic state, Level and Partitions must only be read or mutated through
-// the SetLevel / SetPartitionLevel / GetCurrentLevels API — direct writes to
+// the SetLevel / SetPartitionLevel / Levels API — direct writes to
 // the static fields are not race-safe against concurrent logging.
 //
 // Copying a Config after NewHandler / SetLevel has been called shares the

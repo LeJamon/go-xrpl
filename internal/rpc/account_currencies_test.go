@@ -602,7 +602,7 @@ func TestAccountCurrenciesServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
 }
 
 // TestAccountCurrenciesMethodMetadata tests the method's metadata functions

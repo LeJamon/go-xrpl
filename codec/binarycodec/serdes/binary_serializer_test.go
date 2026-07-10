@@ -81,12 +81,12 @@ func TestBinarySerializer_Put(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewBinarySerializer(NewFieldIDCodec(definitions.Get()))
 			s.put(tc.input)
-			require.Equal(t, tc.expected, s.GetSink())
+			require.Equal(t, tc.expected, s.Bytes())
 		})
 	}
 }
 
-func TestBinarySerializer_GetSink(t *testing.T) {
+func TestBinarySerializer_Bytes(t *testing.T) {
 	testcases := []struct {
 		name     string
 		input    []byte
@@ -108,7 +108,7 @@ func TestBinarySerializer_GetSink(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := NewBinarySerializer(NewFieldIDCodec(definitions.Get()))
 			s.put(tc.input)
-			require.Equal(t, tc.expected, s.GetSink())
+			require.Equal(t, tc.expected, s.Bytes())
 		})
 	}
 }
@@ -116,7 +116,7 @@ func TestBinarySerializer_GetSink(t *testing.T) {
 func TestBinarySerializer_WriteFieldAndValue(t *testing.T) {
 	codec := DefaultFieldIDCodec()
 	fieldInstance := func(name string) definitions.FieldInstance {
-		fi, err := definitions.Get().GetFieldInstanceByFieldName(name)
+		fi, err := definitions.Get().FieldInstanceByName(name)
 		require.NoError(t, err)
 		return *fi
 	}
@@ -180,7 +180,7 @@ func TestBinarySerializer_WriteFieldAndValue(t *testing.T) {
 				require.Error(t, err, tc.expectedErr.Error())
 			} else {
 				require.NoError(t, err)
-				require.Equal(t, tc.expected, s.GetSink())
+				require.Equal(t, tc.expected, s.Bytes())
 			}
 		})
 	}

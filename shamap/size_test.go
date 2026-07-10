@@ -101,7 +101,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 		t.Fatalf("parent cachedSize = %d, want 3", v)
 	}
 
-	snap, err := sm.Snapshot(false)
+	snap, err := sm.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	}
 
 	// Mutable snapshot must not inherit: callers may mutate it.
-	mut, err := sm.Snapshot(true)
+	mut, err := sm.SnapshotMutable()
 	if err != nil {
 		t.Fatalf("snapshot mutable: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 
 	// FlushDirty(true) drops in-memory children, so any subsequent
 	// descend() goes through Family.Fetch.
-	batch, err := sm.FlushDirty(true)
+	batch, err := sm.FlushDirtyAndRelease()
 	if err != nil {
 		t.Fatalf("flush: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 		t.Fatalf("source cachedSize = %d, want 4", v)
 	}
 
-	snap, err := sm.Snapshot(false)
+	snap, err := sm.SnapshotImmutable()
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	}
 
 	// Mutable snapshot must not inherit: callers may mutate it.
-	mut, err := sm.Snapshot(true)
+	mut, err := sm.SnapshotMutable()
 	if err != nil {
 		t.Fatalf("snapshot mutable: %v", err)
 	}

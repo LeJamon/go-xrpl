@@ -11,11 +11,11 @@ import (
 // Compile-time interface checks
 var (
 	_ relationaldb.RepositoryManager            = (*RepositoryManager)(nil)
-	_ relationaldb.LedgerRepository             = (*LedgerRepository)(nil)
-	_ relationaldb.TransactionRepository        = (*TransactionRepository)(nil)
-	_ relationaldb.AccountTransactionRepository = (*AccountTransactionRepository)(nil)
-	_ relationaldb.SystemRepository             = (*SystemRepository)(nil)
-	_ relationaldb.TransactionContext           = (*TransactionContext)(nil)
+	_ relationaldb.LedgerRepository             = (*ledgerRepository)(nil)
+	_ relationaldb.TransactionRepository        = (*transactionRepository)(nil)
+	_ relationaldb.AccountTransactionRepository = (*accountTransactionRepository)(nil)
+	_ relationaldb.SystemRepository             = (*systemRepository)(nil)
+	_ relationaldb.TransactionContext           = (*transactionContext)(nil)
 )
 
 func setupTestDB(t *testing.T) *RepositoryManager {
@@ -84,7 +84,7 @@ func TestLedgerCRUD(t *testing.T) {
 
 	// Save ledger
 	info := makeLedgerInfo(10)
-	if err := rm.Ledger().SaveValidatedLedger(ctx, info, true); err != nil {
+	if err := rm.Ledger().SaveValidatedLedger(ctx, info); err != nil {
 		t.Fatal(err)
 	}
 
@@ -149,7 +149,7 @@ func TestLedgerCRUD(t *testing.T) {
 
 	// Upsert: save again with updated total
 	info.TotalCoins = 200000000000
-	if err := rm.Ledger().SaveValidatedLedger(ctx, info, true); err != nil {
+	if err := rm.Ledger().SaveValidatedLedger(ctx, info); err != nil {
 		t.Fatal(err)
 	}
 	got3, err := rm.Ledger().GetLedgerInfoBySeq(ctx, 10)
@@ -166,7 +166,7 @@ func TestLedgerHashQueries(t *testing.T) {
 	ctx := context.Background()
 
 	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -201,7 +201,7 @@ func TestLedgerDelete(t *testing.T) {
 	ctx := context.Background()
 
 	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -223,7 +223,7 @@ func TestLedgerLimited(t *testing.T) {
 	ctx := context.Background()
 
 	for i := uint32(5); i <= 10; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i)); err != nil {
 			t.Fatal(err)
 		}
 	}

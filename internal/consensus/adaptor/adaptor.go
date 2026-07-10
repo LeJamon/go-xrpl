@@ -199,9 +199,15 @@ type Adaptor struct {
 	// consensusPhaseCh serializes consensus-phase notifications to the ledger
 	// service's OnConsensusPhase hook: a single dispatcher goroutine drains it
 	// in order (preventing out-of-order delivery). Enqueue is non-blocking, so
-	// a slow hook can't stall the consensus path.
+	// a slow hook can't stall the consensus path. The dispatcher is started
+	// lazily on first emit and stopped by StopConsensusPhaseDispatcher; the
+	// channel is never closed, so a concurrent emit can't send on a closed
+	// channel. consensusPhaseMu guards the lazy-start / stopped transition.
+	consensusPhaseMu   sync.Mutex
 	consensusPhaseCh   chan string
-	consensusPhaseOnce sync.Once
+	consensusPhaseQuit chan struct{}
+	consensusPhaseWG   sync.WaitGroup
+	consensusPhaseStop bool
 
 	// negUNLVoter produces the UNLModify pseudo-tx each voting ledger (at most
 	// one ToDisable + one ToReEnable). nil for non-validating adaptors.
@@ -237,7 +243,7 @@ type Adaptor struct {
 	// sources vote stances from each round (so operator veto/upvote changes
 	// take effect without restart) and stashes per-round tallies into. nil
 	// falls back to the construction-time amendmentStances map.
-	amendmentTable *amendment.AmendmentTable
+	amendmentTable *amendment.Table
 
 	// trustedVotes caches per-validator amendment votes for 24h to dampen
 	// flapping when a flaky validator drops briefly.
@@ -383,11 +389,11 @@ type Config struct {
 	// flag ledger. Unknown names are dropped at construction; already-enabled
 	// ones are filtered per-emission since the enabled set changes over time.
 	AmendmentVote []string
-	// AmendmentTable, when supplied, is the live amendment table owning the
+	// Table, when supplied, is the live amendment table owning the
 	// operator's veto/upvote preferences; authoritative for stances (vetoed →
 	// abstain, upvoted → up) over registry defaults. Shared with the ledger
 	// service, which folds validated flag ledgers in via DoValidatedLedger.
-	AmendmentTable *amendment.AmendmentTable
+	Table *amendment.Table
 	// RelayValidations is the operator's [relay_validations] stance; the
 	// zero value relays untrusted validations (rippled's default).
 	RelayValidations RelayValidationsPolicy
@@ -423,7 +429,7 @@ func seedAmendmentStances(amendmentVote []string, logger *slog.Logger) map[[32]b
 		}
 	}
 	for _, name := range amendmentVote {
-		f := amendment.GetFeatureByName(name)
+		f := amendment.FeatureByName(name)
 		if f == nil {
 			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
 			continue
@@ -520,7 +526,7 @@ func New(cfg Config) *Adaptor {
 		cookie:            cookie,
 		feeVote:           feeVote,
 		amendmentStances:  amendmentStances,
-		amendmentTable:    cfg.AmendmentTable,
+		amendmentTable:    cfg.Table,
 		trustedVotes:      trustedVotes,
 		relayValidations:  cfg.RelayValidations,
 		logger:            logger,
@@ -1351,7 +1357,7 @@ func featureEnabled(rules *amendment.Rules, name string, unknownDefault bool) bo
 	if rules == nil {
 		return unknownDefault
 	}
-	f := amendment.GetFeatureByName(name)
+	f := amendment.FeatureByName(name)
 	if f == nil {
 		return unknownDefault
 	}
@@ -1631,21 +1637,59 @@ func (a *Adaptor) emitConsensusPhase(phase string) {
 	if a.ledgerService == nil {
 		return
 	}
-	a.consensusPhaseOnce.Do(func() {
+	a.consensusPhaseMu.Lock()
+	if a.consensusPhaseStop {
+		a.consensusPhaseMu.Unlock()
+		return
+	}
+	if a.consensusPhaseCh == nil {
 		a.consensusPhaseCh = make(chan string, 64)
-		go func() {
-			for p := range a.consensusPhaseCh {
-				if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-					hooks.OnConsensusPhase(p)
-				}
-			}
-		}()
-	})
+		a.consensusPhaseQuit = make(chan struct{})
+		a.consensusPhaseWG.Add(1)
+		go a.runConsensusPhaseDispatcher()
+	}
+	ch := a.consensusPhaseCh
+	a.consensusPhaseMu.Unlock()
 	select {
-	case a.consensusPhaseCh <- phase:
+	case ch <- phase:
 	default:
 		slog.Warn("consensus phase hook buffer full; dropping notification",
 			"t", "adaptor.emitConsensusPhase", "phase", phase)
+	}
+}
+
+// runConsensusPhaseDispatcher drains consensus-phase notifications in order
+// until StopConsensusPhaseDispatcher signals quit. The notifications are
+// advisory, so a shutdown abandons any still buffered rather than draining them.
+func (a *Adaptor) runConsensusPhaseDispatcher() {
+	defer a.consensusPhaseWG.Done()
+	for {
+		select {
+		case p := <-a.consensusPhaseCh:
+			if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+				hooks.OnConsensusPhase(p)
+			}
+		case <-a.consensusPhaseQuit:
+			return
+		}
+	}
+}
+
+// StopConsensusPhaseDispatcher stops the consensus-phase dispatcher goroutine and
+// joins it, so an in-process restart cycle doesn't leak one per cycle. Idempotent
+// and safe if the dispatcher was never started.
+func (a *Adaptor) StopConsensusPhaseDispatcher() {
+	a.consensusPhaseMu.Lock()
+	if a.consensusPhaseStop {
+		a.consensusPhaseMu.Unlock()
+		return
+	}
+	a.consensusPhaseStop = true
+	quit := a.consensusPhaseQuit
+	a.consensusPhaseMu.Unlock()
+	if quit != nil {
+		close(quit)
+		a.consensusPhaseWG.Wait()
 	}
 }
 

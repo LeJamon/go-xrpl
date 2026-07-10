@@ -21,7 +21,7 @@ func cpKeypair(t *testing.T, seed byte) (priv, pub, addr string) {
 	for i := range entropy {
 		entropy[i] = seed
 	}
-	priv, pub, err := ed25519.ED25519().DeriveKeypair(entropy, false)
+	priv, pub, err := ed25519.Algorithm{}.DeriveKeypair(entropy, false)
 	if err != nil {
 		t.Fatalf("derive keypair: %v", err)
 	}

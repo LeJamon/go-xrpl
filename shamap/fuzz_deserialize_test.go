@@ -14,18 +14,18 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 	f.Add([]byte{})
 
 	// Single wire type bytes (each triggers a different parser with insufficient data)
-	f.Add([]byte{protocol.WireTypeTransaction})
-	f.Add([]byte{protocol.WireTypeAccountState})
-	f.Add([]byte{protocol.WireTypeInner})
-	f.Add([]byte{protocol.WireTypeCompressedInner})
-	f.Add([]byte{protocol.WireTypeTransactionWithMeta})
+	f.Add([]byte{byte(protocol.WireTypeTransaction)})
+	f.Add([]byte{byte(protocol.WireTypeAccountState)})
+	f.Add([]byte{byte(protocol.WireTypeInner)})
+	f.Add([]byte{byte(protocol.WireTypeCompressedInner)})
+	f.Add([]byte{byte(protocol.WireTypeTransactionWithMeta)})
 
 	// Invalid wire type
 	f.Add([]byte{0xFF})
 
 	// Valid full inner node: 512 zero-bytes + wire type (all branches empty)
 	fullInner := make([]byte, 513)
-	fullInner[512] = protocol.WireTypeInner
+	fullInner[512] = byte(protocol.WireTypeInner)
 	f.Add(fullInner)
 
 	// Valid full inner node with one non-zero hash at branch 0
@@ -33,7 +33,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 	for i := range 32 {
 		fullInnerWithHash[i] = 0xAB
 	}
-	fullInnerWithHash[512] = protocol.WireTypeInner
+	fullInnerWithHash[512] = byte(protocol.WireTypeInner)
 	f.Add(fullInnerWithHash)
 
 	// Valid compressed inner node: one chunk (32-byte hash + position 0)
@@ -42,7 +42,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 		compressed[i] = 0xCD
 	}
 	compressed[32] = 0x00 // position 0
-	compressed[33] = protocol.WireTypeCompressedInner
+	compressed[33] = byte(protocol.WireTypeCompressedInner)
 	f.Add(compressed)
 
 	// Valid account state leaf: 12-byte data + 32-byte non-zero key + wire type
@@ -53,7 +53,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 	for i := 12; i < 44; i++ {
 		acctState[i] = 0x01
 	}
-	acctState[44] = protocol.WireTypeAccountState
+	acctState[44] = byte(protocol.WireTypeAccountState)
 	f.Add(acctState)
 
 	// Valid transaction leaf: 12-byte data + wire type
@@ -61,7 +61,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 	for i := range 12 {
 		txLeaf[i] = byte(i + 1)
 	}
-	txLeaf[12] = protocol.WireTypeTransaction
+	txLeaf[12] = byte(protocol.WireTypeTransaction)
 	f.Add(txLeaf)
 
 	// Valid transaction+meta leaf: 12-byte data + 32-byte non-zero key + wire type
@@ -72,11 +72,11 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 	for i := 12; i < 44; i++ {
 		txMeta[i] = 0x02
 	}
-	txMeta[44] = protocol.WireTypeTransactionWithMeta
+	txMeta[44] = byte(protocol.WireTypeTransactionWithMeta)
 	f.Add(txMeta)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := DeserializeNodeFromWire(data)
+		node, err := deserializeNodeFromWire(data)
 		if err != nil {
 			return
 		}
@@ -95,7 +95,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 
 	// Full format: 512 bytes + wire type
 	full := make([]byte, 513)
-	full[512] = protocol.WireTypeInner
+	full[512] = byte(protocol.WireTypeInner)
 	f.Add(full)
 
 	// Full format with hashes at positions 0 and 15
@@ -104,7 +104,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 		fullWithHashes[i] = 0xAA     // branch 0
 		fullWithHashes[480+i] = 0xBB // branch 15
 	}
-	fullWithHashes[512] = protocol.WireTypeInner
+	fullWithHashes[512] = byte(protocol.WireTypeInner)
 	f.Add(fullWithHashes)
 
 	// Compressed: 1 chunk
@@ -113,7 +113,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 		comp1[i] = 0xCC
 	}
 	comp1[32] = 0x05 // position 5
-	comp1[33] = protocol.WireTypeCompressedInner
+	comp1[33] = byte(protocol.WireTypeCompressedInner)
 	f.Add(comp1)
 
 	// Compressed: max 16 chunks (528 bytes + wire type)
@@ -125,7 +125,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 		}
 		comp16[offset+32] = byte(i) // position = branch index
 	}
-	comp16[528] = protocol.WireTypeCompressedInner
+	comp16[528] = byte(protocol.WireTypeCompressedInner)
 	f.Add(comp16)
 
 	// Compressed with invalid position (16 >= BranchFactor)
@@ -134,7 +134,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 		compBad[i] = 0xDD
 	}
 	compBad[32] = 16 // invalid position
-	compBad[33] = protocol.WireTypeCompressedInner
+	compBad[33] = byte(protocol.WireTypeCompressedInner)
 	f.Add(compBad)
 
 	// Invalid wire type
@@ -160,7 +160,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 // Wire format: [state_data][32-byte key][0x01]
 func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 	f.Add([]byte{})
-	f.Add([]byte{protocol.WireTypeAccountState})
+	f.Add([]byte{byte(protocol.WireTypeAccountState)})
 
 	// Minimum valid: 12 data + 32 non-zero key + wire type = 45 bytes
 	minValid := make([]byte, 45)
@@ -170,7 +170,7 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 	for i := 12; i < 44; i++ {
 		minValid[i] = 0x01
 	}
-	minValid[44] = protocol.WireTypeAccountState
+	minValid[44] = byte(protocol.WireTypeAccountState)
 	f.Add(minValid)
 
 	// Zero key (should fail)
@@ -179,7 +179,7 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 		zeroKey[i] = byte(i + 1)
 	}
 	// key bytes 12..43 are zero
-	zeroKey[44] = protocol.WireTypeAccountState
+	zeroKey[44] = byte(protocol.WireTypeAccountState)
 	f.Add(zeroKey)
 
 	// Data too short (4 bytes + 32 key + wire type)
@@ -190,7 +190,7 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 	for i := 4; i < 36; i++ {
 		tooShort[i] = 0x01
 	}
-	tooShort[36] = protocol.WireTypeAccountState
+	tooShort[36] = byte(protocol.WireTypeAccountState)
 	f.Add(tooShort)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -209,14 +209,14 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 // Wire format: [tx_data][0x00] — key derived by hashing.
 func FuzzNewTransactionLeafFromWire(f *testing.F) {
 	f.Add([]byte{})
-	f.Add([]byte{protocol.WireTypeTransaction})
+	f.Add([]byte{byte(protocol.WireTypeTransaction)})
 
 	// Minimum valid: 12 data + wire type = 13 bytes
 	minValid := make([]byte, 13)
 	for i := range 12 {
 		minValid[i] = byte(i + 1)
 	}
-	minValid[12] = protocol.WireTypeTransaction
+	minValid[12] = byte(protocol.WireTypeTransaction)
 	f.Add(minValid)
 
 	// Larger payload
@@ -224,11 +224,11 @@ func FuzzNewTransactionLeafFromWire(f *testing.F) {
 	for i := range 64 {
 		larger[i] = byte(i)
 	}
-	larger[64] = protocol.WireTypeTransaction
+	larger[64] = byte(protocol.WireTypeTransaction)
 	f.Add(larger)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := NewTransactionLeafFromWire(data)
+		node, err := newTransactionLeafFromWire(data)
 		if err != nil {
 			return
 		}
@@ -243,7 +243,7 @@ func FuzzNewTransactionLeafFromWire(f *testing.F) {
 // Wire format: [tx_data][32-byte key][0x04]
 func FuzzNewTransactionWithMetaLeafFromWire(f *testing.F) {
 	f.Add([]byte{})
-	f.Add([]byte{protocol.WireTypeTransactionWithMeta})
+	f.Add([]byte{byte(protocol.WireTypeTransactionWithMeta)})
 
 	// Minimum valid: 12 data + 32 key + wire type = 45 bytes
 	minValid := make([]byte, 45)
@@ -253,7 +253,7 @@ func FuzzNewTransactionWithMetaLeafFromWire(f *testing.F) {
 	for i := 12; i < 44; i++ {
 		minValid[i] = 0x03
 	}
-	minValid[44] = protocol.WireTypeTransactionWithMeta
+	minValid[44] = byte(protocol.WireTypeTransactionWithMeta)
 	f.Add(minValid)
 
 	// Only key + wire type, no data (should fail — data < 12)
@@ -261,7 +261,7 @@ func FuzzNewTransactionWithMetaLeafFromWire(f *testing.F) {
 	for i := range 32 {
 		noData[i] = 0x01
 	}
-	noData[32] = protocol.WireTypeTransactionWithMeta
+	noData[32] = byte(protocol.WireTypeTransactionWithMeta)
 	f.Add(noData)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -289,12 +289,12 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 
 	// Valid inner node prefix: 4 prefix + 512 child hashes = 516 bytes
 	innerPrefix := make([]byte, 516)
-	copy(innerPrefix[:4], protocol.HashPrefixInnerNode[:])
+	copy(innerPrefix[:4], protocol.HashPrefixInnerNode().Bytes())
 	f.Add(innerPrefix)
 
 	// Inner node prefix with one non-zero hash
 	innerWithHash := make([]byte, 516)
-	copy(innerWithHash[:4], protocol.HashPrefixInnerNode[:])
+	copy(innerWithHash[:4], protocol.HashPrefixInnerNode().Bytes())
 	for i := 4; i < 36; i++ {
 		innerWithHash[i] = 0xEE
 	}
@@ -302,7 +302,7 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 
 	// Valid account state prefix: 4 prefix + 12 data + 32 non-zero key = 48 bytes
 	acctPrefix := make([]byte, 48)
-	copy(acctPrefix[:4], protocol.HashPrefixLeafNode[:])
+	copy(acctPrefix[:4], protocol.HashPrefixLeafNode().Bytes())
 	for i := 4; i < 16; i++ {
 		acctPrefix[i] = byte(i)
 	}
@@ -313,7 +313,7 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 
 	// Valid transaction prefix: 4 prefix + 12 data = 16 bytes
 	txPrefix := make([]byte, 16)
-	copy(txPrefix[:4], protocol.HashPrefixTransactionID[:])
+	copy(txPrefix[:4], protocol.HashPrefixTransactionID().Bytes())
 	for i := 4; i < 16; i++ {
 		txPrefix[i] = byte(i)
 	}
@@ -321,7 +321,7 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 
 	// Valid tx+meta prefix: 4 prefix + 12 data + 32 key = 48 bytes
 	txMetaPrefix := make([]byte, 48)
-	copy(txMetaPrefix[:4], protocol.HashPrefixTxNode[:])
+	copy(txMetaPrefix[:4], protocol.HashPrefixTxNode().Bytes())
 	for i := 4; i < 16; i++ {
 		txMetaPrefix[i] = byte(i)
 	}
@@ -332,11 +332,11 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 
 	// Wrong size for inner node prefix (too small)
 	innerBadSize := make([]byte, 100)
-	copy(innerBadSize[:4], protocol.HashPrefixInnerNode[:])
+	copy(innerBadSize[:4], protocol.HashPrefixInnerNode().Bytes())
 	f.Add(innerBadSize)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := DeserializeFromPrefix(data)
+		node, err := deserializeFromPrefix(data)
 		if err != nil {
 			return
 		}

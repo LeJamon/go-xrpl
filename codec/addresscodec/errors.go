@@ -26,7 +26,7 @@ var (
 	ErrInvalidAddressFormat = errors.New("invalid address format")
 	// ErrPrefixMismatch indicates the decoded payload does not start with the
 	// expected type prefix.
-	ErrPrefixMismatch = errors.New("b58string prefix and typeprefix not equal")
+	ErrPrefixMismatch = errors.New("decoded payload does not start with expected type prefix")
 
 	// checksum
 

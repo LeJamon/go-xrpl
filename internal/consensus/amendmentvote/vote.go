@@ -1,6 +1,6 @@
 // Package amendmentvote decides whether to inject EnableAmendment
 // pseudo-txs into the consensus tx set at a flag-ledger boundary.
-// Mirrors rippled AmendmentTableImpl::doVoting (AmendmentTable.cpp:847-941).
+// Mirrors rippled AmendmentTableImpl::doVoting (Table.cpp:847-941).
 package amendmentvote
 
 import (

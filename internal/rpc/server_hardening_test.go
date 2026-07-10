@@ -75,6 +75,75 @@ func TestPostBodyLimit(t *testing.T) {
 	}
 }
 
+// TestInternalErrorMessageNotLeakedOnWire ensures a handler's internal-error
+// detail never reaches the client: the wire error_message is the fixed
+// "Internal error." and the caller's detail string appears nowhere in the
+// response body, matching rippled's fixed rpcINTERNAL entry.
+func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
+	const secret = "pebble internal key 0xdeadbeef corrupt at offset 4096"
+	srv := newHardeningServer(t, time.Second, "account_info", &stubHandler{
+		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+			return nil, types.RpcErrorInternal("Failed to get account info: " + secret)
+		},
+	})
+
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"account_info","params":[{}]}`))
+	req.RemoteAddr = "203.0.113.5:1234"
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+
+	if strings.Contains(rr.Body.String(), secret) {
+		t.Fatalf("internal error detail leaked onto the wire:\n%s", rr.Body.String())
+	}
+	result := decodeEnvelope(t, rr.Body.Bytes())
+	if got := result["error_message"]; got != "Internal error." {
+		t.Errorf("error_message = %v, want the fixed %q", got, "Internal error.")
+	}
+	if got := result["error"]; got != "internal" {
+		t.Errorf("error = %v, want %q", got, "internal")
+	}
+}
+
+// TestBatchElementCap rejects a batch envelope past MaxBatchElements with a
+// 400, while a batch at the cap is accepted — bounding request amplification on
+// the public endpoint without breaking legitimate batching.
+func TestBatchElementCap(t *testing.T) {
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{})
+
+	buildBatch := func(n int) string {
+		els := make([]string, n)
+		for i := range els {
+			els[i] = `{"method":"ping","params":[{}]}`
+		}
+		return `{"method":"batch","params":[` + strings.Join(els, ",") + `]}`
+	}
+
+	// Over the cap → 400.
+	req := httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements+1)))
+	req.RemoteAddr = "10.0.0.1:1234"
+	rr := httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("over-cap batch: expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
+	}
+
+	// At the cap → 200 with one reply per element.
+	req = httptest.NewRequest("POST", "/", strings.NewReader(buildBatch(MaxBatchElements)))
+	req.RemoteAddr = "10.0.0.1:1234"
+	rr = httptest.NewRecorder()
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("at-cap batch: expected 200, got %d\nbody: %s", rr.Code, rr.Body.String())
+	}
+	var replies []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
+		t.Fatalf("batch reply not a JSON array: %v\nbody: %s", err, rr.Body.String())
+	}
+	if len(replies) != MaxBatchElements {
+		t.Errorf("reply count = %d, want %d", len(replies), MaxBatchElements)
+	}
+}
+
 // TestRoleNotElevatableByHeader ensures that a remote peer cannot become
 // Admin by sending X-Forwarded-For: 127.0.0.1 / X-Real-IP: 127.0.0.1.
 func TestRoleNotElevatableByHeader(t *testing.T) {

@@ -58,7 +58,7 @@ func (f *memoryFamily) Len() int {
 
 // flushToFamily is a helper that flushes a SHAMap and stores entries in a Family.
 func flushToFamily(sm *SHAMap, family *memoryFamily) error {
-	batch, err := sm.FlushDirty(false)
+	batch, err := sm.FlushDirty()
 	if err != nil {
 		return fmt.Errorf("FlushDirty: %w", err)
 	}
@@ -243,7 +243,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 	}
 
 	// Flush dirty nodes
-	batch, err := sMap.FlushDirty(false)
+	batch, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestFlushDirty_BasicRoundTrip(t *testing.T) {
 
 	// Verify all entries can be deserialized
 	for i, entry := range batch.Entries {
-		node, err := DeserializeFromPrefix(entry.Data)
+		node, err := deserializeFromPrefix(entry.Data)
 		if err != nil {
 			t.Errorf("Failed to deserialize entry %d: %v", i, err)
 			continue
@@ -298,7 +298,7 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// First flush
-	batch1, err := sMap.FlushDirty(false)
+	batch1, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 
 	// Second flush — nothing dirty
-	batch2, err := sMap.FlushDirty(false)
+	batch2, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// First flush — all nodes
-	batch1, err := sMap.FlushDirty(false)
+	batch1, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestFlushDirty_AfterModification(t *testing.T) {
 	}
 
 	// Second flush — only modified path
-	batch2, err := sMap.FlushDirty(false)
+	batch2, err := sMap.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 	}
 
 	// Flush with releaseChildren=true
-	_, err := sMap.FlushDirty(true)
+	_, err := sMap.FlushDirtyAndRelease()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +421,7 @@ func TestDeserializeFromPrefix_InnerNode(t *testing.T) {
 	}
 
 	// Deserialize
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +473,7 @@ func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
 	}
 
 	// Deserialize
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -964,7 +964,7 @@ func TestBacked_Snapshot(t *testing.T) {
 	}
 
 	// Create a mutable snapshot (this flushes + creates from root hash)
-	snap, err := sMap.Snapshot(true)
+	snap, err := sMap.SnapshotMutable()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1079,7 +1079,7 @@ func TestBacked_SetFamily(t *testing.T) {
 
 	// Snapshot should use backed path
 	rootHash, _ := sMap.Hash()
-	snap, err := sMap.Snapshot(false)
+	snap, err := sMap.SnapshotImmutable()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 var ed25519FamilySeedPrefixBytes = []byte{0x01, 0xE1, 0x4B}
 
 var (
-	_ rootcrypto.Algorithm = ED25519CryptoAlgorithm{}
+	_ rootcrypto.Algorithm = Algorithm{}
 
 	// ErrValidatorNotSupported is returned when a validator keypair is used with the ED25519 algorithm.
 	ErrValidatorNotSupported = errors.New("validator keypairs can not use Ed25519")
@@ -33,44 +33,35 @@ var (
 	ErrInvalidSignature = errors.New("invalid signature")
 )
 
-// ED25519CryptoAlgorithm is the implementation of the ED25519 cryptographic algorithm.
-type ED25519CryptoAlgorithm struct {
-	prefix           byte
-	familySeedPrefix []byte
+// Algorithm implements crypto.Algorithm for the Ed25519 signature scheme.
+// It is stateless: the zero value Algorithm{} is ready to use.
+type Algorithm struct{}
+
+// Prefix returns the public-key type prefix for the Ed25519 algorithm.
+func (c Algorithm) Prefix() byte {
+	return ed25519Prefix
 }
 
-// ED25519 returns the ED25519 cryptographic algorithm.
-func ED25519() ED25519CryptoAlgorithm {
-	return ED25519CryptoAlgorithm{
-		prefix:           ed25519Prefix,
-		familySeedPrefix: ed25519FamilySeedPrefixBytes,
-	}
-}
-
-// Prefix returns the prefix for the ED25519 cryptographic algorithm.
-func (c ED25519CryptoAlgorithm) Prefix() byte {
-	return c.prefix
-}
-
-// FamilySeedPrefix returns the family seed prefix for the ED25519 cryptographic algorithm.
+// FamilySeedPrefix returns the family seed prefix for the Ed25519 algorithm.
 // The returned slice aliases shared package state; callers must not mutate it.
-func (c ED25519CryptoAlgorithm) FamilySeedPrefix() []byte {
-	return c.familySeedPrefix
+func (c Algorithm) FamilySeedPrefix() []byte {
+	return ed25519FamilySeedPrefixBytes
 }
 
-// DeriveKeypair derives a keypair from a seed.
-func (c ED25519CryptoAlgorithm) DeriveKeypair(decodedSeed []byte, validator bool) (string, string, error) {
+// DeriveKeypair derives a keypair from a seed, returning the hex-encoded
+// private then public key.
+func (c Algorithm) DeriveKeypair(decodedSeed []byte, validator bool) (privHex, pubHex string, err error) {
 	if validator {
 		return "", "", ErrValidatorNotSupported
 	}
-	rawPriv := common.Sha512Half(decodedSeed)
+	rawPriv := sha512half.Sum(decodedSeed)
 	privKey := ed25519.NewKeyFromSeed(rawPriv[:])
 	pubKey := privKey.Public().(ed25519.PublicKey)
 
-	public := strings.ToUpper(hex.EncodeToString(append([]byte{c.prefix}, pubKey...)))
+	public := strings.ToUpper(hex.EncodeToString(append([]byte{ed25519Prefix}, pubKey...)))
 	// The XRPL private-key encoding is the 0xED prefix + the 32-byte seed, i.e.
 	// the first 33 bytes of the prefixed expanded key (seed || public).
-	prefixedPriv := append([]byte{c.prefix}, privKey...)
+	prefixedPriv := append([]byte{ed25519Prefix}, privKey...)
 	private := strings.ToUpper(hex.EncodeToString(prefixedPriv[:33]))
 	return private, public, nil
 }
@@ -79,7 +70,7 @@ func (c ED25519CryptoAlgorithm) DeriveKeypair(decodedSeed []byte, validator bool
 // 32 bytes; the leading 0xED prefix accepted by the hex Sign wrapper is
 // stripped there, not here. This mirrors secp256k1.SignBytes's 32-only
 // contract so callers reasoning about raw key buffers see a symmetric API.
-func (c ED25519CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
+func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 	if len(privKey) != ed25519.SeedSize {
 		return nil, ErrInvalidPrivateKey
 	}
@@ -90,12 +81,12 @@ func (c ED25519CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 // the raw 32-byte seed (64 hex chars) or the 33-byte 0xED-prefixed form
 // (66 hex chars); the prefix is stripped before delegating to SignBytes.
 // Output is uppercase hex.
-func (c ED25519CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
+func (c Algorithm) Sign(msg, privKey string) (string, error) {
 	b, err := hex.DecodeString(privKey)
 	if err != nil {
 		return "", ErrInvalidPrivateKey
 	}
-	if len(b) == ed25519.SeedSize+1 && b[0] == c.prefix {
+	if len(b) == ed25519.SeedSize+1 && b[0] == ed25519Prefix {
 		b = b[1:]
 	}
 	sig, err := c.SignBytes([]byte(msg), b)
@@ -110,7 +101,7 @@ func (c ED25519CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 // on the explicit ed25519Canonical(sig) (s < L) check before invoking the
 // primitive. Go's stdlib already enforces s < L internally per RFC 8032,
 // but rippled's contract is to reject non-canonical signatures up front.
-func (c ED25519CryptoAlgorithm) ValidateBytes(msg, pubKey, sig []byte) bool {
+func (c Algorithm) ValidateBytes(msg, pubKey, sig []byte) bool {
 	if len(pubKey) != 33 {
 		return false
 	}
@@ -124,7 +115,7 @@ func (c ED25519CryptoAlgorithm) ValidateBytes(msg, pubKey, sig []byte) bool {
 }
 
 // Validate verifies a hex-encoded signature for a message with a public key.
-func (c ED25519CryptoAlgorithm) Validate(msg, pubkey, sig string) bool {
+func (c Algorithm) Validate(msg, pubkey, sig string) bool {
 	bp, err := hex.DecodeString(pubkey)
 	if err != nil {
 		return false

@@ -389,7 +389,7 @@ func New(cfg Config) (*Aggregator, error) {
 	threshold := cfg.Threshold
 	if threshold <= 0 && len(publishers) > 0 {
 		// Mirror rippled's default: ceil(N/2 + 1) for N >= 3, else 1.
-		// Matches config.ValidatorsConfig.GetValidatorListThreshold().
+		// Matches config.ValidatorsConfig.EffectiveListThreshold().
 		if len(publishers) < 3 {
 			threshold = 1
 		} else {

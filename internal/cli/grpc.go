@@ -4,15 +4,43 @@ import (
 	"context"
 	"fmt"
 	"net"
+	rtdebug "runtime/debug"
 	"strings"
 
 	googlegrpc "google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/LeJamon/go-xrpl/config"
 	xrplgrpc "github.com/LeJamon/go-xrpl/internal/grpc"
 	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
+
+// grpcRecoveryInterceptor is the panic boundary for gRPC handlers. grpc-go does
+// not recover handler panics by default, so a latent panic in the binary
+// ledger surface (a slice-bounds error on a truncated blob, a SHAMap walk on a
+// corrupt request-selected ledger) would take down the node. It mirrors the
+// HTTP and WebSocket recover middleware: recover, log the detail with a stack
+// trace server-side, and return a fixed codes.Internal status so no internal
+// detail reaches the client.
+func grpcRecoveryInterceptor(log xrpllog.Logger) googlegrpc.UnaryServerInterceptor {
+	return func(
+		ctx context.Context,
+		req any,
+		info *googlegrpc.UnaryServerInfo,
+		handler googlegrpc.UnaryHandler,
+	) (resp any, err error) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Error("gRPC handler panic",
+					"method", info.FullMethod, "panic", rec, "stack", string(rtdebug.Stack()))
+				err = status.Error(codes.Internal, "Internal error.")
+			}
+		}()
+		return handler(ctx, req)
+	}
+}
 
 // startGRPCServer binds a listener for the [port_grpc] section and serves
 // the XRPLedgerAPIService (the binary ledger surface consumed by Clio).
@@ -43,7 +71,7 @@ func startGRPCServer(
 		}
 	}
 
-	addr := p.GetBindAddress()
+	addr := p.BindAddress()
 	var lc net.ListenConfig
 	lis, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
@@ -51,7 +79,9 @@ func startGRPCServer(
 	}
 	boundAddr := lis.Addr().String()
 
-	srv := googlegrpc.NewServer()
+	srv := googlegrpc.NewServer(
+		googlegrpc.ChainUnaryInterceptor(grpcRecoveryInterceptor(log)),
+	)
 	rpcv1.RegisterXRPLedgerAPIServiceServer(srv, xrplgrpc.NewServer(lookup))
 
 	go func() {

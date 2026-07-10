@@ -16,11 +16,11 @@ import (
 // amendment-blocked node must never report a mode above Connected, no matter
 // what transition the sync machinery requests.
 func TestSetOperatingMode_AmendmentBlockedCapsAtConnected(t *testing.T) {
-	tbl := amendment.NewAmendmentTable()
+	tbl := amendment.NewTable()
 	svc, err := service.New(service.Config{
-		Standalone:     true,
-		GenesisConfig:  genesis.DefaultConfig(),
-		AmendmentTable: tbl,
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		Table:         tbl,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())

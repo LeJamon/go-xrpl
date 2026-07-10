@@ -91,6 +91,9 @@ type persistJob struct {
 // runs the equivalent pendSaveValidated on its job queue. Best-effort: a full
 // queue drops with a loud log and the chain advances (the ledger stays servable
 // from the in-memory history window).
+//
+// Callers hold s.mu, so the persistStopped read is race-free against Stop
+// (which sets it under s.mu).
 func (s *Service) enqueuePersist(l *ledger.Ledger) {
 	if l == nil {
 		return
@@ -102,6 +105,13 @@ func (s *Service) enqueuePersist(l *ledger.Ledger) {
 		}
 		return
 	}
+	if s.persistStopped {
+		// Shutdown in progress: the worker is draining/joined. Dropping is safe
+		// only because Stop runs after consensus quiesces, so no validated
+		// ledger closes past this point in practice.
+		s.logger.Warn("persist skipped: service stopping", "seq", l.Sequence())
+		return
+	}
 	select {
 	case s.persistCh <- persistJob{l: l}:
 	default:
@@ -111,30 +121,85 @@ func (s *Service) enqueuePersist(l *ledger.Ledger) {
 }
 
 // FlushPersists blocks until every ledger enqueued before the call has been
-// persisted. No-op when the worker isn't running.
+// persisted. No-op when the worker isn't running or has stopped. It gives up if
+// Stop closes persistQuit while it waits, so it never parks past shutdown.
 func (s *Service) FlushPersists() {
-	if s.persistCh == nil {
+	s.mu.RLock()
+	ch, quit, stopped := s.persistCh, s.persistQuit, s.persistStopped
+	s.mu.RUnlock()
+	if ch == nil || stopped {
 		return
 	}
 	done := make(chan struct{})
-	s.persistCh <- persistJob{done: done}
-	<-done
+	select {
+	case ch <- persistJob{done: done}:
+	case <-quit:
+		return
+	}
+	select {
+	case <-done:
+	case <-quit:
+	}
+}
+
+// Stop drains the persistence queue and joins the worker, guaranteeing every
+// validated-ledger persist enqueued before Stop is durable before the caller
+// closes the underlying node/relational stores. Idempotent and safe on a
+// never-started Service. Must be called before those stores are closed.
+func (s *Service) Stop() {
+	s.mu.Lock()
+	if s.persistCh == nil || s.persistStopped {
+		s.mu.Unlock()
+		return
+	}
+	s.persistStopped = true
+	quit := s.persistQuit
+	eventQuit := s.ledgerEventQuit
+	s.mu.Unlock()
+
+	// Signal the workers to drain their queues and exit, then wait for them. The
+	// channels are never closed, so the drains can complete without racing a
+	// concurrent send.
+	close(quit)
+	if eventQuit != nil {
+		close(eventQuit)
+	}
+	s.persistWG.Wait()
+	s.ledgerEventWG.Wait()
 }
 
 // runPersistWorker drains the persist queue in FIFO order, keeping
-// nodestore/relational writes ordered by enqueue. Runs for the process
-// lifetime.
+// nodestore/relational writes ordered by enqueue. It runs until Stop closes
+// persistQuit, at which point it drains everything already queued before
+// exiting so a shutdown doesn't drop validated-ledger persists.
 func (s *Service) runPersistWorker() {
-	for job := range s.persistCh {
-		if job.l != nil {
-			if err := s.persistLedger(context.Background(), job.l); err != nil {
-				s.logger.Error("failed to persist ledger; chain advance continues",
-					"seq", job.l.Sequence(), "err", err)
+	defer s.persistWG.Done()
+	for {
+		select {
+		case job := <-s.persistCh:
+			s.runPersistJob(job)
+		case <-s.persistQuit:
+			for {
+				select {
+				case job := <-s.persistCh:
+					s.runPersistJob(job)
+				default:
+					return
+				}
 			}
 		}
-		if job.done != nil {
-			close(job.done)
+	}
+}
+
+func (s *Service) runPersistJob(job persistJob) {
+	if job.l != nil {
+		if err := s.persistLedger(context.Background(), job.l); err != nil {
+			s.logger.Error("failed to persist ledger; chain advance continues",
+				"seq", job.l.Sequence(), "err", err)
 		}
+	}
+	if job.done != nil {
+		close(job.done)
 	}
 }
 
@@ -227,7 +292,7 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 	seq := relationaldb.LedgerIndex(l.Sequence())
 
 	return s.relationalDB.WithTransaction(ctx, func(txCtx relationaldb.TransactionContext) error {
-		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo, true); err != nil {
+		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo); err != nil {
 			return err
 		}
 

@@ -37,7 +37,7 @@ func buildWireManifest(t *testing.T, seq uint32, masterSeed, ephSeed byte) []byt
 	preimageHex, err := binarycodec.Encode(j)
 	require.NoError(t, err)
 	body, _ := hex.DecodeString(preimageHex)
-	prefix := protocol.HashPrefixManifest
+	prefix := protocol.HashPrefixManifest()
 	preimage := append(prefix[:], body...)
 
 	j["Signature"] = hex.EncodeToString(ed25519.Sign(ephPriv, preimage))

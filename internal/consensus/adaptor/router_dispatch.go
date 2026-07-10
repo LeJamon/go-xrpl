@@ -17,6 +17,8 @@ import (
 )
 
 func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "dispatch")
+
 	msgType := message.MessageType(msg.Type)
 
 	switch msgType {
@@ -389,6 +391,8 @@ func validateValidationBounds(v *consensus.Validation) (string, bool) {
 }
 
 func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "transaction")
+
 	// Frames fanned out from a TMTransactions batch arrive already
 	// decoded in Tx; only wire-sourced frames need decoding from Payload.
 	txMsg := msg.Tx

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -64,10 +65,10 @@ type Config struct {
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
 
-	// AmendmentTable, when supplied, is the live amendment table the service
+	// Table, when supplied, is the live amendment table the service
 	// folds each validated flag ledger into (enabled set + majority projection +
 	// blocked state). Optional — nil disables amendment-table resync.
-	AmendmentTable *amendment.AmendmentTable
+	Table *amendment.Table
 
 	// TxQ optionally overrides the transaction-queue configuration
 	// (built from the operator's [transaction_queue] stanza via
@@ -105,7 +106,7 @@ type Service struct {
 
 	// amendmentTable is the live amendment table folded by each validated flag
 	// ledger (nil disables resync). Has its own internal mutex.
-	amendmentTable *amendment.AmendmentTable
+	amendmentTable *amendment.Table
 
 	// Current open ledger (accepting transactions)
 	openLedger *ledger.Ledger
@@ -224,8 +225,29 @@ type Service struct {
 	lastConsensusRoundTime time.Duration
 
 	// persistCh feeds the single persistence worker (see enqueuePersist);
-	// nil until Start.
+	// nil until Start. It is never closed — the worker exits on persistQuit
+	// after draining the queue, so a concurrent enqueuePersist can never send
+	// on a closed channel.
 	persistCh chan persistJob
+
+	// persistQuit signals the persistence worker to drain the queue and exit.
+	// Closed by Stop. persistStopped (guarded by mu, like enqueuePersist's
+	// callers) short-circuits new enqueues once Stop has begun. persistWG joins
+	// the worker so Stop can guarantee every queued validated-ledger persist is
+	// durable before the caller closes the underlying stores.
+	persistQuit    chan struct{}
+	persistStopped bool
+	persistWG      sync.WaitGroup
+
+	// ledgerEventCh feeds the single accepted-ledger event dispatcher (see
+	// dispatchLedgerEvent). A single consumer preserves FIFO delivery and runs
+	// eventCallback single-threaded, replacing per-event goroutines that ran the
+	// callback concurrently with itself — racing the subscriber's mutable state
+	// and reordering ledgerClosed stream events. Started by Start, joined by Stop.
+	ledgerEventCh       chan *LedgerAcceptedEvent
+	ledgerEventQuit     chan struct{}
+	ledgerEventWG       sync.WaitGroup
+	droppedLedgerEvents atomic.Uint64
 
 	// configCacheMu guards the memoised open-ledger ApplyConfig below. The config
 	// is a pure function of closedLedger, rebuilt only when it advances, keeping
@@ -259,7 +281,7 @@ func New(cfg Config) (*Service, error) {
 		logger:                   logger.Named(xrpllog.PartitionLedger),
 		nodeStore:                cfg.NodeStore,
 		relationalDB:             cfg.RelationalDB,
-		amendmentTable:           cfg.AmendmentTable,
+		amendmentTable:           cfg.Table,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		ledgerByHash:             make(map[[32]byte]uint32),
 		txIndex:                  make(map[[32]byte]uint32),
@@ -275,10 +297,10 @@ func New(cfg Config) (*Service, error) {
 	return s, nil
 }
 
-// syncAmendmentTable folds a newly-validated ledger into the live amendment
+// syncTable folds a newly-validated ledger into the live amendment
 // table (enabled set + majority projection + block detection). Gated to
 // flag-ledger windows by NeedValidatedLedger; no-op when no table is configured.
-func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
+func (s *Service) syncTable(l *ledger.Ledger) {
 	if s.amendmentTable == nil || l == nil {
 		return
 	}
@@ -311,9 +333,9 @@ func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
 	}
 }
 
-// AmendmentTable returns the live amendment table shared with the consensus
+// Table returns the live amendment table shared with the consensus
 // adaptor, or nil when none is configured.
-func (s *Service) AmendmentTable() *amendment.AmendmentTable {
+func (s *Service) Table() *amendment.Table {
 	return s.amendmentTable
 }
 
@@ -335,7 +357,7 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 		return nil
 	}
 	name := ""
-	if f := amendment.GetFeature(id); f != nil {
+	if f := amendment.FeatureByID(id); f != nil {
 		name = f.Name
 	}
 	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
@@ -372,7 +394,14 @@ func (s *Service) Start() error {
 
 	if s.persistCh == nil {
 		s.persistCh = make(chan persistJob, 32)
+		s.persistQuit = make(chan struct{})
+		s.persistWG.Add(1)
 		go s.runPersistWorker()
+
+		s.ledgerEventCh = make(chan *LedgerAcceptedEvent, ledgerEventBufferDepth)
+		s.ledgerEventQuit = make(chan struct{})
+		s.ledgerEventWG.Add(1)
+		go s.runLedgerEventDispatcher()
 	}
 
 	genesisResult, err := genesis.Create(s.config.GenesisConfig)

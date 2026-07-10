@@ -12,6 +12,8 @@ import (
 )
 
 func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
+	defer r.recoverFrame(msg, "get_ledger")
+
 	decoded, err := message.Decode(message.TypeGetLedger, msg.Payload)
 	if err != nil {
 		r.logger.Warn("failed to decode get_ledger", "error", err, "peer", msg.PeerID)

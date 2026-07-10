@@ -56,11 +56,81 @@ type Result struct {
 
 type SubmittedTxCallback func(SubmittedTxEvent)
 
+// ledgerEventBufferDepth bounds the accepted-ledger event dispatch queue. Deep
+// enough to absorb a catch-up adoption burst (many ledgers per second) without
+// dropping stream events; a wedged subscriber past this is shed and counted.
+const ledgerEventBufferDepth = 256
+
 func (s *Service) SetEventCallback(callback EventCallback) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.eventCallback = callback
 }
+
+// dispatchLedgerEvent hands an accepted-ledger event to the single ordered
+// dispatcher so eventCallback runs FIFO and single-threaded, instead of the
+// per-event goroutines that ran it concurrently with itself — a data race on
+// the subscriber's state and out-of-order ledgerClosed delivery. rippled
+// serializes the equivalent through NetworkOPs' single job-queue strand.
+// Enqueue is non-blocking: a lagging subscriber drops the event with a counted
+// warn rather than stalling ledger close.
+func (s *Service) dispatchLedgerEvent(event *LedgerAcceptedEvent) {
+	if event == nil {
+		return
+	}
+	if s.ledgerEventCh == nil {
+		// Dispatcher not started (paths that emit without Start). Deliver on a
+		// fresh goroutine to preserve the "callback fires, never under s.mu"
+		// contract; ordering isn't guaranteed here, but Start-anchored callers
+		// (production and the event tests) always take the channel path.
+		go s.deliverLedgerEvent(event)
+		return
+	}
+	select {
+	case s.ledgerEventCh <- event:
+	default:
+		n := s.droppedLedgerEvents.Add(1)
+		s.logger.Warn("ledger event subscriber lagging; dropping event", "droppedTotal", n)
+	}
+}
+
+// runLedgerEventDispatcher is the single consumer that delivers accepted-ledger
+// events in FIFO order. It drains the queue on Stop before exiting so a shutdown
+// doesn't drop already-queued stream events.
+func (s *Service) runLedgerEventDispatcher() {
+	defer s.ledgerEventWG.Done()
+	for {
+		select {
+		case ev := <-s.ledgerEventCh:
+			s.deliverLedgerEvent(ev)
+		case <-s.ledgerEventQuit:
+			for {
+				select {
+				case ev := <-s.ledgerEventCh:
+					s.deliverLedgerEvent(ev)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+// deliverLedgerEvent reads the current callback under a read lock (so a
+// late-wired or unwired callback is respected) and invokes it outside the lock,
+// preserving the contract that subscriber callbacks never run under s.mu.
+func (s *Service) deliverLedgerEvent(event *LedgerAcceptedEvent) {
+	s.mu.RLock()
+	cb := s.eventCallback
+	s.mu.RUnlock()
+	if cb != nil {
+		cb(event)
+	}
+}
+
+// DroppedLedgerEvents returns the cumulative count of accepted-ledger events
+// shed because the subscriber lagged.
+func (s *Service) DroppedLedgerEvents() uint64 { return s.droppedLedgerEvents.Load() }
 
 // SetSubmittedTxCallback registers a sink fired from SubmitTransaction after
 // every apply attempt. Pass nil to unwire.

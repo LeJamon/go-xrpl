@@ -234,10 +234,10 @@ func signPayload(payloadHex string, privateKeyHex string, keyType string) (strin
 	var signature string
 
 	if keyType == "ed25519" {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		signature, err = algo.Sign(payloadStr, privateKeyHex)
 	} else {
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		signature, err = algo.Sign(payloadStr, privateKeyHex)
 	}
 

@@ -41,11 +41,11 @@ func (p *BinaryParser) ReadField() (*definitions.FieldInstance, error) {
 	if err != nil {
 		return nil, err
 	}
-	fn, err := p.definitions.GetFieldNameByFieldHeader(*fh)
+	fn, err := p.definitions.FieldNameByHeader(*fh)
 	if err != nil {
 		return nil, err
 	}
-	f, err := p.definitions.GetFieldInstanceByFieldName(fn)
+	f, err := p.definitions.FieldInstanceByName(fn)
 	if err != nil {
 		return nil, err
 	}

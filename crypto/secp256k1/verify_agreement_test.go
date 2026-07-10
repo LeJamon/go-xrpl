@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
 	"github.com/stretchr/testify/require"
 )
@@ -37,8 +37,8 @@ func TestVerifyDigestRaw_GoldenVectors(t *testing.T) {
 	lowS := mustDecodeHex(t, lowSDER)
 	highS := mustDecodeHex(t, flipSToHighS(t, lowSDER))
 
-	digest := common.Sha512Half([]byte(msg))
-	wrongDigest := common.Sha512Half([]byte("Goodbye World"))
+	digest := sha512half.Sum([]byte(msg))
+	wrongDigest := sha512half.Sum([]byte("Goodbye World"))
 
 	cases := []struct {
 		name   string

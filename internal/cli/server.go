@@ -96,10 +96,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	logHandler := xrpllog.NewHandler(logCfg)
-	rootLogger := xrpllog.New(logHandler, logCfg)
-	xrpllog.SetRoot(rootLogger)
-	xrpllog.SetRootConfig(logCfg)
+	rootLogger, logHandler := xrpllog.Init(logCfg)
 	// Route subsystems that log through slog.Default() (consensus adaptor,
 	// inbound-ledger, validator-list) through the same configured handler so
 	// they honour the operator's level, format, output file, and rotation.
@@ -196,7 +193,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Get network ID from config
-	networkID, err := globalConfig.GetNetworkID()
+	networkID, err := globalConfig.ResolvedNetworkID()
 	if err != nil {
 		return fmt.Errorf("get network ID: %w", err)
 	}
@@ -205,7 +202,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// One instance is shared between the ledger service (which folds validated
 	// flag ledgers into it) and the consensus adaptor (which sources vote
 	// stances from it).
-	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
+	amendmentTable := buildTable(globalConfig.Amendments, repoManager, serverLog)
 
 	// Build the transaction-queue config from the operator's
 	// [transaction_queue] stanza layered over the rippled defaults.
@@ -216,13 +213,13 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	// Initialize ledger service
 	cfg := service.Config{
-		Standalone:     standalone,
-		NetworkID:      uint32(networkID),
-		NodeStore:      db,
-		RelationalDB:   repoManager,
-		Logger:         rootLogger,
-		AmendmentTable: amendmentTable,
-		TxQ:            &txqCfg,
+		Standalone:   standalone,
+		NetworkID:    uint32(networkID),
+		NodeStore:    db,
+		RelationalDB: repoManager,
+		Logger:       rootLogger,
+		Table:        amendmentTable,
+		TxQ:          &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
 
@@ -270,7 +267,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 			if prunable, ok := db.(shamapstore.NodePruner); ok {
 				var relPruner shamapstore.RelationalPruner
 				if repoManager != nil {
-					relPruner = relationaldb.NewLedgerPruner(repoManager, globalConfig.NodeDB.GetDeleteBatch())
+					relPruner = relationaldb.NewLedgerPruner(repoManager, globalConfig.NodeDB.DeleteBatch)
 				}
 				rotator = shamapstore.NewRotator(
 					advisoryStore,
@@ -278,7 +275,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 					relPruner,
 					shamapstore.RotationConfig{
 						DeleteInterval: uint32(globalConfig.NodeDB.OnlineDelete),
-						DeleteBatch:    globalConfig.NodeDB.GetDeleteBatch(),
+						DeleteBatch:    globalConfig.NodeDB.DeleteBatch,
 					},
 					serverLog,
 				)
@@ -734,8 +731,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	// Create HTTP JSON-RPC server with 30 second timeout
-	httpServer := rpc.NewServer(30*time.Second, services)
+	// Create HTTP JSON-RPC server. The dispatch timeout stays strictly below
+	// the transport WriteTimeout (see httpWriteTimeout) so a timed-out request
+	// can still serialize its error envelope.
+	httpServer := rpc.NewServer(rpcDispatchTimeout, services)
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		httpServer.SetPeerSource(consensusComponents.Overlay)
 	}
@@ -743,7 +742,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	services.SetDispatcher(httpServer)
 
 	// Create WebSocket server for real-time subscriptions
-	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
+	wsServer = rpc.NewWebSocketServer(rpcDispatchTimeout, services)
 	if globalConfig.WebsocketPingFrequency > 0 {
 		wsServer.SetPingInterval(time.Duration(globalConfig.WebsocketPingFrequency) * time.Second)
 	}
@@ -969,7 +968,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// configured. Disabled by default: no section → no listener (mirrors
 	// rippled's GRPCServer). The ledger service already satisfies the
 	// grpc.LedgerLookup surface the service implementation needs.
-	if grpcName, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+	if grpcName, grpcPort, hasGRPC := globalConfig.GRPCPort(); hasGRPC {
 		srv, addr, err := startGRPCServer(grpcName, grpcPort, ledgerService, serverLog, listenerErrCh)
 		if err != nil {
 			return fmt.Errorf("start grpc server: %w", err)
@@ -1109,7 +1108,7 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	} else if dbPath != "" {
 		// Default: auto-create SQLite databases at the given directory
 		// path, applying the operator's [sqlite] tuning.
-		journalMode, synchronous, tempStore := cfg.SQLite.GetEffectiveSettings()
+		journalMode, synchronous, tempStore := cfg.SQLite.EffectiveSettings()
 		var err error
 		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
 			JournalMode:      journalMode,
@@ -1166,8 +1165,13 @@ func startListeners(
 	httpServer http.Handler,
 	wsServer *rpc.WebSocketServer,
 ) (httpSrvs, wsSrvs []*http.Server, listenerErrCh chan error, err error) {
-	// Shared connection limiter for all ports
+	// Shared connection limiter for all ports. Seeded with a bounded process-wide
+	// default so an unset per-port limit can't leave WS connections unbounded;
+	// [server] max_connections overrides it (negative disables the global cap).
 	connLimiter := rpc.NewConnLimiter()
+	if cfg.Server.MaxConnections != 0 {
+		connLimiter.SetGlobalLimit(cfg.Server.MaxConnections)
+	}
 	wsServer.SetConnLimiter(connLimiter)
 
 	// Build the base HTTP mux (shared handler logic, wrapped per-port below)
@@ -1180,20 +1184,20 @@ func startListeners(
 		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
 	})
 
-	httpPorts := cfg.GetHTTPPorts()
-	wsPorts := cfg.GetWebSocketPorts()
+	httpPorts := cfg.HTTPPorts()
+	wsPorts := cfg.WebSocketPorts()
 
 	for name, p := range httpPorts {
-		log.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
+		log.Info("Port configured", "protocol", "http", "name", name, "addr", p.BindAddress())
 	}
 	for name, p := range wsPorts {
-		log.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
+		log.Info("Port configured", "protocol", "ws", "name", name, "addr", p.BindAddress())
 	}
-	if _, peerPort, hasPeer := cfg.GetPeerPort(); hasPeer {
-		log.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
+	if _, peerPort, hasPeer := cfg.PeerPort(); hasPeer {
+		log.Info("Port configured", "protocol", "peer", "addr", peerPort.BindAddress())
 	}
-	if _, grpcPort, hasGRPC := cfg.GetGRPCPort(); hasGRPC {
-		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.GetBindAddress())
+	if _, grpcPort, hasGRPC := cfg.GRPCPort(); hasGRPC {
+		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.BindAddress())
 	}
 
 	// listenerErrCh routes ListenAndServe failures back to the main
@@ -1209,7 +1213,7 @@ func startListeners(
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: p.BindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		wsSrvs = append(wsSrvs, srv)
 		go func(n string, s *http.Server) {
 			log.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
@@ -1242,7 +1246,7 @@ func startListeners(
 			name string
 			pc   *rpc.PortContext
 			addr string
-		}{name, pc, p.GetBindAddress()})
+		}{name, pc, p.BindAddress()})
 	}
 
 	if len(httpPortList) == 0 {
@@ -1253,11 +1257,12 @@ func startListeners(
 		wrappedMux := http.NewServeMux()
 		wrappedMux.Handle("/", rpc.PortMiddleware(entry.pc, connLimiter, httpMux))
 		srv := &http.Server{
-			Addr:         entry.addr,
-			Handler:      wrappedMux,
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 30 * time.Second,
-			IdleTimeout:  60 * time.Second,
+			Addr:              entry.addr,
+			Handler:           wrappedMux,
+			ReadHeaderTimeout: httpReadHeaderTimeout,
+			ReadTimeout:       httpReadTimeout,
+			WriteTimeout:      httpWriteTimeout,
+			IdleTimeout:       httpIdleTimeout,
 		}
 		httpSrvs = append(httpSrvs, srv)
 		go func(n, addr string, s *http.Server) {
@@ -1274,6 +1279,21 @@ func startListeners(
 
 	return httpSrvs, wsSrvs, listenerErrCh, nil
 }
+
+// HTTP transport timeouts. httpWriteTimeout must stay strictly greater than
+// rpcDispatchTimeout: net/http measures WriteTimeout from the start of the
+// handler and covers execution plus the response write, so a request that
+// consumes its full dispatch budget still needs headroom to serialize its
+// timeout/error envelope instead of writing into a socket net/http has already
+// closed (which the client sees as a connection reset, not a clean 503).
+// Deriving both from the one dispatch constant keeps them from drifting.
+const (
+	rpcDispatchTimeout    = 30 * time.Second
+	httpReadHeaderTimeout = 10 * time.Second
+	httpReadTimeout       = rpcDispatchTimeout + 10*time.Second
+	httpWriteTimeout      = rpcDispatchTimeout + 10*time.Second
+	httpIdleTimeout       = 60 * time.Second
+)
 
 // Pebble-internal tuning with no corresponding config key: the block
 // cache for the storage engine itself and the max open file handles.
@@ -1364,7 +1384,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 		serverLog.Warn("SIGHUP received but no --conf path set; skipping UNL reload")
 		return
 	}
-	cfg, err := config.LoadConfig(config.ConfigPaths{Main: configPath})
+	cfg, err := config.LoadConfig(config.Paths{Main: configPath})
 	if err != nil {
 		serverLog.Error("SIGHUP UNL reload: re-load config failed", "err", err)
 		return
@@ -1442,8 +1462,14 @@ func doShutdown(
 		logger.Info("Consensus components stopped")
 	}
 
-	// Note: ledgerService has no Stop method; it is garbage collected
-	_ = ledgerService
+	// Drain and join the persistence worker before closing its stores, so
+	// queued validated-ledger persists become durable instead of being
+	// abandoned (and so no StoreBatch races kvDB.Close). Ordered after the
+	// consensus components stop, so no new ledger closes past this point.
+	if ledgerService != nil {
+		ledgerService.Stop()
+		logger.Info("Ledger service persistence drained")
+	}
 	if kvDB != nil {
 		if err := kvDB.Close(); err != nil {
 			logger.Warn("Node store close failed", "err", err)
@@ -1968,17 +1994,17 @@ func parseVLLength(data []byte) (int, int) {
 	return 12481 + ((b1 - 241) * 65536) + (int(data[1]) * 256) + int(data[2]), 3
 }
 
-// buildAmendmentTable constructs the live amendment table from the operator's
+// buildTable constructs the live amendment table from the operator's
 // [amendments] config and any persisted runtime votes. Config preferences are
 // applied first, then persisted votes (from the `feature` RPC) override them so
 // runtime changes win across restarts — mirroring rippled, where the FeatureVotes
 // DB takes precedence over the config stanzas. Unknown names are logged and
 // ignored. The returned table owns operator veto/upvote and the enabled/blocked
 // state, and is shared between the ledger service and the consensus adaptor.
-func buildAmendmentTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.AmendmentTable {
-	t := amendment.NewAmendmentTable()
+func buildTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.Table {
+	t := amendment.NewTable()
 	for _, name := range cfg.Upvote {
-		f := amendment.GetFeatureByName(name)
+		f := amendment.FeatureByName(name)
 		if f == nil {
 			log.Warn("unknown amendment in [amendments].upvote; ignoring", "name", name)
 			continue
@@ -1986,7 +2012,7 @@ func buildAmendmentTable(cfg config.AmendmentsConfig, repo relationaldb.Reposito
 		t.UpVote(f.ID)
 	}
 	for _, name := range cfg.Veto {
-		f := amendment.GetFeatureByName(name)
+		f := amendment.FeatureByName(name)
 		if f == nil {
 			log.Warn("unknown amendment in [amendments].veto; ignoring", "name", name)
 			continue

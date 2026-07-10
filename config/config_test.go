@@ -109,7 +109,7 @@ func TestLoadConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	mainConfigPath := writeConfig(t, tempDir, "test_config.toml", completeTestConfig())
 
-	config, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	config, err := LoadConfig(Paths{Main: mainConfigPath})
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
@@ -131,12 +131,12 @@ func TestLoadConfig_MinimalConfig(t *testing.T) {
 	tempDir := t.TempDir()
 	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", minimalTestConfig())
 
-	config, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	config, err := LoadConfig(Paths{Main: mainConfigPath})
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
-	assert.Equal(t, 256, config.GetLedgerHistory())
-	assert.Equal(t, defaultFetchDepth, config.GetFetchDepth())
+	assert.Equal(t, 256, config.ResolvedLedgerHistory())
+	assert.Equal(t, defaultFetchDepth, config.ResolvedFetchDepth())
 	assert.Zero(t, config.MaxTransactions)
 	assert.Empty(t, config.NodeSize)
 }
@@ -172,7 +172,7 @@ validator_list_threshold = 1
 	writeConfig(t, tempDir, "test_validators.toml", validatorsContent)
 
 	// validators_file is relative — must resolve against the main config dir.
-	config, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	config, err := LoadConfig(Paths{Main: mainConfigPath})
 	require.NoError(t, err)
 	require.NotNil(t, config)
 
@@ -211,13 +211,13 @@ path = "/tmp/test/db"
 	otherPath := writeConfig(t, tempDir, "other_validators.toml",
 		`validator_list_sites = ["https://from-paths.example.com"]`)
 
-	config, err := LoadConfig(ConfigPaths{Main: mainConfigPath, Validators: otherPath})
+	config, err := LoadConfig(Paths{Main: mainConfigPath, Validators: otherPath})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"https://from-explicit.example.com"}, config.Validators.ValidatorListSites)
 }
 
 func TestLoadConfig_MissingFile(t *testing.T) {
-	_, err := LoadConfig(ConfigPaths{Main: "/nonexistent/path/xrpld.toml"})
+	_, err := LoadConfig(Paths{Main: "/nonexistent/path/xrpld.toml"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config file does not exist")
 }
@@ -245,7 +245,7 @@ path = "/tmp/test/db"
 `
 	mainConfigPath := writeConfig(t, tempDir, "test_config.toml", configContent)
 
-	_, err := LoadConfig(ConfigPaths{Main: mainConfigPath})
+	_, err := LoadConfig(Paths{Main: mainConfigPath})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "validators file not found")
 }
@@ -459,24 +459,24 @@ func TestConfigHelperMethods(t *testing.T) {
 		FetchDepth:    FetchDepth{Set: true, Full: true},
 	}
 
-	networkID, err := config.GetNetworkID()
+	networkID, err := config.ResolvedNetworkID()
 	assert.NoError(t, err)
 	assert.Equal(t, 0, networkID)
 
-	assert.Equal(t, 1000, config.GetLedgerHistory())
-	assert.Equal(t, math.MaxInt32, config.GetFetchDepth()) // "full" maps to MaxInt32
+	assert.Equal(t, 1000, config.ResolvedLedgerHistory())
+	assert.Equal(t, math.MaxInt32, config.ResolvedFetchDepth()) // "full" maps to MaxInt32
 }
 
 func TestConfigHelperMethods_Defaults(t *testing.T) {
 	config := &Config{}
 
-	_, err := config.GetNetworkID()
+	_, err := config.ResolvedNetworkID()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "required but not set")
 
 	// Unset ledger_history / fetch_depth fall back to the rippled defaults.
-	assert.Equal(t, 256, config.GetLedgerHistory())
-	assert.Equal(t, defaultFetchDepth, config.GetFetchDepth())
+	assert.Equal(t, 256, config.ResolvedLedgerHistory())
+	assert.Equal(t, defaultFetchDepth, config.ResolvedFetchDepth())
 }
 
 func TestPortConfigMethods(t *testing.T) {
@@ -487,7 +487,7 @@ func TestPortConfigMethods(t *testing.T) {
 	}
 
 	assert.True(t, port.HasPeer())
-	assert.Equal(t, "127.0.0.1:8080", port.GetBindAddress())
+	assert.Equal(t, "127.0.0.1:8080", port.BindAddress())
 }
 
 func TestValidatorsConfigMethods(t *testing.T) {
@@ -496,7 +496,7 @@ func TestValidatorsConfigMethods(t *testing.T) {
 		ValidatorListThreshold: 0,
 	}
 
-	threshold := validators.GetValidatorListThreshold()
+	threshold := validators.EffectiveListThreshold()
 	assert.Equal(t, 2, threshold) // floor(3/2) + 1 = 2
 }
 
@@ -557,6 +557,6 @@ func TestParseValidatorsTxt_BadThreshold(t *testing.T) {
 // TestExampleConfigLoads keeps config/examples/xrpld.toml loadable by
 // the strict loader, so the shipped example never drifts from the schema.
 func TestExampleConfigLoads(t *testing.T) {
-	_, err := LoadConfig(ConfigPaths{Main: filepath.Join("examples", "xrpld.toml")})
+	_, err := LoadConfig(Paths{Main: filepath.Join("examples", "xrpld.toml")})
 	require.NoError(t, err)
 }

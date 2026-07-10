@@ -29,6 +29,15 @@ import (
 // goxrpl and rippled reject the same oversized payloads on the wire.
 const MaxRequestBytes = 1_000_000
 
+// MaxBatchElements caps the number of elements in a `batch` envelope. rippled
+// imposes no explicit cap (it iterates every params entry), so this is a
+// defensive go-xrpl superset: without it, thousands of minimal elements fit in
+// one MaxRequestBytes body and each drives a synchronous ledger read on a single
+// connection-slot goroutine before any per-IP shedding kicks in — cheap request
+// amplification for a public endpoint. A batch past the cap is rejected whole
+// with 400, mirroring the malformed-batch path.
+const MaxBatchElements = 256
+
 // rpcLog returns the logger for the HTTP JSON-RPC server.
 // Resolved lazily so it picks up the root logger set during CLI bootstrap.
 func rpcLog() xrpllog.Logger { return xrpllog.Named(xrpllog.PartitionRPC) }
@@ -287,6 +296,12 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		// rejects as "not an array"; an empty [] unmarshals to a non-nil empty
 		// slice and is accepted.
 		if err := json.Unmarshal(request.Params, &elements); err != nil || elements == nil {
+			http.Error(w, "Malformed batch request", http.StatusBadRequest)
+			return
+		}
+		// Defensive cap (go-xrpl superset of rippled): reject an oversized batch
+		// whole rather than amplifying one request into hundreds of ledger reads.
+		if len(elements) > MaxBatchElements {
 			http.Error(w, "Malformed batch request", http.StatusBadRequest)
 			return
 		}
@@ -747,6 +762,12 @@ func dispatchMethod(
 	}
 	result, rpcErr := handler.Handle(ctx, params)
 	finalizeLoad(tracker, ctx, method, handler, rpcErr, log)
+	// An internal error ships the fixed "Internal error." to the client; the
+	// caller's detail is logged here (the one choke point with method + client)
+	// so an unexpected failure stays diagnosable without leaking to the wire.
+	if detail := rpcErr.LogDetail(); detail != "" {
+		log.Error("rpc internal error", "method", method, "client", ctx.ClientIP, "detail", detail)
+	}
 	return result, rpcErr
 }
 
