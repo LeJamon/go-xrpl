@@ -166,7 +166,7 @@ func (l *LoanPay) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if !amountAssetMatches(l.Amount, asset) {
 		return ter.TecWRONG_ASSET
 	}
-	if r := vault.AssetFrozen(view, accountID, asset); r != ter.TesSUCCESS {
+	if r := tx.AssetFrozen(view, accountID, asset); r != ter.TesSUCCESS {
 		return r
 	}
 	if r := tx.RequireAuth(view, asset, accountID); r != ter.TesSUCCESS {
@@ -217,7 +217,7 @@ func (l *LoanPay) Apply(ctx *tx.ApplyContext) ter.Result {
 		minCover = brokerCoverRateAtScale(lendNum(b.DebtTotal), b.CoverRateMinimum, loanScale, integral)
 	}
 	sendFeeToOwner := lendNum(b.CoverAvailable).Cmp(minCover) >= 0 &&
-		vault.AssetFrozen(ctx.View, b.Owner, asset) == ter.TesSUCCESS &&
+		tx.AssetFrozen(ctx.View, b.Owner, asset) == ter.TesSUCCESS &&
 		tx.RequireAuth(ctx.View, asset, b.Owner) == ter.TesSUCCESS
 	brokerPayee := b.Account
 	if sendFeeToOwner {

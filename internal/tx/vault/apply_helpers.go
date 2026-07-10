@@ -96,21 +96,6 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 	return 1, ter.TesSUCCESS
 }
 
-// assetFrozen reports whether asset is frozen/locked for accountID, returning the
-// matching TER (tecFROZEN for IOU, tecLOCKED for MPT) or tesSUCCESS.
-func assetFrozen(view tx.LedgerView, accountID [20]byte, asset tx.Asset) ter.Result {
-	if asset.IsMPT() {
-		if id, ok := assetMPTID(asset); ok && tx.IsMPTLocked(view, id, accountID) {
-			return ter.TecLOCKED
-		}
-		return ter.TesSUCCESS
-	}
-	if tx.IsFrozen(view, accountID, asset) {
-		return ter.TecFROZEN
-	}
-	return ter.TesSUCCESS
-}
-
 // sendMPTAsset moves amount of the MPT asset from `from` to `to`, crediting or
 // debiting OutstandingAmount when either party is the issuer.
 func sendMPTAsset(ctx *tx.ApplyContext, mptID [24]byte, from, to [20]byte, amount uint64) ter.Result {

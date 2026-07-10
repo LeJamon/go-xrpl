@@ -97,11 +97,6 @@ func CanAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 	return canAddHolding(view, asset)
 }
 
-// AssetFrozen reports whether asset is frozen/locked for accountID.
-func AssetFrozen(view tx.LedgerView, accountID [20]byte, asset tx.Asset) ter.Result {
-	return assetFrozen(view, accountID, asset)
-}
-
 // AddEmptyHolding gives accountID a zero-balance holding for asset, returning the
 // owner-count delta to apply.
 func AddEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {

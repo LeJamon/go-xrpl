@@ -165,7 +165,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	}
 
 	asset := vaultAssetOf(vd)
-	if res := assetFrozen(view, dstID, asset); res != ter.TesSUCCESS {
+	if res := tx.AssetFrozen(view, dstID, asset); res != ter.TesSUCCESS {
 		return res
 	}
 

@@ -198,7 +198,7 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		}
 	}
 
-	if res := assetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 		return res
 	}
 

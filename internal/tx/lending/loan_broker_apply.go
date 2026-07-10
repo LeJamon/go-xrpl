@@ -78,7 +78,7 @@ func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Resu
 		if res := vault.CanAddHolding(view, asset); res != ter.TesSUCCESS {
 			return res
 		}
-		if res := vault.AssetFrozen(view, vinfo.Account, asset); res != ter.TesSUCCESS {
+		if res := tx.AssetFrozen(view, vinfo.Account, asset); res != ter.TesSUCCESS {
 			return res
 		}
 	}
@@ -323,10 +323,10 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineCo
 	if !amountAssetMatches(l.Amount, asset) {
 		return ter.TecWRONG_ASSET
 	}
-	if res := vault.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
 		return res
 	}
-	if res := vault.AssetFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
+	if res := tx.AssetFrozen(view, b.Account, asset); res != ter.TesSUCCESS {
 		return res
 	}
 	if res := tx.RequireAuth(view, asset, accountID); res != ter.TesSUCCESS {

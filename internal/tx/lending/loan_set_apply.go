@@ -95,10 +95,10 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if r := vault.CanAddHolding(view, asset); r != ter.TesSUCCESS {
 		return r
 	}
-	if r := vault.AssetFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
+	if r := tx.AssetFrozen(view, vinfo.Account, asset); r != ter.TesSUCCESS {
 		return r
 	}
-	if r := vault.AssetFrozen(view, borrower, asset); r != ter.TesSUCCESS {
+	if r := tx.AssetFrozen(view, borrower, asset); r != ter.TesSUCCESS {
 		return r
 	}
 	return ter.TesSUCCESS
