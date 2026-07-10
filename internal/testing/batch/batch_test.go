@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	xtesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
@@ -23,9 +23,9 @@ import (
 // fixBatchInnerSigs), so the all-supported preset no longer activates it and
 // every Batch test must opt in. EnableFeatureNow enables it from genesis,
 // matching the behaviour these tests relied on when the preset carried Batch.
-func newBatchEnv(t *testing.T) *xtesting.TestEnv {
+func newBatchEnv(t *testing.T) *jtx.TestEnv {
 	t.Helper()
-	env := xtesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.EnableFeatureNow("Batch")
 	return env
 }
@@ -39,8 +39,8 @@ func TestEnabled(t *testing.T) {
 	t.Run("batch enabled", func(t *testing.T) {
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -53,15 +53,15 @@ func TestEnabled(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	})
 
 	t.Run("batch disabled", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := jtx.NewTestEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -74,14 +74,14 @@ func TestEnabled(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temDISABLED")
+		jtx.RequireTxFail(t, result, "temDISABLED")
 	})
 
 	t.Run("tfInnerBatchTxn on non-batch tx - feature enabled", func(t *testing.T) {
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -89,49 +89,49 @@ func TestEnabled(t *testing.T) {
 		// the engine and fails with temINVALID_FLAG. Reference: rippled
 		// checkValidity short-circuits it to Valid before fixBatchInnerSigs, so
 		// it reaches the engine (Batch_test.cpp doTestInnerSubmitRPC).
-		p := MakeInnerPayment(alice, bob, xtesting.XRP(1), env.Seq(alice))
+		p := MakeInnerPayment(alice, bob, jtx.XRP(1), env.Seq(alice))
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = "" // inner batch format, but submitted directly
 
 		result := env.Submit(p)
-		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 
 	t.Run("tfInnerBatchTxn on non-batch tx - fixBatchInnerSigs enabled", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableFeatureNow("fixBatchInnerSigs")
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
 		// With fixBatchInnerSigs an inner-flagged transaction never has a valid
 		// signature, so it is rejected as invalid rather than reaching the
 		// engine. Reference: rippled apply.cpp checkValidity (PR #6069).
-		p := MakeInnerPayment(alice, bob, xtesting.XRP(1), env.Seq(alice))
+		p := MakeInnerPayment(alice, bob, jtx.XRP(1), env.Seq(alice))
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
 
 		result := env.Submit(p)
-		xtesting.RequireTxFail(t, result, "temINVALID")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
 	t.Run("tfInnerBatchTxn on non-batch tx - feature disabled", func(t *testing.T) {
-		env := xtesting.NewTestEnv(t)
+		env := jtx.NewTestEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
 		// A regular payment with tfInnerBatchTxn should fail with temINVALID_FLAG
-		p := MakeInnerPayment(alice, bob, xtesting.XRP(1), env.Seq(alice))
+		p := MakeInnerPayment(alice, bob, jtx.XRP(1), env.Seq(alice))
 		p.Fee = fmt.Sprintf("%d", env.BaseFee())
 		p.SigningPubKey = ""
 
 		result := env.Submit(p)
-		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 }
 
@@ -143,8 +143,8 @@ func TestEnabled(t *testing.T) {
 func TestPreflight(t *testing.T) {
 	t.Run("temBAD_FEE - negative fee", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -158,13 +158,13 @@ func TestPreflight(t *testing.T) {
 		batch.AddInnerTransaction(MakeFakeInnerTx())
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_FEE")
+		jtx.RequireTxFail(t, result, "temBAD_FEE")
 	})
 
 	t.Run("temINVALID_FLAG - invalid batch flags", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -178,13 +178,13 @@ func TestPreflight(t *testing.T) {
 										Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 
 	t.Run("temINVALID_FLAG - too many mode flags", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -198,12 +198,12 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 
 	t.Run("temARRAY_EMPTY - no transactions", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
+		alice := jtx.NewAccount("alice")
 		env.Fund(alice)
 		env.Close()
 
@@ -219,8 +219,8 @@ func TestPreflight(t *testing.T) {
 
 	t.Run("temARRAY_EMPTY - only 1 transaction", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -237,8 +237,8 @@ func TestPreflight(t *testing.T) {
 
 	t.Run("temARRAY_TOO_LARGE - more than 8 transactions", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -256,8 +256,8 @@ func TestPreflight(t *testing.T) {
 
 	t.Run("temREDUNDANT - duplicate batch signer", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -276,8 +276,8 @@ func TestPreflight(t *testing.T) {
 
 	t.Run("temBAD_SIGNER - signer is outer account", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -295,7 +295,7 @@ func TestPreflight(t *testing.T) {
 
 	t.Run("temARRAY_TOO_LARGE - too many signers", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
+		alice := jtx.NewAccount("alice")
 		env.Fund(alice)
 		env.Close()
 
@@ -305,7 +305,7 @@ func TestPreflight(t *testing.T) {
 			AddInnerTx(MakeFakeInnerTx()).
 			AddInnerTx(MakeFakeInnerTx())
 		for i := range 9 {
-			signer := xtesting.NewAccount(fmt.Sprintf("signer%d", i))
+			signer := jtx.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")
 		}
 		batch := builder.Build()
@@ -317,8 +317,8 @@ func TestPreflight(t *testing.T) {
 	// Reference: rippled Batch_test.cpp:398-406.
 	t.Run("temINVALID_INNER_BATCH - malformed inner tx", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -337,7 +337,7 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+		jtx.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	// A batch may not wrap a blocklisted inner transaction type (all Vault and
@@ -346,8 +346,8 @@ func TestPreflight(t *testing.T) {
 	// Reference: rippled Batch::disabledTxTypes + Batch_test.cpp testLoan().
 	t.Run("temINVALID_INNER_BATCH - disabled inner type (VaultCreate)", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -360,7 +360,7 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+		jtx.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	// The blocklist check precedes the inner tfInnerBatchTxn-flag check: a
@@ -368,8 +368,8 @@ func TestPreflight(t *testing.T) {
 	// temINVALID_FLAG.
 	t.Run("temINVALID_INNER_BATCH - disabled type precedes flag check", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -385,15 +385,15 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+		jtx.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	// The blocklist check precedes the inner zero-fee check: a blocklisted inner
 	// with a non-zero fee is still temINVALID_INNER_BATCH, not temBAD_FEE.
 	t.Run("temINVALID_INNER_BATCH - disabled type precedes fee check", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -409,15 +409,15 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+		jtx.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	// Reference: rippled Batch_test.cpp:410-501 (per-inner rejection cases).
 
 	t.Run("temBAD_FEE - inner fee non-zero", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -432,13 +432,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_FEE")
+		jtx.RequireTxFail(t, result, "temBAD_FEE")
 	})
 
 	t.Run("temSEQ_AND_TICKET - inner has both Sequence and TicketSequence", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -454,13 +454,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temSEQ_AND_TICKET")
+		jtx.RequireTxFail(t, result, "temSEQ_AND_TICKET")
 	})
 
 	t.Run("temSEQ_AND_TICKET - inner has neither Sequence nor TicketSequence", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -474,13 +474,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temSEQ_AND_TICKET")
+		jtx.RequireTxFail(t, result, "temSEQ_AND_TICKET")
 	})
 
 	t.Run("temBAD_SIGNATURE - inner has TxnSignature", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -495,13 +495,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
 	t.Run("temBAD_SIGNER - inner has Signers", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -518,13 +518,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
 	t.Run("temBAD_REGKEY - inner has SigningPubKey", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -539,13 +539,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_REGKEY")
+		jtx.RequireTxFail(t, result, "temBAD_REGKEY")
 	})
 
 	t.Run("temINVALID - inner is itself a Batch", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -563,7 +563,7 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID")
+		jtx.RequireTxFail(t, result, "temINVALID")
 	})
 
 	t.Run("temINVALID_INNER_BATCH - inner ticket with AccountTxnID", func(t *testing.T) {
@@ -571,8 +571,8 @@ func TestPreflight(t *testing.T) {
 		// ticket may not also carry AccountTxnID (rippled inner preflight1 ->
 		// temINVALID, surfaced on the outer as temINVALID_INNER_BATCH).
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -587,13 +587,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+		jtx.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
 	t.Run("temINVALID_FLAG - inner missing tfInnerBatchTxn", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -609,13 +609,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
 
 	t.Run("temREDUNDANT - duplicate inner transactions", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -628,13 +628,13 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temREDUNDANT")
+		jtx.RequireTxFail(t, result, "temREDUNDANT")
 	})
 
 	t.Run("temREDUNDANT - duplicate sequence per account under tfAllOrNothing", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -647,7 +647,7 @@ func TestPreflight(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temREDUNDANT")
+		jtx.RequireTxFail(t, result, "temREDUNDANT")
 	})
 
 	t.Run("valid batch with all four mode flags individually", func(t *testing.T) {
@@ -658,8 +658,8 @@ func TestPreflight(t *testing.T) {
 			batchtx.BatchFlagIndependent,
 		} {
 			env := newBatchEnv(t)
-			alice := xtesting.NewAccount("alice")
-			bob := xtesting.NewAccount("bob")
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
 			env.Fund(alice, bob)
 			env.Close()
 
@@ -671,7 +671,7 @@ func TestPreflight(t *testing.T) {
 				Build()
 
 			result := env.Submit(batch)
-			xtesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 		}
 	})
@@ -716,8 +716,8 @@ func TestCalculateBaseFee(t *testing.T) {
 func TestAllOrNothing(t *testing.T) {
 	t.Run("all succeed", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -732,21 +732,21 @@ func TestAllOrNothing(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice consumes sequences (outer + 2 inner)
-		xtesting.RequireSequence(t, env, alice, seq+3)
+		jtx.RequireSequence(t, env, alice, seq+3)
 
 		// Alice pays XRP(3) + fee; Bob receives XRP(3)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("tec failure - all rolled back", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -762,21 +762,21 @@ func TestAllOrNothing(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		jtx.RequireTxSuccess(t, result) // Batch itself succeeds
 		env.Close()
 
 		// Only outer sequence consumed (inner txns rolled back)
-		xtesting.RequireSequence(t, env, alice, seq+1)
+		jtx.RequireSequence(t, env, alice, seq+1)
 
 		// Alice pays fee only; Bob unaffected
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 
 	t.Run("tef failure - all rolled back", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -792,19 +792,19 @@ func TestAllOrNothing(t *testing.T) {
 		// Use a past sequence for the second tx to trigger tefPAST_SEQ
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
-			AddInnerTx(MakeInnerPayment(alice, bob, xtesting.XRP(1), 1)). // past seq -> tef
+			AddInnerTx(MakeInnerPayment(alice, bob, jtx.XRP(1), 1)). // past seq -> tef
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		jtx.RequireTxSuccess(t, result) // Batch itself succeeds
 		env.Close()
 
 		// Only outer sequence consumed
-		xtesting.RequireSequence(t, env, alice, seq+1)
+		jtx.RequireSequence(t, env, alice, seq+1)
 
 		// Alice pays fee only; Bob unaffected
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 }
 
@@ -816,8 +816,8 @@ func TestAllOrNothing(t *testing.T) {
 func TestOnlyOne(t *testing.T) {
 	t.Run("all transactions fail", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -834,21 +834,21 @@ func TestOnlyOne(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// All inner txns executed (all failed) -> seq advances by 4 (outer + 3 inner)
-		xtesting.RequireSequence(t, env, alice, seq+4)
+		jtx.RequireSequence(t, env, alice, seq+4)
 
 		// Alice pays fee only; Bob unaffected
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 
 	t.Run("first fails then succeeds - stops after success", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -864,21 +864,21 @@ func TestOnlyOne(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Only 2 inner txns processed (fail + success) -> seq advances by 3
-		xtesting.RequireSequence(t, env, alice, seq+3)
+		jtx.RequireSequence(t, env, alice, seq+3)
 
 		// Alice pays XRP(1) + fee
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(1))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(1)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(1))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(1)))
 	})
 
 	t.Run("succeeds first - stops immediately", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -894,15 +894,15 @@ func TestOnlyOne(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Only 1 inner txn processed -> seq advances by 2
-		xtesting.RequireSequence(t, env, alice, seq+2)
+		jtx.RequireSequence(t, env, alice, seq+2)
 
 		// Alice pays XRP(1) + fee
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(1))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(1)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(1))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(1)))
 	})
 }
 
@@ -914,8 +914,8 @@ func TestOnlyOne(t *testing.T) {
 func TestUntilFailure(t *testing.T) {
 	t.Run("first transaction fails - stops immediately", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -932,21 +932,21 @@ func TestUntilFailure(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// 1 inner txn processed (the failure) -> seq advances by 2
-		xtesting.RequireSequence(t, env, alice, seq+2)
+		jtx.RequireSequence(t, env, alice, seq+2)
 
 		// Alice pays fee only; Bob unaffected
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 
 	t.Run("all transactions succeed", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -963,21 +963,21 @@ func TestUntilFailure(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// All 4 inner txns succeed -> seq advances by 5
-		xtesting.RequireSequence(t, env, alice, seq+5)
+		jtx.RequireSequence(t, env, alice, seq+5)
 
 		// Alice pays XRP(10) + fee
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(10))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(10)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(10))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(10)))
 	})
 
 	t.Run("tec error in middle - stops at failure", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -994,15 +994,15 @@ func TestUntilFailure(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// 3 inner txns processed (2 success + 1 failure) -> seq advances by 4
-		xtesting.RequireSequence(t, env, alice, seq+4)
+		jtx.RequireSequence(t, env, alice, seq+4)
 
 		// Alice pays XRP(3) + fee (the 2 successful payments)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 }
 
@@ -1014,8 +1014,8 @@ func TestUntilFailure(t *testing.T) {
 func TestIndependent(t *testing.T) {
 	t.Run("multiple transactions fail - all execute", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1032,21 +1032,21 @@ func TestIndependent(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// All 4 inner txns processed -> seq advances by 5
-		xtesting.RequireSequence(t, env, alice, seq+5)
+		jtx.RequireSequence(t, env, alice, seq+5)
 
 		// Alice pays XRP(4) + fee (only successful payments)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(4))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(4)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(4))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(4)))
 	})
 
 	t.Run("tec error in middle - continues executing", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1063,15 +1063,15 @@ func TestIndependent(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// All 4 inner txns processed -> seq advances by 5
-		xtesting.RequireSequence(t, env, alice, seq+5)
+		jtx.RequireSequence(t, env, alice, seq+5)
 
 		// Alice pays XRP(6) + fee (3 successful payments)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(6))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(6)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(6))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(6)))
 	})
 }
 
@@ -1082,13 +1082,13 @@ func TestIndependent(t *testing.T) {
 
 func TestAccountActivation(t *testing.T) {
 	env := newBatchEnv(t)
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
-	env.FundAmount(alice, uint64(xtesting.XRP(10000))) // rippled funds with XRP(10000)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.FundAmount(alice, uint64(jtx.XRP(10000))) // rippled funds with XRP(10000)
 	env.Close()
 
 	// Bob does not exist yet
-	xtesting.RequireAccountNotExists(t, env, bob)
+	jtx.RequireAccountNotExists(t, env, bob)
 
 	preAlice := env.Balance(alice)
 
@@ -1102,18 +1102,18 @@ func TestAccountActivation(t *testing.T) {
 		Build()
 
 	result := env.Submit(batch)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob now exists
-	xtesting.RequireAccountExists(t, env, bob)
+	jtx.RequireAccountExists(t, env, bob)
 
 	// Alice consumes sequences (outer + 2 inner)
-	xtesting.RequireSequence(t, env, alice, seq+3)
+	jtx.RequireSequence(t, env, alice, seq+3)
 
 	// Alice pays XRP(1001) + fee; Bob receives XRP(1001)
-	xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(1001))-batchFee)
-	xtesting.RequireBalance(t, env, bob, uint64(xtesting.XRP(1001)))
+	jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(1001))-batchFee)
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(1001)))
 }
 
 // TestActivateTwoAccounts is the issue #846 regression: a Batch whose inner txs
@@ -1125,14 +1125,14 @@ func TestAccountActivation(t *testing.T) {
 // Reference: rippled apply.cpp:189-207, InvariantCheck.cpp:964-967.
 func TestActivateTwoAccounts(t *testing.T) {
 	env := newBatchEnv(t)
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
-	carol := xtesting.NewAccount("carol")
-	env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
-	xtesting.RequireAccountNotExists(t, env, bob)
-	xtesting.RequireAccountNotExists(t, env, carol)
+	jtx.RequireAccountNotExists(t, env, bob)
+	jtx.RequireAccountNotExists(t, env, carol)
 
 	preAlice := env.Balance(alice)
 	seq := env.Seq(alice)
@@ -1145,20 +1145,20 @@ func TestActivateTwoAccounts(t *testing.T) {
 		Build()
 
 	result := env.Submit(batch)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Both new accounts now exist and are funded.
-	xtesting.RequireAccountExists(t, env, bob)
-	xtesting.RequireAccountExists(t, env, carol)
+	jtx.RequireAccountExists(t, env, bob)
+	jtx.RequireAccountExists(t, env, carol)
 
 	// Alice consumes sequences (outer + 2 inner).
-	xtesting.RequireSequence(t, env, alice, seq+3)
+	jtx.RequireSequence(t, env, alice, seq+3)
 
 	// Alice pays XRP(2000) + fee; bob and carol each receive XRP(1000).
-	xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(2000))-batchFee)
-	xtesting.RequireBalance(t, env, bob, uint64(xtesting.XRP(1000)))
-	xtesting.RequireBalance(t, env, carol, uint64(xtesting.XRP(1000)))
+	jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(2000))-batchFee)
+	jtx.RequireBalance(t, env, bob, uint64(jtx.XRP(1000)))
+	jtx.RequireBalance(t, env, carol, uint64(jtx.XRP(1000)))
 }
 
 // =============================================================================
@@ -1168,8 +1168,8 @@ func TestActivateTwoAccounts(t *testing.T) {
 
 func TestAccountSet(t *testing.T) {
 	env := newBatchEnv(t)
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	env.Close()
 
@@ -1194,15 +1194,15 @@ func TestAccountSet(t *testing.T) {
 		Build()
 
 	result := env.Submit(batch)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice consumes sequences (outer + 2 inner)
-	xtesting.RequireSequence(t, env, alice, seq+3)
+	jtx.RequireSequence(t, env, alice, seq+3)
 
 	// Alice pays XRP(1) + fee; Bob receives XRP(1)
-	xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(1))-batchFee)
-	xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(1)))
+	jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(1))-batchFee)
+	jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(1)))
 }
 
 // =============================================================================
@@ -1213,8 +1213,8 @@ func TestAccountSet(t *testing.T) {
 func TestBadSequence(t *testing.T) {
 	t.Run("past sequence - inner tx with past seq", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1225,24 +1225,24 @@ func TestBadSequence(t *testing.T) {
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, preAliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			// Past sequence (before current)
-			AddInnerTx(MakeInnerPayment(alice, bob, xtesting.XRP(10), 1)).
+			AddInnerTx(MakeInnerPayment(alice, bob, jtx.XRP(10), 1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 5, preAliceSeq+1)).
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		jtx.RequireTxSuccess(t, result) // Batch itself succeeds
 		env.Close()
 
 		// Alice pays fee only, sequence advances by 1 (outer only)
-		xtesting.RequireSequence(t, env, alice, preAliceSeq+1)
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireSequence(t, env, alice, preAliceSeq+1)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 
 	t.Run("future sequence - inner tx with far future seq", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1253,24 +1253,24 @@ func TestBadSequence(t *testing.T) {
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, preAliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			// Future sequence (well ahead of current)
-			AddInnerTx(MakeInnerPayment(alice, bob, xtesting.XRP(10), preAliceSeq+10)).
+			AddInnerTx(MakeInnerPayment(alice, bob, jtx.XRP(10), preAliceSeq+10)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 5, preAliceSeq+1)).
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		jtx.RequireTxSuccess(t, result) // Batch itself succeeds
 		env.Close()
 
 		// Alice pays fee only, sequence advances by 1 (outer only)
-		xtesting.RequireSequence(t, env, alice, preAliceSeq+1)
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireSequence(t, env, alice, preAliceSeq+1)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 
 	t.Run("same sequence as outer - inner tx uses outer's seq", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1281,18 +1281,18 @@ func TestBadSequence(t *testing.T) {
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilder(alice, preAliceSeq, batchFee, batchtx.BatchFlagAllOrNothing).
 			// Same sequence as outer
-			AddInnerTx(MakeInnerPayment(alice, bob, xtesting.XRP(10), preAliceSeq)).
+			AddInnerTx(MakeInnerPayment(alice, bob, jtx.XRP(10), preAliceSeq)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 5, preAliceSeq+1)).
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		jtx.RequireTxSuccess(t, result) // Batch itself succeeds
 		env.Close()
 
 		// Alice pays fee only
-		xtesting.RequireSequence(t, env, alice, preAliceSeq+1)
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireSequence(t, env, alice, preAliceSeq+1)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 }
 
@@ -1304,8 +1304,8 @@ func TestBadSequence(t *testing.T) {
 func TestBadOuterFee(t *testing.T) {
 	t.Run("insufficient fee without signers", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1318,13 +1318,13 @@ func TestBadOuterFee(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "telINSUF_FEE_P")
+		jtx.RequireTxFail(t, result, "telINSUF_FEE_P")
 	})
 
 	t.Run("insufficient fee with batch signers", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1340,7 +1340,7 @@ func TestBadOuterFee(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "telINSUF_FEE_P")
+		jtx.RequireTxFail(t, result, "telINSUF_FEE_P")
 	})
 }
 
@@ -1359,10 +1359,10 @@ func TestBatchDelegate(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableFeature("PermissionDelegationV1_1")
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Alice delegates Payment permission to bob
@@ -1386,15 +1386,15 @@ func TestBatchDelegate(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice consumes sequences: outer + 2 inner = seq + 3
-		xtesting.RequireSequence(t, env, alice, seq+3)
+		jtx.RequireSequence(t, env, alice, seq+3)
 
 		// Alice pays XRP(3) + fee; Bob receives XRP(3)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("delegated atomic inner", func(t *testing.T) {
@@ -1404,12 +1404,12 @@ func TestBatchDelegate(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableFeature("PermissionDelegationV1_1")
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-		env.FundAmount(carol, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
+		env.FundAmount(carol, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Bob delegates Payment permission to carol
@@ -1436,20 +1436,20 @@ func TestBatchDelegate(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice: outer seq + 1 inner = aliceSeq + 2
-		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+		jtx.RequireSequence(t, env, alice, aliceSeq+2)
 		// Bob: 1 inner = bobSeq + 1
-		xtesting.RequireSequence(t, env, bob, bobSeq+1)
+		jtx.RequireSequence(t, env, bob, bobSeq+1)
 
 		// Alice: -XRP(1) (net: pay 2 to bob, receive 1 from bob) - batchFee
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(1))-batchFee)
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(1))-batchFee)
 		// Bob: +XRP(1) (net: receive 2 from alice, pay 1 to alice)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(1)))
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(1)))
 		// Carol: unchanged (batch is atomic, fee is paid by batch outer account)
-		xtesting.RequireBalance(t, env, carol, preCarol)
+		jtx.RequireBalance(t, env, carol, preCarol)
 	})
 }
 
@@ -1464,10 +1464,10 @@ func TestTickets(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer"
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Create 10 tickets for alice
@@ -1486,7 +1486,7 @@ func TestTickets(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Verify owner count: started with 10 tickets, consumed 1 (outer ticket) = 9
@@ -1494,11 +1494,11 @@ func TestTickets(t *testing.T) {
 		require.Equal(t, uint32(9), env.TicketCount(alice), "alice should have 9 tickets remaining")
 
 		// Alice's sequence advances by 2 (inner txns use sequences)
-		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+		jtx.RequireSequence(t, env, alice, aliceSeq+2)
 
 		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("tickets inner", func(t *testing.T) {
@@ -1506,10 +1506,10 @@ func TestTickets(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets inner"
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Create 10 tickets for alice
@@ -1528,7 +1528,7 @@ func TestTickets(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Verify owner count: started with 10 tickets, consumed 2 (inner tickets) = 8
@@ -1536,11 +1536,11 @@ func TestTickets(t *testing.T) {
 		require.Equal(t, uint32(8), env.TicketCount(alice), "alice should have 8 tickets remaining")
 
 		// Alice's sequence advances by 1 (only outer seq increment, inner use tickets)
-		xtesting.RequireSequence(t, env, alice, aliceSeq+1)
+		jtx.RequireSequence(t, env, alice, aliceSeq+1)
 
 		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("tickets outer inner", func(t *testing.T) {
@@ -1548,10 +1548,10 @@ func TestTickets(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testTickets() - "tickets outer inner"
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Create 10 tickets for alice
@@ -1573,7 +1573,7 @@ func TestTickets(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Verify owner count: started with 10 tickets, consumed 2 (outer + inner[0]) = 8
@@ -1581,11 +1581,11 @@ func TestTickets(t *testing.T) {
 		require.Equal(t, uint32(8), env.TicketCount(alice), "alice should have 8 tickets remaining")
 
 		// Alice's sequence advances by 1 (only inner[1] uses a sequence)
-		xtesting.RequireSequence(t, env, alice, aliceSeq+1)
+		jtx.RequireSequence(t, env, alice, aliceSeq+1)
 
 		// Alice pays XRP(3) + batchFee; Bob receives XRP(3)
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 }
 
@@ -1602,8 +1602,8 @@ func TestTicketsOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1621,7 +1621,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 		ticketSeq1 := aliceTicketSeq + 1
 		noopTxn.TicketSequence = &ticketSeq1
 		result := env.Submit(noopTxn)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// Batch Txn using ticket for outer, ticket+1 for inner payment
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
@@ -1630,7 +1630,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq)).
 			Build()
 		result = env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// After close: batch succeeds. The inner tx consumed ticket+1, so
@@ -1648,8 +1648,8 @@ func TestTicketsOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1665,7 +1665,7 @@ func TestTicketsOpenLedger(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq)).
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// AccountSet Txn using ticket+1 (already consumed by batch inner)
 		noopTxn := accounttx.NewAccountSet(alice.Address)
@@ -1700,19 +1700,19 @@ func TestBatchTxQueue(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testBatchTxQueue() first sub-test
 		// "only outer batch transactions are counter towards the queue size"
 		cfg := makeSmallQueueConfig(2)
-		env := xtesting.NewTestEnvWithTxQ(t, cfg)
+		env := jtx.NewTestEnvWithTxQ(t, cfg)
 		env.EnableFeatureNow("Batch")
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
 
 		// Fund across several ledgers so the TxQ metrics stay restricted.
 		// noripple funds do not enable DefaultRipple (1 tx per account instead of 2).
-		env.FundAmountNoRipple(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmountNoRipple(bob, uint64(xtesting.XRP(10000)))
+		env.FundAmountNoRipple(alice, uint64(jtx.XRP(10000)))
+		env.FundAmountNoRipple(bob, uint64(jtx.XRP(10000)))
 		env.Close()
-		env.FundAmountNoRipple(carol, uint64(xtesting.XRP(10000)))
+		env.FundAmountNoRipple(carol, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Fill the ledger: 3 noops above the threshold of 2.
@@ -1723,7 +1723,7 @@ func TestBatchTxQueue(t *testing.T) {
 
 		// Carol's noop gets queued because fee escalation requires more than base fee.
 		result := env.Submit(makeNoopWithFee(carol, env.BaseFee()))
-		xtesting.RequireTxFail(t, result, "terQUEUED")
+		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 1, nil, 3, 2)
 
 		aliceSeq := env.Seq(alice)
@@ -1737,7 +1737,7 @@ func TestBatchTxQueue(t *testing.T) {
 			AddSigner(bob, "").
 			Build()
 		result = env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "terQUEUED")
+		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 2, nil, 3, 2)
 
 		// Replace Queued Batch with open ledger fee.
@@ -1748,7 +1748,7 @@ func TestBatchTxQueue(t *testing.T) {
 			AddSigner(bob, "").
 			Build()
 		result = env.Submit(batch2)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// After close: queue drained (carol's noop applied in new ledger),
@@ -1764,18 +1764,18 @@ func TestBatchTxQueue(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testBatchTxQueue() second sub-test
 		// "inner batch transactions are counter towards the ledger tx count"
 		cfg := makeSmallQueueConfig(2)
-		env := xtesting.NewTestEnvWithTxQ(t, cfg)
+		env := jtx.NewTestEnvWithTxQ(t, cfg)
 		env.EnableFeatureNow("Batch")
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
 
 		// Fund across several ledgers so the TxQ metrics stay restricted.
-		env.FundAmountNoRipple(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmountNoRipple(bob, uint64(xtesting.XRP(10000)))
+		env.FundAmountNoRipple(alice, uint64(jtx.XRP(10000)))
+		env.FundAmountNoRipple(bob, uint64(jtx.XRP(10000)))
 		env.Close()
-		env.FundAmountNoRipple(carol, uint64(xtesting.XRP(10000)))
+		env.FundAmountNoRipple(carol, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Fill the ledger leaving room for 1 more transaction at base fee.
@@ -1794,14 +1794,14 @@ func TestBatchTxQueue(t *testing.T) {
 			AddSigner(bob, "").
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		// txInLedger = 3 (2 noops + 1 batch outer).
 		// The batch counts as 1 for open ledger txInLedger.
 		checkMetrics(t, env, 0, nil, 3, 2)
 
 		// Carol's noop gets queued because txInLedger=3 > txnsExpected=2.
 		result = env.Submit(makeNoopWithFee(carol, env.BaseFee()))
-		xtesting.RequireTxFail(t, result, "terQUEUED")
+		jtx.RequireTxFail(t, result, "terQUEUED")
 		checkMetrics(t, env, 1, nil, 3, 2)
 	})
 }
@@ -1829,7 +1829,7 @@ func makeSmallQueueConfig(minTxnStandalone uint32) txq.Config {
 
 // makeNoopWithFee creates an AccountSet noop with a specific fee.
 // Unlike env.Noop() which auto-fills and submits, this returns the raw tx.
-func makeNoopWithFee(acc *xtesting.Account, fee uint64) *accounttx.AccountSet {
+func makeNoopWithFee(acc *jtx.Account, fee uint64) *accounttx.AccountSet {
 	as := accounttx.NewAccountSet(acc.Address)
 	as.Fee = fmt.Sprintf("%d", fee)
 	return as
@@ -1838,7 +1838,7 @@ func makeNoopWithFee(acc *xtesting.Account, fee uint64) *accounttx.AccountSet {
 // checkMetrics asserts TxQ metrics match expected values.
 // maxSize nil means skip that assertion (matches rippled's std::nullopt).
 // Reference: rippled test/jtx/TestHelpers.h checkMetrics()
-func checkMetrics(t *testing.T, env *xtesting.TestEnv, expectedQueueSize uint32, expectedMaxSize *uint32, expectedTxInLedger uint32, expectedTxPerLedger uint32) {
+func checkMetrics(t *testing.T, env *jtx.TestEnv, expectedQueueSize uint32, expectedMaxSize *uint32, expectedTxInLedger uint32, expectedTxPerLedger uint32) {
 	t.Helper()
 	metrics := env.TxQMetrics()
 
@@ -1891,9 +1891,9 @@ func TestSequenceOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
 		env.Fund(alice, bob, carol)
 		env.Close()
 
@@ -1909,7 +1909,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		futureSeq := aliceSeq + 2
 		noopTxn.Sequence = &futureSeq
 		result := env.Submit(noopTxn)
-		xtesting.RequireTxFail(t, result, "terPRE_SEQ")
+		jtx.RequireTxFail(t, result, "terPRE_SEQ")
 
 		// Batch Txn: carol outer, alice inner signer
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
@@ -1919,7 +1919,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 			AddSigner(alice, "").
 			Build()
 		result = env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// After first close: batch applied (alice seq -> aliceSeq+2).
@@ -1939,8 +1939,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 			"carol seq should have advanced by 1 (batch outer)")
 
 		// alice paid XRP(1) + XRP(2) = XRP(3) to bob, plus baseFee for noop
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-env.BaseFee())
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-env.BaseFee())
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("before batch txn with same sequence", func(t *testing.T) {
@@ -1951,8 +1951,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -1967,7 +1967,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		futureSeq := aliceSeq + 1
 		noopTxn.Sequence = &futureSeq
 		result := env.Submit(noopTxn)
-		xtesting.RequireTxFail(t, result, "terPRE_SEQ")
+		jtx.RequireTxFail(t, result, "terPRE_SEQ")
 
 		// Batch Txn: alice outer
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
@@ -1976,7 +1976,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq+2)).
 			Build()
 		result = env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// After first close: batch applied. The noop at aliceSeq+1 is
@@ -1991,8 +1991,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 			"alice seq should have advanced by 3 (outer + 2 inner payments)")
 
 		// alice paid XRP(1) + XRP(2) + batchFee to bob
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("after batch txn with same sequence", func(t *testing.T) {
@@ -2002,8 +2002,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -2018,7 +2018,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, aliceSeq+2)).
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// AccountSet Txn at aliceSeq+1 (same as inner payment #1's seq)
 		// In our Go code, this may succeed since inner txns already applied
@@ -2042,8 +2042,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 		require.Equal(t, aliceSeq+3, env.Seq(alice),
 			"alice seq should have advanced by 3 (outer + 2 inner payments)")
 
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3))-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3))-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("outer batch terPRE_SEQ", func(t *testing.T) {
@@ -2053,9 +2053,9 @@ func TestSequenceOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
 		env.Fund(alice, bob, carol)
 		env.Close()
 
@@ -2072,7 +2072,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 			AddSigner(alice, "").
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "terPRE_SEQ")
+		jtx.RequireTxFail(t, result, "terPRE_SEQ")
 
 		// AccountSet noop at carolSeq -> tesSUCCESS (advances carol's seq)
 		noopTxn := accounttx.NewAccountSet(carol.Address)
@@ -2080,7 +2080,7 @@ func TestSequenceOpenLedger(t *testing.T) {
 		noopTxn.SigningPubKey = carol.PublicKeyHex()
 		noopTxn.Sequence = &carolSeq
 		result = env.Submit(noopTxn)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// After close: noop advances carol's seq, then batch succeeds.
@@ -2097,8 +2097,8 @@ func TestSequenceOpenLedger(t *testing.T) {
 			"carol seq should advance by 2 (noop + batch outer)")
 
 		// alice paid XRP(3) total to bob
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(3)))
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(3)))
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 }
 
@@ -2125,8 +2125,8 @@ func TestObjectsOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -2141,7 +2141,7 @@ func TestObjectsOpenLedger(t *testing.T) {
 		// CheckCash Txn for a check that doesn't exist yet
 		chkID := GetCheckIndex(alice, aliceSeq)
 		cashTxn := check.NewCheckCash(bob.Address, chkID)
-		cashTxn.SetExactAmount(tx.NewXRPAmount(xtesting.XRP(10)))
+		cashTxn.SetExactAmount(tx.NewXRPAmount(jtx.XRP(10)))
 		cashTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		cashTxn.SigningPubKey = bob.PublicKeyHex()
 		cashTxn.Sequence = &bobSeq
@@ -2152,11 +2152,11 @@ func TestObjectsOpenLedger(t *testing.T) {
 		// Batch Txn: creates the check and pays XRP(1)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
-			AddInnerTx(MakeInnerCheckCreate(alice, bob, tx.NewXRPAmount(xtesting.XRP(10)), aliceSeq)).
+			AddInnerTx(MakeInnerCheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10)), aliceSeq)).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// After close (replay): batch creates check, then CheckCash succeeds.
@@ -2173,9 +2173,9 @@ func TestObjectsOpenLedger(t *testing.T) {
 			"alice seq should advance by 1 (inner CheckCreate)")
 
 		// Balance check: alice paid XRP(10) check + XRP(1) + batchFee
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(11))-batchFee)
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(11))-batchFee)
 		// bob gained XRP(10) check + XRP(1), paid baseFee for CheckCash
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(11))-env.BaseFee())
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(11))-env.BaseFee())
 	})
 
 	t.Run("create object before batch txn", func(t *testing.T) {
@@ -2186,8 +2186,8 @@ func TestObjectsOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -2201,22 +2201,22 @@ func TestObjectsOpenLedger(t *testing.T) {
 
 		// CheckCreate Txn (standalone) — alice creates a check payable to bob
 		chkID := GetCheckIndex(alice, aliceSeq)
-		createTxn := check.NewCheckCreate(alice.Address, bob.Address, tx.NewXRPAmount(xtesting.XRP(10)))
+		createTxn := check.NewCheckCreate(alice.Address, bob.Address, tx.NewXRPAmount(jtx.XRP(10)))
 		createTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		createTxn.SigningPubKey = alice.PublicKeyHex()
 		createTxn.Sequence = &aliceSeq
 		result := env.Submit(createTxn)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// Batch Txn: inner CheckCash (bob cashes the check) + inner Payment
 		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
-			AddInnerTx(MakeInnerCheckCash(bob, chkID, tx.NewXRPAmount(xtesting.XRP(10)), bobSeq)).
+			AddInnerTx(MakeInnerCheckCash(bob, chkID, tx.NewXRPAmount(jtx.XRP(10)), bobSeq)).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
 			AddSigner(bob, "").
 			Build()
 		result = env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Final state verification:
@@ -2227,9 +2227,9 @@ func TestObjectsOpenLedger(t *testing.T) {
 			"alice seq should advance by 1 (standalone CheckCreate)")
 
 		// alice paid: XRP(10) check + XRP(1) payment + batchFee + baseFee for CheckCreate
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(11))-batchFee-env.BaseFee())
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(11))-batchFee-env.BaseFee())
 		// bob gained: XRP(10) check + XRP(1) payment
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(11)))
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(11)))
 	})
 
 	t.Run("after batch txn", func(t *testing.T) {
@@ -2240,8 +2240,8 @@ func TestObjectsOpenLedger(t *testing.T) {
 		env := newBatchEnv(t)
 		env.EnableOpenLedgerReplay()
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -2257,15 +2257,15 @@ func TestObjectsOpenLedger(t *testing.T) {
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 		chkID := GetCheckIndex(alice, aliceSeq)
 		batch := NewBatchBuilderWithTicket(alice, aliceTicketSeq, batchFee, batchtx.BatchFlagAllOrNothing).
-			AddInnerTx(MakeInnerCheckCreate(alice, bob, tx.NewXRPAmount(xtesting.XRP(10)), aliceSeq)).
+			AddInnerTx(MakeInnerCheckCreate(alice, bob, tx.NewXRPAmount(jtx.XRP(10)), aliceSeq)).
 			AddInnerTx(MakeInnerPaymentXRPWithTicket(alice, bob, 1, aliceTicketSeq+1)).
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 
 		// CheckCash Txn (standalone) — bob cashes the check
 		cashTxn := check.NewCheckCash(bob.Address, chkID)
-		cashTxn.SetExactAmount(tx.NewXRPAmount(xtesting.XRP(10)))
+		cashTxn.SetExactAmount(tx.NewXRPAmount(jtx.XRP(10)))
 		cashTxn.Fee = fmt.Sprintf("%d", env.BaseFee())
 		cashTxn.SigningPubKey = bob.PublicKeyHex()
 		cashTxn.Sequence = &bobSeq
@@ -2284,9 +2284,9 @@ func TestObjectsOpenLedger(t *testing.T) {
 			"alice seq should advance by 1 (inner CheckCreate)")
 
 		// alice lost XRP(10) check + XRP(1) payment + batchFee
-		xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(11))-batchFee)
+		jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(11))-batchFee)
 		// bob gained XRP(10) check + XRP(1) payment, paid baseFee for CheckCash
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(11))-env.BaseFee())
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(11))-env.BaseFee())
 	})
 }
 
@@ -2310,8 +2310,8 @@ func TestOpenLedger(t *testing.T) {
 	env := newBatchEnv(t)
 	env.EnableOpenLedgerReplay()
 
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	env.Close()
 
@@ -2322,7 +2322,7 @@ func TestOpenLedger(t *testing.T) {
 	bobNoopSeq := env.Seq(bob)
 	noopBob.Sequence = &bobNoopSeq
 	result := env.Submit(noopBob)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	aliceSeq := env.Seq(alice)
@@ -2331,12 +2331,12 @@ func TestOpenLedger(t *testing.T) {
 	bobSeq := env.Seq(bob)
 
 	// Alice Pays Bob (Open Ledger)
-	payTxn1 := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(xtesting.XRP(10)))
+	payTxn1 := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(jtx.XRP(10)))
 	payTxn1.Fee = fmt.Sprintf("%d", env.BaseFee())
 	payTxn1.SigningPubKey = alice.PublicKeyHex()
 	payTxn1.Sequence = &aliceSeq
 	result = env.Submit(payTxn1)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	// Alice & Bob Atomic Batch
 	batchFee := CalcBatchFeeFromEnv(env, 1, 2)
@@ -2346,14 +2346,14 @@ func TestOpenLedger(t *testing.T) {
 		AddSigner(bob, "").
 		Build()
 	result = env.Submit(batch)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	// Bob pays Alice (Open Ledger) at bobSeq+1
 	// In rippled this gets terPRE_SEQ because bob's seq hasn't advanced in
 	// the open view (inner txns deferred). In our code, bob's seq may have
 	// already advanced due to immediate inner txn application.
 	bobPaySeq := bobSeq + 1
-	payTxn2 := payment.NewPayment(bob.Address, alice.Address, tx.NewXRPAmount(xtesting.XRP(5)))
+	payTxn2 := payment.NewPayment(bob.Address, alice.Address, tx.NewXRPAmount(jtx.XRP(5)))
 	payTxn2.Fee = fmt.Sprintf("%d", env.BaseFee())
 	payTxn2.SigningPubKey = bob.PublicKeyHex()
 	payTxn2.Sequence = &bobPaySeq
@@ -2377,12 +2377,12 @@ func TestOpenLedger(t *testing.T) {
 	// but also bob pays alice XRP(5) standalone
 	// Net alice: preAlice - XRP(10) - XRP(10) + XRP(5) + XRP(5) - baseFee - batchFee
 	//          = preAlice - XRP(10) - baseFee - batchFee
-	xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(10))-batchFee-env.BaseFee())
+	jtx.RequireBalance(t, env, alice, preAlice-uint64(jtx.XRP(10))-batchFee-env.BaseFee())
 
 	// bob: +XRP(10) pay1 + XRP(10) inner alice->bob - XRP(5) inner bob->alice
 	//      - XRP(5) standalone - baseFee for standalone
 	// Net bob: preBob + XRP(10) - baseFee
-	xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(10))-env.BaseFee())
+	jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(10))-env.BaseFee())
 }
 
 // =============================================================================
@@ -2393,8 +2393,8 @@ func TestOpenLedger(t *testing.T) {
 func TestBadRawTxn(t *testing.T) {
 	t.Run("nil inner transaction", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -2430,20 +2430,20 @@ func TestPreclaim(t *testing.T) {
 
 	env := newBatchEnv(t)
 
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
-	carol := xtesting.NewAccount("carol")
-	dave := xtesting.NewAccount("dave")
-	elsa := xtesting.NewAccount("elsa")
-	frank := xtesting.NewAccount("frank")
-	phantom := xtesting.NewAccount("phantom") // not funded — phantom account
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dave := jtx.NewAccount("dave")
+	elsa := jtx.NewAccount("elsa")
+	frank := jtx.NewAccount("frank")
+	phantom := jtx.NewAccount("phantom") // not funded — phantom account
 
-	env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xtesting.XRP(10000)))
-	env.FundAmount(dave, uint64(xtesting.XRP(10000)))
-	env.FundAmount(elsa, uint64(xtesting.XRP(10000)))
-	env.FundAmount(frank, uint64(xtesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(dave, uint64(jtx.XRP(10000)))
+	env.FundAmount(elsa, uint64(jtx.XRP(10000)))
+	env.FundAmount(frank, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// ------------------------------------------------------------------
@@ -2463,7 +2463,7 @@ func TestPreclaim(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{dave, carol}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{dave, carol}).
 			Build()
 		result := env.Submit(batch)
 		require.Equal(t, "tefNOT_MULTI_SIGNING", result.Code)
@@ -2472,14 +2472,14 @@ func TestPreclaim(t *testing.T) {
 
 	// Set up signer lists for alice and bob
 	// alice: quorum=2, signers={bob:1, carol:1}
-	env.SetSignerList(alice, 2, []xtesting.TestSigner{
+	env.SetSignerList(alice, 2, []jtx.TestSigner{
 		{Account: bob, Weight: 1},
 		{Account: carol, Weight: 1},
 	})
 	env.Close()
 
 	// bob: quorum=2, signers={carol:1, dave:1, elsa:1}
-	env.SetSignerList(bob, 2, []xtesting.TestSigner{
+	env.SetSignerList(bob, 2, []jtx.TestSigner{
 		{Account: carol, Weight: 1},
 		{Account: dave, Weight: 1},
 		{Account: elsa, Weight: 1},
@@ -2493,7 +2493,7 @@ func TestPreclaim(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, frank}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, frank}).
 			Build()
 		result := env.Submit(batch)
 		require.Equal(t, "tefBAD_SIGNATURE", result.Code)
@@ -2502,13 +2502,13 @@ func TestPreclaim(t *testing.T) {
 
 	// tefBAD_SIGNATURE: Wrong publicKey type (ed25519 dave not in signer list)
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_wrong_key_type", func(t *testing.T) {
-		daveEd := xtesting.NewAccountWithKeyType("dave", xtesting.KeyTypeEd25519)
+		daveEd := jtx.NewAccountWithKeyType("dave", jtx.KeyTypeEd25519)
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, daveEd}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, daveEd}).
 			Build()
 		result := env.Submit(batch)
 		require.Equal(t, "tefBAD_SIGNATURE", result.Code)
@@ -2524,7 +2524,7 @@ func TestPreclaim(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, elsa}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, elsa}).
 			Build()
 		result := env.Submit(batch)
 		require.Equal(t, "tefMASTER_DISABLED", result.Code)
@@ -2538,7 +2538,7 @@ func TestPreclaim(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, phantom}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, phantom}).
 			Build()
 		result := env.Submit(batch)
 		require.Equal(t, "tefBAD_SIGNATURE", result.Code)
@@ -2548,7 +2548,7 @@ func TestPreclaim(t *testing.T) {
 	// tefBAD_SIGNATURE: Signer has not enabled RegularKey
 	// dave signs with davo (ed25519) key, but dave has no regular key set
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_no_regkey", func(t *testing.T) {
-		davo := xtesting.NewAccountWithKeyType("davo", xtesting.KeyTypeEd25519)
+		davo := jtx.NewAccountWithKeyType("davo", jtx.KeyTypeEd25519)
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
@@ -2568,7 +2568,7 @@ func TestPreclaim(t *testing.T) {
 	// dave's regular key is frank, but trying to sign with davo
 	env.SetRegularKey(dave, frank)
 	t.Run("checkBatchSign.checkMultiSign/tefBAD_SIGNATURE_wrong_regkey", func(t *testing.T) {
-		davo := xtesting.NewAccountWithKeyType("davo", xtesting.KeyTypeEd25519)
+		davo := jtx.NewAccountWithKeyType("davo", jtx.KeyTypeEd25519)
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
@@ -2591,7 +2591,7 @@ func TestPreclaim(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol}).
 			Build()
 		result := env.Submit(batch)
 		require.Equal(t, "tefBAD_QUORUM", result.Code)
@@ -2605,10 +2605,10 @@ func TestPreclaim(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, dave}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, dave}).
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	})
 
@@ -2664,7 +2664,7 @@ func TestPreclaim(t *testing.T) {
 			AddSignerWithRegKey(bob, carol, "DEADBEEF").
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	})
 
@@ -2678,7 +2678,7 @@ func TestPreclaim(t *testing.T) {
 			AddSigner(bob, "DEADBEEF").
 			Build()
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 	})
 
@@ -2709,10 +2709,10 @@ func TestAccountDelete(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testAccountDelete() - tfIndependent success
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(alice)
@@ -2735,22 +2735,22 @@ func TestAccountDelete(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice does not exist; Bob receives Alice's XRP
-		xtesting.RequireAccountNotExists(t, env, alice)
-		xtesting.RequireBalance(t, env, bob, preBob+(preAlice-batchFee))
+		jtx.RequireAccountNotExists(t, env, alice)
+		jtx.RequireBalance(t, env, bob, preBob+(preAlice-batchFee))
 	})
 
 	t.Run("tfIndependent - account delete fails", func(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testAccountDelete() - tfIndependent fails
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(alice)
@@ -2775,22 +2775,22 @@ func TestAccountDelete(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice still exists; Bob receives XRP(3) from the two successful payments
-		xtesting.RequireAccountExists(t, env, alice)
-		xtesting.RequireBalance(t, env, bob, preBob+uint64(xtesting.XRP(3)))
+		jtx.RequireAccountExists(t, env, alice)
+		jtx.RequireBalance(t, env, bob, preBob+uint64(jtx.XRP(3)))
 	})
 
 	t.Run("tfAllOrNothing - account delete fails", func(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testAccountDelete() - tfAllOrNothing fails
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(alice)
@@ -2811,12 +2811,12 @@ func TestAccountDelete(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice still exists (all rolled back); Bob is unchanged
-		xtesting.RequireAccountExists(t, env, alice)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireAccountExists(t, env, alice)
+		jtx.RequireBalance(t, env, bob, preBob)
 	})
 }
 
@@ -2831,12 +2831,12 @@ func TestObjectCreateSequence(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testObjectCreateSequence() - success
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		gw := xtesting.NewAccount("gw")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-		env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		gw := jtx.NewAccount("gw")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
+		env.FundAmount(gw, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		// Set up trust lines and issue USD
@@ -2868,18 +2868,18 @@ func TestObjectCreateSequence(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// Alice consumes sequences (outer + 1 inner)
-		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+		jtx.RequireSequence(t, env, alice, aliceSeq+2)
 
 		// Bob consumes sequences (1 inner)
-		xtesting.RequireSequence(t, env, bob, bobSeq+1)
+		jtx.RequireSequence(t, env, bob, bobSeq+1)
 
 		// Alice pays fee; Bob XRP unchanged
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 
 		// Alice gains USD(10); Bob loses USD(10)
 		require.InDelta(t, preAliceUSD+10.0, env.BalanceIOU(alice, "USD", gw), 0.001,
@@ -2894,12 +2894,12 @@ func TestObjectCreateSequence(t *testing.T) {
 		// Reference: rippled Batch_test.cpp testObjectCreateSequence() - failure
 		env := newBatchEnv(t)
 
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		gw := xtesting.NewAccount("gw")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-		env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		gw := jtx.NewAccount("gw")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
+		env.FundAmount(gw, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		usd10 := tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)
@@ -2932,18 +2932,18 @@ func TestObjectCreateSequence(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result) // Batch itself succeeds
+		jtx.RequireTxSuccess(t, result) // Batch itself succeeds
 		env.Close()
 
 		// Alice consumes sequences (outer + 1 inner)
-		xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+		jtx.RequireSequence(t, env, alice, aliceSeq+2)
 
 		// Bob consumes sequences (1 inner)
-		xtesting.RequireSequence(t, env, bob, bobSeq+1)
+		jtx.RequireSequence(t, env, bob, bobSeq+1)
 
 		// Alice pays fee only; Bob XRP unchanged
-		xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-		xtesting.RequireBalance(t, env, bob, preBob)
+		jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+		jtx.RequireBalance(t, env, bob, preBob)
 
 		// USD balances unchanged (both inner txns failed)
 		require.InDelta(t, preAliceUSD, env.BalanceIOU(alice, "USD", gw), 0.001,
@@ -2963,12 +2963,12 @@ func TestObjectCreateTicket(t *testing.T) {
 	// Reference: rippled Batch_test.cpp testObjectCreateTicket()
 	env := newBatchEnv(t)
 
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
-	gw := xtesting.NewAccount("gw")
-	env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	gw := jtx.NewAccount("gw")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines and issue USD
@@ -3007,20 +3007,20 @@ func TestObjectCreateTicket(t *testing.T) {
 		Build()
 
 	result := env.Submit(batch)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice consumes sequences: outer + 1 inner = aliceSeq + 2
-	xtesting.RequireSequence(t, env, alice, aliceSeq+2)
+	jtx.RequireSequence(t, env, alice, aliceSeq+2)
 
 	// Bob: TicketCreate uses seq bobSeq (sequence advances by 1 + 10 tickets = 11).
 	// CheckCreate uses ticket (no sequence advancement).
 	// So bob's sequence = bobSeq + 10 + 1 = bobSeq + 11
-	xtesting.RequireSequence(t, env, bob, bobSeq+10+1)
+	jtx.RequireSequence(t, env, bob, bobSeq+10+1)
 
 	// Alice pays fee; Bob XRP unchanged
-	xtesting.RequireBalance(t, env, alice, preAlice-batchFee)
-	xtesting.RequireBalance(t, env, bob, preBob)
+	jtx.RequireBalance(t, env, alice, preAlice-batchFee)
+	jtx.RequireBalance(t, env, bob, preBob)
 
 	// Alice gains USD(10); Bob loses USD(10)
 	require.InDelta(t, preAliceUSD+10.0, env.BalanceIOU(alice, "USD", gw), 0.001,
@@ -3042,15 +3042,15 @@ func TestObjectCreate3rdParty(t *testing.T) {
 
 	env := newBatchEnv(t)
 
-	alice := xtesting.NewAccount("alice")
-	bob := xtesting.NewAccount("bob")
-	carol := xtesting.NewAccount("carol")
-	gw := xtesting.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	gw := jtx.NewAccount("gw")
 
-	env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xtesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xtesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xtesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines and fund IOU
@@ -3081,18 +3081,18 @@ func TestObjectCreate3rdParty(t *testing.T) {
 		Build()
 
 	result := env.Submit(batch)
-	xtesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify sequences advanced
-	xtesting.RequireSequence(t, env, alice, aliceSeq+1)
-	xtesting.RequireSequence(t, env, bob, bobSeq+1)
-	xtesting.RequireSequence(t, env, carol, carolSeq+1)
+	jtx.RequireSequence(t, env, alice, aliceSeq+1)
+	jtx.RequireSequence(t, env, bob, bobSeq+1)
+	jtx.RequireSequence(t, env, carol, carolSeq+1)
 
 	// Verify XRP balances: alice and bob unchanged, carol pays fee
-	xtesting.RequireBalance(t, env, alice, preAlice)
-	xtesting.RequireBalance(t, env, bob, preBob)
-	xtesting.RequireBalance(t, env, carol, preCarol-batchFee)
+	jtx.RequireBalance(t, env, alice, preAlice)
+	jtx.RequireBalance(t, env, bob, preBob)
+	jtx.RequireBalance(t, env, carol, preCarol-batchFee)
 
 	// Verify IOU balances: alice gains USD(10), bob loses USD(10)
 	require.InDelta(t, preAliceUSD+10.0, env.BalanceIOU(alice, "USD", gw), 0.001,
@@ -3109,8 +3109,8 @@ func TestObjectCreate3rdParty(t *testing.T) {
 func TestBatchCalculateBaseFee(t *testing.T) {
 	t.Run("too many txns returns error fee", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3131,18 +3131,18 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 	t.Run("too many signers returns error fee", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
+		alice := jtx.NewAccount("alice")
 		env.Fund(alice)
 		env.Close()
 
-		bob := xtesting.NewAccount("bob")
+		bob := jtx.NewAccount("bob")
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 9, 2)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+2))
 		for i := range 9 {
-			signer := xtesting.NewAccount(fmt.Sprintf("signer%d", i))
+			signer := jtx.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")
 		}
 		batch := builder.Build()
@@ -3154,8 +3154,8 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 	t.Run("valid batch fee calculation", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3186,8 +3186,8 @@ func TestBatchSigningVectors(t *testing.T) {
 	// are provided at all, so the required set is never emptied (Batch.cpp:448-453).
 	t.Run("temBAD_SIGNER - foreign inner with no batch signers", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3199,15 +3199,15 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
 	// temBAD_SIGNER: a presented signer is not required because both inner txns
 	// belong to the outer account, so requiredSigners is empty (Batch.cpp:530-541).
 	t.Run("temBAD_SIGNER - stray signer, no inner requires it", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3220,16 +3220,16 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
 	// temBAD_SIGNER: bob's inner requires bob, but the presented signer is carol
 	// (Batch.cpp:543-552).
 	t.Run("temBAD_SIGNER - wrong signer for required inner account", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
 		env.Fund(alice, bob, carol)
 		env.Close()
 
@@ -3242,16 +3242,16 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
 	// temBAD_SIGNER: a required inner account (carol) is left uncovered after all
 	// presented signers are consumed (Batch.cpp:581-592).
 	t.Run("temBAD_SIGNER - required inner account uncovered", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
 		env.Fund(alice, bob, carol)
 		env.Close()
 
@@ -3265,7 +3265,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNER")
 	})
 
 	// temBAD_SIGNATURE: signer Account is bob (required) and the signature is made
@@ -3278,8 +3278,8 @@ func TestBatchSigningVectors(t *testing.T) {
 	t.Run("temBAD_SIGNATURE - signature key mismatched to signing pubkey", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3292,7 +3292,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.SubmitSigned(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
 	// temBAD_SIGNATURE: bob is the required signer with his own public key but a
@@ -3300,8 +3300,8 @@ func TestBatchSigningVectors(t *testing.T) {
 	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3314,15 +3314,15 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.SubmitSigned(batch)
-		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
+		jtx.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
 	// tesSUCCESS: a single required signer (bob) signs the batch digest with his
 	// master key — a valid single-signed BatchSigner.
 	t.Run("tesSUCCESS - valid single-signed batch signer", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3335,7 +3335,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	})
 
 	// tesSUCCESS: same valid single-signed BatchSigner, with full signature
@@ -3344,8 +3344,8 @@ func TestBatchSigningVectors(t *testing.T) {
 	t.Run("tesSUCCESS - valid single-signed batch signer (verified)", func(t *testing.T) {
 		env := newBatchEnv(t)
 		env.VerifySignatures = true
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3358,7 +3358,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.SubmitSigned(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	})
 
 	// tesSUCCESS: bob's required signature is satisfied by a nested multi-sign
@@ -3366,14 +3366,14 @@ func TestBatchSigningVectors(t *testing.T) {
 	// BatchSigner.
 	t.Run("tesSUCCESS - valid multi-signed batch signer", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
-		dave := xtesting.NewAccount("dave")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
+		dave := jtx.NewAccount("dave")
 		env.Fund(alice, bob, carol, dave)
 		env.Close()
 
-		env.SetSignerList(bob, 2, []xtesting.TestSigner{
+		env.SetSignerList(bob, 2, []jtx.TestSigner{
 			{Account: carol, Weight: 1},
 			{Account: dave, Weight: 1},
 		})
@@ -3384,11 +3384,11 @@ func TestBatchSigningVectors(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, dave}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, dave}).
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	})
 
 	// tesSUCCESS: same valid multi-signed BatchSigner, but with full signature
@@ -3397,16 +3397,16 @@ func TestBatchSigningVectors(t *testing.T) {
 	// engine's batch multi-sign crypto path end-to-end.
 	t.Run("tesSUCCESS - valid multi-signed batch signer (verified)", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		carol := xtesting.NewAccount("carol")
-		dave := xtesting.NewAccount("dave")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		carol := jtx.NewAccount("carol")
+		dave := jtx.NewAccount("dave")
 		env.Fund(alice, bob, carol, dave)
 		env.Close()
 
 		// Establish bob's signer list before enabling signature verification, since
 		// the SetSignerList helper submits an unsigned SignerListSet.
-		env.SetSignerList(bob, 2, []xtesting.TestSigner{
+		env.SetSignerList(bob, 2, []jtx.TestSigner{
 			{Account: carol, Weight: 1},
 			{Account: dave, Weight: 1},
 		})
@@ -3418,19 +3418,19 @@ func TestBatchSigningVectors(t *testing.T) {
 		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
-			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, dave}).
+			AddMultiSignBatchSigner(bob, []*jtx.Account{carol, dave}).
 			Build()
 
 		result := env.SubmitSigned(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	})
 
 	// tesSUCCESS: a single-account batch (both inners from the outer account)
 	// needs no BatchSigners at all.
 	t.Run("tesSUCCESS - single-account batch needs no signers", func(t *testing.T) {
 		env := newBatchEnv(t)
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
 		env.Fund(alice, bob)
 		env.Close()
 
@@ -3442,7 +3442,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
-		xtesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	})
 }
 
@@ -3454,11 +3454,11 @@ func TestBatchSigningVectors(t *testing.T) {
 // Reference: rippled STTx::maxMultiSigners + Batch_test.cpp multi-sign vectors.
 func TestBatchSignerArrayBound(t *testing.T) {
 	// makeNestedSigners builds n distinct, funded signer accounts.
-	makeNestedSigners := func(env *xtesting.TestEnv, n int) []*xtesting.Account {
-		signers := make([]*xtesting.Account, n)
+	makeNestedSigners := func(env *jtx.TestEnv, n int) []*jtx.Account {
+		signers := make([]*jtx.Account, n)
 		for i := range n {
-			s := xtesting.NewAccount(fmt.Sprintf("nsigner%d", i))
-			env.FundAmount(s, uint64(xtesting.XRP(1000)))
+			s := jtx.NewAccount(fmt.Sprintf("nsigner%d", i))
+			env.FundAmount(s, uint64(jtx.XRP(1000)))
 			signers[i] = s
 		}
 		return signers
@@ -3466,7 +3466,7 @@ func TestBatchSignerArrayBound(t *testing.T) {
 
 	// buildBatch produces a two-inner batch whose bob account is multi-signed by
 	// the supplied nested signers. bob's inner makes it a required signer.
-	buildBatch := func(env *xtesting.TestEnv, alice, bob *xtesting.Account, signers []*xtesting.Account) *batchtx.Batch {
+	buildBatch := func(env *jtx.TestEnv, alice, bob *jtx.Account, signers []*jtx.Account) *batchtx.Batch {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, uint32(len(signers)+1), 2)
 		return NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
@@ -3481,10 +3481,10 @@ func TestBatchSignerArrayBound(t *testing.T) {
 	t.Run("ExpandedSignerList enabled - 33 nested signers rejected", func(t *testing.T) {
 		env := newBatchEnv(t)
 		require.True(t, env.FeatureEnabled("ExpandedSignerList"))
-		alice := xtesting.NewAccount("alice")
-		bob := xtesting.NewAccount("bob")
-		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
-		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		env.FundAmount(alice, uint64(jtx.XRP(10000)))
+		env.FundAmount(bob, uint64(jtx.XRP(10000)))
 		env.Close()
 
 		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 33))

@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	ammtest "github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	coreamm "github.com/LeJamon/go-xrpl/internal/tx/amm"
@@ -24,10 +24,10 @@ import (
 // asserts the pseudo-account lands at the address derived from the view's real
 // parent hash, not the all-zero-hash variant.
 func TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := testenv.NewAccount("gateway")
-	alice := testenv.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
 	env.Fund(gw, alice)
 
 	// alice trusts and holds USD so she can fund the AMM's second asset.
@@ -103,10 +103,10 @@ func TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash(t *testing.T) {
 // account than both rippled and goXRPL's own canonical build until the next
 // close.
 func TestTxqAdapter_ApplyTransaction_AMMCreateUsesParentHash(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := testenv.NewAccount("gateway")
-	alice := testenv.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
 	env.Fund(gw, alice)
 
 	env.Trust(alice, gw.IOU("USD", 1000))

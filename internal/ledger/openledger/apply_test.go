@@ -9,7 +9,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -19,7 +19,7 @@ import (
 //
 // We bypass env.Submit because that would mutate the env's live open
 // ledger; we want to test ApplyTxs in isolation against a fresh view.
-func buildSignedBlob(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, signer *testenv.Account) []byte {
+func buildSignedBlob(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
 	t.Helper()
 	env.SignWith(txn, signer)
 	txMap, err := txn.Flatten()
@@ -37,7 +37,7 @@ func buildSignedBlob(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, sig
 	return blob
 }
 
-func freshView(t *testing.T, env *testenv.TestEnv) *ledger.Ledger {
+func freshView(t *testing.T, env *jtx.TestEnv) *ledger.Ledger {
 	t.Helper()
 	// Close the env once so we have a closed parent to anchor a brand-new
 	// open view against — independent of env.ledger so AddTransactionWithMeta
@@ -60,14 +60,14 @@ func freshView(t *testing.T, env *testenv.TestEnv) *ledger.Ledger {
 // because bob does not exist yet; on a retry pass after alice→bob
 // succeeds it must settle.
 func TestApplyTxs_RetrySettles(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	// ApplyTxs always verifies signatures on pass 0 (engine config
 	// SkipSignatureVerification = pass > 0), so we need real signatures.
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
-	carol := testenv.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 	env.Fund(alice, carol) // bob will be funded by the in-loop payment
 
 	view := freshView(t, env)
@@ -131,11 +131,11 @@ func TestApplyTxs_RetrySettles(t *testing.T) {
 // in the engine as a tem/tef class result. The tx must NOT land in the
 // view and must NOT appear in retries.
 func TestApplyTxs_TemMalformed_DroppedNotRetried(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true) // ensure the bad sig is actually checked
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 
 	view := freshView(t, env)
@@ -189,10 +189,10 @@ func TestApplyTxs_TemMalformed_DroppedNotRetried(t *testing.T) {
 // classic shape is "fund a brand-new account with less than ReserveBase",
 // which yields tecNO_DST_INSUF_XRP. This is the same scenario the
 // convergence test had to pre-fund around before Mode existed.
-func buildTecPayment(t *testing.T, env *testenv.TestEnv) (openledger.PendingTx, *testenv.Account) {
+func buildTecPayment(t *testing.T, env *jtx.TestEnv) (openledger.PendingTx, *jtx.Account) {
 	t.Helper()
-	master := testenv.MasterAccount()
-	newAcct := testenv.NewAccount("tec-target")
+	master := jtx.MasterAccount()
+	newAcct := jtx.NewAccount("tec-target")
 	// 100 XRP < 200 XRP reserve → tecNO_DST_INSUF_XRP.
 	pay := payment.Pay(master, newAcct, 100_000_000).
 		Sequence(env.Seq(master)).
@@ -210,7 +210,7 @@ func buildTecPayment(t *testing.T, env *testenv.TestEnv) (openledger.PendingTx, 
 // rippled OpenLedger::apply_one (OpenLedger.cpp:170-189). The tx must
 // end up in the view's tx map and must NOT appear in retries.
 func TestApplyTxs_OpenLedgerMode_TecCommits(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
 	pt, _ := buildTecPayment(t, env)
@@ -244,7 +244,7 @@ func TestApplyTxs_OpenLedgerMode_TecCommits(t *testing.T) {
 // apply loop. Net effect: the tx still ends up in the view and is not
 // reported as a leftover retry.
 func TestApplyTxs_BuildLedgerMode_TecRetriesThenCommits(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
 	pt, _ := buildTecPayment(t, env)

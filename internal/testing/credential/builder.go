@@ -4,15 +4,15 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 )
 
 // CredentialCreateBuilder provides a fluent interface for building CredentialCreate transactions.
 type CredentialCreateBuilder struct {
-	account        *testing.Account
-	subject        *testing.Account
+	account        *jtx.Account
+	subject        *jtx.Account
 	credentialType string
 	uri            string
 	expiration     *uint32
@@ -23,7 +23,7 @@ type CredentialCreateBuilder struct {
 
 // CredentialCreate creates a new CredentialCreateBuilder.
 // The account (issuer) creates a credential for the subject.
-func CredentialCreate(account, subject *testing.Account, credentialType string) *CredentialCreateBuilder {
+func CredentialCreate(account, subject *jtx.Account, credentialType string) *CredentialCreateBuilder {
 	return &CredentialCreateBuilder{
 		account:        account,
 		subject:        subject,
@@ -107,8 +107,8 @@ func (b *CredentialCreateBuilder) BuildCredentialCreate() *credential.Credential
 
 // CredentialAcceptBuilder provides a fluent interface for building CredentialAccept transactions.
 type CredentialAcceptBuilder struct {
-	account        *testing.Account
-	issuer         *testing.Account
+	account        *jtx.Account
+	issuer         *jtx.Account
 	credentialType string
 	fee            uint64
 	sequence       *uint32
@@ -117,7 +117,7 @@ type CredentialAcceptBuilder struct {
 
 // CredentialAccept creates a new CredentialAcceptBuilder.
 // The account (subject) accepts a credential issued by the issuer.
-func CredentialAccept(account, issuer *testing.Account, credentialType string) *CredentialAcceptBuilder {
+func CredentialAccept(account, issuer *jtx.Account, credentialType string) *CredentialAcceptBuilder {
 	return &CredentialAcceptBuilder{
 		account:        account,
 		issuer:         issuer,
@@ -172,9 +172,9 @@ func (b *CredentialAcceptBuilder) BuildCredentialAccept() *credential.Credential
 
 // CredentialDeleteBuilder provides a fluent interface for building CredentialDelete transactions.
 type CredentialDeleteBuilder struct {
-	account        *testing.Account
-	subject        *testing.Account
-	issuer         *testing.Account
+	account        *jtx.Account
+	subject        *jtx.Account
+	issuer         *jtx.Account
 	credentialType string
 	fee            uint64
 	sequence       *uint32
@@ -183,7 +183,7 @@ type CredentialDeleteBuilder struct {
 
 // CredentialDelete creates a new CredentialDeleteBuilder.
 // The account submits the delete. Subject and issuer identify the credential.
-func CredentialDelete(account, subject, issuer *testing.Account, credentialType string) *CredentialDeleteBuilder {
+func CredentialDelete(account, subject, issuer *jtx.Account, credentialType string) *CredentialDeleteBuilder {
 	return &CredentialDeleteBuilder{
 		account:        account,
 		subject:        subject,

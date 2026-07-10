@@ -3,7 +3,7 @@ package ticket
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	tickettx "github.com/LeJamon/go-xrpl/internal/tx/ticket"
 )
@@ -11,7 +11,7 @@ import (
 // TicketCreateBuilder provides a fluent interface for building TicketCreate transactions.
 // Reference: rippled's ticket::create() in test/jtx/ticket.h
 type TicketCreateBuilder struct {
-	account   *testing.Account
+	account   *jtx.Account
 	count     uint32
 	fee       int64
 	sequence  *uint32
@@ -21,7 +21,7 @@ type TicketCreateBuilder struct {
 
 // TicketCreate creates a new TicketCreateBuilder.
 // count is the number of tickets to create (1-250).
-func TicketCreate(account *testing.Account, count uint32) *TicketCreateBuilder {
+func TicketCreate(account *jtx.Account, count uint32) *TicketCreateBuilder {
 	return &TicketCreateBuilder{
 		account: account,
 		count:   count,

@@ -3,14 +3,14 @@ package accountset
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 )
 
 // AccountSetBuilder provides a fluent interface for building AccountSet transactions.
 type AccountSetBuilder struct {
-	account              *testing.Account
+	account              *jtx.Account
 	setFlag              *uint32
 	clearFlag            *uint32
 	domain               string
@@ -30,7 +30,7 @@ type AccountSetBuilder struct {
 }
 
 // AccountSet creates a new AccountSetBuilder.
-func AccountSet(account *testing.Account) *AccountSetBuilder {
+func AccountSet(account *jtx.Account) *AccountSetBuilder {
 	return &AccountSetBuilder{
 		account: account,
 		fee:     10, // Default fee: 10 drops
@@ -178,7 +178,7 @@ func (b *AccountSetBuilder) AllowTrustLineLocking() *AccountSetBuilder {
 
 // AuthorizedMinter sets the account as an authorized NFToken minter.
 // Reference: rippled's token::setMinter(account, minter).
-func (b *AccountSetBuilder) AuthorizedMinter(minter *testing.Account) *AccountSetBuilder {
+func (b *AccountSetBuilder) AuthorizedMinter(minter *jtx.Account) *AccountSetBuilder {
 	flag := accounttx.AccountSetFlagAuthorizedNFTokenMinter
 	b.setFlag = &flag
 	b.nfTokenMinter = minter.Address

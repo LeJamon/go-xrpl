@@ -12,7 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -55,7 +55,7 @@ func newAdaptorWithService(t *testing.T, svc *service.Service) *adaptor.Adaptor 
 // buildSignedPaymentBlob constructs a signed Payment binary blob from
 // sender to receiver for the given drops amount. Same shape as the
 // service-test helper of the same name.
-func buildSignedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver *testenv.Account, dropsAmount uint64, senderSeq uint32) ([]byte, [32]byte) {
+func buildSignedPaymentBlob(t *testing.T, env *jtx.TestEnv, sender, receiver *jtx.Account, dropsAmount uint64, senderSeq uint32) ([]byte, [32]byte) {
 	t.Helper()
 	env.SetVerifySignatures(true)
 
@@ -91,9 +91,9 @@ func TestAdaptor_AddPendingTx_RoutesToOpenLedger(t *testing.T) {
 	svc := newOpenLedgerTestService(t)
 	a := newAdaptorWithService(t, svc)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 	blob, hash := buildSignedPaymentBlob(t, env, master, alice, 100_000_000, 1)
 
 	a.AddPendingTx(blob, true)
@@ -115,10 +115,10 @@ func TestAdaptor_GetProposableTxs_FromOpenLedger(t *testing.T) {
 	svc := newOpenLedgerTestService(t)
 	a := newAdaptorWithService(t, svc)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	blob1, _ := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
 	blob2, _ := buildSignedPaymentBlob(t, env, master, bob, 60_000_000, 2)
 
@@ -159,9 +159,9 @@ func TestAdaptor_AddPendingTx_FailureNotInPool(t *testing.T) {
 	svc := newOpenLedgerTestService(t)
 	a := newAdaptorWithService(t, svc)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 	goodBlob, _ := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
 
 	// Corrupt the signature by XORing a byte near the end, where the

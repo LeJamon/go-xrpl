@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	ammtest "github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
@@ -19,7 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-func signedBlob(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, signer *testenv.Account) []byte {
+func signedBlob(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
 	t.Helper()
 	env.SignWith(txn, signer)
 	txMap, err := txn.Flatten()
@@ -83,11 +83,11 @@ func TestService_SimulateTransaction_AMMCreateUsesParentHash(t *testing.T) {
 		t.Fatalf("service.Start: %v", err)
 	}
 
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
-	master := testenv.MasterAccount()
-	gw := testenv.NewAccount("gateway")
-	alice := testenv.NewAccount("alice")
+	master := jtx.MasterAccount()
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
 
 	// Submit + close are separate ledgers: SubmitTransaction applies to the
 	// openLedgerView, and only AcceptLedger folds the result into the

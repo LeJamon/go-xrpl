@@ -3,14 +3,14 @@ package offer
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	offertx "github.com/LeJamon/go-xrpl/internal/tx/offer"
 )
 
 // OfferCreateBuilder provides a fluent interface for building OfferCreate transactions.
 type OfferCreateBuilder struct {
-	account       *testing.Account
+	account       *jtx.Account
 	takerPays     tx.Amount
 	takerGets     tx.Amount
 	expiration    *uint32
@@ -24,7 +24,7 @@ type OfferCreateBuilder struct {
 
 // OfferCreate creates a new OfferCreateBuilder.
 // takerPays is what the offer creator receives, takerGets is what they pay.
-func OfferCreate(account *testing.Account, takerPays, takerGets tx.Amount) *OfferCreateBuilder {
+func OfferCreate(account *jtx.Account, takerPays, takerGets tx.Amount) *OfferCreateBuilder {
 	return &OfferCreateBuilder{
 		account:   account,
 		takerPays: takerPays,
@@ -36,7 +36,7 @@ func OfferCreate(account *testing.Account, takerPays, takerGets tx.Amount) *Offe
 // OfferCreateXRP creates an offer where one side is XRP.
 // If buyXRP is true, creates an offer to buy XRP with issued currency.
 // If buyXRP is false, creates an offer to sell XRP for issued currency.
-func OfferCreateXRP(account *testing.Account, xrpAmount uint64, issuedAmount tx.Amount, buyXRP bool) *OfferCreateBuilder {
+func OfferCreateXRP(account *jtx.Account, xrpAmount uint64, issuedAmount tx.Amount, buyXRP bool) *OfferCreateBuilder {
 	xrp := tx.NewXRPAmount(int64(xrpAmount))
 	if buyXRP {
 		// Offer creator receives XRP, pays issued currency
@@ -159,7 +159,7 @@ func (b *OfferCreateBuilder) BuildOfferCreate() *offertx.OfferCreate {
 
 // OfferCancelBuilder provides a fluent interface for building OfferCancel transactions.
 type OfferCancelBuilder struct {
-	account   *testing.Account
+	account   *jtx.Account
 	offerSeq  uint32
 	fee       uint64
 	sequence  *uint32
@@ -168,7 +168,7 @@ type OfferCancelBuilder struct {
 
 // OfferCancel creates a new OfferCancelBuilder.
 // offerSeq is the sequence number of the OfferCreate transaction to cancel.
-func OfferCancel(account *testing.Account, offerSeq uint32) *OfferCancelBuilder {
+func OfferCancel(account *jtx.Account, offerSeq uint32) *OfferCancelBuilder {
 	return &OfferCancelBuilder{
 		account:  account,
 		offerSeq: offerSeq,

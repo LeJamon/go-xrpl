@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	escrowtx "github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -23,8 +23,8 @@ func FromRippleTime(rippleTime uint32) time.Time {
 
 // EscrowCreateBuilder provides a fluent interface for building EscrowCreate transactions.
 type EscrowCreateBuilder struct {
-	from        *testing.Account
-	to          *testing.Account
+	from        *jtx.Account
+	to          *jtx.Account
 	amount      int64      // XRP in drops
 	iouAmount   *tx.Amount // IOU amount (nil = XRP)
 	mptAmount   *tx.Amount // MPT amount (nil = not MPT)
@@ -40,7 +40,7 @@ type EscrowCreateBuilder struct {
 
 // EscrowCreate creates a new EscrowCreateBuilder.
 // The amount is specified in drops (1 XRP = 1,000,000 drops).
-func EscrowCreate(from, to *testing.Account, amount int64) *EscrowCreateBuilder {
+func EscrowCreate(from, to *jtx.Account, amount int64) *EscrowCreateBuilder {
 	return &EscrowCreateBuilder{
 		from:   from,
 		to:     to,
@@ -177,8 +177,8 @@ func (b *EscrowCreateBuilder) BuildEscrowCreate() *escrowtx.EscrowCreate {
 
 // EscrowFinishBuilder provides a fluent interface for building EscrowFinish transactions.
 type EscrowFinishBuilder struct {
-	finisher      *testing.Account
-	owner         *testing.Account
+	finisher      *jtx.Account
+	owner         *jtx.Account
 	offerSeq      uint32
 	condition     []byte
 	fulfillment   []byte
@@ -190,7 +190,7 @@ type EscrowFinishBuilder struct {
 // EscrowFinish creates a new EscrowFinishBuilder.
 // The finisher is the account submitting the transaction, owner is who created the escrow,
 // and offerSeq is the sequence number of the EscrowCreate transaction.
-func EscrowFinish(finisher *testing.Account, owner *testing.Account, offerSeq uint32) *EscrowFinishBuilder {
+func EscrowFinish(finisher *jtx.Account, owner *jtx.Account, offerSeq uint32) *EscrowFinishBuilder {
 	return &EscrowFinishBuilder{
 		finisher: finisher,
 		owner:    owner,
@@ -283,8 +283,8 @@ func (b *EscrowFinishBuilder) BuildEscrowFinish() *escrowtx.EscrowFinish {
 
 // EscrowCancelBuilder provides a fluent interface for building EscrowCancel transactions.
 type EscrowCancelBuilder struct {
-	canceller *testing.Account
-	owner     *testing.Account
+	canceller *jtx.Account
+	owner     *jtx.Account
 	offerSeq  uint32
 	fee       uint64
 	sequence  *uint32
@@ -293,7 +293,7 @@ type EscrowCancelBuilder struct {
 // EscrowCancel creates a new EscrowCancelBuilder.
 // The canceller is the account submitting the transaction, owner is who created the escrow,
 // and offerSeq is the sequence number of the EscrowCreate transaction.
-func EscrowCancel(canceller *testing.Account, owner *testing.Account, offerSeq uint32) *EscrowCancelBuilder {
+func EscrowCancel(canceller *jtx.Account, owner *jtx.Account, offerSeq uint32) *EscrowCancelBuilder {
 	return &EscrowCancelBuilder{
 		canceller: canceller,
 		owner:     owner,

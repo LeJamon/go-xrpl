@@ -5,7 +5,7 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
@@ -14,22 +14,22 @@ import (
 // TestDeliverMin_WithoutPartialPayment tests that delivermin requires tfPartialPayment flag.
 // From rippled: delivermin without tfPartialPayment should fail with temBAD_AMOUNT
 func TestDeliverMin_WithoutPartialPayment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// DeliverMin without tfPartialPayment should fail with temBAD_AMOUNT
@@ -46,22 +46,22 @@ func TestDeliverMin_WithoutPartialPayment(t *testing.T) {
 // TestDeliverMin_NegativeAmount tests that negative delivermin fails.
 // From rippled: negative delivermin should fail with temBAD_AMOUNT
 func TestDeliverMin_NegativeAmount(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Negative DeliverMin should fail with temBAD_AMOUNT
@@ -80,22 +80,22 @@ func TestDeliverMin_NegativeAmount(t *testing.T) {
 // TestDeliverMin_CurrencyMismatch tests that delivermin currency must match amount currency.
 // From rippled: delivermin with different currency should fail with temBAD_AMOUNT
 func TestDeliverMin_CurrencyMismatch(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// DeliverMin with different currency (XRP vs USD) should fail with temBAD_AMOUNT
@@ -114,24 +114,24 @@ func TestDeliverMin_CurrencyMismatch(t *testing.T) {
 // TestDeliverMin_IssuerMismatch tests that delivermin issuer must match amount issuer.
 // From rippled: delivermin with different issuer should fail with temBAD_AMOUNT
 func TestDeliverMin_IssuerMismatch(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	carol := xrplgoTesting.NewAccount("carol")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	carol := jtx.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// DeliverMin with different issuer should fail with temBAD_AMOUNT
@@ -150,22 +150,22 @@ func TestDeliverMin_IssuerMismatch(t *testing.T) {
 // TestDeliverMin_ExceedsAmount tests that delivermin cannot exceed amount.
 // From rippled: delivermin greater than amount should fail with temBAD_AMOUNT
 func TestDeliverMin_ExceedsAmount(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// DeliverMin > Amount should fail with temBAD_AMOUNT
@@ -184,39 +184,39 @@ func TestDeliverMin_ExceedsAmount(t *testing.T) {
 // TestDeliverMin_PathPartial tests partial payment via path with delivermin.
 // From rippled: partial payment that doesn't meet delivermin should fail with tecPATH_PARTIAL
 func TestDeliverMin_PathPartial(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Pay carol some USD
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, carol, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Carol creates offer: sell 5 USD for 5 XRP
 	usd5 := tx.NewIssuedAmountFromFloat64(5, "USD", gw.Address)
 	xrp5 := tx.NewXRPAmount(5_000_000)
 	result = env.CreateOffer(carol, usd5, xrp5) // TakerGets=USD, TakerPays=XRP
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice tries to pay bob 10 USD via XRP path with delivermin of 7 USD
@@ -239,34 +239,34 @@ func TestDeliverMin_PathPartial(t *testing.T) {
 // TestDeliverMin_SelfPayment tests self-payment with delivermin.
 // From rippled: alice can pay herself via offer, converting all available liquidity
 func TestDeliverMin_SelfPayment(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund bob with USD
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, bob, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob creates an offer: sell 100 USD for 100 XRP
 	xrp100 := tx.NewXRPAmount(100_000_000)
 	result = env.CreateOffer(bob, usd100, xrp100) // TakerGets=USD, TakerPays=XRP
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice pays herself USD through XRP path (cross-currency self-payment)
@@ -278,7 +278,7 @@ func TestDeliverMin_SelfPayment(t *testing.T) {
 		PartialPayment().
 		SendMax(xrp100).
 		Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice should now have 100 USD
@@ -291,30 +291,30 @@ func TestDeliverMin_SelfPayment(t *testing.T) {
 // TestDeliverMin_MultipleOffers tests delivermin with multiple offers.
 // From rippled: payment should consume multiple offers to meet delivermin
 func TestDeliverMin_MultipleOffers(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund bob with USD
 	usd200 := tx.NewIssuedAmountFromFloat64(200, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, bob, usd200).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob creates multiple offers at different rates
@@ -322,19 +322,19 @@ func TestDeliverMin_MultipleOffers(t *testing.T) {
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	xrp100 := tx.NewXRPAmount(100_000_000)
 	result = env.CreateOffer(bob, usd100, xrp100)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Offer 2: sell 100 USD for 1000 XRP (10:1)
 	xrp1000 := tx.NewXRPAmount(1000_000_000)
 	result = env.CreateOffer(bob, usd100, xrp1000)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Offer 3: sell 100 USD for 10000 XRP (100:1) - bob doesn't have this much USD left
 	xrp10000 := tx.NewXRPAmount(10000_000_000)
 	result = env.CreateOffer(bob, usd100, xrp10000)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice tries to pay carol USD via XRP path with delivermin of 200 USD
@@ -358,7 +358,7 @@ func TestDeliverMin_MultipleOffers(t *testing.T) {
 		PartialPayment().
 		SendMax(xrp1100).
 		Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob should have 0 USD (all sold through offers)
@@ -375,50 +375,50 @@ func TestDeliverMin_MultipleOffers(t *testing.T) {
 // TestDeliverMin_MultipleProviders tests delivermin with multiple liquidity providers.
 // From rippled: payment should consume offers from multiple providers
 func TestDeliverMin_MultipleProviders(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
-	dan := xrplgoTesting.NewAccount("dan")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dan := jtx.NewAccount("dan")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(dan, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(dan, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund bob and dan with USD
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, bob, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(gw, dan, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob creates offers
 	xrp100 := tx.NewXRPAmount(100_000_000)
 	xrp1000 := tx.NewXRPAmount(1000_000_000)
 	result = env.CreateOffer(bob, usd100, xrp100) // Sell 100 USD for 100 XRP
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.CreateOffer(bob, usd100, xrp1000) // This won't be used (bob only has 100 USD)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Dan creates an offer
 	result = env.CreateOffer(dan, usd100, xrp100) // Sell 100 USD for 100 XRP
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Alice pays carol USD with sendmax of 200 XRP
@@ -432,7 +432,7 @@ func TestDeliverMin_MultipleProviders(t *testing.T) {
 		PartialPayment().
 		SendMax(xrp200).
 		Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Bob should have 0 USD

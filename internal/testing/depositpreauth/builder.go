@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -19,7 +19,7 @@ import (
 // credential-based deposit preauthorization.
 // Reference: rippled jtx::deposit::AuthorizeCredentials
 type AuthorizeCredentials struct {
-	Issuer   *testing.Account
+	Issuer   *jtx.Account
 	CredType string // raw credential type (will be hex-encoded if needed)
 }
 
@@ -31,8 +31,8 @@ type AuthorizeCredentials struct {
 // AuthBuilder provides a fluent interface for building a DepositPreauth
 // transaction that authorizes an account.
 type AuthBuilder struct {
-	owner      *testing.Account
-	authorized *testing.Account
+	owner      *jtx.Account
+	authorized *jtx.Account
 	fee        uint64
 	sequence   *uint32
 	flags      *uint32
@@ -40,7 +40,7 @@ type AuthBuilder struct {
 }
 
 // Auth creates a new AuthBuilder for deposit preauthorization.
-func Auth(owner, authorized *testing.Account) *AuthBuilder {
+func Auth(owner, authorized *jtx.Account) *AuthBuilder {
 	return &AuthBuilder{
 		owner:      owner,
 		authorized: authorized,
@@ -85,8 +85,8 @@ func (b *AuthBuilder) BuildDepositPreauth() *depositpreauth.DepositPreauth {
 // UnauthBuilder provides a fluent interface for building a DepositPreauth
 // transaction that removes authorization for an account.
 type UnauthBuilder struct {
-	owner        *testing.Account
-	unauthorized *testing.Account
+	owner        *jtx.Account
+	unauthorized *jtx.Account
 	fee          uint64
 	sequence     *uint32
 	flags        *uint32
@@ -94,7 +94,7 @@ type UnauthBuilder struct {
 }
 
 // Unauth creates a new UnauthBuilder for removing deposit preauthorization.
-func Unauth(owner, unauthorized *testing.Account) *UnauthBuilder {
+func Unauth(owner, unauthorized *jtx.Account) *UnauthBuilder {
 	return &UnauthBuilder{
 		owner:        owner,
 		unauthorized: unauthorized,
@@ -139,7 +139,7 @@ func (b *UnauthBuilder) BuildDepositPreauth() *depositpreauth.DepositPreauth {
 // AuthCredentialsBuilder provides a fluent interface for building a
 // DepositPreauth transaction that authorizes deposits using credentials.
 type AuthCredentialsBuilder struct {
-	owner       *testing.Account
+	owner       *jtx.Account
 	credentials []AuthorizeCredentials
 	fee         uint64
 	sequence    *uint32
@@ -147,7 +147,7 @@ type AuthCredentialsBuilder struct {
 }
 
 // AuthCredentials creates a new AuthCredentialsBuilder.
-func AuthCredentials(owner *testing.Account, credentials []AuthorizeCredentials) *AuthCredentialsBuilder {
+func AuthCredentials(owner *jtx.Account, credentials []AuthorizeCredentials) *AuthCredentialsBuilder {
 	return &AuthCredentialsBuilder{
 		owner:       owner,
 		credentials: credentials,
@@ -207,7 +207,7 @@ func (b *AuthCredentialsBuilder) BuildDepositPreauth() *depositpreauth.DepositPr
 // UnauthCredentialsBuilder provides a fluent interface for building a
 // DepositPreauth transaction that removes credential-based authorization.
 type UnauthCredentialsBuilder struct {
-	owner       *testing.Account
+	owner       *jtx.Account
 	credentials []AuthorizeCredentials
 	fee         uint64
 	sequence    *uint32
@@ -215,7 +215,7 @@ type UnauthCredentialsBuilder struct {
 }
 
 // UnauthCredentials creates a new UnauthCredentialsBuilder.
-func UnauthCredentials(owner *testing.Account, credentials []AuthorizeCredentials) *UnauthCredentialsBuilder {
+func UnauthCredentials(owner *jtx.Account, credentials []AuthorizeCredentials) *UnauthCredentialsBuilder {
 	return &UnauthCredentialsBuilder{
 		owner:       owner,
 		credentials: credentials,
@@ -306,7 +306,7 @@ func (b *RawBuilder) Build() *depositpreauth.DepositPreauth { return b.dp }
 
 // CredentialIndex computes the ledger entry hash for a credential.
 // This matches rippled's credentials::ledgerEntry index.
-func CredentialIndex(subject, issuer *testing.Account, credType string) string {
+func CredentialIndex(subject, issuer *jtx.Account, credType string) string {
 	rawCredType := credType
 	if isHexEncoded(credType) {
 		decoded, err := hex.DecodeString(credType)
@@ -319,7 +319,7 @@ func CredentialIndex(subject, issuer *testing.Account, credType string) string {
 }
 
 // DepositPreauthKeylet returns the keylet for a basic (account-based) deposit preauth.
-func DepositPreauthKeylet(owner, authorized *testing.Account) keylet.Keylet {
+func DepositPreauthKeylet(owner, authorized *jtx.Account) keylet.Keylet {
 	return keylet.DepositPreauth(owner.ID, authorized.ID)
 }
 

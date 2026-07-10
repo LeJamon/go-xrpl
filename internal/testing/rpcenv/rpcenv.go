@@ -12,7 +12,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	xrpltesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -20,7 +20,7 @@ import (
 // registry. Embedding TestEnv keeps every fund/submit/close/query helper
 // available alongside RPC dispatch.
 type Env struct {
-	*xrpltesting.TestEnv
+	*jtx.TestEnv
 
 	t        testing.TB
 	services *types.ServiceContainer
@@ -29,12 +29,12 @@ type Env struct {
 
 func New(t testing.TB) *Env {
 	t.Helper()
-	return Wrap(t, xrpltesting.NewTestEnv(t))
+	return Wrap(t, jtx.NewTestEnv(t))
 }
 
 // Wrap layers RPC dispatch on top of an existing TestEnv — for fixtures
 // with custom genesis, TxQ, etc.
-func Wrap(t testing.TB, env *xrpltesting.TestEnv) *Env {
+func Wrap(t testing.TB, env *jtx.TestEnv) *Env {
 	t.Helper()
 	registry := types.NewMethodRegistry()
 	handlers.RegisterAll(registry)

@@ -16,7 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 )
 
@@ -51,7 +51,7 @@ func newConvergenceServiceAndAdaptor(t *testing.T) (*service.Service, *adaptor.A
 // signedPaymentBlob signs and binary-encodes a Payment, returning the
 // raw blob. Mirrors the helper used by the open-ledger service/adaptor
 // tests but kept local so this test file stays self-contained.
-func signedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver *testenv.Account, dropsAmount uint64, senderSeq uint32) []byte {
+func signedPaymentBlob(t *testing.T, env *jtx.TestEnv, sender, receiver *jtx.Account, dropsAmount uint64, senderSeq uint32) []byte {
 	t.Helper()
 	txn := payment.Pay(sender, receiver, dropsAmount).Sequence(senderSeq).Build()
 	env.SignWith(txn, sender)
@@ -86,18 +86,18 @@ func signedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver *tes
 func fundAccountsAndClose(
 	t *testing.T,
 	svc *service.Service,
-	env *testenv.TestEnv,
+	env *jtx.TestEnv,
 	nSenders int,
-) (senders []*testenv.Account, existingDest *testenv.Account, senderInitialSeq uint32) {
+) (senders []*jtx.Account, existingDest *jtx.Account, senderInitialSeq uint32) {
 	t.Helper()
 	env.SetVerifySignatures(true)
-	master := testenv.MasterAccount()
-	existingDest = testenv.NewAccount("convergence-existing-dest")
+	master := jtx.MasterAccount()
+	existingDest = jtx.NewAccount("convergence-existing-dest")
 
-	senders = make([]*testenv.Account, nSenders)
+	senders = make([]*jtx.Account, nSenders)
 	fundingBlobs := make([][]byte, nSenders+1)
 	for i := range nSenders {
-		senders[i] = testenv.NewAccount(fmt.Sprintf("convergence-sender-%03d", i))
+		senders[i] = jtx.NewAccount(fmt.Sprintf("convergence-sender-%03d", i))
 		// 1000 XRP per sender: well above the 200 XRP reserve, leaves
 		// plenty of headroom for the payment + fee.
 		fundingBlobs[i] = signedPaymentBlob(t, env, master, senders[i], 1_000_000_000, uint32(i+1))
@@ -181,8 +181,8 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 		rngSeed   = int64(0xC07407)
 	)
 
-	envA := testenv.NewTestEnv(t)
-	envB := testenv.NewTestEnv(t)
+	envA := jtx.NewTestEnv(t)
+	envB := jtx.NewTestEnv(t)
 
 	svcA, adA := newConvergenceServiceAndAdaptor(t)
 	svcB, adB := newConvergenceServiceAndAdaptor(t)
@@ -203,12 +203,12 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	}
 
 	// Pre-build fresh destinations (deterministic across A and B by name).
-	freshDestsA := make([]*testenv.Account, nFresh)
-	freshDestsB := make([]*testenv.Account, nFresh)
+	freshDestsA := make([]*jtx.Account, nFresh)
+	freshDestsB := make([]*jtx.Account, nFresh)
 	for i := range nFresh {
 		name := fmt.Sprintf("convergence-fresh-dest-%03d", i)
-		freshDestsA[i] = testenv.NewAccount(name)
-		freshDestsB[i] = testenv.NewAccount(name)
+		freshDestsA[i] = jtx.NewAccount(name)
+		freshDestsB[i] = jtx.NewAccount(name)
 		if freshDestsA[i].ID != freshDestsB[i].ID {
 			t.Fatalf("fresh dest %d account ID diverges across envs (test premise broken)", i)
 		}
@@ -217,7 +217,7 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	blobsA := make([][]byte, nPayments)
 	blobsB := make([][]byte, nPayments)
 	for i := range nPayments {
-		var destA, destB *testenv.Account
+		var destA, destB *jtx.Account
 		var amount uint64
 		if i < nFresh {
 			// 100 XRP < 200 XRP reserve → tecNO_DST_INSUF_XRP. Post-fix

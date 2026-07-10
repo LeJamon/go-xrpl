@@ -14,7 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -25,12 +25,12 @@ var errNotImplemented = errors.New("rpcenv: LedgerService method not implemented
 // applied. Methods not yet exercised by a consumer test return
 // errNotImplemented so the gap is obvious.
 type ledgerAdapter struct {
-	env *testing.TestEnv
+	env *jtx.TestEnv
 }
 
 var _ types.LedgerService = (*ledgerAdapter)(nil)
 
-func newLedgerAdapter(env *testing.TestEnv) *ledgerAdapter {
+func newLedgerAdapter(env *jtx.TestEnv) *ledgerAdapter {
 	return &ledgerAdapter{env: env}
 }
 
