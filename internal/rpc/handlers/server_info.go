@@ -119,9 +119,9 @@ func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []ty
 
 	if isAdmin && !blocked {
 		if p, ok := services.Ledger.(interface {
-			AmendmentTable() *amendment.AmendmentTable
+			Table() *amendment.Table
 		}); ok {
-			if tbl := p.AmendmentTable(); tbl != nil {
+			if tbl := p.Table(); tbl != nil {
 				if exp, has := tbl.FirstUnsupportedExpected(); has {
 					warnings = append(warnings, types.WarningObject{
 						ID:      types.WarningUnsupportedAmendmentsMajority,

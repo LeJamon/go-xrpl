@@ -8,7 +8,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/keylet"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -188,7 +188,7 @@ func checkCredentialArray(creds []CredentialWrapper) error {
 		}
 
 		// Check for duplicates using sha512Half(issuer, credType)
-		hash := common.Sha512Half(issuerID[:], credTypeBytes)
+		hash := sha512half.Sum(issuerID[:], credTypeBytes)
 		if duplicates[hash] {
 			return ter.Errorf(ter.TemMALFORMED, "duplicates in credentials")
 		}

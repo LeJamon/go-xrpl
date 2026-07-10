@@ -77,7 +77,7 @@ func FuzzECDSACanonicality(f *testing.F) {
 		result := ECDSACanonicality(sig)
 
 		// Result must be one of the three valid enum values
-		if result != CanonicityNone && result != CanonicityCanonical && result != CanonicityFullyCanonical {
+		if result != CanonicalityNone && result != CanonicalityCanonical && result != CanonicalityFullyCanonical {
 			t.Fatalf("unexpected canonicality value: %d", result)
 		}
 	})

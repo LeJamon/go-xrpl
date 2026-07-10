@@ -77,7 +77,7 @@ func writeAndLoad(t *testing.T, contents string) (*Config, error) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "xrpld.toml")
 	require.NoError(t, os.WriteFile(p, []byte(contents), 0o644))
-	return LoadConfig(ConfigPaths{Main: p})
+	return LoadConfig(Paths{Main: p})
 }
 
 func TestTypedFields_LedgerHistory_Integer(t *testing.T) {
@@ -89,7 +89,7 @@ func TestTypedFields_LedgerHistory_Integer(t *testing.T) {
 	assert.False(t, cfg.LedgerHistory.Full)
 	assert.Equal(t, 1024, cfg.LedgerHistory.Count)
 	assert.Equal(t, 1024, cfg.LedgerHistory.Value())
-	assert.Equal(t, 1024, cfg.GetLedgerHistory())
+	assert.Equal(t, 1024, cfg.ResolvedLedgerHistory())
 }
 
 func TestTypedFields_LedgerHistory_Full(t *testing.T) {
@@ -100,7 +100,7 @@ func TestTypedFields_LedgerHistory_Full(t *testing.T) {
 	assert.True(t, cfg.LedgerHistory.Set)
 	assert.True(t, cfg.LedgerHistory.Full)
 	assert.Equal(t, math.MaxInt32, cfg.LedgerHistory.Value())
-	assert.Equal(t, math.MaxInt32, cfg.GetLedgerHistory())
+	assert.Equal(t, math.MaxInt32, cfg.ResolvedLedgerHistory())
 }
 
 // TestTypedFields_LedgerHistory_FullCaseInsensitive verifies parity with
@@ -141,7 +141,7 @@ func TestTypedFields_FetchDepth_Integer(t *testing.T) {
 	assert.True(t, cfg.FetchDepth.Set)
 	assert.False(t, cfg.FetchDepth.Full)
 	assert.Equal(t, 512, cfg.FetchDepth.Count)
-	assert.Equal(t, 512, cfg.GetFetchDepth())
+	assert.Equal(t, 512, cfg.ResolvedFetchDepth())
 }
 
 func TestTypedFields_FetchDepth_Full(t *testing.T) {
@@ -167,7 +167,7 @@ func TestTypedFields_FetchDepth_None(t *testing.T) {
 	// Rippled mutates FETCH_DEPTH itself (Config.cpp:671-672); the decoder
 	// applies the same clamp so Count is observably the post-floor value.
 	assert.Equal(t, 10, cfg.FetchDepth.Count)
-	assert.Equal(t, 10, cfg.GetFetchDepth())
+	assert.Equal(t, 10, cfg.ResolvedFetchDepth())
 }
 
 // TestTypedFields_FetchDepth_FullCaseInsensitive matches rippled's
@@ -193,7 +193,7 @@ func TestTypedFields_FetchDepth_BelowMinClamps(t *testing.T) {
 	// Clamp is applied at decode time so direct field reads see the floor
 	// rather than the raw 5.
 	assert.Equal(t, 10, cfg.FetchDepth.Count)
-	assert.Equal(t, 10, cfg.GetFetchDepth())
+	assert.Equal(t, 10, cfg.ResolvedFetchDepth())
 }
 
 func TestTypedFields_FetchDepth_Invalid(t *testing.T) {
@@ -212,7 +212,7 @@ func TestTypedFields_NetworkID_Integer(t *testing.T) {
 	assert.Equal(t, 21338, cfg.NetworkID.ID)
 	assert.Empty(t, cfg.NetworkID.Name)
 
-	got, err := cfg.GetNetworkID()
+	got, err := cfg.ResolvedNetworkID()
 	require.NoError(t, err)
 	assert.Equal(t, 21338, got)
 }
@@ -229,7 +229,7 @@ func TestTypedFields_NetworkID_NamedStrings(t *testing.T) {
 			cfg, err := writeAndLoad(t, toml)
 			require.NoError(t, err)
 			assert.Equal(t, name, cfg.NetworkID.Name)
-			got, err := cfg.GetNetworkID()
+			got, err := cfg.ResolvedNetworkID()
 			require.NoError(t, err)
 			assert.Equal(t, want, got)
 		})
@@ -292,7 +292,7 @@ func TestTypedFields_NetworkID_DigitString(t *testing.T) {
 	assert.Equal(t, 21338, cfg.NetworkID.ID)
 	assert.Empty(t, cfg.NetworkID.Name)
 
-	got, err := cfg.GetNetworkID()
+	got, err := cfg.ResolvedNetworkID()
 	require.NoError(t, err)
 	assert.Equal(t, 21338, got)
 }
@@ -309,9 +309,9 @@ func TestTypedFields_AbsentFields(t *testing.T) {
 	cfg, err := writeAndLoad(t, "network_id = \"main\"\n"+baseTOMLWithoutUnionFields())
 	require.NoError(t, err)
 	assert.True(t, cfg.LedgerHistory.IsZero())
-	assert.Equal(t, 256, cfg.GetLedgerHistory())
+	assert.Equal(t, 256, cfg.ResolvedLedgerHistory())
 	assert.True(t, cfg.FetchDepth.IsZero())
-	assert.Equal(t, defaultFetchDepth, cfg.GetFetchDepth())
+	assert.Equal(t, defaultFetchDepth, cfg.ResolvedFetchDepth())
 }
 
 // TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete reproduces the

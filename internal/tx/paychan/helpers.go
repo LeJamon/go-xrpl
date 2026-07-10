@@ -196,11 +196,11 @@ func verifyClaimSignature(channelIDHex string, amountDrops uint64, pubKeyHex, si
 
 	// ED25519 keys start with 0xED prefix
 	if pubKeyBytes[0] == 0xED {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		return algo.Validate(msgStr, pubKeyHex, sigHex)
 	}
 
 	// Otherwise use secp256k1
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	return algo.Validate(msgStr, pubKeyHex, sigHex)
 }

@@ -5,7 +5,7 @@
 package amendment
 
 import (
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // VoteBehavior defines how a node votes on an amendment by default.
@@ -47,7 +47,7 @@ type Feature struct {
 
 // FeatureID computes the feature ID from a feature name.
 func FeatureID(name string) [32]byte {
-	return common.Sha512Half([]byte(name))
+	return sha512half.Sum([]byte(name))
 }
 
 // IsSupported returns true if the feature is supported by this code.

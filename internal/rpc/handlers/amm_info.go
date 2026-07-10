@@ -505,7 +505,7 @@ func accountIdent(raw json.RawMessage) string {
 func accountFromString(ident string) ([20]byte, bool) {
 	var accountID [20]byte
 	if pubKey, err := addresscodec.DecodeAccountPublicKey(ident); err == nil {
-		copy(accountID[:], addresscodec.Sha256RipeMD160(pubKey))
+		copy(accountID[:], addresscodec.SHA256RIPEMD160(pubKey))
 		return accountID, true
 	}
 	if _, raw, err := addresscodec.DecodeClassicAddressToAccountID(ident); err == nil {
@@ -517,7 +517,7 @@ func accountFromString(ident string) ([20]byte, bool) {
 	if !ok {
 		return accountID, false
 	}
-	_, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seed, false)
+	_, pubKeyHex, err := secp256k1.Algorithm{}.DeriveKeypair(seed, false)
 	if err != nil {
 		return accountID, false
 	}
@@ -525,7 +525,7 @@ func accountFromString(ident string) ([20]byte, bool) {
 	if err != nil {
 		return accountID, false
 	}
-	copy(accountID[:], addresscodec.Sha256RipeMD160(pubKey))
+	copy(accountID[:], addresscodec.SHA256RIPEMD160(pubKey))
 	return accountID, true
 }
 

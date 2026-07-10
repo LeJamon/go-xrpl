@@ -7,18 +7,18 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// SystemRepository implements the SystemRepository interface for PostgreSQL
-type SystemRepository struct {
+// systemRepository implements the systemRepository interface for PostgreSQL
+type systemRepository struct {
 	db *sql.DB
 }
 
-// NewSystemRepository creates a new PostgreSQL system repository
-func NewSystemRepository(db *sql.DB) *SystemRepository {
-	return &SystemRepository{db: db}
+// newSystemRepository creates a new PostgreSQL system repository
+func newSystemRepository(db *sql.DB) *systemRepository {
+	return &systemRepository{db: db}
 }
 
 // GetKBUsedAll returns the total on-disk size of all public tables in KB.
-func (r *SystemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
+func (r *systemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
 	if r.db == nil {
 		return 0, relationaldb.ErrDatabaseClosed
 	}
@@ -35,7 +35,7 @@ func (r *SystemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
 }
 
 // Ping verifies connectivity to the database.
-func (r *SystemRepository) Ping(ctx context.Context) error {
+func (r *systemRepository) Ping(ctx context.Context) error {
 	if r.db == nil {
 		return relationaldb.ErrDatabaseClosed
 	}
@@ -47,8 +47,8 @@ func (r *SystemRepository) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Begin starts a database transaction and returns a TransactionContext bound to it.
-func (r *SystemRepository) Begin(ctx context.Context) (relationaldb.TransactionContext, error) {
+// Begin starts a database transaction and returns a transactionContext bound to it.
+func (r *systemRepository) Begin(ctx context.Context) (relationaldb.TransactionContext, error) {
 	if r.db == nil {
 		return nil, relationaldb.ErrDatabaseClosed
 	}
@@ -58,19 +58,5 @@ func (r *SystemRepository) Begin(ctx context.Context) (relationaldb.TransactionC
 		return nil, relationaldb.NewTransactionError("begin", "failed to begin transaction", err)
 	}
 
-	return NewTransactionContext(tx), nil
-}
-
-// CloseLedgerDB closes the ledger database connection.
-// In PostgreSQL, this is a no-op since we use a single connection pool.
-func (r *SystemRepository) CloseLedgerDB(ctx context.Context) error {
-	// PostgreSQL uses a single connection pool, so this is a no-op
-	return nil
-}
-
-// CloseTransactionDB closes the transaction database connection.
-// In PostgreSQL, this is a no-op since we use a single connection pool.
-func (r *SystemRepository) CloseTransactionDB(ctx context.Context) error {
-	// PostgreSQL uses a single connection pool, so this is a no-op
-	return nil
+	return newTransactionContext(tx), nil
 }

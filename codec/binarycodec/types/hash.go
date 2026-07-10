@@ -9,28 +9,28 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
-// ErrInvalidHashLength struct is used when the hash length does not meet the expected value.
-type ErrInvalidHashLength struct {
+// InvalidHashLengthError struct is used when the hash length does not meet the expected value.
+type InvalidHashLengthError struct {
 	Expected int
 }
 
-// ErrInvalidHashType indicates the provided JSON value is not a valid hash type.
-type ErrInvalidHashType struct{}
+// InvalidHashTypeError indicates the provided JSON value is not a valid hash type.
+type InvalidHashTypeError struct{}
 
-// ErrInvalidHexString indicates an error occurred decoding a hex string.
-type ErrInvalidHexString struct {
+// InvalidHexStringError indicates an error occurred decoding a hex string.
+type InvalidHexStringError struct {
 	Err error
 }
 
-func (e *ErrInvalidHashLength) Error() string {
+func (e *InvalidHashLengthError) Error() string {
 	return fmt.Sprintf("invalid hash length expected length %v", e.Expected)
 }
 
-func (e *ErrInvalidHashType) Error() string {
+func (e *InvalidHashTypeError) Error() string {
 	return "invalid hash type"
 }
 
-func (e *ErrInvalidHexString) Error() string {
+func (e *InvalidHexStringError) Error() string {
 	return "error decoding hex string: " + e.Err.Error()
 }
 
@@ -40,14 +40,14 @@ func (e *ErrInvalidHexString) Error() string {
 func hashFromJSON(json any, length int) ([]byte, error) {
 	v, ok := json.(string)
 	if !ok {
-		return nil, &ErrInvalidHashType{}
+		return nil, &InvalidHashTypeError{}
 	}
 	decoded, err := hex.DecodeString(v)
 	if err != nil {
-		return nil, &ErrInvalidHexString{Err: err}
+		return nil, &InvalidHexStringError{Err: err}
 	}
 	if length != len(decoded) {
-		return nil, &ErrInvalidHashLength{Expected: length}
+		return nil, &InvalidHashLengthError{Expected: length}
 	}
 	return decoded, nil
 }

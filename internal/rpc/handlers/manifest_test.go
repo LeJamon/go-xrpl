@@ -77,7 +77,7 @@ func manifestPreimage(t *testing.T, src map[string]any) []byte {
 	if err != nil {
 		t.Fatalf("decode preimage: %v", err)
 	}
-	prefix := protocol.HashPrefixManifest
+	prefix := protocol.HashPrefixManifest()
 	out := make([]byte, 0, len(prefix)+len(body))
 	out = append(out, prefix[:]...)
 	out = append(out, body...)

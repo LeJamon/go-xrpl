@@ -1305,7 +1305,7 @@ func TestLogLevelMethod(t *testing.T) {
 		// The global threshold must change; no partition override named
 		// "base" may be created (rippled treats partition "base" as the
 		// base threshold, matched case-insensitively).
-		global, partitions := xrpllog.GetCurrentLevels()
+		global, partitions := xrpllog.Levels()
 		assert.Equal(t, xrpllog.LevelWarn, global)
 		assert.NotContains(t, partitions, "base")
 		assert.NotContains(t, partitions, "BASE")

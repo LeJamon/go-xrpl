@@ -243,7 +243,7 @@ func (m *Manifest) Verify() error {
 // precedes st.addWithoutSigningFields(ss).
 func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	for k := range decoded {
-		fi, _ := definitions.Get().GetFieldInstanceByFieldName(k)
+		fi, _ := definitions.Get().FieldInstanceByName(k)
 		if fi != nil && !fi.IsSigningField {
 			delete(decoded, k)
 		}
@@ -256,7 +256,7 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	prefix := protocol.HashPrefixManifest
+	prefix := protocol.HashPrefixManifest()
 	out := make([]byte, 0, len(prefix)+len(body))
 	out = append(out, prefix[:]...)
 	out = append(out, body...)
@@ -274,13 +274,13 @@ func VerifyKeyTypeSignature(pubKey [33]byte, message []byte, sigHex string) bool
 	pubHex := hex.EncodeToString(pubKey[:])
 	switch crypto.PublicKeyType(pubKey[:]) {
 	case crypto.KeyTypeEd25519:
-		return ed25519.ED25519().Validate(string(message), pubHex, sigHex)
+		return ed25519.Algorithm{}.Validate(string(message), pubHex, sigHex)
 	case crypto.KeyTypeSecp256k1:
 		// rippled's manifest verify path Sign.cpp:47-62 → PublicKey::verify
 		// uses the header-default mustBeFullyCanonical=true
 		// (PublicKey.h:256), so non-low-S manifest signatures must be
 		// rejected.
-		return secp256k1.SECP256K1().Validate(string(message), pubHex, sigHex)
+		return secp256k1.Algorithm{}.Validate(string(message), pubHex, sigHex)
 	default:
 		return false
 	}

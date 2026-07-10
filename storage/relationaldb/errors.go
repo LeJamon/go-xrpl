@@ -53,7 +53,9 @@ type DatabaseError struct {
 	Type      ErrorType `json:"type"`
 	Operation string    `json:"operation"`
 	Message   string    `json:"message"`
-	Cause     error     `json:"cause,omitempty"`
+	// Cause carries the underlying error and is not JSON-serializable, so it
+	// has no tag; use Unwrap/errors.Is/As to reach it.
+	Cause error `json:"-"`
 }
 
 // Error implements the error interface

@@ -5,7 +5,7 @@ import (
 )
 
 func FuzzSecp256k1Validate(f *testing.F) {
-	algo := SECP256K1()
+	algo := Algorithm{}
 
 	// Valid (msg, pubkey, sig) triplets from test suite
 	f.Add(

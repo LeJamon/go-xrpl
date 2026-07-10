@@ -43,7 +43,7 @@ func TestPasses_Strict(t *testing.T) {
 
 func TestPasses_SingleValidatorAlwaysLax(t *testing.T) {
 	// trustedValidations==1 degrades to >=, else the gate is
-	// unreachable. AmendmentTable.cpp:372-374.
+	// unreachable. Table.cpp:372-374.
 	assert.True(t, passes(1, 1, 1),
 		"with 1 validator, votes==threshold MUST pass")
 }
@@ -164,7 +164,7 @@ func TestDecide_AbstainStanceNeverVotes(t *testing.T) {
 
 func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 	// LostMajority does NOT gate on local stance — the ledger
-	// needs the timer cleared either way. AmendmentTable.cpp:910-915.
+	// needs the timer cleared either way. Table.cpp:910-915.
 	a := makeAmendment(0xF0)
 	in := Inputs{
 		UpcomingSeq:        1024,
@@ -185,7 +185,7 @@ func TestDecide_LostMajorityFiresEvenForAbstain(t *testing.T) {
 // (in.Majority) but absent from Known — one this server doesn't
 // recognize, e.g. a newer protocol amendment — must NEVER emit a
 // pseudo-tx, even with lost validator support. Rippled's doVoting walks
-// only amendmentMap_ (AmendmentTable.cpp:875), so it emits nothing for
+// only amendmentMap_ (Table.cpp:875), so it emits nothing for
 // such an amendment; emitting a spurious LostMajority would fork the
 // flag-ledger tx set from the rest of the network.
 func TestDecide_UnknownAmendmentInMajorityIgnored(t *testing.T) {
@@ -274,7 +274,7 @@ func TestDoVoting_SerializesEnableAmendmentTx(t *testing.T) {
 }
 
 func TestDoVoting_EnableTxOmitsFlags(t *testing.T) {
-	// AmendmentTable.h:172-174: rippled writes sfFlags only when
+	// Table.h:172-174: rippled writes sfFlags only when
 	// non-zero. Our serialized enable pseudo-tx must have no Flags
 	// field at all on the wire.
 	a := makeAmendment(0x43)
@@ -297,14 +297,14 @@ func TestDoVoting_EnableTxOmitsFlags(t *testing.T) {
 }
 
 // runRoundFor is a helper that mirrors rippled's
-// AmendmentTable_test.cpp doRound() at the algorithm level. It
+// Table_test.cpp doRound() at the algorithm level. It
 // runs Decide once, then mutates `enabled` and `majority` based on
 // the emitted Decisions: a GotMajority pseudo-tx records the
 // closeTime as the majoritySince timestamp; an Enable pseudo-tx
 // (Flags==0) marks the amendment enabled and clears its majority
 // entry; a LostMajority pseudo-tx clears the majority entry. This
 // matches rippled's `Change::applyEnableAmendment` side-effects on
-// the parent ledger between rounds (AmendmentTable.cpp:902-924
+// the parent ledger between rounds (Table.cpp:902-924
 // enumerated against ChangeImpl.cpp).
 func runRoundFor(
 	upcomingSeq uint32,
@@ -341,7 +341,7 @@ func runRoundFor(
 }
 
 // TestDecide_DetectMajoritySweep is the algorithm-level analog of
-// rippled's testDetectMajority (AmendmentTable_test.cpp:837-902).
+// rippled's testDetectMajority (Table_test.cpp:837-902).
 // 16 validators, post-fix strict, 2-week MajorityTimeout, sweep
 // validator support i = 0..17 across consecutive weekly rounds.
 //
@@ -394,7 +394,7 @@ func TestDecide_DetectMajoritySweep(t *testing.T) {
 }
 
 // TestDecide_LostMajoritySweep is the algorithm-level analog of
-// rippled's testLostMajority (AmendmentTable_test.cpp:906-979).
+// rippled's testLostMajority (Table_test.cpp:906-979).
 // 16 validators, post-fix strict, 8-week MajorityTimeout (so the
 // enable doesn't fire and we observe lost-majority cleanly).
 //
@@ -445,7 +445,7 @@ func TestDecide_LostMajoritySweep(t *testing.T) {
 }
 
 // TestDecide_VoteEnableMultiWeek mirrors rippled's testVoteEnable
-// (AmendmentTable_test.cpp:757-833) at the algorithm level. With
+// (Table_test.cpp:757-833) at the algorithm level. With
 // 10 validators, 2-week MajorityTimeout, post-fix strict, and a
 // single test amendment we vote VoteUp for:
 //

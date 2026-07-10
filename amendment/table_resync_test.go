@@ -10,7 +10,7 @@ import "testing"
 var unknownAmendment = [32]byte{0xDE, 0xAD, 0xBE, 0xEF}
 
 func TestEnable_TracksUnsupported(t *testing.T) {
-	tbl := NewAmendmentTable()
+	tbl := NewTable()
 
 	tbl.Enable(FeatureDID) // supported
 	if tbl.unsupportedEnabled {
@@ -32,7 +32,7 @@ func TestEnable_TracksUnsupported(t *testing.T) {
 }
 
 func TestDoValidatedLedger_EnablesAndBlocks(t *testing.T) {
-	tbl := NewAmendmentTable()
+	tbl := NewTable()
 
 	enabled := map[[32]byte]bool{
 		FeatureDID:          true,
@@ -55,7 +55,7 @@ func TestDoValidatedLedger_EnablesAndBlocks(t *testing.T) {
 }
 
 func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
-	tbl := NewAmendmentTable()
+	tbl := NewTable()
 
 	const unsupportedMajorityTime uint32 = 1_000_000
 	majorities := map[[32]byte]uint32{
@@ -87,7 +87,7 @@ func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 }
 
 func TestLastVote_RoundTripAndDefensiveCopy(t *testing.T) {
-	tbl := NewAmendmentTable()
+	tbl := NewTable()
 	if tbl.LastVote() != nil {
 		t.Fatal("fresh table must have no last vote")
 	}
@@ -116,7 +116,7 @@ func TestLastVote_RoundTripAndDefensiveCopy(t *testing.T) {
 }
 
 func TestNeedValidatedLedger_Windowing(t *testing.T) {
-	tbl := NewAmendmentTable()
+	tbl := NewTable()
 
 	// Fresh table (lastUpdateSeq 0) always needs the first sync.
 	if !tbl.NeedValidatedLedger(100) {

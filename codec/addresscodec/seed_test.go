@@ -3,9 +3,9 @@ package addresscodec
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,11 +37,11 @@ func TestSeedFromPassphrase(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Generate seed bytes from passphrase using SHA512-Half (first 16 bytes)
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			seedBytes := seedHash[:16]
 
 			// Encode the seed using secp256k1 algorithm
-			encodedSeed, err := EncodeSeed(seedBytes, secp256k1.SECP256K1())
+			encodedSeed, err := EncodeSeed(seedBytes, secp256k1.Algorithm{})
 			require.NoError(t, err, "EncodeSeed should not return an error")
 			require.Equal(t, tc.expectedSeed, encodedSeed, "Encoded seed should match expected value")
 		})
@@ -128,7 +128,7 @@ func TestSeedDecode(t *testing.T) {
 // Mirrors rippled's parseBase58<Seed> which enforces the FamilySeed type
 // prefix and an exact 16-byte length (Seed.cpp:88-93).
 func TestDecodeSeedValidation(t *testing.T) {
-	edPrefix := ed25519.ED25519().FamilySeedPrefix()
+	edPrefix := ed25519.Algorithm{}.FamilySeedPrefix()
 
 	testcases := []struct {
 		name string
@@ -203,11 +203,11 @@ func TestSeedRoundTrip(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Generate seed bytes from passphrase
-			seedHash := common.Sha512Half([]byte(tc.passphrase))
+			seedHash := sha512half.Sum([]byte(tc.passphrase))
 			originalSeedBytes := seedHash[:16]
 
 			// Encode the seed
-			encodedSeed, err := EncodeSeed(originalSeedBytes, secp256k1.SECP256K1())
+			encodedSeed, err := EncodeSeed(originalSeedBytes, secp256k1.Algorithm{})
 			require.NoError(t, err, "EncodeSeed should not return an error")
 
 			// Decode the seed
@@ -249,11 +249,11 @@ func TestSeedPrefixDetection(t *testing.T) {
 			// Check algorithm type by comparing with expected algorithm instances
 			if tc.expectedAlgoType == "ed25519" {
 				// ED25519 algorithm should match
-				_, expectedAlgo := ed25519.ED25519(), ed25519.ED25519()
+				_, expectedAlgo := ed25519.Algorithm{}, ed25519.Algorithm{}
 				require.Equal(t, expectedAlgo, algo, "Algorithm should be ED25519")
 			} else {
 				// SECP256K1 algorithm should match
-				_, expectedAlgo := secp256k1.SECP256K1(), secp256k1.SECP256K1()
+				_, expectedAlgo := secp256k1.Algorithm{}, secp256k1.Algorithm{}
 				require.Equal(t, expectedAlgo, algo, "Algorithm should be SECP256K1")
 			}
 		})

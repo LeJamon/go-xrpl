@@ -3,7 +3,7 @@ package shamap
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // staleHash is an obviously-wrong preimage used to simulate an inner node whose
@@ -52,7 +52,7 @@ func TestUpdateHashDeep_ResyncsStalePreimage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := common.Sha512Half(data); got != good {
+	if got := sha512half.Sum(data); got != good {
 		t.Errorf("serialized preimage hashes to %x, want %x", got[:8], good[:8])
 	}
 }
@@ -92,7 +92,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 	root.hashes[branch] = staleHash
 	root.SetDirty(true)
 
-	batch, err := sm.FlushDirty(false)
+	batch, err := sm.FlushDirty()
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 	if rootData == nil {
 		t.Fatal("root node not present in flush batch")
 	}
-	if got := common.Sha512Half(rootData); got != rootHash {
+	if got := sha512half.Sum(rootData); got != rootHash {
 		t.Errorf("flushed root preimage hashes to %x, want %x", got[:8], rootHash[:8])
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 
+	"github.com/LeJamon/go-xrpl/crypto"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
@@ -87,7 +88,7 @@ func EncodeClassicAddressFromPublicKey(pubkey []byte) (string, error) {
 		return "", &EncodeLengthError{Instance: "PublicKey", Expected: AccountPublicKeyLength, Input: len(pubkey)}
 	}
 
-	accountID := Sha256RipeMD160(pubkey)
+	accountID := SHA256RIPEMD160(pubkey)
 
 	address, err := Encode(accountID, []byte{AccountAddressPrefix}, AccountAddressLength)
 	if err != nil {
@@ -125,32 +126,32 @@ func EncodeAccountIDToClassicAddress(accountID []byte) (string, error) {
 	return Base58CheckEncode(accountID, AccountAddressPrefix), nil
 }
 
-// EncodeSeed returns a base58 encoding of a seed using the specified encoding type.
-func EncodeSeed(entropy []byte, encodingType CryptoImplementation) (string, error) {
+// EncodeSeed returns a base58 encoding of a seed using the specified algorithm.
+func EncodeSeed(entropy []byte, algorithm crypto.Algorithm) (string, error) {
 	if len(entropy) != FamilySeedLength {
 		return "", &EncodeLengthError{Instance: "Entropy", Input: len(entropy), Expected: FamilySeedLength}
 	}
-	if encodingType == nil {
+	if algorithm == nil {
 		return "", ErrUnknownSeedEncoding
 	}
 
-	return Encode(entropy, encodingType.FamilySeedPrefix(), FamilySeedLength)
+	return Encode(entropy, algorithm.FamilySeedPrefix(), FamilySeedLength)
 }
 
 // DecodeSeed returns the decoded seed and its corresponding algorithm.
-func DecodeSeed(seed string) ([]byte, CryptoImplementation, error) {
+func DecodeSeed(seed string) ([]byte, crypto.Algorithm, error) {
 	decoded, err := Base58CheckDecode(seed)
 	if err != nil {
 		return nil, nil, ErrInvalidSeed
 	}
 
-	edPrefix := ed25519.ED25519().FamilySeedPrefix()
+	edPrefix := ed25519.Algorithm{}.FamilySeedPrefix()
 	if len(decoded) >= len(edPrefix) && bytes.Equal(decoded[:len(edPrefix)], edPrefix) {
 		body := decoded[len(edPrefix):]
 		if len(body) != FamilySeedLength {
 			return nil, nil, ErrInvalidSeed
 		}
-		return body, ed25519.ED25519(), nil
+		return body, ed25519.Algorithm{}, nil
 	}
 
 	if decoded[0] == FamilySeedPrefix {
@@ -158,7 +159,7 @@ func DecodeSeed(seed string) ([]byte, CryptoImplementation, error) {
 		if len(body) != FamilySeedLength {
 			return nil, nil, ErrInvalidSeed
 		}
-		return body, secp256k1.SECP256K1(), nil
+		return body, secp256k1.Algorithm{}, nil
 	}
 
 	return nil, nil, ErrInvalidSeed

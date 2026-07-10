@@ -4,13 +4,23 @@ import (
 	"fmt"
 )
 
-// FlushDirty performs a post-order traversal of the tree, collecting all dirty nodes.
-// Each dirty node is serialized and added to the returned NodeBatch.
+// FlushDirty serializes every dirty node into the returned NodeBatch and marks
+// them clean, retaining all in-memory child pointers.
+func (sm *SHAMap) FlushDirty() (*NodeBatch, error) {
+	return sm.flushDirty(false)
+}
+
+// FlushDirtyAndRelease is FlushDirty that additionally releases inner nodes'
+// child pointers after flushing (retaining only hashes) so the GC can reclaim
+// memory; children are lazily reloaded from the NodeStore on next access.
+func (sm *SHAMap) FlushDirtyAndRelease() (*NodeBatch, error) {
+	return sm.flushDirty(true)
+}
+
+// flushDirty performs a post-order traversal of the tree, collecting all dirty
+// nodes. Each dirty node is serialized and added to the returned NodeBatch.
 // After serialization, nodes are marked clean (dirty=false).
-// If releaseChildren is true, inner nodes release their child pointers after flush
-// (retaining only hashes), allowing GC to reclaim memory. Children will be
-// lazily reloaded from NodeStore on next access.
-func (sm *SHAMap) FlushDirty(releaseChildren bool) (*NodeBatch, error) {
+func (sm *SHAMap) flushDirty(releaseChildren bool) (*NodeBatch, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 

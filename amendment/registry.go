@@ -14,7 +14,7 @@ import (
 // initialization (the FeatureXxx declarations call register* during var init,
 // which runs single-threaded before any goroutine sees this package). After
 // init(), the maps are read-only — no synchronisation is required around
-// GetFeature / GetFeatureByName.
+// FeatureByID / FeatureByName.
 var (
 	features       = make(map[[32]byte]*Feature)
 	featuresByName = make(map[string]*Feature)
@@ -200,42 +200,60 @@ func register(name string, supported Supported, vote VoteBehavior, retired bool)
 	return id
 }
 
-// GetFeature returns the feature with the given ID, or nil if not found.
-func GetFeature(id [32]byte) *Feature {
-	return features[id]
+// FeatureByID returns a copy of the feature with the given ID, or nil if not
+// found. The returned pointer is independent of the process-wide registry, so
+// mutating it cannot corrupt global amendment/voting state.
+func FeatureByID(id [32]byte) *Feature {
+	f, ok := features[id]
+	if !ok {
+		return nil
+	}
+	cp := *f
+	return &cp
 }
 
-// GetFeatureByName returns the feature with the given name, or nil if not found.
-func GetFeatureByName(name string) *Feature {
-	return featuresByName[name]
+// FeatureByName returns a copy of the feature with the given name, or nil if
+// not found. The returned pointer is independent of the process-wide registry.
+func FeatureByName(name string) *Feature {
+	f, ok := featuresByName[name]
+	if !ok {
+		return nil
+	}
+	cp := *f
+	return &cp
 }
 
-// AllFeatures returns all registered features in ID-sorted order. The
-// returned slice is fresh; callers may mutate it.
+// AllFeatures returns copies of all registered features in ID-sorted order.
+// The slice and its elements are independent of the registry.
 func AllFeatures() []*Feature {
 	out := make([]*Feature, len(orderedFeatures))
-	copy(out, orderedFeatures)
+	for i, f := range orderedFeatures {
+		cp := *f
+		out[i] = &cp
+	}
 	return out
 }
 
-// SupportedFeatures returns supported features in ID-sorted order.
+// SupportedFeatures returns copies of the supported features in ID-sorted order.
 func SupportedFeatures() []*Feature {
 	result := make([]*Feature, 0, len(orderedFeatures))
 	for _, f := range orderedFeatures {
 		if f.Supported == SupportedYes {
-			result = append(result, f)
+			cp := *f
+			result = append(result, &cp)
 		}
 	}
 	return result
 }
 
-// DefaultYesFeatures returns features that default to a yes vote, in
-// ID-sorted order.
+// DefaultYesFeatures returns copies of the features that default to a yes vote,
+// in ID-sorted order.
 func DefaultYesFeatures() []*Feature {
 	result := make([]*Feature, 0, len(orderedFeatures))
 	for _, f := range orderedFeatures {
 		if f.Vote == VoteDefaultYes && !f.Retired {
-			result = append(result, f)
+			cp := *f
+			result = append(result, &cp)
 		}
 	}
 	return result

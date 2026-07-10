@@ -17,6 +17,7 @@ var (
 	ErrInvalidType  = errors.New("invalid node type")
 	ErrInvalidState = errors.New("invalid state for operation")
 	ErrItemTooSmall = errors.New("item data too small (minimum 12 bytes)")
+	ErrNilFamily    = errors.New("family is required for backed SHAMap")
 )
 
 // State defines the state of the SHAMap
@@ -67,9 +68,6 @@ func (t Type) String() string {
 	}
 }
 
-// Key is a type alias for a 32-byte key used in the SHAMap.
-type Key = [32]byte
-
 // SHAMap is the main structure representing the tree
 type SHAMap struct {
 	mu        sync.RWMutex
@@ -103,7 +101,7 @@ func New(mapType Type) *SHAMap {
 // Unlike New(), this map will flush dirty nodes to the Family and support lazy loading.
 func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 	if family == nil {
-		return nil, errors.New("family is required for backed SHAMap")
+		return nil, ErrNilFamily
 	}
 	sm := &SHAMap{
 		root:    newInnerNode(),
@@ -131,7 +129,7 @@ func (sm *SHAMap) SetFamily(family Family) {
 // Children are loaded lazily on demand via descend().
 func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, error) {
 	if family == nil {
-		return nil, errors.New("family is required for backed SHAMap")
+		return nil, ErrNilFamily
 	}
 
 	// Fetch root node from store
@@ -144,7 +142,7 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	}
 
 	// Deserialize — creates innerNode with hashes set, children nil
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize root node: %w", err)
 	}
@@ -201,7 +199,7 @@ func (sm *SHAMap) descendCtx(ctx context.Context, inner *innerNode, branch int) 
 	}
 
 	// Fresh deserialised copy — not shared across SHAMap instances.
-	node, err := DeserializeFromPrefix(data)
+	node, err := deserializeFromPrefix(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to deserialize child node: %w", err)
 	}
@@ -238,8 +236,8 @@ func (sm *SHAMap) SetImmutable() error {
 	return nil
 }
 
-// SetFull marks the map as fully loaded
-func (sm *SHAMap) SetFull() {
+// setFull marks the map as fully loaded
+func (sm *SHAMap) setFull() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	sm.full = true
@@ -321,11 +319,11 @@ func (sm *SHAMap) Put(key [32]byte, data []byte) error {
 // PutWithNodeType adds an item with a specific node type (for transaction+metadata)
 func (sm *SHAMap) PutWithNodeType(key [32]byte, data []byte, nodeType NodeType) error {
 	item := NewItem(key, data)
-	return sm.PutItemWithNodeType(item, nodeType)
+	return sm.putItemWithNodeType(item, nodeType)
 }
 
-// PutItemWithNodeType adds an item with a specific node type
-func (sm *SHAMap) PutItemWithNodeType(item *Item, nodeType NodeType) error {
+// putItemWithNodeType adds an item with a specific node type
+func (sm *SHAMap) putItemWithNodeType(item *Item, nodeType NodeType) error {
 	if item == nil {
 		return ErrNilItem
 	}
@@ -481,7 +479,7 @@ func (sm *SHAMap) dirtyUp(stack *nodeStack, target [32]byte, child Node) (Node, 
 		return nil, ErrInvalidState
 	}
 	if child == nil {
-		return nil, errors.New("dirtyUp called with nil child")
+		return nil, errors.New("cannot propagate hash update through a nil child")
 	}
 
 	currentChild := child
@@ -659,23 +657,35 @@ func (sm *SHAMap) consolidateAfterDelete(stack *nodeStack, key [32]byte) (Node, 
 	return prevNode, nil
 }
 
-// Snapshot returns a structurally-shared copy of the SHAMap in O(1).
+// SnapshotMutable returns a structurally-shared copy that may be modified.
+// See snapshot for the sharing and flushing semantics.
+func (sm *SHAMap) SnapshotMutable() (*SHAMap, error) {
+	return sm.snapshot(true)
+}
+
+// SnapshotImmutable returns a read-only structurally-shared copy.
+// See snapshot for the sharing and flushing semantics.
+func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
+	return sm.snapshot(false)
+}
+
+// snapshot returns a structurally-shared copy of the SHAMap in O(1).
 // The source and the returned map share the same root pointer; mutation
 // paths in either map are path-copy persistent (dirtyUp shallow-clones
 // each touched inner node), so the snapshot's tree is never observed
 // being mutated.
 //
 // For backed maps, dirty nodes present at entry are flushed to the store
-// before the root is shared. FlushDirty and the subsequent RLock are
+// before the root is shared. flushDirty and the subsequent RLock are
 // separate critical sections, so a writer racing between the two can
 // produce a snapshot whose root references dirty inner nodes that are
-// not yet in the store; those will be flushed on the next FlushDirty.
+// not yet in the store; those will be flushed on the next flush.
 // Flushing a structurally-shared subtree from either map is safe: the
 // dirty flag is atomic and node hashes are read and written under each
 // node's own lock.
-func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
+func (sm *SHAMap) snapshot(mutable bool) (*SHAMap, error) {
 	if sm.backed && sm.family != nil {
-		batch, err := sm.FlushDirty(false)
+		batch, err := sm.flushDirty(false)
 		if err != nil {
 			return nil, fmt.Errorf("failed to flush dirty nodes: %w", err)
 		}

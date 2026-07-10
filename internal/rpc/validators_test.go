@@ -262,7 +262,7 @@ func TestValidationCreateHexSeed(t *testing.T) {
 	const hexSeed = "DEDCE9CE67B451D852FD4E846FCDE31C" // 32 hex chars = 16-byte seed
 	entropy, err := hex.DecodeString(hexSeed)
 	require.NoError(t, err)
-	base58Seed, err := addresscodec.EncodeSeed(entropy, secp256k1.SECP256K1())
+	base58Seed, err := addresscodec.EncodeSeed(entropy, secp256k1.Algorithm{})
 	require.NoError(t, err)
 
 	fromHex := callValidationCreate(t, method, ctx, hexSeed)

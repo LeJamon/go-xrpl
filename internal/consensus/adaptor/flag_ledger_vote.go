@@ -201,7 +201,7 @@ func extractFeeVote(v *consensus.Validation, xrpFeesEnabled bool) feevote.Vote {
 	return out
 }
 
-// runAmendmentVote runs the AmendmentTable producer against the
+// runAmendmentVote runs the Table producer against the
 // parent ledger's enabled amendments + majorities (already parsed
 // at the boundary in readAmendmentsSLE) and the trusted
 // validations' sfAmendments. Returns the serialized

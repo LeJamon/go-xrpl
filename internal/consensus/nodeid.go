@@ -13,7 +13,7 @@ import "github.com/LeJamon/go-xrpl/codec/addresscodec"
 // the prefix-included bytes verbatim, so cross-implementation NodeID
 // values agree byte-for-byte for the same master key.
 func CalcNodeID(masterPub [33]byte) NodeID {
-	h := addresscodec.Sha256RipeMD160(masterPub[:])
+	h := addresscodec.SHA256RIPEMD160(masterPub[:])
 	var id NodeID
 	copy(id[:], h)
 	return id

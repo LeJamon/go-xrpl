@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -28,7 +28,7 @@ func TestLoanBrokerKeylet(t *testing.T) {
 	}
 
 	// Independent re-derivation via the raw namespace-byte formula.
-	want := common.Sha512Half(be16('l'), owner[:], be32(seq))
+	want := sha512half.Sum(be16('l'), owner[:], be32(seq))
 	if k.Key != want {
 		t.Errorf("key mismatch\n got  %x\n want %x", k.Key, want)
 	}
@@ -55,7 +55,7 @@ func TestLoanKeylet(t *testing.T) {
 		t.Errorf("Type = %#x, want %#x", uint16(k.Type), uint16(entry.TypeLoan))
 	}
 
-	want := common.Sha512Half(be16('L'), lbID[:], be32(seq))
+	want := sha512half.Sum(be16('L'), lbID[:], be32(seq))
 	if k.Key != want {
 		t.Errorf("key mismatch\n got  %x\n want %x", k.Key, want)
 	}

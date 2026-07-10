@@ -22,7 +22,7 @@ func registerLending() { registerOnce.Do(lending.Register) }
 // registration: Supported::yes, VoteBehavior::DefaultNo. The Loan* transactors
 // are fully implemented, so the node applies them once the amendment activates.
 func TestLendingAmendmentSupported(t *testing.T) {
-	f := amendment.GetFeature(amendment.FeatureLendingProtocol)
+	f := amendment.FeatureByID(amendment.FeatureLendingProtocol)
 	if f == nil {
 		t.Fatal("LendingProtocol must be registered")
 	}
@@ -143,7 +143,7 @@ func TestLendingCodecDefinitions(t *testing.T) {
 		"LoanSet": 80, "LoanDelete": 81, "LoanManage": 82, "LoanPay": 84,
 	}
 	for name, code := range txTypes {
-		got, err := d.GetTransactionTypeCodeByTransactionTypeName(name)
+		got, err := d.TransactionTypeCode(name)
 		if err != nil || got != code {
 			t.Errorf("tx type %q: got (%d, %v), want %d", name, got, err, code)
 		}
@@ -151,7 +151,7 @@ func TestLendingCodecDefinitions(t *testing.T) {
 
 	entryTypes := map[string]int32{"LoanBroker": 0x0088, "Loan": 0x0089}
 	for name, code := range entryTypes {
-		got, err := d.GetLedgerEntryTypeCodeByLedgerEntryTypeName(name)
+		got, err := d.LedgerEntryTypeCode(name)
 		if err != nil || got != code {
 			t.Errorf("ledger entry %q: got (%d, %v), want %d", name, got, err, code)
 		}
@@ -179,7 +179,7 @@ func TestLendingCodecDefinitions(t *testing.T) {
 		{"CounterpartySignature", "STObject", false},
 	}
 	for _, f := range fields {
-		fi, err := d.GetFieldInstanceByFieldName(f.name)
+		fi, err := d.FieldInstanceByName(f.name)
 		if err != nil {
 			t.Errorf("field %q: not found: %v", f.name, err)
 			continue

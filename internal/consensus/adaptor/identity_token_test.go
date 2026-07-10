@@ -52,7 +52,7 @@ func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
 	for i := range sec {
 		sec[i] = seed ^ byte(i+1)
 	}
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	signingPubBytes, err := algo.DerivePublicKeyFromSecret(sec[:])
 	if err != nil {
 		t.Fatalf("derive ephemeral pubkey: %v", err)
@@ -132,7 +132,7 @@ func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 	t.Helper()
 	filtered := make(map[string]any, len(src))
 	for k, v := range src {
-		fi, _ := definitions.Get().GetFieldInstanceByFieldName(k)
+		fi, _ := definitions.Get().FieldInstanceByName(k)
 		if fi != nil && !fi.IsSigningField {
 			continue
 		}
@@ -146,7 +146,7 @@ func manifestSigningPreimage(t *testing.T, src map[string]any) []byte {
 	if err != nil {
 		t.Fatalf("decode preimage hex: %v", err)
 	}
-	prefix := protocol.HashPrefixManifest
+	prefix := protocol.HashPrefixManifest()
 	out := make([]byte, 0, len(prefix)+len(body))
 	out = append(out, prefix[:]...)
 	out = append(out, body...)

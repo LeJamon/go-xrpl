@@ -92,7 +92,7 @@ func putStateTree(t *testing.T, family *fakeFamily, keys []string) [32]byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := sm.FlushDirty(false)
+	batch, err := sm.FlushDirty()
 	if err != nil {
 		t.Fatal(err)
 	}

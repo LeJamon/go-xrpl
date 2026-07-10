@@ -12,8 +12,8 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	secp256k1 "github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -128,10 +128,10 @@ func GenerateGenesisAccountID() ([20]byte, string, error) {
 
 // GenerateAccountIDFromPassphrase derives an account ID from a passphrase.
 func GenerateAccountIDFromPassphrase(passphrase string) ([20]byte, string, error) {
-	seedHash := common.Sha512Half([]byte(passphrase))
+	seedHash := sha512half.Sum([]byte(passphrase))
 	seed := seedHash[:16]
 
-	algo := secp256k1.SECP256K1()
+	algo := secp256k1.Algorithm{}
 	_, pubKeyHex, err := algo.DeriveKeypair(seed, false)
 	if err != nil {
 		return [20]byte{}, "", err

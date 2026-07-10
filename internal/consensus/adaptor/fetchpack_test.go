@@ -423,7 +423,7 @@ func TestHandleFetchPackReply_HeaderObjectNotCharged(t *testing.T) {
 	nodes := validFetchPackNodes(t)
 	header := message.IndexedObject{
 		Hash: bytes.Repeat([]byte{0xEE}, 32),
-		Data: append(protocol.HashPrefixLedgerMaster.Bytes(), 0xDE, 0xAD, 0xBE, 0xEF),
+		Data: append(protocol.HashPrefixLedgerMaster().Bytes(), 0xDE, 0xAD, 0xBE, 0xEF),
 	}
 	objects := append([]message.IndexedObject{header}, nodesToObjects(nodes)...)
 	payload := encodeFetchPack(t, objects)

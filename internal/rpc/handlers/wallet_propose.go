@@ -9,10 +9,10 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -74,7 +74,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 		// Check if the seed's algorithm matches the requested key type
 		// If a seed encodes ed25519 but user requests secp256k1, that's an error
-		if _, isEd25519 := algo.(ed25519.ED25519CryptoAlgorithm); isEd25519 {
+		if _, isEd25519 := algo.(ed25519.Algorithm); isEd25519 {
 			if keyType != "ed25519" {
 				return nil, &types.RpcError{
 					Code:        types.RpcBAD_SEED,
@@ -98,7 +98,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	} else if request.Passphrase != "" {
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)
-		hash := common.Sha512Half([]byte(request.Passphrase))
+		hash := sha512half.Sum([]byte(request.Passphrase))
 		entropy = hash[:16]
 		passphraseUsed = true
 	} else {
@@ -115,7 +115,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	var err error
 
 	if keyType == "ed25519" {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive keypair: %v", err))
@@ -125,7 +125,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode seed: %v", err))
 		}
 	} else {
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		privateKey, publicKey, err = algo.DeriveKeypair(entropy, false)
 		if err != nil {
 			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive keypair: %v", err))

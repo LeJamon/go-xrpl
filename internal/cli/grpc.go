@@ -71,7 +71,7 @@ func startGRPCServer(
 		}
 	}
 
-	addr := p.GetBindAddress()
+	addr := p.BindAddress()
 	var lc net.ListenConfig
 	lis, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {

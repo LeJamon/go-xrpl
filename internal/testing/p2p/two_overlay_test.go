@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -64,7 +64,7 @@ func makeMetaBlob(t *testing.T, txIndex uint32) []byte {
 func makeTxLeaf(t *testing.T, payload []byte, txIndex uint32) ([]byte, [32]byte) {
 	t.Helper()
 	meta := makeMetaBlob(t, txIndex)
-	txID := common.Sha512Half(protocol.HashPrefixTransactionID[:], payload)
+	txID := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), payload)
 	blob := make([]byte, 0, len(payload)+len(meta)+4)
 	blob = append(blob, vlEncode(len(payload))...)
 	blob = append(blob, payload...)
@@ -170,7 +170,7 @@ func (p *lookupProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) 
 	wantHash := want.Hash()
 	objects := []message.IndexedObject{{
 		Hash:      append([]byte(nil), wantHash[:]...),
-		Data:      append(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(wantHdr, false)...),
+		Data:      append(protocol.HashPrefixLedgerMaster().Bytes(), header.AddRaw(wantHdr, false)...),
 		LedgerSeq: seq,
 	}}
 	appendNodes := func(m *shamap.SHAMap) error {

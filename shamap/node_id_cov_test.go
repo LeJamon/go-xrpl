@@ -215,7 +215,7 @@ func TestNid_MarshalUnmarshalRoundtrip(t *testing.T) {
 		t.Fatalf("expected %d bytes, got %d", NodeIDSize, len(data))
 	}
 
-	decoded, err := UnmarshalBinary(data)
+	decoded, err := ParseNodeID(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +227,7 @@ func TestNid_MarshalUnmarshalRoundtrip(t *testing.T) {
 func TestNid_Bytes_UnmarshalBinary_Roundtrip(t *testing.T) {
 	nid, _ := nodeID(3, nid_gradientKey)
 	b := nid.Bytes()
-	decoded, err := UnmarshalBinary(b)
+	decoded, err := ParseNodeID(b)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestNid_Bytes_UnmarshalBinary_Roundtrip(t *testing.T) {
 
 func TestNid_UnmarshalBinary_WrongLength(t *testing.T) {
 	for _, badLen := range []int{0, 1, 32, 34, 100} {
-		_, err := UnmarshalBinary(make([]byte, badLen))
+		_, err := ParseNodeID(make([]byte, badLen))
 		if !errors.Is(err, ErrInvalidNodeIDLength) {
 			t.Errorf("len=%d: expected ErrInvalidNodeIDLength, got %v", badLen, err)
 		}
@@ -248,7 +248,7 @@ func TestNid_UnmarshalBinary_WrongLength(t *testing.T) {
 func TestNid_UnmarshalBinary_ExceedsMaxDepth(t *testing.T) {
 	data := make([]byte, NodeIDSize)
 	data[32] = MaxDepth + 1
-	_, err := UnmarshalBinary(data)
+	_, err := ParseNodeID(data)
 	if !errors.Is(err, ErrMaxDepthExceeded) {
 		t.Fatalf("expected ErrMaxDepthExceeded, got %v", err)
 	}
@@ -914,7 +914,7 @@ func TestNid_NewTransactionLeafFromWire_Valid(t *testing.T) {
 	leaf, _ := newTransactionLeafNode(item)
 	wire, _ := leaf.SerializeForWire()
 
-	recovered, err := NewTransactionLeafFromWire(wire)
+	recovered, err := newTransactionLeafFromWire(wire)
 	if err != nil {
 		t.Fatalf("NewTransactionLeafFromWire: %v", err)
 	}
@@ -924,7 +924,7 @@ func TestNid_NewTransactionLeafFromWire_Valid(t *testing.T) {
 }
 
 func TestNid_NewTransactionLeafFromWire_Empty(t *testing.T) {
-	_, err := NewTransactionLeafFromWire([]byte{})
+	_, err := newTransactionLeafFromWire([]byte{})
 	if err == nil {
 		t.Fatal("expected error for empty wire data")
 	}

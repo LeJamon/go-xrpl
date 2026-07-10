@@ -7,31 +7,31 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// TransactionContext wraps a sql.Tx on the transaction database.
+// transactionContext wraps a sql.Tx on the transaction database.
 // The ledger repository operates outside the transaction since
 // SQLite does not support cross-database transactions.
-type TransactionContext struct {
+type transactionContext struct {
 	tx *sql.Tx
 
-	ledgerRepo             *LedgerRepository
-	transactionRepo        *TransactionRepository
-	accountTransactionRepo *AccountTransactionRepository
+	ledgerRepo             *ledgerRepository
+	transactionRepo        *transactionRepository
+	accountTransactionRepo *accountTransactionRepository
 }
 
-// NewTransactionContext creates a SQLite transaction context. The transaction and
+// newTransactionContext creates a SQLite transaction context. The transaction and
 // account-transaction repositories run inside tx; the ledger repository runs on
 // ledgerDB outside it, since SQLite has no cross-database transactions.
-func NewTransactionContext(tx *sql.Tx, ledgerDB *sql.DB) *TransactionContext {
-	return &TransactionContext{
+func newTransactionContext(tx *sql.Tx, ledgerDB *sql.DB) *transactionContext {
+	return &transactionContext{
 		tx:                     tx,
-		ledgerRepo:             NewLedgerRepository(ledgerDB), // non-transactional
-		transactionRepo:        NewTransactionRepositoryWithTx(tx),
-		accountTransactionRepo: NewAccountTransactionRepositoryWithTx(tx),
+		ledgerRepo:             newLedgerRepository(ledgerDB), // non-transactional
+		transactionRepo:        newTransactionRepositoryWithTx(tx),
+		accountTransactionRepo: newAccountTransactionRepositoryWithTx(tx),
 	}
 }
 
 // Commit commits the underlying transaction-database transaction.
-func (tc *TransactionContext) Commit(ctx context.Context) error {
+func (tc *transactionContext) Commit(ctx context.Context) error {
 	if tc.tx == nil {
 		return relationaldb.ErrTransactionClosed
 	}
@@ -45,7 +45,7 @@ func (tc *TransactionContext) Commit(ctx context.Context) error {
 
 // Rollback aborts the underlying transaction; it is a no-op if already committed
 // or rolled back.
-func (tc *TransactionContext) Rollback(ctx context.Context) error {
+func (tc *transactionContext) Rollback(ctx context.Context) error {
 	if tc.tx == nil {
 		return nil
 	}
@@ -58,16 +58,16 @@ func (tc *TransactionContext) Rollback(ctx context.Context) error {
 }
 
 // Ledger returns the (non-transactional) ledger repository.
-func (tc *TransactionContext) Ledger() relationaldb.LedgerRepository {
+func (tc *transactionContext) Ledger() relationaldb.LedgerRepository {
 	return tc.ledgerRepo
 }
 
 // Transaction returns the transaction-scoped transaction repository.
-func (tc *TransactionContext) Transaction() relationaldb.TransactionRepository {
+func (tc *transactionContext) Transaction() relationaldb.TransactionRepository {
 	return tc.transactionRepo
 }
 
 // AccountTransaction returns the transaction-scoped account-transaction repository.
-func (tc *TransactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
+func (tc *transactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return tc.accountTransactionRepo
 }

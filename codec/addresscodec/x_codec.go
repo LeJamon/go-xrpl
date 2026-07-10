@@ -14,22 +14,41 @@ var (
 // XAddressLength is the length of an X-address (35 bytes).
 const XAddressLength = 35
 
+// Network selects which XRPL network an X-address encodes for.
+type Network uint8
+
+const (
+	// Mainnet is the production XRPL network.
+	Mainnet Network = iota
+	// Testnet is the XRPL test network.
+	Testnet
+)
+
+// String returns the network's name.
+func (n Network) String() string {
+	if n == Testnet {
+		return "testnet"
+	}
+	return "mainnet"
+}
+
 // IsValidXAddress returns true if the x-address is valid. Otherwise, it returns false.
 func IsValidXAddress(xAddress string) bool {
 	_, _, _, err := DecodeXAddress(xAddress)
 	return err == nil
 }
 
-// EncodeXAddress returns the x-address encoding of the accountId, tag, and testnet boolean.
-// If the accountId is not 20 bytes long, it returns an error.
-func EncodeXAddress(accountID []byte, tag uint32, tagFlag, testnetFlag bool) (string, error) {
+// EncodeXAddress returns the x-address encoding of accountID for the given
+// network. A nil tag encodes an X-address without a destination tag; a non-nil
+// tag encodes its value. It returns an error if accountID is not 20 bytes long.
+func EncodeXAddress(accountID []byte, tag *uint32, network Network) (string, error) {
 	if len(accountID) != AccountAddressLength {
 		return "", ErrInvalidAccountID
 	}
 
 	xAddressBytes := make([]byte, 0, XAddressLength)
 
-	if testnetFlag {
+	if network == Testnet {
 		xAddressBytes = append(xAddressBytes, testnetXAddressPrefix...)
 	} else {
 		xAddressBytes = append(xAddressBytes, mainnetXAddressPrefix...)
@@ -37,18 +56,20 @@ func EncodeXAddress(accountID []byte, tag uint32, tagFlag, testnetFlag bool) (st
 
 	xAddressBytes = append(xAddressBytes, accountID...)
 
-	if tagFlag {
+	var tagValue uint32
+	if tag != nil {
 		xAddressBytes = append(xAddressBytes, byte(1))
+		tagValue = *tag
 	} else {
 		xAddressBytes = append(xAddressBytes, byte(0))
 	}
 
 	xAddressBytes = append(
 		xAddressBytes,
-		byte(tag&0xff),
-		byte((tag>>8)&0xff),
-		byte((tag>>16)&0xff),
-		byte((tag>>24)&0xff),
+		byte(tagValue&0xff),
+		byte((tagValue>>8)&0xff),
+		byte((tagValue>>16)&0xff),
+		byte((tagValue>>24)&0xff),
 		0,
 		0,
 		0,
@@ -61,63 +82,63 @@ func EncodeXAddress(accountID []byte, tag uint32, tagFlag, testnetFlag bool) (st
 	return EncodeBase58(xAddressBytes), nil
 }
 
-// DecodeXAddress returns the accountId, tag, and testnet boolean decoding of the x-address.
+// DecodeXAddress returns the accountID, tag, and network of the x-address.
 // If the x-address is invalid, it returns an error.
-func DecodeXAddress(xAddress string) (accountID []byte, tag uint32, testnet bool, err error) {
+func DecodeXAddress(xAddress string) (accountID []byte, tag uint32, network Network, err error) {
 	xAddressBytes, err := Base58CheckDecode(xAddress)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, Mainnet, err
 	}
 
 	// Verify length (2 prefix + 20 accountID + 1 flag + 8 tag bytes = 31)
 	if len(xAddressBytes) != 31 {
-		return nil, 0, false, ErrInvalidXAddress
+		return nil, 0, Mainnet, ErrInvalidXAddress
 	}
 
 	switch {
 	case bytes.HasPrefix(xAddressBytes, mainnetXAddressPrefix):
-		testnet = false
+		network = Mainnet
 	case bytes.HasPrefix(xAddressBytes, testnetXAddressPrefix):
-		testnet = true
+		network = Testnet
 	default:
-		return nil, 0, false, ErrInvalidXAddress
+		return nil, 0, Mainnet, ErrInvalidXAddress
 	}
 
 	tag, _, err = decodeTag(xAddressBytes)
 	if err != nil {
-		return nil, 0, false, err
+		return nil, 0, Mainnet, err
 	}
 
-	return xAddressBytes[2:22], tag, testnet, nil
+	return xAddressBytes[2:22], tag, network, nil
 }
 
 // XAddressToClassicAddress converts the x-address to a classic address.
-// It returns the classic address, tag and testnet boolean.
+// It returns the classic address, tag and network.
 // If the x-address is invalid, it returns an error.
-func XAddressToClassicAddress(xAddress string) (classicAddress string, tag uint32, testnet bool, err error) {
-	accountID, tag, testnet, err := DecodeXAddress(xAddress)
+func XAddressToClassicAddress(xAddress string) (classicAddress string, tag uint32, network Network, err error) {
+	accountID, tag, network, err := DecodeXAddress(xAddress)
 	if err != nil {
-		return "", 0, false, err
+		return "", 0, Mainnet, err
 	}
 
 	classicAddress, err = EncodeAccountIDToClassicAddress(accountID)
 	if err != nil {
-		return "", 0, false, err
+		return "", 0, Mainnet, err
 	}
 
-	return classicAddress, tag, testnet, nil
+	return classicAddress, tag, network, nil
 }
 
-// ClassicAddressToXAddress converts the classic address to an x-address.
-// It returns the x-address.
-// If the classic address is invalid, it returns an error.
-func ClassicAddressToXAddress(address string, tag uint32, tagFlag, testnetFlag bool) (string, error) {
+// ClassicAddressToXAddress converts the classic address to an x-address for the
+// given network. A nil tag omits the destination tag; a non-nil tag encodes its
+// value. It returns an error if the classic address is invalid.
+func ClassicAddressToXAddress(address string, tag *uint32, network Network) (string, error) {
 	_, accountID, err := DecodeClassicAddressToAccountID(address)
 	if err != nil {
 		return "", err
 	}
 
-	return EncodeXAddress(accountID, tag, tagFlag, testnetFlag)
+	return EncodeXAddress(accountID, tag, network)
 }
 
 // decodeTag returns the tag from the x-address.

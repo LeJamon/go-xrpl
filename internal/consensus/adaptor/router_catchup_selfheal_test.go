@@ -3,7 +3,7 @@ package adaptor
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -30,7 +30,7 @@ func completedCatchUpAcquisition(t *testing.T, seq uint32) *inbound.Ledger {
 		// TxHash left zero: empty tx tree, complete once the state tree is filled.
 	}
 	data := header.AddRaw(hdr, false)
-	ledgerHash := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), data)
+	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), data)
 
 	il := inbound.New(ledgerHash, seq, 7, serveTestLogger())
 	require.NoError(t, il.GotBase([]message.LedgerNode{
@@ -113,7 +113,7 @@ func TestCompleteInboundLedger_SingleLedgerCatchUpUsesHeldSeam(t *testing.T) {
 		AccountHash: rootHash,
 	}
 	data := header.AddRaw(hdr, false)
-	ledgerHash := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), data)
+	ledgerHash := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), data)
 
 	il := inbound.New(ledgerHash, parent.Sequence()+1, 7, serveTestLogger())
 	require.NoError(t, il.GotBase([]message.LedgerNode{

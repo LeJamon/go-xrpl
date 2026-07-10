@@ -500,20 +500,20 @@ func TestBinarySerializerOperations(t *testing.T) {
 	defs := definitions.Get()
 	codec := NewFieldIDCodec(defs)
 
-	t.Run("GetSink returns accumulated bytes", func(t *testing.T) {
+	t.Run("Bytes returns accumulated bytes", func(t *testing.T) {
 		serializer := NewBinarySerializer(codec)
 
 		// Initially empty
-		assert.Empty(t, serializer.GetSink())
+		assert.Empty(t, serializer.Bytes())
 
 		// After writing, sink has data
-		fi, err := defs.GetFieldInstanceByFieldName("Flags")
+		fi, err := defs.FieldInstanceByName("Flags")
 		require.NoError(t, err)
 
 		err = serializer.WriteFieldAndValue(*fi, []byte{0x00, 0x08, 0x00, 0x00})
 		require.NoError(t, err)
 
-		sink := serializer.GetSink()
+		sink := serializer.Bytes()
 		assert.NotEmpty(t, sink)
 	})
 }
@@ -533,7 +533,7 @@ func TestVLEncodedFieldTypes(t *testing.T) {
 
 	for _, fieldName := range vlFields {
 		t.Run(fieldName, func(t *testing.T) {
-			fi, err := defs.GetFieldInstanceByFieldName(fieldName)
+			fi, err := defs.FieldInstanceByName(fieldName)
 			require.NoError(t, err)
 			assert.True(t, fi.IsVLEncoded, "Field %s should be VL-encoded", fieldName)
 		})
@@ -549,7 +549,7 @@ func TestVLEncodedFieldTypes(t *testing.T) {
 
 	for _, fieldName := range nonVLFields {
 		t.Run(fieldName+"_not_VL", func(t *testing.T) {
-			fi, err := defs.GetFieldInstanceByFieldName(fieldName)
+			fi, err := defs.FieldInstanceByName(fieldName)
 			require.NoError(t, err)
 			assert.False(t, fi.IsVLEncoded, "Field %s should NOT be VL-encoded", fieldName)
 		})
@@ -560,7 +560,7 @@ func TestVLEncodedFieldTypes(t *testing.T) {
 		serializer := NewBinarySerializer(codec)
 
 		// SigningPubKey is VL-encoded
-		fi, err := defs.GetFieldInstanceByFieldName("SigningPubKey")
+		fi, err := defs.FieldInstanceByName("SigningPubKey")
 		require.NoError(t, err)
 
 		// 33-byte public key
@@ -570,7 +570,7 @@ func TestVLEncodedFieldTypes(t *testing.T) {
 		err = serializer.WriteFieldAndValue(*fi, pubKey)
 		require.NoError(t, err)
 
-		sink := serializer.GetSink()
+		sink := serializer.Bytes()
 		// Should have: field ID + VL length (1 byte for len 33) + 33 bytes data
 		assert.Equal(t, 1+1+33, len(sink), "VL-encoded field should have length prefix")
 
@@ -596,7 +596,7 @@ func TestSerializedFieldOrder(t *testing.T) {
 
 	var prevOrdinal int32 = -1
 	for _, fieldName := range fields {
-		fi, err := defs.GetFieldInstanceByFieldName(fieldName)
+		fi, err := defs.FieldInstanceByName(fieldName)
 		require.NoError(t, err)
 
 		assert.Greater(t, fi.Ordinal, prevOrdinal,

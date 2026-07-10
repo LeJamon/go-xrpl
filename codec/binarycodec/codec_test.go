@@ -278,7 +278,7 @@ func TestEncode(t *testing.T) {
 			description: "hash128 wrong length",
 			input:       map[string]any{"EmailHash": "73734B611DDA23D3F5F62E20A173"},
 			output:      "",
-			expectedErr: &types.ErrInvalidHashLength{Expected: 16},
+			expectedErr: &types.InvalidHashLengthError{Expected: 16},
 		},
 		{
 			description: "serialize hash 160",
@@ -290,7 +290,7 @@ func TestEncode(t *testing.T) {
 			description: "hash160 wrong length",
 			input:       map[string]any{"TakerPaysCurrency": "73734B611DDA23D3F5F62E20A173B789"},
 			output:      "",
-			expectedErr: &types.ErrInvalidHashLength{Expected: 20},
+			expectedErr: &types.InvalidHashLengthError{Expected: 20},
 		},
 		{
 			description: "serialize hash 256",
@@ -302,7 +302,7 @@ func TestEncode(t *testing.T) {
 			description: "hash256 wrong length",
 			input:       map[string]any{"Digest": "73734B611DDA23D3F5F62E20A173B78AB8406AC5015094DA53F537"},
 			output:      "",
-			expectedErr: &types.ErrInvalidHashLength{Expected: 32},
+			expectedErr: &types.InvalidHashLengthError{Expected: 32},
 		},
 		{
 			description: "serialize Vector256 successfully,",
@@ -314,13 +314,13 @@ func TestEncode(t *testing.T) {
 			description: "invalid input for Vector256 - not a string array",
 			input:       map[string]any{"Amendments": []int{1, 2, 3}},
 			output:      "",
-			expectedErr: &types.ErrInvalidVector256Type{Got: "[]int"},
+			expectedErr: &types.InvalidVector256TypeError{Got: "[]int"},
 		},
 		{
 			description: "invalid input for Vector256 - wrong hash length",
 			input:       map[string]any{"Amendments": []string{"73734B611DDA23D3F5F62E20A173B78AB8406AC5015094DA53F53D39B9EDB06C56342689", "73734B611DDA23D3F5F62E20A173B78AB8406AC5015094DA53F53D39B9EDB06"}},
 			output:      "",
-			expectedErr: &types.ErrInvalidHashLength{Expected: types.HashLengthBytes},
+			expectedErr: &types.InvalidHashLengthError{Expected: types.HashLengthBytes},
 		},
 		{
 			description: "serialize STObject correctly",

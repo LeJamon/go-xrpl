@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -65,7 +65,7 @@ func indexHash(space uint16, data ...[]byte) [32]byte {
 	inputs = append(inputs, spaceBytes[:])
 	inputs = append(inputs, data...)
 
-	return common.Sha512Half(inputs...)
+	return sha512half.Sum(inputs...)
 }
 
 // Account returns the keylet for an account root entry.
@@ -209,7 +209,7 @@ type CredentialPair struct {
 func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Keylet {
 	hashes := make([][32]byte, len(sortedCreds))
 	for i, c := range sortedCreds {
-		hashes[i] = common.Sha512Half(c.Issuer[:], c.CredentialType)
+		hashes[i] = sha512half.Sum(c.Issuer[:], c.CredentialType)
 	}
 	data := make([][]byte, 0, 1+len(sortedCreds))
 	data = append(data, owner[:])
@@ -273,7 +273,7 @@ func CurrencyBytes(currency string) [20]byte {
 	case 3:
 		for i := range 3 {
 			if !isISOCurrencyChar(currency[i]) {
-				return NoCurrency
+				return noCurrency
 			}
 		}
 		result[12] = currency[0]
@@ -281,10 +281,10 @@ func CurrencyBytes(currency string) [20]byte {
 		result[14] = currency[2]
 	case 40:
 		if _, err := hex.Decode(result[:], []byte(currency)); err != nil {
-			return NoCurrency
+			return noCurrency
 		}
 	default:
-		return NoCurrency
+		return noCurrency
 	}
 
 	return result
@@ -315,17 +315,27 @@ func IsValidCurrencyCode(code string) bool {
 	}
 }
 
+// Currency-parsing errors. Callers distinguishing a malformed code from a
+// reserved one can match these with errors.Is.
+var (
+	// ErrInvalidCurrency reports a code that is not well-formed per to_currency.
+	ErrInvalidCurrency = errors.New("invalid currency code")
+	// ErrReservedCurrency reports a well-formed code that resolves to one of the
+	// reserved sentinels (NoCurrency or BadCurrency).
+	ErrReservedCurrency = errors.New("reserved currency code")
+)
+
 // ParseCurrency validates code against rippled's to_currency rules and returns
 // the 20-byte currency. It errors on malformed codes and on the reserved
 // sentinels NoCurrency and BadCurrency, giving callers a single
 // validate-and-encode entry point that stays symmetric with CurrencyBytes.
 func ParseCurrency(code string) ([20]byte, error) {
 	if !IsValidCurrencyCode(code) {
-		return [20]byte{}, errors.New("invalid currency code")
+		return [20]byte{}, ErrInvalidCurrency
 	}
 	currency := CurrencyBytes(code)
-	if currency == NoCurrency || currency == BadCurrency {
-		return [20]byte{}, errors.New("reserved currency code")
+	if currency == noCurrency || currency == badCurrency {
+		return [20]byte{}, ErrReservedCurrency
 	}
 	return currency, nil
 }
@@ -348,15 +358,25 @@ func isISOCurrencyChar(c byte) bool {
 	return false
 }
 
-// NoCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
+// noCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
 // base_uint<160>{1} stored big-endian, distinct from xrpCurrency() = all-zeros.
 // to_currency yields it for any malformed code.
-var NoCurrency = [20]byte{19: 0x01}
+var noCurrency = [20]byte{19: 0x01}
 
-// BadCurrency mirrors rippled's badCurrency() sentinel (UintTypes.cpp:133-137) —
+// badCurrency mirrors rippled's badCurrency() sentinel (UintTypes.cpp:133-137) —
 // Currency(0x5852500000000000), the ISO-style spelling of the reserved system
 // code "XRP" packed at bytes 12-14.
-var BadCurrency = [20]byte{12: 'X', 13: 'R', 14: 'P'}
+var badCurrency = [20]byte{12: 'X', 13: 'R', 14: 'P'}
+
+// NoCurrency returns the reserved sentinel that to_currency yields for any
+// malformed code. It is returned by value so callers cannot mutate the shared
+// process-wide sentinel.
+func NoCurrency() [20]byte { return noCurrency }
+
+// BadCurrency returns the reserved sentinel for the ISO-style spelling of the
+// system code "XRP". It is returned by value so callers cannot mutate the
+// shared process-wide sentinel.
+func BadCurrency() [20]byte { return badCurrency }
 
 // BookDir returns the keylet for an order book directory (base, without quality).
 // The hash order follows rippled: paysCurrency, getsCurrency, paysIssuer, getsIssuer

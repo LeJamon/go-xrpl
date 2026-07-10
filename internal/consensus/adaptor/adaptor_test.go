@@ -738,7 +738,7 @@ func TestNew_SeedsRestartValidationFloor(t *testing.T) {
 	for _, seq := range []relationaldb.LedgerIndex{740, 742, 741} {
 		info := &relationaldb.LedgerInfo{Sequence: seq}
 		info.Hash[0] = byte(seq)
-		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info, true))
+		require.NoError(t, rm.Ledger().SaveValidatedLedger(ctx, info))
 	}
 
 	cfg := service.DefaultConfig()

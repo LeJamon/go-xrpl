@@ -5,9 +5,9 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -124,7 +124,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 		}
 		// If key_type not specified, use the algorithm from the seed
 		if !hasKeyType {
-			_, isEd := algo.(ed25519.ED25519CryptoAlgorithm)
+			_, isEd := algo.(ed25519.Algorithm)
 			useEd25519 = isEd
 		}
 
@@ -142,7 +142,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 
 	case "passphrase":
 		// SHA512-Half of the passphrase, take first 16 bytes
-		hash := common.Sha512Half([]byte(secretValue))
+		hash := sha512half.Sum([]byte(secretValue))
 		seedBytes = hash[:16]
 
 	case "secret":
@@ -152,14 +152,14 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
 		if err == nil {
 			// Successfully parsed as base58 seed
-			_, isEd := algo.(ed25519.ED25519CryptoAlgorithm)
+			_, isEd := algo.(ed25519.Algorithm)
 			useEd25519 = isEd
 		} else {
 			// Try as hex
 			seedBytes, err = hex.DecodeString(secretValue)
 			if err != nil || len(seedBytes) != 16 {
 				// Treat as passphrase
-				hash := common.Sha512Half([]byte(secretValue))
+				hash := sha512half.Sum([]byte(secretValue))
 				seedBytes = hash[:16]
 			}
 		}
@@ -167,10 +167,10 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 
 	// Derive keypair using the appropriate algorithm
 	if useEd25519 {
-		algo := ed25519.ED25519()
+		algo := ed25519.Algorithm{}
 		privateKeyHex, publicKeyHex, err = algo.DeriveKeypair(seedBytes, false)
 	} else {
-		algo := secp256k1.SECP256K1()
+		algo := secp256k1.Algorithm{}
 		privateKeyHex, publicKeyHex, err = algo.DeriveKeypair(seedBytes, false)
 	}
 

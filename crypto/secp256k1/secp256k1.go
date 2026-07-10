@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -27,7 +27,7 @@ const (
 var secp256K1FamilySeedPrefixBytes = []byte{secp256K1FamilySeedPrefix}
 
 var (
-	_ rootcrypto.Algorithm = SECP256K1CryptoAlgorithm{}
+	_ rootcrypto.Algorithm = Algorithm{}
 
 	// ErrInvalidPrivateKey is returned when a private key is invalid
 	ErrInvalidPrivateKey = errors.New("invalid private key")
@@ -39,29 +39,19 @@ var (
 	ErrScalarDerivation = errors.New("unable to derive scalar from seed")
 )
 
-// SECP256K1CryptoAlgorithm is the implementation of the SECP256K1 algorithm.
-type SECP256K1CryptoAlgorithm struct {
-	prefix           byte
-	familySeedPrefix []byte
+// Algorithm implements crypto.Algorithm for the secp256k1 signature scheme.
+// It is stateless: the zero value Algorithm{} is ready to use.
+type Algorithm struct{}
+
+// Prefix returns the public-key type prefix for the secp256k1 algorithm.
+func (c Algorithm) Prefix() byte {
+	return secp256K1Prefix
 }
 
-// SECP256K1 returns a new SECP256K1CryptoAlgorithm instance.
-func SECP256K1() SECP256K1CryptoAlgorithm {
-	return SECP256K1CryptoAlgorithm{
-		prefix:           secp256K1Prefix,
-		familySeedPrefix: secp256K1FamilySeedPrefixBytes,
-	}
-}
-
-// Prefix returns the prefix for the SECP256K1 algorithm.
-func (c SECP256K1CryptoAlgorithm) Prefix() byte {
-	return c.prefix
-}
-
-// FamilySeedPrefix returns the family seed prefix for the SECP256K1 algorithm.
+// FamilySeedPrefix returns the family seed prefix for the secp256k1 algorithm.
 // The returned slice aliases shared package state; callers must not mutate it.
-func (c SECP256K1CryptoAlgorithm) FamilySeedPrefix() []byte {
-	return c.familySeedPrefix
+func (c Algorithm) FamilySeedPrefix() []byte {
+	return secp256K1FamilySeedPrefixBytes
 }
 
 // deriveScalar derives a scalar from a seed using the rippled "XRP Family
@@ -69,7 +59,7 @@ func (c SECP256K1CryptoAlgorithm) FamilySeedPrefix() []byte {
 // 32 bytes, retrying until the result is in (0, n). The loop almost always
 // exits on the first iteration; it returns ErrScalarDerivation if no valid
 // scalar is found within 128 retries, mirroring rippled's bounded retry.
-func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error) {
+func (c Algorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error) {
 	order := btcec.S256().N
 	hasher := sha512.New()
 	sum := make([]byte, 0, sha512.Size)
@@ -121,10 +111,11 @@ func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) (*
 	return nil, ErrScalarDerivation
 }
 
-// DeriveKeypair derives a keypair from a seed.
-// For regular (non-validator) keys, the derivation uses an additional scalar derived
-// from the root public key. For validator keys, only the root generator is used.
-func (c SECP256K1CryptoAlgorithm) DeriveKeypair(seed []byte, validator bool) (string, string, error) {
+// DeriveKeypair derives a keypair from a seed, returning the hex-encoded
+// private then public key. For regular (non-validator) keys, the derivation
+// uses an additional scalar derived from the root public key. For validator
+// keys, only the root generator is used.
+func (c Algorithm) DeriveKeypair(seed []byte, validator bool) (privHex, pubHex string, err error) {
 	curve := btcec.S256()
 	order := curve.N
 
@@ -164,7 +155,7 @@ func (c SECP256K1CryptoAlgorithm) DeriveKeypair(seed []byte, validator bool) (st
 
 // SignBytes signs msg with a 32-byte raw secp256k1 private key and returns
 // the DER-encoded signature in bytes.
-func (c SECP256K1CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
+func (c Algorithm) SignBytes(msg, privKey []byte) ([]byte, error) {
 	if len(privKey) != 32 {
 		return nil, ErrInvalidPrivateKey
 	}
@@ -172,7 +163,7 @@ func (c SECP256K1CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error)
 		return nil, ErrInvalidMessage
 	}
 	secpPrivKey := secp256k1.PrivKeyFromBytes(privKey)
-	hash := common.Sha512Half(msg)
+	hash := sha512half.Sum(msg)
 	sig := ecdsa.Sign(secpPrivKey, hash[:])
 	return derFromRS(sig.R(), sig.S()), nil
 }
@@ -201,7 +192,7 @@ func decodePrivKeyHex(privKeyHex string) ([]byte, error) {
 // Sign signs a message with a private key (hex-encoded, optionally
 // 0x00-prefixed). The returned signature is the uppercase hex form of the
 // DER-encoded signature.
-func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
+func (c Algorithm) Sign(msg, privKey string) (string, error) {
 	key, err := decodePrivKeyHex(privKey)
 	if err != nil {
 		return "", err
@@ -217,7 +208,7 @@ func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 // Matches rippled's signDigest() which passes the SHA-512Half hash directly
 // to secp256k1 signing. The private key hex is validated exactly like Sign,
 // then signing is delegated to the validated [SignDigestBytes] core.
-func (c SECP256K1CryptoAlgorithm) SignDigest(digest [32]byte, privKeyHex string) ([]byte, error) {
+func (c Algorithm) SignDigest(digest [32]byte, privKeyHex string) ([]byte, error) {
 	key, err := decodePrivKeyHex(privKeyHex)
 	if err != nil {
 		return nil, err
@@ -228,13 +219,13 @@ func (c SECP256K1CryptoAlgorithm) SignDigest(digest [32]byte, privKeyHex string)
 // Validate validates a signature for a message with a public key.
 // It checks that the signature is fully canonical (low S) to prevent
 // signature malleability attacks.
-func (c SECP256K1CryptoAlgorithm) Validate(msg, pubkey, sig string) bool {
+func (c Algorithm) Validate(msg, pubkey, sig string) bool {
 	return c.ValidateWithCanonicality(msg, pubkey, sig, true)
 }
 
 // ValidateWithCanonicality validates a signature with optional canonicality checking.
 // If mustBeFullyCanonical is true, the signature must have S <= curve_order/2.
-func (c SECP256K1CryptoAlgorithm) ValidateWithCanonicality(msg, pubkey, sig string, mustBeFullyCanonical bool) bool {
+func (c Algorithm) ValidateWithCanonicality(msg, pubkey, sig string, mustBeFullyCanonical bool) bool {
 	sigBytes, err := hex.DecodeString(sig)
 	if err != nil {
 		return false
@@ -247,24 +238,24 @@ func (c SECP256K1CryptoAlgorithm) ValidateWithCanonicality(msg, pubkey, sig stri
 }
 
 // ValidateBytes verifies a fully-canonical DER signature with a SHA-512Half-of-msg digest.
-func (c SECP256K1CryptoAlgorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
+func (c Algorithm) ValidateBytes(msg, pubkey, sig []byte) bool {
 	return c.validateBytes(msg, pubkey, sig, true, true)
 }
 
 // validateBytes is the byte-level core used by Validate/ValidateBytes/ValidateDigest.
 // When hashMsg is true the message is SHA-512Half-hashed before verification;
 // otherwise msg is treated as a pre-computed 32-byte digest.
-func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
+func (c Algorithm) validateBytes(msg, pubkey, sig []byte, mustBeFullyCanonical, hashMsg bool) bool {
 	canonicality := rootcrypto.ECDSACanonicality(sig)
-	if canonicality == rootcrypto.CanonicityNone {
+	if canonicality == rootcrypto.CanonicalityNone {
 		return false
 	}
-	if mustBeFullyCanonical && canonicality != rootcrypto.CanonicityFullyCanonical {
+	if mustBeFullyCanonical && canonicality != rootcrypto.CanonicalityFullyCanonical {
 		return false
 	}
 	var digest [32]byte
 	if hashMsg {
-		digest = common.Sha512Half(msg)
+		digest = sha512half.Sum(msg)
 	} else {
 		if len(msg) != 32 {
 			return false
@@ -278,12 +269,12 @@ func (c SECP256K1CryptoAlgorithm) validateBytes(msg, pubkey, sig []byte, mustBeF
 // Unlike Validate, this does NOT re-hash the data — it uses the digest directly.
 // Matches rippled's verifyDigest() which passes the SHA-512Half hash directly
 // to secp256k1_ecdsa_verify.
-func (c SECP256K1CryptoAlgorithm) ValidateDigest(digest [32]byte, pubkeyBytes []byte, sigBytes []byte) bool {
+func (c Algorithm) ValidateDigest(digest [32]byte, pubkeyBytes []byte, sigBytes []byte) bool {
 	return c.validateBytes(digest[:], pubkeyBytes, sigBytes, false, false)
 }
 
 // DerivePublicKeyFromPublicGenerator derives a public key from a public generator.
-func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromPublicGenerator(pubKey []byte) ([]byte, error) {
+func (c Algorithm) DerivePublicKeyFromPublicGenerator(pubKey []byte) ([]byte, error) {
 	curve := btcec.S256()
 
 	// Parse the input public key as a point
@@ -328,7 +319,7 @@ func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromPublicGenerator(pubKey []by
 // derivePublicKey(KeyType::secp256k1, SecretKey) used by validator-token
 // loading, where the JSON `validation_secret_key` already is the raw
 // scalar (no seed expansion).
-func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
+func (c Algorithm) DerivePublicKeyFromSecret(secret []byte) ([]byte, error) {
 	if len(secret) != 32 {
 		return nil, ErrInvalidPrivateKey
 	}

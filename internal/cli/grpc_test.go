@@ -204,7 +204,7 @@ func TestGRPCServer_DisabledByDefault(t *testing.T) {
 		"port_rpc": {Port: 5005, IP: "127.0.0.1", Protocol: "http"},
 		"port_ws":  {Port: 6006, IP: "127.0.0.1", Protocol: "ws"},
 	}}
-	if _, _, ok := cfg.GetGRPCPort(); ok {
+	if _, _, ok := cfg.GRPCPort(); ok {
 		t.Fatal("gRPC must be disabled when no [port_grpc] section is configured")
 	}
 }

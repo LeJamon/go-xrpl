@@ -15,7 +15,7 @@ import (
 // (temDISABLED) and Apply is never reached. Do not flip this to SupportedYes
 // until the Apply methods are fully implemented.
 func TestXChainAmendmentRemainsUnsupported(t *testing.T) {
-	f := amendment.GetFeature(amendment.FeatureXChainBridge)
+	f := amendment.FeatureByID(amendment.FeatureXChainBridge)
 	require.NotNil(t, f, "XChainBridge must be registered")
 	assert.Equal(t, amendment.SupportedNo, f.Supported,
 		"XChainBridge must stay SupportedNo while xchain Apply is stubbed")

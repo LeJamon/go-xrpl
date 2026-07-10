@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -20,10 +20,10 @@ func pseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, pseudoOwnerKe
 	for i := range uint16(maxPseudoAccountAttempts) {
 		var iBytes [2]byte
 		binary.BigEndian.PutUint16(iBytes[:], i)
-		hash := common.Sha512Half(iBytes[:], parentHash[:], pseudoOwnerKey[:])
+		hash := sha512half.Sum(iBytes[:], parentHash[:], pseudoOwnerKey[:])
 
 		var accountID [20]byte
-		copy(accountID[:], addresscodec.Sha256RipeMD160(hash[:]))
+		copy(accountID[:], addresscodec.SHA256RIPEMD160(hash[:]))
 
 		if exists, _ := view.Exists(keylet.Account(accountID)); !exists {
 			return accountID

@@ -20,7 +20,7 @@ import (
 // internally (SHA512-Half). Reference: rippled Batch.h serializeBatch.
 func serializeBatch(flags uint32, txids [][32]byte) []byte {
 	msg := make([]byte, 0, 4+4+4+len(txids)*32)
-	msg = append(msg, protocol.HashPrefixBatch.Bytes()...)
+	msg = append(msg, protocol.HashPrefixBatch().Bytes()...)
 	msg = binary.BigEndian.AppendUint32(msg, flags)
 	msg = binary.BigEndian.AppendUint32(msg, uint32(len(txids)))
 	for _, txid := range txids {
@@ -162,9 +162,9 @@ func verifyBatchSig(msg []byte, pubKeyHex, sigHex string) bool {
 	msgStr := string(msg)
 	switch pubKeyBytes[0] {
 	case 0xED:
-		return ed25519.ED25519().Validate(msgStr, pubKeyHex, sigHex)
+		return ed25519.Algorithm{}.Validate(msgStr, pubKeyHex, sigHex)
 	case 0x02, 0x03:
-		return secp256k1.SECP256K1().ValidateWithCanonicality(msgStr, pubKeyHex, sigHex, true)
+		return secp256k1.Algorithm{}.ValidateWithCanonicality(msgStr, pubKeyHex, sigHex, true)
 	default:
 		return false
 	}

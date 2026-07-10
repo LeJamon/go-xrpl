@@ -81,7 +81,7 @@ func (c ValidationArchiveConfig) WithDefaults() ValidationArchiveConfig {
 
 // Validate returns a non-nil error if any knob is out of range. Called
 // by ValidateConfig during startup so operators see all problems at once.
-func (c *ValidationArchiveConfig) Validate() error {
+func (c ValidationArchiveConfig) Validate() error {
 	if !c.Enabled {
 		return nil
 	}

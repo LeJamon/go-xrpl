@@ -112,7 +112,7 @@ func materializeState(t *testing.T, env *jtx.TestEnv) (*ctrlFamily, [32]byte) {
 	}
 
 	family := newCtrlFamily()
-	batch, err := rebuilt.FlushDirty(false)
+	batch, err := rebuilt.FlushDirty()
 	if err != nil {
 		t.Fatalf("FlushDirty: %v", err)
 	}

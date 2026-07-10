@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields/spec"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -532,7 +532,7 @@ func TestGeneratedSLE_RoundTripAndAccessors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Hash: %v", err)
 			}
-			want := common.Sha512Half(protocol.HashPrefixLeafNode[:], canonical, index[:])
+			want := sha512half.Sum(protocol.HashPrefixLeafNode().Bytes(), canonical, index[:])
 			if h != want {
 				t.Fatalf("hash mismatch:\n want %x\n got  %x", want, h)
 			}

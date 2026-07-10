@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -25,7 +25,7 @@ const (
 type leafKindInfo struct {
 	nodeType   NodeType
 	hashPrefix []byte
-	wireType   byte
+	wireType   protocol.WireType
 	keyOnWire  bool
 	label      string
 }
@@ -33,25 +33,33 @@ type leafKindInfo struct {
 var leafKinds = [...]leafKindInfo{
 	leafAccountState: {
 		nodeType:   NodeTypeAccountState,
-		hashPrefix: protocol.HashPrefixLeafNode[:],
+		hashPrefix: protocol.HashPrefixLeafNode().Bytes(),
 		wireType:   protocol.WireTypeAccountState,
 		keyOnWire:  true,
 		label:      "AccountStateLeafNode",
 	},
 	leafTransaction: {
 		nodeType:   NodeTypeTransactionNoMeta,
-		hashPrefix: protocol.HashPrefixTransactionID[:],
+		hashPrefix: protocol.HashPrefixTransactionID().Bytes(),
 		wireType:   protocol.WireTypeTransaction,
 		keyOnWire:  false,
 		label:      "TransactionLeafNode",
 	},
 	leafTransactionWithMeta: {
 		nodeType:   NodeTypeTransactionWithMeta,
-		hashPrefix: protocol.HashPrefixTxNode[:],
+		hashPrefix: protocol.HashPrefixTxNode().Bytes(),
 		wireType:   protocol.WireTypeTransactionWithMeta,
 		keyOnWire:  true,
 		label:      "TransactionWithMetaLeafNode",
 	},
+}
+
+// LeafReader is the read-only view of a leaf node returned to callers outside
+// the package: the node's identity plus its stored Item, without the
+// item-replacement or hashing mutators of LeafNode.
+type LeafReader interface {
+	NodeReader
+	Item() *Item
 }
 
 // LeafNode interface extends Node with item-level access.
@@ -164,8 +172,8 @@ func (n *leafNode) hashPrefix() []byte {
 	return leafKinds[n.kind].hashPrefix
 }
 
-// wireType returns the trailing wire-type byte.
-func (n *leafNode) wireType() byte {
+// wireType returns the trailing wire type.
+func (n *leafNode) wireType() protocol.WireType {
 	return leafKinds[n.kind].wireType
 }
 
@@ -187,12 +195,12 @@ func (n *leafNode) SerializeForWire() ([]byte, error) {
 		result := make([]byte, 0, len(data)+33)
 		result = append(result, data...)
 		result = append(result, key[:]...)
-		result = append(result, n.wireType())
+		result = append(result, byte(n.wireType()))
 		return result, nil
 	}
 	result := make([]byte, 0, len(data)+1)
 	result = append(result, data...)
-	result = append(result, n.wireType())
+	result = append(result, byte(n.wireType()))
 	return result, nil
 }
 
@@ -225,7 +233,7 @@ func newAccountStateLeafFromWire(data []byte) (*leafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 	if wireType != protocol.WireTypeAccountState {
 		return nil, fmt.Errorf("invalid wire type for account state: %d", wireType)
 	}
@@ -250,17 +258,22 @@ func newAccountStateLeafFromWire(data []byte) (*leafNode, error) {
 }
 
 // NewTransactionLeafFromWire creates a transaction leaf (without metadata)
-// from wire format data. The key is derived by hashing the data.
-func NewTransactionLeafFromWire(data []byte) (LeafNode, error) {
+// from wire format data. The key is derived by hashing the data. It returns a
+// read-only LeafReader; the mutable node is used only within the package.
+func NewTransactionLeafFromWire(data []byte) (LeafReader, error) {
+	return newTransactionLeafFromWire(data)
+}
+
+func newTransactionLeafFromWire(data []byte) (*leafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 	if wireType != protocol.WireTypeTransaction {
 		return nil, fmt.Errorf("invalid wire type for transaction: %d", wireType)
 	}
 	nodeData := data[:len(data)-1]
-	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], nodeData)
+	key := sha512half.Sum(protocol.HashPrefixTransactionID().Bytes(), nodeData)
 	item := NewItem(key, nodeData)
 	node, err := newLeafNode(leafTransaction, item)
 	if err != nil {
@@ -276,7 +289,7 @@ func newTransactionWithMetaLeafFromWire(data []byte) (*leafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
-	wireType := data[len(data)-1]
+	wireType := protocol.WireType(data[len(data)-1])
 	if wireType != protocol.WireTypeTransactionWithMeta {
 		return nil, fmt.Errorf("invalid wire type for transaction with meta: %d", wireType)
 	}

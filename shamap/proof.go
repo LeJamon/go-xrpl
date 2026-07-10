@@ -106,7 +106,7 @@ func VerifyProofPathWithValue(rootHash [32]byte, key [32]byte, path [][]byte) []
 
 		// Deserialize the node from wire format
 		// This may fail if the data is malformed (e.g., from network)
-		node, err := DeserializeNodeFromWire(nodeData)
+		node, err := deserializeNodeFromWire(nodeData)
 		if err != nil {
 			return nil
 		}

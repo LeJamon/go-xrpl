@@ -54,7 +54,7 @@ func TestAddKnownNodeByID_OutOfOrderConverges(t *testing.T) {
 	var list []item
 	maxDepth := 0
 	for _, w := range wireNodes {
-		nid, err := UnmarshalBinary(w.NodeID)
+		nid, err := ParseNodeID(w.NodeID)
 		if err != nil {
 			t.Fatalf("UnmarshalBinary: %v", err)
 		}

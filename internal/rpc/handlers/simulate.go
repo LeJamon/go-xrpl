@@ -206,7 +206,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// same registry rippled's STParsedJSONObject consults.
 	defs := binarycodecdefs.Get()
 	for k := range txJsonMap {
-		if _, ok := defs.Fields[k]; !ok {
+		if !defs.HasField(k) {
 			return nil, types.RpcErrorInvalidParams(
 				fmt.Sprintf("Field 'tx_json.%s' is unknown.", k))
 		}

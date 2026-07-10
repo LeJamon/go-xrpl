@@ -17,9 +17,9 @@ type UInt16 struct{}
 // method will attempt to convert it into a corresponding type code. If the conversion fails, an error is returned.
 func (u *UInt16) FromJSON(value any) ([]byte, error) {
 	if s, ok := value.(string); ok {
-		tc, err := definitions.Get().GetTransactionTypeCodeByTransactionTypeName(s)
+		tc, err := definitions.Get().TransactionTypeCode(s)
 		if err != nil {
-			tc, err = definitions.Get().GetLedgerEntryTypeCodeByLedgerEntryTypeName(s)
+			tc, err = definitions.Get().LedgerEntryTypeCode(s)
 			if err != nil {
 				return nil, err
 			}
