@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -126,10 +126,10 @@ func TestAcceptLedger_StandaloneFlagLedgerAppliesNegativeUNL(t *testing.T) {
 func TestAcceptLedger_FlagLedgerWithTxAppliesNegativeUNL(t *testing.T) {
 	svc, validator := driveStandaloneToFlagParent(t)
 
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 
 	masterSeq := accountSeq(t, svc, master.Address)
 	mustApply(t, svc, signedBlob(t, env,

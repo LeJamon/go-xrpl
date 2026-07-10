@@ -32,7 +32,7 @@ func TestRefreshRemoteFee_MedianOverTrustedValidations(t *testing.T) {
 	a.refreshRemoteFee(id)
 
 	// Sorted set: {256, 320, 500}; middle = 320.
-	if got := ft.GetRemoteFee(); got != 320 {
+	if got := ft.RemoteFee(); got != 320 {
 		t.Fatalf("RemoteFee = %d; want 320", got)
 	}
 }
@@ -45,9 +45,9 @@ func TestRefreshRemoteFee_NoHistorian(t *testing.T) {
 	if ft == nil {
 		t.Fatal("FeeTrack must be non-nil")
 	}
-	before := ft.GetRemoteFee()
+	before := ft.RemoteFee()
 	a.refreshRemoteFee(consensus.LedgerID{0xBB})
-	if got := ft.GetRemoteFee(); got != before {
+	if got := ft.RemoteFee(); got != before {
 		t.Fatalf("RemoteFee changed without historian: before=%d after=%d", before, got)
 	}
 }
@@ -65,7 +65,7 @@ func TestRefreshRemoteFee_EmptyValidations(t *testing.T) {
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{},
 	})
 	a.refreshRemoteFee(consensus.LedgerID{0xCC})
-	if got := ft.GetRemoteFee(); got != 777 {
+	if got := ft.RemoteFee(); got != 777 {
 		t.Fatalf("RemoteFee mutated on empty validations: got %d, want 777", got)
 	}
 }
@@ -92,7 +92,7 @@ func TestGetLoadFee_MaxLocalCluster(t *testing.T) {
 	ft.SetClusterFee(feetrack.LoadBase)
 	ft.RaiseLocalFee() // raise latch
 	ft.RaiseLocalFee() // local = 320
-	if got := a.GetLoadFee(); got != ft.GetLocalFee() {
-		t.Fatalf("local-dominated GetLoadFee = %d; want %d", got, ft.GetLocalFee())
+	if got := a.GetLoadFee(); got != ft.LocalFee() {
+		t.Fatalf("local-dominated GetLoadFee = %d; want %d", got, ft.LocalFee())
 	}
 }

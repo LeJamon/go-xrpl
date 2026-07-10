@@ -6,16 +6,16 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-func unlimitedCtx(s *types.ClientLoadShedder) *types.RpcContext {
-	return &types.RpcContext{
+func unlimitedCtx(s *types.ClientLoadShedder) *types.RPCContext {
+	return &types.RPCContext{
 		Role:      types.RoleAdmin,
 		Unlimited: true,
 		Services:  &types.ServiceContainer{ClientLoad: s},
 	}
 }
 
-func gatedCtx(s *types.ClientLoadShedder) *types.RpcContext {
-	return &types.RpcContext{Services: &types.ServiceContainer{ClientLoad: s}}
+func gatedCtx(s *types.ClientLoadShedder) *types.RPCContext {
+	return &types.RPCContext{Services: &types.ServiceContainer{ClientLoad: s}}
 }
 
 func loadInFlight(s *types.ClientLoadShedder, n int64) {
@@ -25,7 +25,7 @@ func loadInFlight(s *types.ClientLoadShedder, n int64) {
 }
 
 func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
-	for _, ctx := range []*types.RpcContext{
+	for _, ctx := range []*types.RPCContext{
 		nil,
 		{},
 		{Services: &types.ServiceContainer{}},

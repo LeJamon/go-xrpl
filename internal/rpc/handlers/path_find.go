@@ -19,8 +19,8 @@ import (
 // UpdatePathFindSessions on each ledger close (wired in cli/server.go).
 type PathFindMethod struct{}
 
-func (m *PathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	return nil, types.RpcErrorNoEvents("")
+func (m *PathFindMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+	return nil, types.RPCErrorNoEvents("")
 }
 
 func (m *PathFindMethod) RequiredRole() types.Role {

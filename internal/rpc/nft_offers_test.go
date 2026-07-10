@@ -177,7 +177,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -278,7 +278,7 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -349,7 +349,7 @@ func TestNftBuyOffersWithIOUAmount(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -407,7 +407,7 @@ func TestNftBuyOffersWithPagination(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftBuyOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -460,7 +460,7 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftSellOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -544,7 +544,7 @@ func TestNftSellOffersSuccess(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftSellOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -600,7 +600,7 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 	services := newNFTOffersTestServices(mock)
 
 	method := &handlers.NftSellOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -639,7 +639,7 @@ func TestNftSellOffersEmptyResult(t *testing.T) {
 // TestNftBuyOffersServiceUnavailable tests response when ledger service is unavailable
 func TestNftBuyOffersServiceUnavailable(t *testing.T) {
 	method := &handlers.NftBuyOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -661,7 +661,7 @@ func TestNftBuyOffersServiceUnavailable(t *testing.T) {
 // TestNftSellOffersServiceUnavailable tests response when ledger service is unavailable
 func TestNftSellOffersServiceUnavailable(t *testing.T) {
 	method := &handlers.NftSellOffersMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

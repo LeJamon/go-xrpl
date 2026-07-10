@@ -136,7 +136,7 @@ type EngineConfig struct {
 	EnforceLoadFee bool
 }
 
-// GetRules returns the amendment rules for this apply. Rules must be plumbed
+// RequireRules returns the amendment rules for this apply. Rules must be plumbed
 // from the parent ledger's Amendments SLE; a nil Rules panics for the same
 // reason Engine.rules() does — a silent AllSupportedRules fallback treats every
 // amendment as enabled regardless of on-chain state, desyncing the engine from
@@ -144,7 +144,7 @@ type EngineConfig struct {
 // Engine.rules() and ApplyContext.Rules() route through the same no-fallback
 // rule. Tests must set Rules explicitly (amendment.AllSupportedRules() or
 // EmptyRules()).
-func (c EngineConfig) GetRules() *amendment.Rules {
+func (c EngineConfig) RequireRules() *amendment.Rules {
 	if c.Rules == nil {
 		panic("tx.EngineConfig: Rules is nil — every apply path must plumb " +
 			"amendment.Rules from the parent ledger's Amendments SLE. Tests " +

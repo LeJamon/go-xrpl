@@ -56,7 +56,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -136,7 +136,7 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -174,7 +174,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -220,7 +220,7 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -248,7 +248,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -269,7 +269,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -296,7 +296,7 @@ func TestTxHistoryInternalError(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,

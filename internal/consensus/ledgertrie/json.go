@@ -5,10 +5,10 @@ import (
 	"strconv"
 )
 
-// GetJson returns a JSON-serializable snapshot of the trie's support state:
+// GetJSON returns a JSON-serializable snapshot of the trie's support state:
 // the compressed ancestry trie under "trie" and a per-sequence tip-count map
 // under "seq_support".
-func (t *Trie) GetJson() map[string]any {
+func (t *Trie) GetJSON() map[string]any {
 	seqSupport := make(map[string]uint32, len(t.seqSupport))
 	for seq, sup := range t.seqSupport {
 		seqSupport[strconv.FormatUint(uint64(seq), 10)] = sup

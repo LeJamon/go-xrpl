@@ -208,7 +208,7 @@ func TestGetAdoptedLedgerBySequence(t *testing.T) {
 	}
 
 	// A closed ledger in adopted history resolves like GetLedgerBySequence.
-	closed, err := svc.GetAdoptedLedgerBySequence(2)
+	closed, err := svc.AdoptedLedgerBySequence(2)
 	if err != nil {
 		t.Fatalf("adopted-history seq 2 should resolve: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestGetAdoptedLedgerBySequence(t *testing.T) {
 	if l, err := svc.GetLedgerBySequence(openSeq); err != nil || l == nil {
 		t.Fatalf("GetLedgerBySequence must fall back to the open ledger at seq %d (err=%v)", openSeq, err)
 	}
-	if _, err := svc.GetAdoptedLedgerBySequence(openSeq); err != ErrLedgerNotFound {
+	if _, err := svc.AdoptedLedgerBySequence(openSeq); err != ErrLedgerNotFound {
 		t.Errorf("GetAdoptedLedgerBySequence(%d) must NOT return the open ledger; got %v", openSeq, err)
 	}
 }

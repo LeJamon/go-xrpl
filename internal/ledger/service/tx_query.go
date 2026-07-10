@@ -295,7 +295,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, 
 	}
 	fee := loadFee
 	if s.txQueue != nil {
-		feeLevel := s.txQueue.GetRequiredFeeLevel(s.openLedger.TxCount())
+		feeLevel := s.txQueue.RequiredFeeLevel(s.openLedger.TxCount())
 		if uint64(feeLevel) > txq.BaseLevel {
 			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
 			if escalated > fee {

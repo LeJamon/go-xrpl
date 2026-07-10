@@ -12,12 +12,12 @@ import (
 )
 
 // MethodDispatcher allows forwarding RPC calls to the method registry.
-// Used by the 'json' RPC method to proxy calls. The caller's RpcContext is
+// Used by the 'json' RPC method to proxy calls. The caller's RPCContext is
 // threaded through so the forwarded method keeps the request's timeout,
 // role, client IP and api version — without it a guest could wrap a heavy
 // method in `json` to escape per-IP load charging.
 type MethodDispatcher interface {
-	ExecuteMethod(ctx *RpcContext, method string, params []byte) (any, *RpcError)
+	ExecuteMethod(ctx *RPCContext, method string, params []byte) (any, *RPCError)
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the
@@ -428,7 +428,7 @@ type ServiceContainer struct {
 }
 
 // URLSubscriptionService is the url-keyed subscription registry mirroring
-// rippled's RPCSub/mRpcSubMap: each url maps to one long-lived subscriber
+// rippled's RPCSub/mRPCSubMap: each url maps to one long-lived subscriber
 // whose events are delivered as outbound JSON-RPC "event" calls with per-url
 // sequence numbers and basic auth. Callers gate on role before invoking —
 // both methods are admin-only in rippled's handlers.
@@ -436,11 +436,11 @@ type URLSubscriptionService interface {
 	// Subscribe registers (or extends) the url subscription and returns the
 	// same ack payload a WebSocket subscriber gets (current ledger info for
 	// the ledger stream, book snapshots).
-	Subscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+	Subscribe(ctx *RPCContext, request SubscriptionRequest) (map[string]any, *RPCError)
 	// Unsubscribe removes the listed streams/accounts/books from the url
 	// subscription and drops the registry entry once no stream
 	// subscriptions remain. An unknown url is silent success.
-	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+	Unsubscribe(ctx *RPCContext, request SubscriptionRequest) (map[string]any, *RPCError)
 }
 
 // QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by

@@ -1,5 +1,5 @@
-// Package testing provides test infrastructure for XRPL transaction testing.
-package testing
+// Package jtx provides test infrastructure for XRPL transaction testing.
+package jtx
 
 import (
 	"math"

@@ -63,7 +63,7 @@ func TestAccountInfoQueueData_RealQueue(t *testing.T) {
 		},
 	}
 
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -132,7 +132,7 @@ func TestAccountInfoQueueData_Tickets(t *testing.T) {
 			}
 		},
 	}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	method := &handlers.AccountInfoMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"account": queueTestAccount, "queue": true, "ledger_index": "current"})
 
@@ -189,7 +189,7 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 		},
 	}
 
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
 
@@ -233,7 +233,7 @@ func TestLedgerQueueData_EmptyOmitted(t *testing.T) {
 		Ledger:      mock,
 		QueueAllTxs: func() []types.QueuedTxInfo { return nil },
 	}
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
 

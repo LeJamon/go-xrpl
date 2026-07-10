@@ -5,7 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 )
 
@@ -19,12 +19,12 @@ import (
 // catch drops-and-continues; OpenView::rawTxInsert's duplicate-id LogicError was
 // converted to a catchable exception in PR #6540.
 func TestApplyTxs_DuplicateTxId_DroppedThenBuildContinues(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
-	carol := testenv.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 	env.Fund(alice, bob, carol)
 
 	view := freshView(t, env)

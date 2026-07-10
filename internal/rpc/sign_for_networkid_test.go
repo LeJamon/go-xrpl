@@ -20,10 +20,10 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 	method := &handlers.SignForMethod{}
 	const signer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh" // masterpassphrase
 
-	ctxWith := func(networkID uint32) *types.RpcContext {
+	ctxWith := func(networkID uint32) *types.RPCContext {
 		mock := newMockLedgerService()
 		mock.serverInfo = types.LedgerServerInfo{NetworkID: networkID}
-		return &types.RpcContext{
+		return &types.RPCContext{
 			Context:    context.Background(),
 			ApiVersion: types.ApiVersion1,
 			Services:   &types.ServiceContainer{Ledger: mock},

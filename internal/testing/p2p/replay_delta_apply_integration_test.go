@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -44,11 +44,11 @@ import (
 //  6. Assert the derived ledger's hash, AccountHash, and TxHash
 //     match the successor.
 func TestReplayDelta_Apply_Integration(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.VerifySignatures = true // make sure signed txs round-trip cleanly
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	env.Close()
 
@@ -58,7 +58,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	// Build + sign a real Payment alice → bob using the env's signer.
 	aliceSeq := env.Seq(alice)
 	pay := payment.NewPayment(alice.Address, bob.Address,
-		tx.NewXRPAmount(xrplgoTesting.XRP(123)))
+		tx.NewXRPAmount(jtx.XRP(123)))
 	pay.Sequence = &aliceSeq
 	pay.Fee = "10"
 	env.SignWith(pay, alice)
@@ -145,11 +145,11 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 // tefALREADY on the second apply). That's a reliable, real-engine
 // path to a tef result during replay.
 func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.VerifySignatures = true
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	env.Close()
 
@@ -157,7 +157,7 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 
 	aliceSeq := env.Seq(alice)
 	pay := payment.NewPayment(alice.Address, bob.Address,
-		tx.NewXRPAmount(xrplgoTesting.XRP(123)))
+		tx.NewXRPAmount(jtx.XRP(123)))
 	pay.Sequence = &aliceSeq
 	pay.Fee = "10"
 	env.SignWith(pay, alice)

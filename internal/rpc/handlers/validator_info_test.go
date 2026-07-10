@@ -67,8 +67,8 @@ func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceCo
 	}
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
-	return &types.RpcContext{
+func adminCtx(services *types.ServiceContainer) *types.RPCContext {
+	return &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

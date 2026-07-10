@@ -94,7 +94,7 @@ type WebSocketConnection struct {
 }
 
 // NewWebSocketServer creates a new WebSocket server. The provided
-// service container is attached to every RpcContext routed through the
+// service container is attached to every RPCContext routed through the
 // server so handlers reach the ledger via ctx.Services. May be nil for
 // test contexts.
 func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
@@ -307,14 +307,14 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	defer func() {
 		if rec := recover(); rec != nil {
 			wsLog().Error("ws message panic", "conn", wsConn.ID, "err", rec, "stack", string(debug.Stack()))
-			ws.sendError(wsConn, types.NewRpcError(types.RpcINTERNAL, "internal", "internal", "Internal server error"), nil)
+			ws.sendError(wsConn, types.NewRPCError(types.RpcINTERNAL, "internal", "internal", "Internal server error"), nil)
 		}
 	}()
 
 	// XRPL WebSocket format: command and id at top level, all other fields are params.
 	var cmdMap map[string]any
 	if err := json.Unmarshal(message, &cmdMap); err != nil {
-		ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
+		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
 		return
 	}
 
@@ -375,7 +375,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
 		defer cancel()
 	}
-	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	rpcCtx := newRPCContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 
 	// Handle subscription commands specially
 	switch cmd.Command {
@@ -393,11 +393,11 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	ws.handleRPCMethod(wsConn, rpcCtx, cmd)
 }
 
-func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
-			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid subscription parameters: "+err.Error()), cmd.ID)
+			ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid subscription parameters: "+err.Error()), cmd.ID)
 			return
 		}
 	}
@@ -406,7 +406,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 	// to the url's subscriber, not to this WebSocket connection.
 	if request.HasURL() {
 		if !ctx.IsAdmin {
-			ws.sendError(wsConn, types.RpcErrorNoPermission("subscribe"), cmd.ID)
+			ws.sendError(wsConn, types.RPCErrorNoPermission("subscribe"), cmd.ID)
 			return
 		}
 		result, rpcErr := ws.urlSubs.Subscribe(ctx, request)
@@ -445,11 +445,11 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 	ws.sendResponse(wsConn, response)
 }
 
-func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
-			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid unsubscription parameters: "+err.Error()), cmd.ID)
+			ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid unsubscription parameters: "+err.Error()), cmd.ID)
 			return
 		}
 	}
@@ -457,7 +457,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 	// See handleSubscribe: url requests target the RPCSub registry.
 	if request.HasURL() {
 		if !ctx.IsAdmin {
-			ws.sendError(wsConn, types.RpcErrorNoPermission("unsubscribe"), cmd.ID)
+			ws.sendError(wsConn, types.RPCErrorNoPermission("unsubscribe"), cmd.ID)
 			return
 		}
 		result, rpcErr := ws.urlSubs.Unsubscribe(ctx, request)
@@ -493,13 +493,13 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 // handlePathFind processes path_find commands (special WebSocket-only method).
 // Subcommands: "create" (start session), "close" (stop session), "status" (get current paths).
 // Reference: rippled PathFind.cpp
-func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	var sub struct {
 		Subcommand string `json:"subcommand"`
 	}
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &sub); err != nil {
-			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid parameters: "+err.Error()), cmd.ID)
+			ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid parameters: "+err.Error()), cmd.ID)
 			return
 		}
 	}
@@ -512,13 +512,13 @@ func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *type
 	case "status":
 		ws.handlePathFindStatus(wsConn, ctx, cmd)
 	default:
-		ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
+		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
 	}
 }
 
 // handlePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
-func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	release, rpcErr := handlers.AcquirePathfind(ctx)
 	if rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
@@ -533,13 +533,13 @@ func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx
 	}
 
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		ws.sendError(wsConn, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+		ws.sendError(wsConn, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available"), cmd.ID)
 		return
 	}
 	view, err := ctx.Services.Ledger.GetClosedLedgerView()
 	if err != nil {
-		ws.sendError(wsConn, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+		ws.sendError(wsConn, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 			"No closed ledger available"), cmd.ID)
 		return
 	}
@@ -562,14 +562,14 @@ func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx
 }
 
 // handlePathFindClose closes the active pathfinding session on this connection.
-func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	wsConn.mutex.Lock()
 	session := wsConn.pathFindSession
 	wsConn.pathFindSession = nil
 	wsConn.mutex.Unlock()
 
 	if session == nil {
-		ws.sendError(wsConn, types.RpcErrorNoPathRequest(), cmd.ID)
+		ws.sendError(wsConn, types.RPCErrorNoPathRequest(), cmd.ID)
 		return
 	}
 
@@ -584,13 +584,13 @@ func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx 
 }
 
 // handlePathFindStatus returns the current status of the active pathfinding session.
-func (ws *WebSocketServer) handlePathFindStatus(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handlePathFindStatus(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	wsConn.mutex.RLock()
 	session := wsConn.pathFindSession
 	wsConn.mutex.RUnlock()
 
 	if session == nil {
-		ws.sendError(wsConn, types.RpcErrorNoPathRequest(), cmd.ID)
+		ws.sendError(wsConn, types.RPCErrorNoPathRequest(), cmd.ID)
 		return
 	}
 
@@ -653,14 +653,14 @@ func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerSt
 	}
 }
 
-func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
 	// Shared dispatch core (registry → admin gate → conditionMet →
 	// api-version → busy/load gates → handle → finalize), identical to the
 	// HTTP path. The WS-specific admin gate returns rpcFORBIDDEN instead of
 	// rpcNO_PERMISSION (ServerHandler.cpp:482-486): when requestRole returns
 	// Role::FORBID for an admin-required command, rippled writes
 	// rpcError(rpcFORBIDDEN) before doCommand ever runs.
-	result, rpcErr := dispatchMethod(ws.methodRegistry, ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, types.RpcErrorForbidden, wsLog())
+	result, rpcErr := dispatchMethod(ws.methodRegistry, ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, types.RPCErrorForbidden, wsLog())
 	opts := wsLoadWarningOpts(ctx)
 	if rpcErr != nil {
 		ws.sendErrorWithOptions(wsConn, rpcErr, cmd.ID, opts)
@@ -678,7 +678,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 // wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
 // dispatch crossed the resource warn threshold (recorded on ctx by
 // finalizeLoad), and returns nil otherwise.
-func wsLoadWarningOpts(ctx *types.RpcContext) *types.WebSocketResponseOptions {
+func wsLoadWarningOpts(ctx *types.RPCContext) *types.WebSocketResponseOptions {
 	if ctx != nil && ctx.LoadWarning {
 		return &types.WebSocketResponseOptions{Warning: "load"}
 	}
@@ -778,13 +778,13 @@ func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, reque
 	ws.deliver(wsConn, data)
 }
 
-func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any) {
+func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RPCError, id any) {
 	ws.sendErrorWithOptions(wsConn, rpcErr, id, nil)
 }
 
 // sendErrorWithOptions writes an XRPL-format error: error fields are at top
 // level (not nested in result) per the WebSocket spec.
-func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions) {
+func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RPCError, id any, opts *types.WebSocketResponseOptions) {
 	response := types.WebSocketResponse{
 		Type:   "response",
 		Status: "error",
@@ -888,7 +888,7 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 // It reuses the ledger service's GetBookOffers — the same code path the
 // book_offers RPC uses — so the snapshot a subscriber gets in the ack is
 // identical to what they would have read with a separate book_offers call.
-func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
+func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RPCContext, request types.SubscriptionRequest) map[string]any {
 	result := make(map[string]any)
 
 	if slices.Contains(request.Streams, types.SubLedger) {
@@ -952,7 +952,7 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request type
 // subscribe ack. Errors are squashed — a snapshot failure mustn't
 // reject the entire subscribe (rippled Subscribe.cpp:339-394 ignores
 // the snapshot block on lookup failure too).
-func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker string) ([]types.BookOffer, error) {
+func (ws *WebSocketServer) snapshotBook(ctx *types.RPCContext, takerGets, takerPays types.Amount, taker string) ([]types.BookOffer, error) {
 	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, nil
 	}
@@ -1039,8 +1039,8 @@ func (ws *WebSocketServer) RegisterAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
 }
 
-// GetSubscriptionManager returns the subscription manager for event publishing
-func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
+// SubscriptionManager returns the subscription manager for event publishing
+func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 

@@ -28,7 +28,7 @@ import (
 // adaptor.
 type ValidatorsMethod struct{ AdminHandler }
 
-func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 	publisherLists := []map[string]any{}
 	trustedKeys := []string{}
 	signingKeys := map[string]any{}
@@ -219,7 +219,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:672-705.
 type ValidatorListSitesMethod struct{ AdminHandler }
 
-func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *ValidatorListSitesMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 	sites := []map[string]any{}
 
 	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList != nil {

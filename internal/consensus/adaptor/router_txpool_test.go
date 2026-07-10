@@ -10,7 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
@@ -20,10 +20,10 @@ import (
 // returns its wire blob plus the expected transaction hash. The
 // open-ledger Submit path rejects un-parseable blobs, so a tx must be a
 // genuine signed Payment for HasTx to report true after dispatch.
-func signedPaymentFrame(t *testing.T, env *testenv.TestEnv, seq uint32) ([]byte, consensus.TxID) {
+func signedPaymentFrame(t *testing.T, env *jtx.TestEnv, seq uint32) ([]byte, consensus.TxID) {
 	t.Helper()
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 	txn := payment.Pay(master, alice, 100_000_000).Sequence(seq).Build()
 	env.SignWith(txn, master)
 	txMap, err := txn.Flatten()
@@ -72,7 +72,7 @@ func TestSubmitTxJobInlineFallback(t *testing.T) {
 	r := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
 	require.Nil(t, r.txJobs, "pool must be unstarted so submitTxJob takes the inline path")
 
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 	blob, txID := signedPaymentFrame(t, env, 1)
 
@@ -100,7 +100,7 @@ func TestRunDrainsTxLane(t *testing.T) {
 
 	go r.Run(t.Context())
 
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 	blob, txID := signedPaymentFrame(t, env, 1)
 

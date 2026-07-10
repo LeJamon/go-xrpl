@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	"github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
@@ -25,14 +25,14 @@ import (
 // transaction_hash is identical every time. A failure pins the divergence to
 // metadata generation; bisect the apply_state_table map iterations next.
 func TestBuildDeterminism_TransactionHash(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	g := testenv.NewAccount("gateway")
-	a := testenv.NewAccount("alice")
-	b := testenv.NewAccount("bob")
-	d := testenv.NewAccount("dave")
-	c := testenv.NewAccount("carol")
+	g := jtx.NewAccount("gateway")
+	a := jtx.NewAccount("alice")
+	b := jtx.NewAccount("bob")
+	d := jtx.NewAccount("dave")
+	c := jtx.NewAccount("carol")
 	env.Fund(g, a, b, d, c)
 
 	usd := func(v float64) tx.Amount { return tx.NewIssuedAmountFromFloat64(v, "USD", g.Address) }
@@ -46,9 +46,9 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 	// run-to-run while the final state is identical.
 	type spec struct {
 		txn    tx.Transaction
-		signer *testenv.Account
+		signer *jtx.Account
 	}
-	sellUSD := func(acct *testenv.Account, seq uint32) tx.Transaction {
+	sellUSD := func(acct *jtx.Account, seq uint32) tx.Transaction {
 		// taker pays 10 XRP, gets 10 USD → owner gives USD, gets XRP.
 		return offer.OfferCreate(acct, tx.NewXRPAmount(10_000_000), usd(10)).Sequence(seq).Build()
 	}
@@ -71,7 +71,7 @@ func TestBuildDeterminism_TransactionHash(t *testing.T) {
 	// destination owner directories — the multi-owner threading path
 	// (apply_state_table threadOwners) suspected of map-order leakage.
 	const finishAfter = uint32(4_000_000_000) // far future, won't finish
-	esc := func(from, to *testenv.Account, amt int64, seq uint32) tx.Transaction {
+	esc := func(from, to *jtx.Account, amt int64, seq uint32) tx.Transaction {
 		return escrow.EscrowCreate(from, to, amt).FinishAfter(finishAfter).Sequence(seq).Build()
 	}
 	specs = append(specs,

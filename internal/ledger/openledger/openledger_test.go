@@ -10,12 +10,12 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
-func buildSignedBlobOL(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, signer *testenv.Account) []byte {
+func buildSignedBlobOL(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, signer *jtx.Account) []byte {
 	t.Helper()
 	env.SignWith(txn, signer)
 	txMap, err := txn.Flatten()
@@ -35,7 +35,7 @@ func buildSignedBlobOL(t *testing.T, env *testenv.TestEnv, txn tx.Transaction, s
 
 // closedParent closes the env once and returns the LCL, providing a clean
 // closed ledger to anchor a freshly constructed OpenLedger against.
-func closedParent(t *testing.T, env *testenv.TestEnv) *ledger.Ledger {
+func closedParent(t *testing.T, env *jtx.TestEnv) *ledger.Ledger {
 	t.Helper()
 	env.Close()
 	parent := env.LastClosedLedger()
@@ -49,7 +49,7 @@ func closedParent(t *testing.T, env *testenv.TestEnv) *ledger.Ledger {
 // OpenLedger whose Current() view is sequence = parent + 1 and has an empty
 // tx map. Mirrors rippled OpenLedger ctor (OpenLedger.cpp:35-41) + create().
 func TestOpenLedger_NewCurrent_SnapshotsClosed(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	parent := closedParent(t, env)
 
 	ol, err := openledger.New(parent, openledger.Config{})
@@ -80,11 +80,11 @@ func TestOpenLedger_NewCurrent_SnapshotsClosed(t *testing.T) {
 // publishes a new Current(), keeps the tx in it, and changes state-map hash.
 // Mirrors NetworkOPsImp::apply -> openLedger().modify (NetworkOPs.cpp:1507).
 func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	parent := closedParent(t, env)
 
@@ -149,7 +149,7 @@ func TestOpenLedger_Submit_AppliesAndPublishes(t *testing.T) {
 // TestOpenLedger_Modify_ReturnsFalse_DoesNotPublish verifies the publish gate
 // (OpenLedger.cpp:63-66): a Modify callback returning false must not swap.
 func TestOpenLedger_Modify_ReturnsFalse_DoesNotPublish(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	parent := closedParent(t, env)
 
 	ol, err := openledger.New(parent, openledger.Config{})
@@ -172,16 +172,16 @@ func TestOpenLedger_Modify_ReturnsFalse_DoesNotPublish(t *testing.T) {
 // goroutines. Validates: no panic, every Current() observation is non-nil,
 // and the final txCount matches the number of successful Submits.
 func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
 	const N = 50
-	senders := make([]*testenv.Account, N)
+	senders := make([]*jtx.Account, N)
 	for i := range N {
-		senders[i] = testenv.NewAccount("sender" + itoa(i))
+		senders[i] = jtx.NewAccount("sender" + itoa(i))
 	}
-	dest := testenv.NewAccount("dest")
-	all := append([]*testenv.Account{dest}, senders...)
+	dest := jtx.NewAccount("dest")
+	all := append([]*jtx.Account{dest}, senders...)
 	env.Fund(all...)
 	parent := closedParent(t, env)
 
@@ -336,12 +336,12 @@ func newClosedFrom(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 // the prior current view's transactions onto the new working view.
 // Mirrors OpenLedger::accept (OpenLedger.cpp:96-112).
 func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
-	carol := testenv.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 	env.Fund(alice, bob, carol)
 	parent := closedParent(t, env)
 
@@ -413,11 +413,11 @@ func TestOpenLedger_Accept_ReplaysCurrentTxs(t *testing.T) {
 // once txA is committed to the working view by the current-replay
 // pass, the locals pass sees it and skips.
 func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	parent := closedParent(t, env)
 
@@ -479,11 +479,11 @@ func TestOpenLedger_Accept_NoDoubleApply(t *testing.T) {
 // TestOpenLedger_Accept_LocalsApplied verifies that locals passed to
 // Accept are applied to the new working view (OpenLedger.cpp:117-118).
 func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	parent := closedParent(t, env)
 
@@ -528,11 +528,11 @@ func TestOpenLedger_Accept_LocalsApplied(t *testing.T) {
 // ReserveBase to a brand-new account → tecNO_DST_INSUF_XRP. Pre-Mode
 // fix, this returned ResultRetry and was silently dropped.
 func TestOpenLedger_Submit_TecCommits(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	master := testenv.MasterAccount()
-	newAcct := testenv.NewAccount("tec-target-submit")
+	master := jtx.MasterAccount()
+	newAcct := jtx.NewAccount("tec-target-submit")
 	parent := closedParent(t, env)
 
 	ol, err := openledger.New(parent, openledger.Config{})
@@ -575,11 +575,11 @@ func TestOpenLedger_Submit_TecCommits(t *testing.T) {
 // retriesFirst=true, a held tx in *retries is replayed against the new
 // working view. Mirrors OpenLedger.cpp:85-90.
 func TestOpenLedger_Accept_RetriesFirst_ReplaysHeldTx(t *testing.T) {
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
 
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 	env.Fund(alice, bob)
 	parent := closedParent(t, env)
 

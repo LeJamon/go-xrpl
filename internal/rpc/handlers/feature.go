@@ -28,7 +28,7 @@ type amendmentVoteController interface {
 	SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error
 }
 
-func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *FeatureMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		Feature string `json:"feature,omitempty"`
 		Vetoed  *bool  `json:"vetoed,omitempty"`
@@ -51,20 +51,20 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// Admin vote mutation: set or clear a veto on a specific amendment.
 	if request.Vetoed != nil {
 		if !ctx.IsAdmin {
-			return nil, types.RpcErrorNoPermission("feature")
+			return nil, types.RPCErrorNoPermission("feature")
 		}
 		if request.Feature == "" {
-			return nil, types.RpcErrorInvalidParams("feature required to set a vote")
+			return nil, types.RPCErrorInvalidParams("feature required to set a vote")
 		}
 		f := resolveFeature(request.Feature)
 		if f == nil {
-			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
+			return nil, types.RPCErrorBadFeature("Feature not found: " + request.Feature)
 		}
 		if ctrl == nil || tbl == nil {
-			return nil, types.RpcErrorNotSupported("amendment voting is not available on this server")
+			return nil, types.RPCErrorNotSupported("amendment voting is not available on this server")
 		}
 		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, *request.Vetoed); err != nil {
-			return nil, types.RpcErrorInternal("failed to record amendment vote: " + err.Error())
+			return nil, types.RPCErrorInternal("failed to record amendment vote: " + err.Error())
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]any{
@@ -76,7 +76,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	if request.Feature != "" {
 		f := resolveFeature(request.Feature)
 		if f == nil {
-			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
+			return nil, types.RPCErrorBadFeature("Feature not found: " + request.Feature)
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]any{

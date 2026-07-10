@@ -44,7 +44,7 @@ func TestDisputeTracker_CreateAndVote(t *testing.T) {
 		t.Error("new peer vote should report changed")
 	}
 
-	dispute = dt.GetDispute(txID)
+	dispute = dt.Dispute(txID)
 	if dispute.Yays != 3 || dispute.Nays != 1 {
 		t.Errorf("Expected 3 yays, 1 nay; got %d/%d", dispute.Yays, dispute.Nays)
 	}
@@ -58,7 +58,7 @@ func TestDisputeTracker_CreateAndVote(t *testing.T) {
 	if !dt.SetVote(txID, peerA, false) {
 		t.Error("flipped vote should report changed")
 	}
-	dispute = dt.GetDispute(txID)
+	dispute = dt.Dispute(txID)
 	if dispute.Yays != 2 || dispute.Nays != 2 {
 		t.Errorf("After flip expected 2/2; got %d/%d", dispute.Yays, dispute.Nays)
 	}
@@ -80,17 +80,17 @@ func TestDisputeTracker_UnVote(t *testing.T) {
 	dt.SetVote(tx2, peerX, false)
 
 	// Before: tx1 has 2 yays, tx2 has 1 nay.
-	if d := dt.GetDispute(tx1); d.Yays != 2 {
+	if d := dt.Dispute(tx1); d.Yays != 2 {
 		t.Fatalf("tx1 pre-unvote yays = %d, want 2", d.Yays)
 	}
-	if d := dt.GetDispute(tx2); d.Nays != 1 {
+	if d := dt.Dispute(tx2); d.Nays != 1 {
 		t.Fatalf("tx2 pre-unvote nays = %d, want 1", d.Nays)
 	}
 
 	// UnVote removes peerX from every dispute but not peerY.
 	dt.UnVote(peerX)
 
-	tx1Disp := dt.GetDispute(tx1)
+	tx1Disp := dt.Dispute(tx1)
 	if tx1Disp.Yays != 1 {
 		t.Errorf("tx1 post-unvote yays = %d, want 1", tx1Disp.Yays)
 	}
@@ -101,14 +101,14 @@ func TestDisputeTracker_UnVote(t *testing.T) {
 		t.Error("peerY should remain in tx1 votes")
 	}
 
-	tx2Disp := dt.GetDispute(tx2)
+	tx2Disp := dt.Dispute(tx2)
 	if tx2Disp.Nays != 0 {
 		t.Errorf("tx2 post-unvote nays = %d, want 0", tx2Disp.Nays)
 	}
 
 	// UnVote for a peer that never voted is a no-op.
 	dt.UnVote(consensus.NodeID{0xFE})
-	if d := dt.GetDispute(tx1); d.Yays != 1 {
+	if d := dt.Dispute(tx1); d.Yays != 1 {
 		t.Errorf("unknown-peer unvote mutated tx1; yays = %d", d.Yays)
 	}
 }
@@ -133,10 +133,10 @@ func TestDisputeTracker_UpdateDisputes(t *testing.T) {
 	if !dt.UpdateDisputes(peerID, peerTxSet) {
 		t.Error("first UpdateDisputes should report changes")
 	}
-	if d := dt.GetDispute(tx1); d.Yays != 1 || d.Nays != 0 {
+	if d := dt.Dispute(tx1); d.Yays != 1 || d.Nays != 0 {
 		t.Errorf("tx1 after UpdateDisputes = %d/%d, want 1/0", d.Yays, d.Nays)
 	}
-	if d := dt.GetDispute(tx2); d.Yays != 0 || d.Nays != 1 {
+	if d := dt.Dispute(tx2); d.Yays != 0 || d.Nays != 1 {
 		t.Errorf("tx2 after UpdateDisputes = %d/%d, want 0/1", d.Yays, d.Nays)
 	}
 
@@ -167,7 +167,7 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 	if len(changed) != 1 || changed[0] != txID {
 		t.Fatalf("expected dispute to flip at init state; got %v", changed)
 	}
-	if d := dt.GetDispute(txID); !d.OurVote {
+	if d := dt.Dispute(txID); !d.OurVote {
 		t.Error("OurVote should now be true")
 	}
 
@@ -185,7 +185,7 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 	if len(changed) != 1 || changed[0] != txID2 {
 		t.Fatalf("expected unanimous opposition to flip our vote; got %v", changed)
 	}
-	d := dt.GetDispute(txID2)
+	d := dt.Dispute(txID2)
 	if d.OurVote {
 		t.Error("OurVote should have flipped to false")
 	}
@@ -204,7 +204,7 @@ func TestDisputeTracker_UpdateOurVote_AvalancheRamp(t *testing.T) {
 		dt.SetVote(rampID, p, false)
 	}
 
-	ramp := dt.GetDispute(rampID)
+	ramp := dt.Dispute(rampID)
 	if ramp.AvalancheState != consensus.AvalancheInit {
 		t.Fatalf("ramp dispute should start at AvalancheInit; got %v", ramp.AvalancheState)
 	}

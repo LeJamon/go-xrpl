@@ -78,7 +78,7 @@ func resolveHostID() string {
 // This is the "human-readable" variant (rippled human=true).
 type ServerInfoMethod struct{ BaseHandler }
 
-func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ServerInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []ty
 // buildServerInfo constructs the info/state object.
 // When human is true it produces the server_info format (XRP decimals, converge_time_s, hostid).
 // When human is false it produces the server_state format (drops integers, converge_time, load_base, etc.).
-func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
+func buildServerInfo(ctx *types.RPCContext, human bool) map[string]any {
 	services := ctx.Services
 	serverInfo := services.Ledger.GetServerInfo()
 	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
@@ -409,7 +409,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	return info
 }
 
-func getPeerCount(ctx *types.RpcContext) int {
+func getPeerCount(ctx *types.RPCContext) int {
 	if ctx == nil || ctx.PeerSource == nil {
 		return 0
 	}

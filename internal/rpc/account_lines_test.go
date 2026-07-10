@@ -186,7 +186,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -324,7 +324,7 @@ func TestAccountLinesInvalidAccountTypes(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -376,7 +376,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -598,7 +598,7 @@ func TestAccountLinesPeerFilter(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -731,7 +731,7 @@ func TestAccountLinesPagination(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -963,7 +963,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1195,7 +1195,7 @@ func TestAccountLinesResponseFields(t *testing.T) {
 // TestAccountLinesServiceUnavailable tests behavior when ledger service is not available
 func TestAccountLinesServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1219,7 +1219,7 @@ func TestAccountLinesServiceUnavailable(t *testing.T) {
 // TestAccountLinesServiceNilLedger tests behavior when ledger service is nil
 func TestAccountLinesServiceNilLedger(t *testing.T) {
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1264,7 +1264,7 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1314,7 +1314,7 @@ func TestAccountLinesHistoricLedgers(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1404,7 +1404,7 @@ func TestAccountLinesMarkerOwnership(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1441,7 +1441,7 @@ func TestAccountLinesDeletedEntry(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1476,7 +1476,7 @@ func TestAccountLinesWalkMarkers(t *testing.T) {
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

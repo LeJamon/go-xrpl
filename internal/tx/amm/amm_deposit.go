@@ -243,7 +243,7 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 	// Check authorization and freeze status for BOTH pool assets — only when
 	// AMMClawback is enabled.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
-	if config.GetRules().Enabled(amendment.FeatureAMMClawback) {
+	if config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		if result := tx.RequireAuth(view, a.Asset, accountID); result != ter.TesSUCCESS {
 			return result
 		}

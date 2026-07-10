@@ -54,7 +54,7 @@ func reservationServices() *types.ServiceContainer {
 
 func TestPeerReservationsAddValidation(t *testing.T) {
 	method := &handlers.PeerReservationsAddMethod{}
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
+	ctx := &types.RPCContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
 
 	t.Run("missing public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
@@ -104,7 +104,7 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 func TestPeerReservationsRoundTrip(t *testing.T) {
 	key := testNodePublic(t, 1)
 	svc := reservationServices()
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: svc}
+	ctx := &types.RPCContext{Context: context.Background(), Role: types.RoleAdmin, Services: svc}
 
 	add := &handlers.PeerReservationsAddMethod{}
 	del := &handlers.PeerReservationsDelMethod{}
@@ -149,7 +149,7 @@ func TestPeerReservationsRoundTrip(t *testing.T) {
 // regardless of the backend's iteration order.
 func TestPeerReservationsListSorted(t *testing.T) {
 	svc := reservationServices()
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: svc}
+	ctx := &types.RPCContext{Context: context.Background(), Role: types.RoleAdmin, Services: svc}
 	add := &handlers.PeerReservationsAddMethod{}
 
 	for _, seed := range []byte{40, 10, 30, 20} {
@@ -176,7 +176,7 @@ func TestPeerReservationsListSorted(t *testing.T) {
 // A persistence failure surfaces as an internal error, mirroring rippled's
 // insert_or_assign throwing on a failed DB write.
 func TestPeerReservationsAddPersistenceError(t *testing.T) {
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
 		Services: &types.ServiceContainer{
@@ -192,7 +192,7 @@ func TestPeerReservationsAddPersistenceError(t *testing.T) {
 }
 
 func TestPeerReservationsEmptyWhenUnwired(t *testing.T) {
-	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
+	ctx := &types.RPCContext{Context: context.Background(), Role: types.RoleAdmin, Services: &types.ServiceContainer{}}
 
 	// list returns an empty array, and add is a no-op that reports no previous.
 	resL, rpcErr := (&handlers.PeerReservationsListMethod{}).Handle(ctx, nil)

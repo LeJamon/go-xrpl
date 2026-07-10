@@ -1,4 +1,4 @@
-package cli
+package node
 
 import (
 	"os"
@@ -87,7 +87,7 @@ func TestReloadTrustedValidators_NilComponentsIsNoOp(t *testing.T) {
 	// Should not panic on nil components. No sink is reachable from
 	// here (Components.Adaptor wiring is the only path), so the
 	// success criterion is simply "doesn't crash".
-	reloadTrustedValidators(xrpllog.Discard(), nil)
+	reloadTrustedValidators(xrpllog.Discard(), nil, "")
 }
 
 // TestDoShutdown_ToleratesNilComponents pins the partial-init teardown

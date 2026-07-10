@@ -20,7 +20,7 @@ type condStubHandler struct {
 	cond types.Condition
 }
 
-func (h *condStubHandler) Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+func (h *condStubHandler) Handle(*types.RPCContext, json.RawMessage) (any, *types.RPCError) {
 	return map[string]any{"ok": true}, nil
 }
 func (h *condStubHandler) RequiredRole() types.Role           { return types.RoleGuest }
@@ -35,22 +35,22 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 	reg.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
 
 	t.Run("not synced is refused", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			ApiVersion: types.ApiVersion1,
 			Services:   &types.ServiceContainer{Ledger: newMockLedgerService()}, // zero serverInfo: disconnected
 		}
-		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
+		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RPCErrorNoPermission, rpcLog())
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
 		assert.Equal(t, "noNetwork", rpcErr.ErrorString)
 	})
 
 	t.Run("synced passes", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			ApiVersion: types.ApiVersion1,
 			Services:   &types.ServiceContainer{Ledger: syncedStandalone()},
 		}
-		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
+		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RPCErrorNoPermission, rpcLog())
 		require.Nil(t, rpcErr)
 		assert.Equal(t, map[string]any{"ok": true}, result)
 	})
@@ -121,7 +121,7 @@ func TestSingleRequestParseFailuresReturn400(t *testing.T) {
 // warning:"load" INSIDE result (rippled ServerHandler.cpp:919-920 → :938/:971),
 // not at the top level (which is the WS placement, :519).
 func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
-	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JsonRpcResponseOptions{Warning: "load"})
+	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JSONRPCResponseOptions{Warning: "load"})
 	result, ok := body["result"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "load", result["warning"], "HTTP load warning belongs inside result")

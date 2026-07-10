@@ -53,32 +53,32 @@ type pathFindCreateRequest struct {
 
 // ParseAndCreateSession parses a path_find create request and creates a session.
 // Returns the session and initial result, or an RPC error.
-func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpctypes.RpcError) {
+func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpctypes.RPCError) {
 	var request pathFindCreateRequest
 	if err := json.Unmarshal(params, &request); err != nil {
-		return nil, rpctypes.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		return nil, rpctypes.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 
 	// Validate required fields
 	if request.SourceAccount == "" {
-		return nil, rpctypes.RpcErrorInvalidParams("Missing field 'source_account'.")
+		return nil, rpctypes.RPCErrorInvalidParams("Missing field 'source_account'.")
 	}
 	if request.DestinationAccount == "" {
-		return nil, rpctypes.RpcErrorInvalidParams("Missing field 'destination_account'.")
+		return nil, rpctypes.RPCErrorInvalidParams("Missing field 'destination_account'.")
 	}
 	if request.DestinationAmount == nil {
-		return nil, rpctypes.RpcErrorInvalidParams("Missing field 'destination_amount'.")
+		return nil, rpctypes.RPCErrorInvalidParams("Missing field 'destination_amount'.")
 	}
 
 	// Decode accounts
 	srcAccount, err := state.DecodeAccountID(request.SourceAccount)
 	if err != nil {
-		return nil, rpctypes.NewRpcError(rpctypes.RpcACT_MALFORMED, "srcActMalformed", "invalidParams",
+		return nil, rpctypes.NewRPCError(rpctypes.RpcACT_MALFORMED, "srcActMalformed", "invalidParams",
 			"Source account is malformed.")
 	}
 	dstAccount, err := state.DecodeAccountID(request.DestinationAccount)
 	if err != nil {
-		return nil, rpctypes.NewRpcError(rpctypes.RpcACT_MALFORMED, "dstActMalformed", "invalidParams",
+		return nil, rpctypes.NewRPCError(rpctypes.RpcACT_MALFORMED, "dstActMalformed", "invalidParams",
 			"Destination account is malformed.")
 	}
 
@@ -86,13 +86,13 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	// no MPT support, so they are rejected as malformed.
 	dstAmount, amtErr := state.AmountFromJSON(request.DestinationAmount)
 	if amtErr != nil || dstAmount.IsMPT() {
-		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, rpctypes.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// destination_amount of exactly -1 selects convert-all mode.
 	convertAll := dstAmount.Value() == "-1"
 	if !convertAll && dstAmount.Signum() <= 0 {
-		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, rpctypes.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// Parse optional send_max
@@ -100,11 +100,11 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 	if request.SendMax != nil {
 		// send_max requires destination_amount to be -1.
 		if !convertAll {
-			return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+			return nil, rpctypes.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
 		amt, smErr := state.AmountFromJSON(request.SendMax)
 		if smErr != nil || amt.IsMPT() || (amt.Signum() <= 0 && amt.Value() != "-1") {
-			return nil, rpctypes.RpcErrorSendMaxMalformed("SendMax amount malformed.")
+			return nil, rpctypes.RPCErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
 	}
@@ -116,7 +116,7 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		if sc.Issuer != "" {
 			issuerID, decErr := state.DecodeAccountID(sc.Issuer)
 			if decErr != nil {
-				return nil, rpctypes.NewRpcError(rpctypes.RpcINVALID_PARAMS, "srcIsrMalformed", "invalidParams",
+				return nil, rpctypes.NewRPCError(rpctypes.RpcINVALID_PARAMS, "srcIsrMalformed", "invalidParams",
 					"Source issuer is malformed.")
 			}
 			issue.Issuer = issuerID

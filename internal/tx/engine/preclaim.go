@@ -94,7 +94,7 @@ func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) (result ter.Re
 		// Wrap the base view so Rules() reports the engine's rules: the base
 		// ledger returns nil, which would silently disable rules-gated reads
 		// (e.g. accountFunds' frozen-LP-token check) during preclaim.
-		preclaimView := rulesView{LedgerView: e.view, rules: e.config.GetRules()}
+		preclaimView := rulesView{LedgerView: e.view, rules: e.config.RequireRules()}
 		if result := preclaimer.Preclaim(preclaimView, e.config); result != ter.TesSUCCESS {
 			return result
 		}
@@ -209,7 +209,7 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 	//     pseudo-tx gating the OpenLedger flag also controls.
 	if e.config.OpenLedger ||
 		(e.config.EnforceLoadFee && e.config.FeeTrack != nil &&
-			e.config.FeeTrack.GetLoadFactor() > feetrack.LoadBase) {
+			e.config.FeeTrack.LoadFactor() > feetrack.LoadBase) {
 		if r := e.enforceFeeFloor(fee, baseFeeForTx); r != ter.TesSUCCESS {
 			return r
 		}
@@ -343,7 +343,7 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 	if checker, ok := tx.(txcore.DelegatePermissionChecker); ok {
 		return checker.CheckDelegatePermission(txcore.DelegatePermissionContext{
 			View:        e.view,
-			Rules:       e.config.GetRules(),
+			Rules:       e.config.RequireRules(),
 			Permissions: delegateEntry.Permissions,
 		})
 	}

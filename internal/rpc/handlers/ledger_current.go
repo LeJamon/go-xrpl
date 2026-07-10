@@ -9,14 +9,14 @@ import (
 // LedgerCurrentMethod handles the ledger_current RPC method
 type LedgerCurrentMethod struct{}
 
-func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerCurrentMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
 	if seq == 0 {
-		return nil, types.RpcErrorLgrNotFound("No current ledger")
+		return nil, types.RPCErrorLgrNotFound("No current ledger")
 	}
 
 	response := map[string]any{

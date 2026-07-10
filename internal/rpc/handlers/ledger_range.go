@@ -10,7 +10,7 @@ import (
 // LedgerRangeMethod handles the ledger_range RPC method
 type LedgerRangeMethod struct{ AdminHandler }
 
-func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerRangeMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	// Parse parameters
 	var request struct {
 		StartLedger uint32 `json:"start_ledger"`
@@ -23,16 +23,16 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	// Validate range
 	if request.StartLedger == 0 || request.StopLedger == 0 {
-		return nil, types.RpcErrorInvalidParams("start_ledger and stop_ledger are required")
+		return nil, types.RPCErrorInvalidParams("start_ledger and stop_ledger are required")
 	}
 
 	if request.StartLedger > request.StopLedger {
-		return nil, types.RpcErrorInvalidParams("start_ledger cannot be greater than stop_ledger")
+		return nil, types.RPCErrorInvalidParams("start_ledger cannot be greater than stop_ledger")
 	}
 
 	// Limit range size to prevent abuse
 	if request.StopLedger-request.StartLedger > 1000 {
-		return nil, types.RpcErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
+		return nil, types.RPCErrorInvalidParams("Ledger range too large (max 1000 ledgers)")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -41,7 +41,7 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	result, err := ctx.Services.Ledger.GetLedgerRange(ctx.Context, request.StartLedger, request.StopLedger)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger range: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get ledger range: %v", err))
 	}
 
 	// Build ledgers array

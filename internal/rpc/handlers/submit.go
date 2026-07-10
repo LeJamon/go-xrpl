@@ -16,7 +16,7 @@ import (
 // Supports both tx_blob (pre-signed hex) and tx_json submissions.
 type SubmitMethod struct{}
 
-func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SubmitMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		TxBlob          string          `json:"tx_blob,omitempty"`
 		TxJson          json.RawMessage `json:"tx_json,omitempty"`
@@ -36,7 +36,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	}
 
 	if request.TxBlob == "" && len(request.TxJson) == 0 {
-		return nil, types.RpcErrorInvalidParams("Either tx_blob or tx_json must be provided")
+		return nil, types.RPCErrorInvalidParams("Either tx_blob or tx_json must be provided")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -54,7 +54,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		// Decode tx_blob to get tx_json
 		decoded, err := binarycodec.Decode(request.TxBlob)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_blob: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid tx_blob: %v", err))
 		}
 		txJsonMap = decoded
 		txBlobHex = request.TxBlob
@@ -62,7 +62,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		// Marshal back to JSON for submission
 		txJSON, err = json.Marshal(decoded)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal decoded tx_blob")
+			return nil, types.RPCErrorInternal("Failed to marshal decoded tx_blob")
 		}
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
@@ -85,14 +85,14 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		var err error
 		txJSON, err = json.Marshal(txJsonMap)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal signed transaction")
+			return nil, types.RPCErrorInternal("Failed to marshal signed transaction")
 		}
 	} else {
 		// Submit using tx_json directly (no signing)
 		txJSON = request.TxJson
 
 		if err := json.Unmarshal(txJSON, &txJsonMap); err != nil {
-			return nil, types.RpcErrorExpectedField("tx_json", "object")
+			return nil, types.RPCErrorExpectedField("tx_json", "object")
 		}
 	}
 
@@ -103,7 +103,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 			if e := arraySizeRPCError(err); e != nil {
 				return nil, e
 			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode tx_json: %v", err))
+			return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode tx_json: %v", err))
 		}
 		txBlobHex = encoded
 	}
@@ -127,7 +127,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
 	}
 	if submitErr != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", submitErr))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", submitErr))
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 

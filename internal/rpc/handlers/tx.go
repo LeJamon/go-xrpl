@@ -15,7 +15,7 @@ import (
 // TxMethod handles the tx RPC method
 type TxMethod struct{}
 
-func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.TransactionParam
 		Binary    bool    `json:"binary,omitempty"`
@@ -37,26 +37,26 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	// Specifying both transaction and ctid is ambiguous and rejected,
 	// matching rippled doTxJson.
 	if request.Transaction != "" && request.CTID != "" {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
 	// CTID lookup support
 	if request.CTID != "" && request.Transaction == "" {
 		ctidLedgerSeq, ctidTxIndex, ctidNetworkID, err := parseCTID(request.CTID)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
 		}
 		// The CTID embeds a network id; reject the request when it does not match
 		// this node's network (Tx.cpp:313-321).
 		if nodeNet := ctx.Services.Ledger.GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
-			return nil, types.RpcErrorWrongNetwork(fmt.Sprintf(
+			return nil, types.RPCErrorWrongNetwork(fmt.Sprintf(
 				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
 		}
 		return m.lookupByCTID(ctx, ctidLedgerSeq, ctidTxIndex, request.Binary)
 	}
 
 	if request.Transaction == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: transaction")
+		return nil, types.RPCErrorInvalidParams("Missing required parameter: transaction")
 	}
 
 	// A search range is formed only when both min_ledger and max_ledger are
@@ -66,17 +66,17 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	if request.MinLedger != nil && request.MaxLedger != nil {
 		minLedger, maxLedger := *request.MinLedger, *request.MaxLedger
 		if maxLedger < minLedger {
-			return nil, types.RpcErrorInvalidLgrRange()
+			return nil, types.RPCErrorInvalidLgrRange()
 		}
 		if maxLedger-minLedger > 1000 {
-			return nil, types.RpcErrorExcessiveLgrRange()
+			return nil, types.RPCErrorExcessiveLgrRange()
 		}
 	}
 
 	// Parse the transaction hash
 	txHashBytes, err := hex.DecodeString(request.Transaction)
 	if err != nil || len(txHashBytes) != 32 {
-		return nil, types.RpcErrorNotImpl()
+		return nil, types.RPCErrorNotImpl()
 	}
 
 	var txHash [32]byte
@@ -85,11 +85,11 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	// Look up the transaction
 	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil {
-		return nil, types.RpcErrorTxnNotFound("Transaction not found")
+		return nil, types.RPCErrorTxnNotFound("Transaction not found")
 	}
 	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to decode transaction data")
+		return nil, types.RPCErrorInternal("Failed to decode transaction data")
 	}
 
 	// Resolve close time from the containing ledger
@@ -105,7 +105,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 
 // buildResponse constructs the tx response, choosing v1 or v2 format based on ctx.ApiVersion.
 func (m *TxMethod) buildResponse(
-	ctx *types.RpcContext,
+	ctx *types.RPCContext,
 	storedTx StoredTransaction,
 	txInfo *types.TransactionInfo,
 	hashStr string,
@@ -226,10 +226,10 @@ func (m *TxMethod) buildResponseV2(
 }
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
-func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RpcError) {
+func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RPCError) {
 	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
-		return nil, types.RpcErrorTxnNotFound("Transaction not found (ledger not available)")
+		return nil, types.RPCErrorTxnNotFound("Transaction not found (ledger not available)")
 	}
 
 	// Iterate transactions to find the one at the given index
@@ -251,7 +251,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	})
 
 	if !found {
-		return nil, types.RpcErrorTxnNotFound("Transaction not found at specified index")
+		return nil, types.RPCErrorTxnNotFound("Transaction not found at specified index")
 	}
 
 	hashStr := strings.ToUpper(hex.EncodeToString(foundHash[:]))
@@ -272,7 +272,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 // omits, and preserve the raw-hex tx_blob fallback used when the stored blob
 // cannot be decoded.
 func (m *TxMethod) ctidResponse(
-	ctx *types.RpcContext,
+	ctx *types.RPCContext,
 	storedTx StoredTransaction,
 	decodeErr error,
 	foundData []byte,

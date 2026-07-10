@@ -111,7 +111,7 @@ func NewInvariantViolation(name, message string) *invariants.InvariantViolation 
 // (which broke the soak in the opposite direction). Panicking forces
 // every call site to plumb the real rules.
 func (e *Engine) rules() *amendment.Rules {
-	return e.config.GetRules()
+	return e.config.RequireRules()
 }
 
 // TxCount returns the current transaction count (for batch baseTxCount).

@@ -17,7 +17,7 @@ const maxCredentialsArraySize = 8
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
 type DepositAuthorizedMethod struct{}
 
-func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		SourceAccount      string          `json:"source_account"`
 		DestinationAccount string          `json:"destination_account"`
@@ -32,7 +32,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Validate source_account: must be present and a valid Base58 address.
 	// Reference: rippled DepositAuthorized.cpp — parseBase58 → rpcACT_MALFORMED
 	if request.SourceAccount == "" {
-		return nil, types.RpcErrorInvalidParams("Missing field 'source_account'.")
+		return nil, types.RPCErrorInvalidParams("Missing field 'source_account'.")
 	}
 	if err := ValidateAccount(request.SourceAccount); err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Validate destination_account: must be present and a valid Base58 address.
 	// Reference: rippled DepositAuthorized.cpp — parseBase58 → rpcACT_MALFORMED
 	if request.DestinationAccount == "" {
-		return nil, types.RpcErrorInvalidParams("Missing field 'destination_account'.")
+		return nil, types.RPCErrorInvalidParams("Missing field 'destination_account'.")
 	}
 	if err := ValidateAccount(request.DestinationAccount); err != nil {
 		return nil, err
@@ -83,11 +83,11 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if err != nil {
 		switch {
 		case errors.Is(err, svcerr.ErrLedgerNotFound):
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		case errors.Is(err, svcerr.ErrSrcAccountNotFound):
-			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+			return nil, types.RPCErrorSrcActNotFound("Source account not found.")
 		case errors.Is(err, svcerr.ErrDstAccountNotFound):
-			return nil, types.RpcErrorDstActNotFound("Destination account not found.")
+			return nil, types.RPCErrorDstActNotFound("Destination account not found.")
 		case errors.Is(err, svcerr.ErrBadCredentials):
 			// Detail follows the sentinel as "bad credentials: <detail>";
 			// strip the prefix so the wire message matches rippled's
@@ -96,9 +96,9 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 			if idx := strings.Index(detail, ": "); idx >= 0 {
 				detail = detail[idx+2:]
 			}
-			return nil, types.RpcErrorBadCredentials(detail)
+			return nil, types.RPCErrorBadCredentials(detail)
 		}
-		return nil, types.RpcErrorInternal(err.Error())
+		return nil, types.RPCErrorInternal(err.Error())
 	}
 
 	// Build response
@@ -124,31 +124,31 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 // duplicate hashes that don't exist on ledger report "credentials don't
 // exist", not "duplicates in credentials".
 // Reference: rippled DepositAuthorized.cpp credential parsing loop
-func parseCredentialsFormat(raw json.RawMessage) ([]string, *types.RpcError) {
+func parseCredentialsFormat(raw json.RawMessage) ([]string, *types.RPCError) {
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil || len(entries) == 0 {
-		return nil, types.RpcErrorExpectedField("credentials",
+		return nil, types.RPCErrorExpectedField("credentials",
 			"is non-empty array of CredentialID(hash256)")
 	}
 
 	if len(entries) > maxCredentialsArraySize {
-		return nil, types.RpcErrorExpectedField("credentials", "array too long")
+		return nil, types.RPCErrorExpectedField("credentials", "array too long")
 	}
 
 	credentials := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		var credStr string
 		if err := json.Unmarshal(entry, &credStr); err != nil {
-			return nil, types.RpcErrorExpectedField("credentials",
+			return nil, types.RPCErrorExpectedField("credentials",
 				"an array of CredentialID(hash256)")
 		}
 		// Each credential must be a valid 64-char hex string (32 bytes / 256 bits)
 		if len(credStr) != 64 {
-			return nil, types.RpcErrorExpectedField("credentials",
+			return nil, types.RPCErrorExpectedField("credentials",
 				"an array of CredentialID(hash256)")
 		}
 		if _, err := hex.DecodeString(credStr); err != nil {
-			return nil, types.RpcErrorExpectedField("credentials",
+			return nil, types.RPCErrorExpectedField("credentials",
 				"an array of CredentialID(hash256)")
 		}
 		credentials = append(credentials, credStr)

@@ -89,7 +89,7 @@ func (sm *Manager) RemoveConnection(connID string) {
 // before reaching the manager: url requests are routed to the
 // URLSubscriptionRegistry, whose per-url connection is what gets
 // subscribed here.
-func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RPCError {
 	w := request.WireArrays()
 
 	sm.mu.Lock()
@@ -104,11 +104,11 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	}
 	for _, stream := range streams {
 		if !validStreams[stream] {
-			return types.RpcErrorMalformedStream()
+			return types.RPCErrorMalformedStream()
 		}
 		// peer_status is admin-only (Subscribe.cpp:161-166).
 		if stream == types.SubPeerStatus && !isAdmin {
-			return types.RpcErrorNoPermission("subscribe")
+			return types.RPCErrorNoPermission("subscribe")
 		}
 		key := stream
 		if key == "rt_transactions" {
@@ -126,11 +126,11 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	}
 	if accountsPresent {
 		if len(accounts) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return types.RPCErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range accounts {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return types.RPCErrorActMalformed("Account malformed.")
 			}
 		}
 		// Accumulate onto the existing subscription rather than replacing it.
@@ -147,11 +147,11 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	}
 	if proposedPresent {
 		if len(proposed) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return types.RPCErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range proposed {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return types.RPCErrorActMalformed("Account malformed.")
 			}
 		}
 		// Accumulate, mirroring the accounts branch above (rippled's
@@ -339,7 +339,7 @@ func wireArrayElements(raw json.RawMessage) (present, isArray bool, elements []j
 // non-array value is rpcINVALID_PARAMS (Subscribe.cpp:118-122), a non-string
 // entry rpcSTREAM_MALFORMED (Subscribe.cpp:126-127). When the request was
 // built directly in Go (not wire-decoded) the typed slice is used as-is.
-func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.SubscriptionType) (present bool, streams []types.SubscriptionType, rpcErr *types.RpcError) {
+func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.SubscriptionType) (present bool, streams []types.SubscriptionType, rpcErr *types.RPCError) {
 	if !wireDecoded {
 		return typed != nil, typed, nil
 	}
@@ -348,13 +348,13 @@ func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.Subscri
 		return false, nil, nil
 	}
 	if !isArray {
-		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	streams = make([]types.SubscriptionType, 0, len(elements))
 	for _, el := range elements {
 		var s string
 		if json.Unmarshal(el, &s) != nil {
-			return true, nil, types.RpcErrorMalformedStream()
+			return true, nil, types.RPCErrorMalformedStream()
 		}
 		streams = append(streams, types.SubscriptionType(s))
 	}
@@ -366,7 +366,7 @@ func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.Subscri
 // null or non-array value is rpcINVALID_PARAMS; a non-string element collapses
 // the set to empty (returned as a nil ids slice), which the caller — together
 // with the empty-array and bad-id cases — reports as rpcACT_MALFORMED.
-func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string) (present bool, ids []string, rpcErr *types.RpcError) {
+func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string) (present bool, ids []string, rpcErr *types.RPCError) {
 	if !wireDecoded {
 		return typed != nil, typed, nil
 	}
@@ -375,7 +375,7 @@ func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string) (pre
 		return false, nil, nil
 	}
 	if !isArray {
-		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	ids = make([]string, 0, len(elements))
 	for _, el := range elements {
@@ -391,7 +391,7 @@ func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string) (pre
 // resolveBooks resolves the books field: a non-array value or a non-object
 // entry is rpcINVALID_PARAMS (Subscribe.cpp:233-242); an empty array yields no
 // subscriptions. Per-entry currency/issuer/market checks run in validateBook.
-func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookRequest) (present bool, books []types.BookRequest, rpcErr *types.RpcError) {
+func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookRequest) (present bool, books []types.BookRequest, rpcErr *types.RPCError) {
 	if !wireDecoded {
 		return typed != nil, typed, nil
 	}
@@ -400,13 +400,13 @@ func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookReque
 		return false, nil, nil
 	}
 	if !isArray {
-		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return true, nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	books = make([]types.BookRequest, 0, len(elements))
 	for _, el := range elements {
 		var b types.BookRequest
 		if json.Unmarshal(el, &b) != nil {
-			return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return true, nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		books = append(books, b)
 	}
@@ -421,7 +421,7 @@ func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookReque
 // (Subscribe.cpp:322-326) is subsumed: the per-side issuer checks already
 // guarantee each side is consistent, and in == out is exactly the
 // same-asset comparison below.
-func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
+func validateBook(book types.BookRequest, includeTaker bool) *types.RPCError {
 	// Both sides must be present and an object or null before either is
 	// parsed (Subscribe.cpp:238-242); a null side then fails the
 	// mandatory-currency check below, like rippled's isMember(currency)
@@ -448,18 +448,18 @@ func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
 	// comparison is on the parsed 160-bit currency and issuer, like rippled's
 	// book.in == book.out, so a currency and its 40-hex encoding match.
 	if paysCur == getsCur && paysIssuer == getsIssuer {
-		return types.RpcErrorBadMarket()
+		return types.RPCErrorBadMarket()
 	}
 
 	// Optional taker — an unparseable account is rpcACT_MALFORMED
 	// (rippled 3.2.0 #6529 changed this from rpcBAD_ISSUER, Subscribe.cpp).
 	if includeTaker && book.Taker != "" && !isValidXRPLAddress(book.Taker) {
-		return types.RpcErrorActMalformed("Account malformed.")
+		return types.RPCErrorActMalformed("Account malformed.")
 	}
 
 	// Optional domain (Subscribe.cpp:308-315).
 	if book.Domain != "" && !isValidDomainHex(book.Domain) {
-		return types.RpcErrorDomainMalformed("")
+		return types.RPCErrorDomainMalformed("")
 	}
 
 	return nil
@@ -468,13 +468,13 @@ func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
 // bookSideObject decodes one side of a book entry into its key/value
 // form, reporting rpcINVALID_PARAMS for a missing or non-object value.
 // A null side decodes to an empty map.
-func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *types.RpcError) {
+func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *types.RPCError) {
 	if raw == nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	var side map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &side); err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	return side, nil
 }
@@ -484,18 +484,18 @@ func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *types.Rpc
 // error codes, taker_gets to "destination" (dst*); messages are the rpcError
 // defaults from ErrorCodes.cpp since Subscribe.cpp returns bare rpcError(code)
 // at every site.
-func parseBookSide(side map[string]json.RawMessage, isPays bool) (currencyID [20]byte, issuerID [20]byte, _ *types.RpcError) {
-	curMalformed := func() *types.RpcError {
+func parseBookSide(side map[string]json.RawMessage, isPays bool) (currencyID [20]byte, issuerID [20]byte, _ *types.RPCError) {
+	curMalformed := func() *types.RPCError {
 		if isPays {
-			return types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+			return types.RPCErrorSrcCurMalformed("Source currency is malformed.")
 		}
-		return types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
-	isrMalformed := func() *types.RpcError {
+	isrMalformed := func() *types.RPCError {
 		if isPays {
-			return types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+			return types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
 		}
-		return types.RpcErrorDstIsrMalformed("Destination issuer is malformed.")
+		return types.RPCErrorDstIsrMalformed("Destination issuer is malformed.")
 	}
 
 	// Mandatory currency (Subscribe.cpp:248-255 / :270-277).
@@ -573,7 +573,7 @@ func isValidDomainHex(domain string) bool {
 // `transactions_proposed` so a client that subscribed with the alias
 // can also unsubscribe with the alias (Unsubscribe.cpp:88-93). Like
 // HandleSubscribe, the url (RPCSub) branch is resolved by the caller.
-func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RPCError {
 	w := request.WireArrays()
 
 	sm.mu.Lock()
@@ -588,7 +588,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		// earlier in the array are already unsubscribed when a later one
 		// fails (Unsubscribe.cpp:66-109).
 		if !validUnsubscribeStreams[stream] {
-			return types.RpcErrorMalformedStream()
+			return types.RPCErrorMalformedStream()
 		}
 		key := stream
 		if key == "rt_transactions" {
@@ -605,11 +605,11 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	}
 	if accountsPresent {
 		if len(accounts) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return types.RPCErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range accounts {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return types.RPCErrorActMalformed("Account malformed.")
 			}
 		}
 		if existing, ok := conn.Subscriptions[types.SubAccounts]; ok {
@@ -640,11 +640,11 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	}
 	if proposedPresent {
 		if len(proposed) == 0 {
-			return types.RpcErrorActMalformed("Account malformed.")
+			return types.RPCErrorActMalformed("Account malformed.")
 		}
 		for _, acc := range proposed {
 			if !isValidXRPLAddress(acc) {
-				return types.RpcErrorActMalformed("Account malformed.")
+				return types.RPCErrorActMalformed("Account malformed.")
 			}
 		}
 		if existing, ok := conn.Subscriptions[types.SubAccountsProposed]; ok {
@@ -703,7 +703,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 
 // HasStreamSubscriptions reports whether the connection still holds any
 // stream subscription. Account and book subscriptions don't count — this
-// mirrors NetworkOPs::tryRemoveRpcSub, which only scans the stream maps
+// mirrors NetworkOPs::tryRemoveRPCSub, which only scans the stream maps
 // when deciding whether a url subscription's registry entry can be dropped.
 func (sm *Manager) HasStreamSubscriptions(connID string) bool {
 	sm.mu.RLock()
@@ -852,8 +852,8 @@ func (sm *Manager) ConnectionCount() int {
 	return len(sm.Connections)
 }
 
-// GetConnection returns a connection by ID
-func (sm *Manager) GetConnection(connID string) *types.Connection {
+// Connection returns a connection by ID
+func (sm *Manager) Connection(connID string) *types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.Connections[connID]
@@ -871,10 +871,10 @@ func (sm *Manager) IsSubscribed(connID string, streamType types.SubscriptionType
 	return ok
 }
 
-// GetConnectionSubscriptions returns a copy of the subscriptions for a
+// ConnectionSubscriptions returns a copy of the subscriptions for a
 // connection. A copy (not the live map) so the caller can iterate without
 // holding sm.mu while HandleSubscribe / HandleUnsubscribe mutate the original.
-func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
+func (sm *Manager) ConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	conn := sm.Connections[connID]
@@ -884,8 +884,8 @@ func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.Subscript
 	return maps.Clone(conn.Subscriptions)
 }
 
-// GetSubscribeResponse creates a subscribe confirmation response
-func (sm *Manager) GetSubscribeResponse(ledgerIndex uint32, ledgerHash string, ledgerTime uint32, feeBase uint64, reserveBase uint64, reserveInc uint64) types.SubscribeResponse {
+// SubscribeResponse creates a subscribe confirmation response
+func (sm *Manager) SubscribeResponse(ledgerIndex uint32, ledgerHash string, ledgerTime uint32, feeBase uint64, reserveBase uint64, reserveInc uint64) types.SubscribeResponse {
 	return types.SubscribeResponse{
 		Status:      "success",
 		LedgerIndex: ledgerIndex,

@@ -12,7 +12,7 @@ import (
 	consensuscommon "github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
@@ -23,7 +23,7 @@ import (
 // 1, matching the master-account sequence on a freshly-started service. The
 // signature is real (secp256k1) because the service's open-ledger Submit
 // path verifies signatures by default.
-func buildSignedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver *testenv.Account, dropsAmount uint64, senderSeq uint32) ([]byte, [32]byte) {
+func buildSignedPaymentBlob(t *testing.T, env *jtx.TestEnv, sender, receiver *jtx.Account, dropsAmount uint64, senderSeq uint32) ([]byte, [32]byte) {
 	t.Helper()
 	env.SetVerifySignatures(true)
 
@@ -72,9 +72,9 @@ func newServiceForOpenLedgerTest(t *testing.T) *service.Service {
 func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 	svc := newServiceForOpenLedgerTest(t)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	dest := testenv.NewAccount("alice")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	dest := jtx.NewAccount("alice")
 
 	blob, hash := buildSignedPaymentBlob(t, env, master, dest, 100_000_000, 1)
 
@@ -115,10 +115,10 @@ func TestService_OpenLedgerSubmit_Roundtrip(t *testing.T) {
 func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 	svc := newServiceForOpenLedgerTest(t)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
-	bob := testenv.NewAccount("bob")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
 	// Two independent txs from the master account at consecutive sequences.
 	blob1, hash1 := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
@@ -160,9 +160,9 @@ func TestService_AcceptConsensusResult_RebuildsOpenView(t *testing.T) {
 func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 	svc := newServiceForOpenLedgerTest(t)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 
 	blob1, hash1 := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
 
@@ -204,9 +204,9 @@ func TestService_AcceptConsensusResult_IncludedTxsNotDuplicated(t *testing.T) {
 func TestService_AcceptConsensusResult_DisputedTxsFirstCrack(t *testing.T) {
 	svc := newServiceForOpenLedgerTest(t)
 
-	env := testenv.NewTestEnv(t)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	env := jtx.NewTestEnv(t)
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 
 	disputedBlob, disputedHash := buildSignedPaymentBlob(t, env, master, alice, 50_000_000, 1)
 

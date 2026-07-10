@@ -19,7 +19,7 @@ import (
 // This adds a signature to a transaction for multi-signing
 type SignForMethod struct{}
 
-func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SignForMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		Account         string          `json:"account"`
 		TxJson          json.RawMessage `json:"tx_json"`
@@ -33,7 +33,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -41,21 +41,21 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// transactionSignFor order. An unparseable account is srcActMalformed
 	// ("Invalid field 'account'."), not the generic actMalformed.
 	if request.Account == "" {
-		return nil, types.RpcErrorMissingField("account")
+		return nil, types.RPCErrorMissingField("account")
 	}
 	if !addresscodec.IsValidClassicAddress(request.Account) {
-		return nil, types.RpcErrorSrcActMalformed("Invalid field 'account'.")
+		return nil, types.RPCErrorSrcActMalformed("Invalid field 'account'.")
 	}
 
 	if len(request.TxJson) == 0 {
-		return nil, types.RpcErrorMissingField("tx_json")
+		return nil, types.RPCErrorMissingField("tx_json")
 	}
 
 	// signature_target directs the multi-signer into a nested inner object.
 	// Only CounterpartySignature is a valid target; any other name is rejected
 	// with the field name as the message, matching rippled TransactionSign.cpp.
 	if request.SignatureTarget != "" && request.SignatureTarget != counterpartySignatureField {
-		return nil, types.RpcErrorInvalidParams(request.SignatureTarget)
+		return nil, types.RPCErrorInvalidParams(request.SignatureTarget)
 	}
 
 	// Parse credentials and derive keypair using the shared helper
@@ -80,12 +80,12 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// Parse the transaction JSON
 	var txMap map[string]any
 	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+		return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
 	// Verify that Account field exists in transaction
 	if _, ok := txMap["Account"]; !ok {
-		return nil, types.RpcErrorMissingField("Account")
+		return nil, types.RPCErrorMissingField("Account")
 	}
 
 	// On networks with ID > 1024, sign_for requires tx_json to carry a matching
@@ -96,11 +96,11 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		if networkID := ctx.Services.Ledger.GetServerInfo().NetworkID; networkID > 1024 {
 			v, ok := txMap["NetworkID"]
 			if !ok {
-				return nil, types.RpcErrorMissingField("tx_json.NetworkID")
+				return nil, types.RPCErrorMissingField("tx_json.NetworkID")
 			}
 			n, ok := v.(float64)
 			if !ok || n != math.Trunc(n) || n < 0 || uint32(n) != networkID {
-				return nil, types.RpcErrorInvalidField("tx_json.NetworkID")
+				return nil, types.RPCErrorInvalidField("tx_json.NetworkID")
 			}
 		}
 	}
@@ -139,7 +139,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	for _, signerWrapper := range signers {
 		if signer, ok := signerWrapper["Signer"].(map[string]any); ok {
 			if signer["Account"] == request.Account {
-				return nil, types.RpcErrorInvalidParams("Account has already signed this transaction")
+				return nil, types.RPCErrorInvalidParams("Account has already signed this transaction")
 			}
 		}
 	}
@@ -157,13 +157,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		if e := arraySizeRPCError(err); e != nil {
 			return nil, e
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode for multisigning: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode for multisigning: %v", err))
 	}
 
 	// Sign the payload
 	signature, err := signPayload(signingPayload, privateKey, keyType)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
 
 	newSigner := map[string]any{
@@ -196,7 +196,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		if e := arraySizeRPCError(err); e != nil {
 			return nil, e
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 
 	txHash := CalculateTxHash(txBlob)

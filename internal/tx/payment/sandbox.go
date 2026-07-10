@@ -122,14 +122,14 @@ func (s *PaymentSandbox) SetTransactionContext(txHash [32]byte, ledgerSeq uint32
 	s.ledgerSeq = ledgerSeq
 }
 
-// GetTransactionContext returns the current transaction hash and ledger sequence
-func (s *PaymentSandbox) GetTransactionContext() ([32]byte, uint32) {
+// TransactionContext returns the current transaction hash and ledger sequence
+func (s *PaymentSandbox) TransactionContext() ([32]byte, uint32) {
 	// Walk up the chain to find the root sandbox with the context
 	if s.txHash != [32]byte{} || s.ledgerSeq != 0 {
 		return s.txHash, s.ledgerSeq
 	}
 	if s.parent != nil {
-		return s.parent.GetTransactionContext()
+		return s.parent.TransactionContext()
 	}
 	return s.txHash, s.ledgerSeq
 }
@@ -137,7 +137,7 @@ func (s *PaymentSandbox) GetTransactionContext() ([32]byte, uint32) {
 // NewChildSandbox creates a child PaymentSandbox on top of a parent.
 // Changes are pushed to the parent when Apply() is called.
 func NewChildSandbox(parent *PaymentSandbox) *PaymentSandbox {
-	txHash, ledgerSeq := parent.GetTransactionContext()
+	txHash, ledgerSeq := parent.TransactionContext()
 	return &PaymentSandbox{
 		parent:             parent,
 		txHash:             txHash,
@@ -886,29 +886,29 @@ func (s *PaymentSandbox) Reset() {
 	s.dropsDestroyed = drops.XRPAmount(0)
 }
 
-// GetView returns the underlying LedgerView for this sandbox chain
-func (s *PaymentSandbox) GetView() tx.LedgerView {
+// View returns the underlying LedgerView for this sandbox chain
+func (s *PaymentSandbox) View() tx.LedgerView {
 	if s.view != nil {
 		return s.view
 	}
 	if s.parent != nil {
-		return s.parent.GetView()
+		return s.parent.View()
 	}
 	return nil
 }
 
-// GetModifications returns the modifications map for debugging
-func (s *PaymentSandbox) GetModifications() map[[32]byte][]byte {
+// Modifications returns the modifications map for debugging
+func (s *PaymentSandbox) Modifications() map[[32]byte][]byte {
 	return s.modifications
 }
 
-// GetInsertions returns the insertions map for debugging
-func (s *PaymentSandbox) GetInsertions() map[[32]byte][]byte {
+// Insertions returns the insertions map for debugging
+func (s *PaymentSandbox) Insertions() map[[32]byte][]byte {
 	return s.insertions
 }
 
-// GetDeletions returns the deletions map for debugging
-func (s *PaymentSandbox) GetDeletions() map[[32]byte]bool {
+// Deletions returns the deletions map for debugging
+func (s *PaymentSandbox) Deletions() map[[32]byte]bool {
 	return s.deletions
 }
 

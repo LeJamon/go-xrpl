@@ -6,15 +6,15 @@ package payment
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
 // PaymentBuilder provides a fluent interface for building Payment transactions.
 type PaymentBuilder struct {
-	from          *testing.Account
-	to            *testing.Account
+	from          *jtx.Account
+	to            *jtx.Account
 	amount        uint64 // XRP in drops
 	issuedAmt     *tx.Amount
 	fee           uint64
@@ -34,7 +34,7 @@ type PaymentBuilder struct {
 
 // Pay creates a new PaymentBuilder for an XRP payment.
 // The amount is specified in drops (1 XRP = 1,000,000 drops).
-func Pay(from, to *testing.Account, amount uint64) *PaymentBuilder {
+func Pay(from, to *jtx.Account, amount uint64) *PaymentBuilder {
 	return &PaymentBuilder{
 		from:   from,
 		to:     to,
@@ -44,7 +44,7 @@ func Pay(from, to *testing.Account, amount uint64) *PaymentBuilder {
 }
 
 // PayIssued creates a new PaymentBuilder for an issued currency payment.
-func PayIssued(from, to *testing.Account, amount tx.Amount) *PaymentBuilder {
+func PayIssued(from, to *jtx.Account, amount tx.Amount) *PaymentBuilder {
 	return &PaymentBuilder{
 		from:      from,
 		to:        to,
@@ -115,7 +115,7 @@ func (b *PaymentBuilder) PathsXRP() *PaymentBuilder {
 // srcIssuer: The issuer of the source currency
 // dstCurrency: The currency being received (e.g., "USD")
 // dstIssuer: The issuer of the destination currency
-func (b *PaymentBuilder) PathsIOUToIOU(srcCurrency string, srcIssuer *testing.Account, dstCurrency string, dstIssuer *testing.Account) *PaymentBuilder {
+func (b *PaymentBuilder) PathsIOUToIOU(srcCurrency string, srcIssuer *jtx.Account, dstCurrency string, dstIssuer *jtx.Account) *PaymentBuilder {
 	// For IOU->IOU cross-currency payments, the path specifies the intermediate steps.
 	// ~USD in rippled means "through the order book for USD" - this is represented
 	// as a path step with just the currency (and optionally issuer) fields.
@@ -135,7 +135,7 @@ func (b *PaymentBuilder) PathsIOUToIOU(srcCurrency string, srcIssuer *testing.Ac
 // This is the Go equivalent of rippled's path(~USD) or path(~EUR).
 // For IOU currencies, the issuer is required.
 // For XRP, pass currency="XRP" and issuer=nil.
-func (b *PaymentBuilder) PathsCurrency(currency string, issuer *testing.Account) *PaymentBuilder {
+func (b *PaymentBuilder) PathsCurrency(currency string, issuer *jtx.Account) *PaymentBuilder {
 	step := payment.PathStep{Currency: currency}
 	stepType := 0x10 // typeCurrency
 	if issuer != nil {

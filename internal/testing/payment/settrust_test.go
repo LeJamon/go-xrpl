@@ -5,7 +5,7 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -15,18 +15,18 @@ import (
 // TestSetTrust_TrustLineDelete tests deletion of trust lines by setting limit to zero.
 // From rippled: SetTrust_test::testTrustLineDelete
 func TestSetTrust_TrustLineDelete(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	becky := xrplgoTesting.NewAccount("becky")
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(becky, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// becky wants to hold at most 50 tokens of alice["USD"]
 	result := env.Submit(trustset.TrustLine(becky, "USD", alice, "50").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line exists
@@ -35,7 +35,7 @@ func TestSetTrust_TrustLineDelete(t *testing.T) {
 
 	// Reset the trust line limit to zero
 	result = env.Submit(trustset.TrustLine(becky, "USD", alice, "0").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line is deleted
@@ -48,13 +48,13 @@ func TestSetTrust_TrustLineDelete(t *testing.T) {
 // TestSetTrust_ResetWithAuthFlag tests trust line reset with authorized flag.
 // From rippled: SetTrust_test::testTrustLineResetWithAuthFlag
 func TestSetTrust_ResetWithAuthFlag(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	becky := xrplgoTesting.NewAccount("becky")
+	alice := jtx.NewAccount("alice")
+	becky := jtx.NewAccount("becky")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(becky, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(becky, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice wants authorized trust lines
@@ -63,14 +63,14 @@ func TestSetTrust_ResetWithAuthFlag(t *testing.T) {
 
 	// becky creates a trust line
 	result := env.Submit(trustset.TrustLine(becky, "USD", alice, "50").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice authorizes becky (using tfSetfAuth flag on TrustSet)
 	authTrustLine := trustset.TrustLine(alice, "USD", becky, "0")
 	authTrustLine.SetAuth()
 	result = env.Submit(authTrustLine.Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line exists
@@ -79,7 +79,7 @@ func TestSetTrust_ResetWithAuthFlag(t *testing.T) {
 
 	// Reset the trust line limit to zero
 	result = env.Submit(trustset.TrustLine(becky, "USD", alice, "0").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Trust line should be deleted despite authorization
@@ -101,17 +101,17 @@ func TestSetTrust_ResetWithAuthFlag(t *testing.T) {
 //
 //	(uOwnerCount < 2) ? XRPAmount(beast::zero) : view().fees().accountReserve(uOwnerCount + 1)
 func TestSetTrust_FreeTrustlines(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gwA := xrplgoTesting.NewAccount("gwA")
-	gwB := xrplgoTesting.NewAccount("gwB")
-	creator := xrplgoTesting.NewAccount("creator")
-	assistor := xrplgoTesting.NewAccount("assistor")
+	gwA := jtx.NewAccount("gwA")
+	gwB := jtx.NewAccount("gwB")
+	creator := jtx.NewAccount("creator")
+	assistor := jtx.NewAccount("assistor")
 
 	// Fund gateways and assistor generously
-	env.FundAmount(gwA, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gwB, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(assistor, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gwA, uint64(jtx.XRP(10000)))
+	env.FundAmount(gwB, uint64(jtx.XRP(10000)))
+	env.FundAmount(assistor, uint64(jtx.XRP(10000)))
 
 	// Fund creator with just enough: baseReserve + 3 tx fees
 	// This is exactly enough to hold an account and pay for 3 transactions.
@@ -124,18 +124,18 @@ func TestSetTrust_FreeTrustlines(t *testing.T) {
 	// First trust line: creator has OwnerCount=0 (< 2), so reserve is 0.
 	// Creator can afford this.
 	result := env.Submit(trustset.TrustLine(creator, "USD", gwA, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	require.True(t, env.TrustLineExists(creator, gwA, "USD"), "First trust line should exist")
-	xrplgoTesting.RequireOwnerCount(t, env, creator, 1)
+	jtx.RequireOwnerCount(t, env, creator, 1)
 
 	// Second trust line: creator has OwnerCount=1 (< 2), so reserve is still 0.
 	// Creator can afford this.
 	result = env.Submit(trustset.TrustLine(creator, "USD", gwB, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	require.True(t, env.TrustLineExists(creator, gwB, "USD"), "Second trust line should exist")
-	xrplgoTesting.RequireOwnerCount(t, env, creator, 2)
+	jtx.RequireOwnerCount(t, env, creator, 2)
 
 	// Third trust line: creator has OwnerCount=2 (>= 2), so reserve is
 	// accountReserve(3) = baseReserve + 3*increment = 200 + 150 = 350 XRP.
@@ -145,7 +145,7 @@ func TestSetTrust_FreeTrustlines(t *testing.T) {
 		"Third trust line should fail with insufficient reserve")
 	env.Close()
 	require.False(t, env.TrustLineExists(creator, assistor, "USD"), "Third trust line should NOT exist")
-	xrplgoTesting.RequireOwnerCount(t, env, creator, 2)
+	jtx.RequireOwnerCount(t, env, creator, 2)
 
 	// Fund creator with additional XRP to cover the reserve for 3 trust lines.
 	// Need threelineReserve - baseReserve = (baseReserve + 3*increment) - baseReserve = 3*increment
@@ -154,27 +154,27 @@ func TestSetTrust_FreeTrustlines(t *testing.T) {
 	master := env.MasterAccount()
 	payTx := Pay(master, creator, threeLineExtra).Build()
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Now the third trust line should succeed.
 	result = env.Submit(trustset.TrustLine(creator, "USD", assistor, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	require.True(t, env.TrustLineExists(creator, assistor, "USD"), "Third trust line should now exist")
-	xrplgoTesting.RequireOwnerCount(t, env, creator, 3)
+	jtx.RequireOwnerCount(t, env, creator, 3)
 }
 
 // TestSetTrust_UsingTicket tests trust line creation with ticket.
 // From rippled: SetTrust_test::testUsingTicket
 func TestSetTrust_UsingTicket(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create tickets
@@ -185,9 +185,9 @@ func TestSetTrust_UsingTicket(t *testing.T) {
 
 	// Create trust line using a ticket
 	trustTx := trustset.TrustLine(alice, "USD", gw, "1000").Build()
-	xrplgoTesting.WithTicketSeq(trustTx, ticketSeq)
+	jtx.WithTicketSeq(trustTx, ticketSeq)
 	result := env.Submit(trustTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line exists
@@ -201,13 +201,13 @@ func TestSetTrust_UsingTicket(t *testing.T) {
 // TestSetTrust_Malformed tests malformed TrustSet transactions.
 // From rippled: SetTrust_test::testMalformed
 func TestSetTrust_Malformed(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust line to self should fail
@@ -227,12 +227,12 @@ func TestSetTrust_Malformed(t *testing.T) {
 // TestSetTrust_TrustNonexistentAccount tests trust line to non-existent account.
 // From rippled: TrustAndBalance_test::testTrustNonexistentAccount
 func TestSetTrust_TrustNonexistentAccount(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	unfunded := xrplgoTesting.NewAccount("unfunded")
+	alice := jtx.NewAccount("alice")
+	unfunded := jtx.NewAccount("unfunded")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust line to non-existent account should fail with tecNO_DST
@@ -246,16 +246,16 @@ func TestSetTrust_TrustNonexistentAccount(t *testing.T) {
 // TestSetTrust_DisallowIncoming tests trust lines with disallow incoming flag.
 // From rippled: SetTrust_test::testDisallowIncoming
 func TestSetTrust_DisallowIncoming(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.EnableFeature("DisallowIncoming")
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set DisallowIncomingTrustline on gateway
@@ -273,7 +273,7 @@ func TestSetTrust_DisallowIncoming(t *testing.T) {
 
 	// Now alice can create a trust line
 	result = env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Set flag on gateway again
@@ -299,7 +299,7 @@ func TestSetTrust_DisallowIncoming(t *testing.T) {
 
 	// Now bob can open a trust line (bob has flag but gw doesn't)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Gateway can send bob a balance
@@ -324,32 +324,32 @@ func TestSetTrust_PaymentsWithPathsAndFees(t *testing.T) {
 
 func testIndirectMultiPath(t *testing.T, withRate bool) {
 	t.Helper()
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	amazon := xrplgoTesting.NewAccount("amazon")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	gw := jtx.NewAccount("gateway")
+	amazon := jtx.NewAccount("amazon")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(amazon, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(amazon, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(amazon, "USD", gw, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", alice, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", alice, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Set transfer rate on gw if needed (1.1x = 10% fee)
@@ -361,9 +361,9 @@ func testIndirectMultiPath(t *testing.T, withRate bool) {
 	// Fund bob and carol with 100 gw/USD each
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, bob, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(gw, carol, usd100).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays amazon 150 gw/USD via paths through bob and carol
@@ -387,7 +387,7 @@ func testIndirectMultiPath(t *testing.T, withRate bool) {
 	}
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify balances
@@ -395,36 +395,36 @@ func testIndirectMultiPath(t *testing.T, withRate bool) {
 		// With transfer rate 1.1x, carol retains some gw/USD:
 		// alice->carol transfers 65 alice/USD, carol->gw transfers ~65/1.1 gw/USD
 		// Rippled expects: alice has -65 carol/USD (6500000000000000e-14 negative)
-		xrplgoTesting.RequireIOUBalanceApprox(t, env, alice, carol, "USD", -65, 0.01)
-		xrplgoTesting.RequireIOUBalance(t, env, carol, gw, "USD", 35)
+		jtx.RequireIOUBalanceApprox(t, env, alice, carol, "USD", -65, 0.01)
+		jtx.RequireIOUBalance(t, env, carol, gw, "USD", 35)
 	} else {
 		// Without rate: alice issued 50 to carol, carol sent 50 gw/USD
-		xrplgoTesting.RequireIOUBalance(t, env, alice, carol, "USD", -50)
-		xrplgoTesting.RequireIOUBalance(t, env, carol, gw, "USD", 50)
+		jtx.RequireIOUBalance(t, env, alice, carol, "USD", -50)
+		jtx.RequireIOUBalance(t, env, carol, gw, "USD", 50)
 	}
 	// Common assertions for both cases
-	xrplgoTesting.RequireIOUBalance(t, env, alice, bob, "USD", -100)
-	xrplgoTesting.RequireIOUBalance(t, env, amazon, gw, "USD", 150)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 0)
+	jtx.RequireIOUBalance(t, env, alice, bob, "USD", -100)
+	jtx.RequireIOUBalance(t, env, amazon, gw, "USD", 150)
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
 }
 
 // TestSetTrust_InvoiceID tests setting invoice ID on payment.
 // From rippled: TrustAndBalance_test::testInvoiceID
 func TestSetTrust_InvoiceID(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Payment with invoice ID
 	invoiceID := "0000000000000000000000000000000000000000000000000000000000000001"
 	payTx := Pay(alice, bob, 100_000_000).InvoiceID(invoiceID).Build()
 	result := env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	t.Log("SetTrust invoice ID test passed")
@@ -433,13 +433,13 @@ func TestSetTrust_InvoiceID(t *testing.T) {
 // TestSetTrust_NegativeLimit tests that negative limit is rejected.
 // From rippled: SetTrust validation
 func TestSetTrust_NegativeLimit(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust line with negative limit should fail
@@ -454,13 +454,13 @@ func TestSetTrust_NegativeLimit(t *testing.T) {
 // TestSetTrust_QualityInOut tests QualityIn and QualityOut fields.
 // From rippled: trust quality settings
 func TestSetTrust_QualityInOut(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust line with QualityIn and QualityOut
@@ -468,7 +468,7 @@ func TestSetTrust_QualityInOut(t *testing.T) {
 		QualityIn(900_000_000).   // 0.9 quality factor
 		QualityOut(1_100_000_000) // 1.1 quality factor
 	result := env.Submit(trustTx.Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line exists
@@ -480,27 +480,27 @@ func TestSetTrust_QualityInOut(t *testing.T) {
 		QualityIn(1_000_000_000). // reset to 1.0
 		QualityOut(1_000_000_000) // reset to 1.0
 	result = env.Submit(trustTx2.Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 }
 
 // TestSetTrust_NoRippleFlag tests NoRipple flag on trust lines.
 // From rippled: NoRipple trust line flag
 func TestSetTrust_NoRippleFlag(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	gw := xrplgoTesting.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust line with NoRipple flag
 	trustLine := trustset.TrustLine(alice, "USD", gw, "1000")
 	trustLine.NoRipple()
 	result := env.Submit(trustLine.Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify trust line exists
@@ -513,25 +513,25 @@ func TestSetTrust_NoRippleFlag(t *testing.T) {
 // TestSetTrust_FreezeTrustLine tests freezing a trust line.
 // From rippled: Freeze trust line via TrustSet
 func TestSetTrust_FreezeTrustLine(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice creates trust line to gw
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// gw freezes alice's trust line
 	freezeTrustLine := trustset.TrustLine(gw, "USD", alice, "0")
 	freezeTrustLine.Freeze()
 	result = env.Submit(freezeTrustLine.Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	t.Log("SetTrust freeze trust line test passed")

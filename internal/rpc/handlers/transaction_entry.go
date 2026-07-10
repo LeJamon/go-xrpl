@@ -18,7 +18,7 @@ type TransactionEntryMethod struct{ BaseHandler }
 
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
-func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		TxHash string `json:"tx_hash"`
 		types.LedgerSpecifier
@@ -29,7 +29,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 
 	if request.TxHash == "" {
-		return nil, types.RpcErrorFieldNotFoundTransaction()
+		return nil, types.RPCErrorFieldNotFoundTransaction()
 	}
 
 	// Resolve the target ledger through the shared lookup (rippled
@@ -42,13 +42,13 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, lerr
 	}
 	if !targetLedger.IsClosed() {
-		return nil, types.RpcErrorNotYetImplemented()
+		return nil, types.RPCErrorNotYetImplemented()
 	}
 
 	// Parse the transaction hash
 	txHashBytes, err := hex.DecodeString(request.TxHash)
 	if err != nil || len(txHashBytes) != 32 {
-		return nil, types.RpcErrorInvalidParams("Invalid tx_hash")
+		return nil, types.RPCErrorInvalidParams("Invalid tx_hash")
 	}
 
 	var txHash [32]byte
@@ -57,17 +57,17 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	// Look up the transaction and verify it is in the requested ledger.
 	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil || txInfo == nil {
-		return nil, types.RpcErrorTransactionNotFound("Transaction not found.")
+		return nil, types.RPCErrorTransactionNotFound("Transaction not found.")
 	}
 	targetSeq := targetLedger.Sequence()
 	if txInfo.LedgerIndex != targetSeq {
-		return nil, types.RpcErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq))
+		return nil, types.RPCErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq))
 	}
 
 	// Parse the stored transaction data (VL-encoded binary or JSON)
 	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to parse transaction data")
+		return nil, types.RPCErrorInternal("Failed to parse transaction data")
 	}
 
 	ledgerHash := txInfo.LedgerHash

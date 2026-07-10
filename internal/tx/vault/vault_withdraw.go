@@ -152,7 +152,7 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	// equivalent asset amount so the limit is enforced. Integral (XRP/MPT) vault
 	// assets stay exempt either way — only an IOU asset needs the conversion.
 	limitAmount := v.Amount
-	if config.GetRules().Enabled(amendment.FeatureFixCleanup3_1_3) && v.amountIsShares(vd) &&
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_1_3) && v.amountIsShares(vd) &&
 		!isNativeAsset(vd.Asset) && !vd.AssetIsMPT {
 		assets, res := v.sharesToAssetAmount(view, vd)
 		if res != ter.TesSUCCESS {

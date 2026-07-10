@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ctxWith builds a minimal RpcContext for conditionMet, wiring the mock as the
+// ctxWith builds a minimal RPCContext for conditionMet, wiring the mock as the
 // ledger service.
-func ctxWith(apiVersion int, mock *mockLedgerService) *types.RpcContext {
-	return &types.RpcContext{
+func ctxWith(apiVersion int, mock *mockLedgerService) *types.RPCContext {
+	return &types.RPCContext{
 		ApiVersion: apiVersion,
 		Services:   &types.ServiceContainer{Ledger: mock},
 	}
@@ -111,7 +111,7 @@ func TestConditionMet_NonStandaloneCurrentLagsValidated(t *testing.T) {
 
 func TestConditionMet_UNLBlocked(t *testing.T) {
 	m := syncedStandalone()
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }},
 	}
@@ -123,7 +123,7 @@ func TestConditionMet_UNLBlocked(t *testing.T) {
 
 func TestConditionMet_UNLNotBlockedPasses(t *testing.T) {
 	m := syncedStandalone()
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return false }},
 	}
@@ -133,7 +133,7 @@ func TestConditionMet_UNLNotBlockedPasses(t *testing.T) {
 func TestConditionMet_AmendmentBlockedBeatsUNL(t *testing.T) {
 	m := syncedStandalone()
 	m.amendmentBlocked = true
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }},
 	}

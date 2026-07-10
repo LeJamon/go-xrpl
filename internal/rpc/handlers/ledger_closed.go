@@ -9,19 +9,19 @@ import (
 // LedgerClosedMethod handles the ledger_closed RPC method
 type LedgerClosedMethod struct{}
 
-func (m *LedgerClosedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerClosedMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	seq := ctx.Services.Ledger.GetClosedLedgerIndex()
 	if seq == 0 {
-		return nil, types.RpcErrorLgrNotFound("No closed ledger")
+		return nil, types.RPCErrorLgrNotFound("No closed ledger")
 	}
 
 	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(seq)
 	if err != nil {
-		return nil, types.RpcErrorLgrNotFound("Closed ledger not found")
+		return nil, types.RPCErrorLgrNotFound("Closed ledger not found")
 	}
 
 	hash := ledger.Hash()

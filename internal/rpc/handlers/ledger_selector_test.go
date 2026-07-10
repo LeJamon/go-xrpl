@@ -67,7 +67,7 @@ func TestResolveLedgerSelector(t *testing.T) {
 		if rpcErr == nil {
 			t.Fatalf("want rpcINVALID_PARAMS, got nil")
 		}
-		if rpcErr.Code != types.RpcErrorInvalidParams("").Code {
+		if rpcErr.Code != types.RPCErrorInvalidParams("").Code {
 			t.Errorf("error code = %d, want invalid_params", rpcErr.Code)
 		}
 	})

@@ -188,7 +188,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -330,7 +330,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -540,7 +540,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -733,7 +733,7 @@ func TestAccountInfoInvalidAccountTypes(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -785,7 +785,7 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -831,7 +831,7 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 // TestAccountInfoServiceUnavailable tests behavior when ledger service is not available
 func TestAccountInfoServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -855,7 +855,7 @@ func TestAccountInfoServiceUnavailable(t *testing.T) {
 // TestAccountInfoServiceNilLedger tests behavior when ledger service is nil
 func TestAccountInfoServiceNilLedger(t *testing.T) {
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -899,7 +899,7 @@ func TestAccountInfoStrictMode(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -952,7 +952,7 @@ func TestAccountInfoLedgerIndexFormats(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

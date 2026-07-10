@@ -52,7 +52,7 @@ func TestSubmitMultisigned_MissingSequence(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	delete(txJSON, "Sequence")
@@ -69,7 +69,7 @@ func TestSubmitMultisigned_InvalidSequenceType(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Sequence"] = "not_a_number"
@@ -87,7 +87,7 @@ func TestSubmitMultisigned_FeeNotPresent(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	delete(txJSON, "Fee")
@@ -105,7 +105,7 @@ func TestSubmitMultisigned_FeeNotString(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Fee"] = 12 // numeric, not string
@@ -123,7 +123,7 @@ func TestSubmitMultisigned_FeeZero(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Fee"] = "0"
@@ -140,7 +140,7 @@ func TestSubmitMultisigned_FeeNegative(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Fee"] = "-10"
@@ -157,7 +157,7 @@ func TestSubmitMultisigned_FeeNotNumericString(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Fee"] = "abc"
@@ -176,7 +176,7 @@ func TestSubmitMultisigned_TxnSignaturePresent(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["TxnSignature"] = "DEADBEEF"
@@ -197,7 +197,7 @@ func TestSubmitMultisigned_SelfSigning(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txAccount := txJSON["Account"].(string)
@@ -223,7 +223,7 @@ func TestSubmitMultisigned_DuplicateSigners(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	dupAccount := "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik"
 	txJSON := validMultisignedTxJSON()
@@ -258,7 +258,7 @@ func TestSubmitMultisigned_FeeValidPositive(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Fee"] = "10"
@@ -277,7 +277,7 @@ func TestSubmitMultisigned_ValidationOrder_SequenceBeforeTxnSignature(t *testing
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	// Both Sequence missing AND TxnSignature present -- Sequence error should come first.
 	txJSON := validMultisignedTxJSON()
@@ -297,7 +297,7 @@ func TestSubmitMultisigned_SrcActMalformed(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["Account"] = "not_an_address"
@@ -319,7 +319,7 @@ func TestSubmitMultisigned_SrcActNotFound(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, validMultisignedTxJSON()))
 	require.NotNil(t, rpcErr)
@@ -339,7 +339,7 @@ func TestSubmitMultisigned_ValidationOrder_SrcActNotFoundBeforeTxnSignature(t *t
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	txJSON["TxnSignature"] = "DEADBEEF"
@@ -359,7 +359,7 @@ func TestSubmitMultisigned_HappyPath(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	txJSON := validMultisignedTxJSON()
 	// Use addresses that pass base58 decoding so binary encoding succeeds.
@@ -387,7 +387,7 @@ func TestSubmitMultisigned_ValidationOrder_TxnSignatureBeforeFee(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1, Services: services}
 
 	// Both TxnSignature present AND Fee invalid -- TxnSignature error should come first.
 	txJSON := validMultisignedTxJSON()

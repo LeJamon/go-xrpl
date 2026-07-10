@@ -16,7 +16,7 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
 type NftBuyOffersMethod struct{ BaseHandler }
 
-func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *NftBuyOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -27,7 +27,7 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 // difference between buy and sell is the fetch function. The caller guards the
 // ledger service before binding fetch.
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
-func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
+func handleNFTOffers(ctx *types.RPCContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RPCError) {
 	var request struct {
 		NFTokenID string `json:"nft_id"`
 		types.LedgerSpecifier
@@ -41,18 +41,18 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 
 	// Check for missing nft_id parameter - matching rippled's missing_field_error
 	if request.NFTokenID == "" {
-		return nil, types.RpcErrorMissingField("nft_id")
+		return nil, types.RPCErrorMissingField("nft_id")
 	}
 
 	// Validate and parse the NFT ID - must be a 64-character hex string (32 bytes)
 	nftIDHex := strings.ToUpper(request.NFTokenID)
 	if len(nftIDHex) != 64 {
-		return nil, types.RpcErrorInvalidField("nft_id")
+		return nil, types.RPCErrorInvalidField("nft_id")
 	}
 
 	nftIDBytes, err := hex.DecodeString(nftIDHex)
 	if err != nil {
-		return nil, types.RpcErrorInvalidField("nft_id")
+		return nil, types.RPCErrorInvalidField("nft_id")
 	}
 
 	var nftID [32]byte
@@ -74,10 +74,10 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 	marker := request.Marker
 	if marker != "" {
 		if len(marker) != 64 {
-			return nil, types.RpcErrorInvalidParams("Invalid marker")
+			return nil, types.RPCErrorInvalidParams("Invalid marker")
 		}
 		if _, err := hex.DecodeString(marker); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid marker")
+			return nil, types.RPCErrorInvalidParams("Invalid marker")
 		}
 	}
 
@@ -88,11 +88,11 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		}
 		switch {
 		case errors.Is(err, svcerr.ErrObjectNotFound):
-			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
+			return nil, types.RPCErrorObjectNotFound("The requested object was not found.")
 		case errors.Is(err, svcerr.ErrInvalidMarker):
-			return nil, types.RpcErrorInvalidParams("Invalid marker")
+			return nil, types.RPCErrorInvalidParams("Invalid marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT offers: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get NFT offers: %v", err))
 	}
 
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil

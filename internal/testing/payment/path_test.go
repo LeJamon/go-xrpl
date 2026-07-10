@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -18,13 +18,13 @@ import (
 )
 
 // acctStep builds an expected account path element (rippled stpath(account)).
-func acctStep(a *xrplgoTesting.Account) payment.PathStep {
+func acctStep(a *jtx.Account) payment.PathStep {
 	return payment.PathStep{Account: a.Address}
 }
 
 // bookStepIOU builds an expected order-book path element for an issued
 // currency (rippled's IPE(issue) test helper).
-func bookStepIOU(currency string, issuer *xrplgoTesting.Account) payment.PathStep {
+func bookStepIOU(currency string, issuer *jtx.Account) payment.PathStep {
 	return payment.PathStep{Currency: currency, Issuer: issuer.Address}
 }
 
@@ -90,13 +90,13 @@ func newPathRequest(
 // TestPath_NoDirectPathNoIntermediaryNoAlternatives tests path finding with no available paths.
 // From rippled: no_direct_path_no_intermediary_no_alternatives
 func TestPath_NoDirectPathNoIntermediaryNoAlternatives(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice tries to pay bob USD without any trust lines or paths
@@ -118,18 +118,18 @@ func TestPath_DirectPathNoIntermediary(t *testing.T) {
 	// From rippled: direct_path_no_intermediary
 	// alice pays bob's USD directly — bob trusts alice for USD, so alice can issue.
 	// Pathfinder should find: empty path set (default path only), source_amount = alice/USD(5).
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// bob trusts alice for USD (alice can issue USD to bob)
 	result := env.Submit(trustset.TrustLine(bob, "USD", alice, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Use pathfinder to find paths: alice -> bob for bob/USD(5)
@@ -157,7 +157,7 @@ func TestPath_DirectPathNoIntermediary(t *testing.T) {
 	usdAmount := tx.NewIssuedAmountFromFloat64(5, "USD", alice.Address)
 	payTx := PayIssued(alice, bob, usdAmount).Build()
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	bobBalance := env.BalanceIOU(bob, "USD", alice)
@@ -176,28 +176,28 @@ func TestPath_DirectPathNoIntermediary(t *testing.T) {
 //	env.require(balance("alice", USD(46)));
 //	env.require(balance("bob", USD(24)));
 func TestPath_PaymentAutoPathFind(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice with 70 USD
 	usd70 := tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd70).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob 24 USD via gateway (auto path finding)
@@ -205,7 +205,7 @@ func TestPath_PaymentAutoPathFind(t *testing.T) {
 	payTx := PayIssued(alice, bob, usd24).Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify balances
@@ -227,24 +227,24 @@ func TestPath_IndirectPath(t *testing.T) {
 	// From rippled: indirect_paths_path_find
 	// alice -> bob -> carol trust chain (rippling)
 	// Reference: Path_test.cpp lines 878-895
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice -> bob -> carol trust chain
 	// bob trusts alice for USD (alice can issue USD to bob)
 	result := env.Submit(trustset.TrustLine(bob, "USD", alice, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	// carol trusts bob for USD (bob can issue USD to carol)
 	result = env.Submit(trustset.TrustLine(carol, "USD", bob, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Use pathfinder: alice -> carol for carol/USD(5)
@@ -284,17 +284,17 @@ func TestPath_IndirectPath(t *testing.T) {
 // then gw2 for the remaining 7 (which costs 7.7 at 1.1x rate).
 // Result: alice has 0 gw/USD, 62.3 gw2/USD; bob has 70 gw/USD, 7 gw2/USD
 func TestPath_AlternativePathsConsumeBestFirst(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	gw2 := xrplgoTesting.NewAccount("gateway2")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	gw2 := jtx.NewAccount("gateway2")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw2, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set transfer rate on gw2 (1.1x = 10% fee)
@@ -303,22 +303,22 @@ func TestPath_AlternativePathsConsumeBestFirst(t *testing.T) {
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(alice, "USD", gw2, "800").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw2, "900").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice from both gateways
 	usd70 := tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd70).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	usd70_2 := tx.NewIssuedAmountFromFloat64(70, "USD", gw2.Address)
 	result = env.Submit(PayIssued(gw2, alice, usd70_2).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob 77 bob/USD with sendmax 100 alice/USD
@@ -336,30 +336,30 @@ func TestPath_AlternativePathsConsumeBestFirst(t *testing.T) {
 		Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify balances
 	// alice sent all 70 gw/USD (best path, no fee), then 7.7 gw2/USD for 7 bob/USD
-	xrplgoTesting.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-	xrplgoTesting.RequireIOUBalanceApprox(t, env, alice, gw2, "USD", 62.3, 0.0001)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 70)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw2, "USD", 7)
+	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
+	jtx.RequireIOUBalanceApprox(t, env, alice, gw2, "USD", 62.3, 0.0001)
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 70)
+	jtx.RequireIOUBalance(t, env, bob, gw2, "USD", 7)
 	// Verify gateway balances (negative = they issued)
-	xrplgoTesting.RequireIOUBalance(t, env, gw, alice, "USD", 0)
-	xrplgoTesting.RequireIOUBalanceApprox(t, env, gw2, alice, "USD", -62.3, 0.0001)
+	jtx.RequireIOUBalance(t, env, gw, alice, "USD", 0)
+	jtx.RequireIOUBalanceApprox(t, env, gw2, alice, "USD", -62.3, 0.0001)
 }
 
 // TestPath_QualitySetAndTest tests quality settings on trust lines.
 // From rippled: quality_paths_quality_set_and_test
 func TestPath_QualitySetAndTest(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// bob sets up trust line to alice with quality settings
@@ -369,34 +369,34 @@ func TestPath_QualitySetAndTest(t *testing.T) {
 		Build()
 
 	result := env.Submit(trustTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	t.Log("Quality set test: trust line quality settings applied")
 }
 
 // TestPath_TrustNormalClear tests that trust lines can be cleared when zero balance.
 // From rippled: trust_auto_clear_trust_normal_clear
 func TestPath_TrustNormalClear(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Both set up bidirectional trust
 	result := env.Submit(trustset.TrustLine(alice, "USD", bob, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", alice, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Clear trust lines by setting limit to 0
 	result = env.Submit(trustset.TrustLine(alice, "USD", bob, "0").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", alice, "0").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	t.Log("Trust normal clear test: trust line deletion verified")
@@ -405,24 +405,24 @@ func TestPath_TrustNormalClear(t *testing.T) {
 // TestPath_TrustAutoClear tests that trust lines auto-clear when balance returns to zero.
 // From rippled: trust_auto_clear_trust_auto_clear
 func TestPath_TrustAutoClear(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice trusts bob for USD (bob can issue USD to alice)
 	result := env.Submit(trustset.TrustLine(alice, "USD", bob, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// bob pays alice 50 USD (bob issues 50 USD to alice)
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", bob.Address)
 	result = env.Submit(PayIssued(bob, alice, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 50 USD from bob
@@ -431,12 +431,12 @@ func TestPath_TrustAutoClear(t *testing.T) {
 
 	// alice sets trust limit to 0 (but still has balance, so trust line remains)
 	result = env.Submit(trustset.TrustLine(alice, "USD", bob, "0").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays back 50 USD to bob - trust line should auto-delete when balance is zero
 	result = env.Submit(PayIssued(alice, bob, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 0 USD balance (trust line may be deleted)
@@ -461,15 +461,15 @@ func TestPath_NoRippleCombinations(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			env := xrplgoTesting.NewTestEnv(t)
+			env := jtx.NewTestEnv(t)
 
-			alice := xrplgoTesting.NewAccount("alice")
-			bob := xrplgoTesting.NewAccount("bob")
-			george := xrplgoTesting.NewAccount("george")
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			george := jtx.NewAccount("george")
 
-			env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-			env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-			env.FundAmount(george, uint64(xrplgoTesting.XRP(10000)))
+			env.FundAmount(alice, uint64(jtx.XRP(10000)))
+			env.FundAmount(bob, uint64(jtx.XRP(10000)))
+			env.FundAmount(george, uint64(jtx.XRP(10000)))
 			env.Close()
 
 			// Set up trust lines from alice and bob to george
@@ -478,14 +478,14 @@ func TestPath_NoRippleCombinations(t *testing.T) {
 				aliceTrust = aliceTrust.NoRipple()
 			}
 			result := env.Submit(aliceTrust.Build())
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 
 			bobTrust := trustset.TrustLine(bob, "USD", george, "100")
 			if !tc.bobRipple {
 				bobTrust = bobTrust.NoRipple()
 			}
 			result = env.Submit(bobTrust.Build())
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 
 			// George also sets NoRipple on his side of each trust line
 			// (rippled sets NoRipple on BOTH sides for it to take effect)
@@ -496,7 +496,7 @@ func TestPath_NoRippleCombinations(t *testing.T) {
 				georgeTrustAlice = georgeTrustAlice.ClearNoRipple()
 			}
 			result = env.Submit(georgeTrustAlice.Build())
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 
 			georgeTrustBob := trustset.TrustLine(george, "USD", bob, "100")
 			if !tc.bobRipple {
@@ -505,13 +505,13 @@ func TestPath_NoRippleCombinations(t *testing.T) {
 				georgeTrustBob = georgeTrustBob.ClearNoRipple()
 			}
 			result = env.Submit(georgeTrustBob.Build())
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
 			// Fund alice through george
 			usd70 := tx.NewIssuedAmountFromFloat64(70, "USD", george.Address)
 			result = env.Submit(PayIssued(george, alice, usd70).Build())
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 			env.Close()
 
 			// alice tries to pay bob through george
@@ -521,7 +521,7 @@ func TestPath_NoRippleCombinations(t *testing.T) {
 			result = env.Submit(payTx)
 
 			if tc.expectSuccess {
-				xrplgoTesting.RequireTxSuccess(t, result)
+				jtx.RequireTxSuccess(t, result)
 			} else {
 				require.NotEqual(t, "tesSUCCESS", result.Code,
 					"Payment should fail with NoRipple on both sides")
@@ -533,18 +533,18 @@ func TestPath_NoRippleCombinations(t *testing.T) {
 // TestPath_XRPToXRP tests XRP to XRP path finding.
 // From rippled: xrp_to_xrp
 func TestPath_XRPToXRP(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// XRP to XRP should be direct (no path needed)
-	result := env.Submit(Pay(alice, bob, uint64(xrplgoTesting.XRP(5))).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	result := env.Submit(Pay(alice, bob, uint64(jtx.XRP(5))).Build())
+	jtx.RequireTxSuccess(t, result)
 	t.Log("XRP to XRP test: payment succeeded")
 }
 
@@ -558,17 +558,17 @@ func TestPath_XRPToXRP(t *testing.T) {
 //	env.require(balance("bob", AUD(10)));
 //	env.require(balance("carol", AUD(39)));
 func TestPath_ViaGateway(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set 10% transfer rate on gateway (1.1 = 1_100_000_000)
@@ -577,33 +577,33 @@ func TestPath_ViaGateway(t *testing.T) {
 
 	// Create trust lines
 	result := env.Submit(trustset.TrustLine(bob, "AUD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "AUD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund carol with AUD
 	aud50 := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
 	result = env.Submit(PayIssued(gw, carol, aud50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Carol creates offer: XRP(50) for AUD(50)
 	aud50Amt := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
-	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
+	xrp50 := tx.NewXRPAmount(jtx.XRP(50))
 	result = env.CreateOffer(carol, aud50Amt, xrp50)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob AUD(10) using XRP as bridge, sendmax XRP(100)
 	aud10 := tx.NewIssuedAmountFromFloat64(10, "AUD", gw.Address)
-	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
+	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	payTx := PayIssued(alice, bob, aud10).
 		SendMax(xrp100).
 		PathsXRP().
 		Build()
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify: bob should have AUD(10)
@@ -618,24 +618,24 @@ func TestPath_ViaGateway(t *testing.T) {
 // TestPath_IssuerToRepay tests path finding when repaying issuer.
 // From rippled: path_find_05 case A - Borrow or repay
 func TestPath_IssuerToRepay(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice trusts gateway for HKD
 	result := env.Submit(trustset.TrustLine(alice, "HKD", gw, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Gateway funds alice with 1000 HKD
 	hkd1000 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, hkd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 1000 HKD
@@ -647,7 +647,7 @@ func TestPath_IssuerToRepay(t *testing.T) {
 	payTx := PayIssued(alice, gw, hkd10).Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 990 HKD remaining
@@ -658,28 +658,28 @@ func TestPath_IssuerToRepay(t *testing.T) {
 // TestPath_CommonGateway tests path through common gateway.
 // From rippled: path_find_05 case B - Common gateway
 func TestPath_CommonGateway(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Both trust the same gateway for HKD
 	result := env.Submit(trustset.TrustLine(alice, "HKD", gw, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "HKD", gw, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Gateway funds alice with 1000 HKD
 	hkd1000 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, hkd1000).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify initial balances
@@ -692,7 +692,7 @@ func TestPath_CommonGateway(t *testing.T) {
 	payTx := PayIssued(alice, bob, hkd10).Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify final balances
@@ -708,55 +708,55 @@ func TestPath_CommonGateway(t *testing.T) {
 // Source -> AC -> OB to XRP -> OB from XRP -> AC -> Destination
 // Reference: rippled Path_test.cpp path_find_05() I4
 func TestPath_XRPBridge(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw1 := xrplgoTesting.NewAccount("gateway1")
-	gw2 := xrplgoTesting.NewAccount("gateway2")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	mm := xrplgoTesting.NewAccount("market_maker")
+	gw1 := jtx.NewAccount("gateway1")
+	gw2 := jtx.NewAccount("gateway2")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	mm := jtx.NewAccount("market_maker")
 
-	env.FundAmount(gw1, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(mm, uint64(xrplgoTesting.XRP(11000)))
+	env.FundAmount(gw1, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw2, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(mm, uint64(jtx.XRP(11000)))
 	env.Close()
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(alice, "HKD", gw1, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "HKD", gw2, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(mm, "HKD", gw1, "100000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(mm, "HKD", gw2, "100000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund accounts
 	hkd1000a := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw1.Address)
 	result = env.Submit(PayIssued(gw1, alice, hkd1000a).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	hkd5000gw1 := tx.NewIssuedAmountFromFloat64(5000, "HKD", gw1.Address)
 	result = env.Submit(PayIssued(gw1, mm, hkd5000gw1).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	hkd5000gw2 := tx.NewIssuedAmountFromFloat64(5000, "HKD", gw2.Address)
 	result = env.Submit(PayIssued(gw2, mm, hkd5000gw2).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Market maker creates offers bridging gw1/HKD <-> XRP <-> gw2/HKD
 	// Offer 1: mm sells XRP for gw1/HKD — mm offers XRP(1000), wants gw1/HKD(1000)
-	xrp1000 := tx.NewXRPAmount(xrplgoTesting.XRP(1000))
+	xrp1000 := tx.NewXRPAmount(jtx.XRP(1000))
 	hkd1000gw1 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw1.Address)
 	result = env.CreateOffer(mm, xrp1000, hkd1000gw1)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 
 	// Offer 2: mm sells gw2/HKD for XRP — mm offers gw2/HKD(1000), wants XRP(1000)
 	hkd1000gw2 := tx.NewIssuedAmountFromFloat64(1000, "HKD", gw2.Address)
 	result = env.CreateOffer(mm, hkd1000gw2, xrp1000)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob gw2/HKD(10), sendmax gw1/HKD(10), path through XRP bridge
@@ -767,7 +767,7 @@ func TestPath_XRPBridge(t *testing.T) {
 		PathsXRP(). // path through XRP bridge
 		Build()
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify: bob should have gw2/HKD(10)
@@ -788,19 +788,19 @@ func TestPath_XRPBridge(t *testing.T) {
 func TestPath_SourceCurrenciesLimit(t *testing.T) {
 	env := rpcenv.New(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// rpf mirrors the rippled test's request builder: numeric 3-character
@@ -840,7 +840,7 @@ func TestPath_SourceCurrenciesLimit(t *testing.T) {
 	for i := 0; i < 87; i++ {
 		cur := strconv.Itoa(i + 100)
 		result = env.Submit(trustset.TrustLine(bob, cur, alice, "100").Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
@@ -850,7 +850,7 @@ func TestPath_SourceCurrenciesLimit(t *testing.T) {
 	// One more sendable currency exceeds max_auto_src_cur and fails the
 	// request (rippled PathRequest::findPaths returns false -> rpcINTERNAL).
 	result = env.Submit(trustset.TrustLine(bob, "AUD", alice, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	_, rpcErr = env.RPC("ripple_path_find", rpf(0))
@@ -869,19 +869,19 @@ func TestPath_PathFindConsumeAll(t *testing.T) {
 	// Pathfinder with convertAll (-1 amount) should find:
 	//   paths: stpath("dan"), stpath("bob", "carol")
 	//   source_amount = alice/USD(110), dest_amount = edward/USD(110)
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
-	dan := xrplgoTesting.NewAccount("dan")
-	edward := xrplgoTesting.NewAccount("edward")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dan := jtx.NewAccount("dan")
+	edward := jtx.NewAccount("edward")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(dan, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(edward, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(dan, uint64(jtx.XRP(10000)))
+	env.FundAmount(edward, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust lines:
@@ -891,15 +891,15 @@ func TestPath_PathFindConsumeAll(t *testing.T) {
 	// env.trust(Account("alice")["USD"](100), "dan");    => dan trusts alice for 100 USD
 	// env.trust(Account("dan")["USD"](100), "edward");   => edward trusts dan for 100 USD
 	result := env.Submit(trustset.TrustLine(bob, "USD", alice, "10").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", bob, "10").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(edward, "USD", carol, "10").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", alice, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(edward, "USD", dan, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// In rippled: find_paths(env, "alice", "edward", Account("edward")["USD"](-1))
@@ -940,37 +940,37 @@ func TestPath_AlternativePathConsumeBoth(t *testing.T) {
 	// Two gateways (gw, gw2), alice has 70 USD from each.
 	// alice pays bob 140 USD via paths(alice/USD) - should consume both paths.
 	// Result: alice has 0 gw/USD, 0 gw2/USD; bob has 70 gw/USD, 70 gw2/USD
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	gw2 := xrplgoTesting.NewAccount("gateway2")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	gw2 := jtx.NewAccount("gateway2")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw2, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(alice, "USD", gw2, "800").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw2, "900").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice from both gateways
 	usd70gw := tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd70gw).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	usd70gw2 := tx.NewIssuedAmountFromFloat64(70, "USD", gw2.Address)
 	result = env.Submit(PayIssued(gw2, alice, usd70gw2).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify alice has 70 from each gateway
@@ -993,7 +993,7 @@ func TestPath_AlternativePathConsumeBoth(t *testing.T) {
 		Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Result: alice has 0 USD from both, bob has 70 from each gateway
@@ -1010,38 +1010,38 @@ func TestPath_AlternativePathConsumeBoth(t *testing.T) {
 // twoGatewayUSDEnv builds the shared fixture for the alternative-paths
 // transfer-rate tests: gw (no fee) and gw2 (1.1x), alice holding 70 USD
 // from each, bob trusting both.
-func twoGatewayUSDEnv(t *testing.T) (env *xrplgoTesting.TestEnv, gw, gw2, alice, bob *xrplgoTesting.Account) {
+func twoGatewayUSDEnv(t *testing.T) (env *jtx.TestEnv, gw, gw2, alice, bob *jtx.Account) {
 	t.Helper()
-	env = xrplgoTesting.NewTestEnv(t)
+	env = jtx.NewTestEnv(t)
 
-	gw = xrplgoTesting.NewAccount("gateway")
-	gw2 = xrplgoTesting.NewAccount("gateway2")
-	alice = xrplgoTesting.NewAccount("alice")
-	bob = xrplgoTesting.NewAccount("bob")
+	gw = jtx.NewAccount("gateway")
+	gw2 = jtx.NewAccount("gateway2")
+	alice = jtx.NewAccount("alice")
+	bob = jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(gw2, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(gw2, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	env.SetTransferRate(gw2, 1_100_000_000)
 	env.Close()
 
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(alice, "USD", gw2, "800").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw2, "900").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	result = env.Submit(PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(gw2, alice, tx.NewIssuedAmountFromFloat64(70, "USD", gw2.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	return env, gw, gw2, alice, bob
@@ -1054,17 +1054,17 @@ func TestPath_AlternativePathsConsumeBestTransfer(t *testing.T) {
 
 	// alice pays bob 70 gw/USD: only the fee-free gw line is touched.
 	result := env.Submit(PayIssued(alice, bob, tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	xrplgoTesting.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-	xrplgoTesting.RequireIOUBalance(t, env, alice, gw2, "USD", 70)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 70)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw2, "USD", 0)
-	xrplgoTesting.RequireIOUBalance(t, env, gw, alice, "USD", 0)
-	xrplgoTesting.RequireIOUBalance(t, env, gw, bob, "USD", -70)
-	xrplgoTesting.RequireIOUBalance(t, env, gw2, alice, "USD", -70)
-	xrplgoTesting.RequireIOUBalance(t, env, gw2, bob, "USD", 0)
+	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
+	jtx.RequireIOUBalance(t, env, alice, gw2, "USD", 70)
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 70)
+	jtx.RequireIOUBalance(t, env, bob, gw2, "USD", 0)
+	jtx.RequireIOUBalance(t, env, gw, alice, "USD", 0)
+	jtx.RequireIOUBalance(t, env, gw, bob, "USD", -70)
+	jtx.RequireIOUBalance(t, env, gw2, alice, "USD", -70)
+	jtx.RequireIOUBalance(t, env, gw2, bob, "USD", 0)
 }
 
 // TestPath_AlternativePathsConsumeBestTransferFirst tests best transfer consumed first.
@@ -1090,35 +1090,35 @@ func TestPath_AlternativePathsConsumeBestTransferFirst(t *testing.T) {
 		SendMax(sendMax).
 		Paths(alt.PathsComputed).
 		Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// gw (no fee) is consumed entirely first; the remaining 7 USD goes via
 	// gw2 at the 1.1x rate, costing alice 7.7 gw2/USD.
-	xrplgoTesting.RequireIOUBalance(t, env, alice, gw, "USD", 0)
-	xrplgoTesting.RequireIOUBalanceApprox(t, env, alice, gw2, "USD", 62.3, 0.0001)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw, "USD", 70)
-	xrplgoTesting.RequireIOUBalance(t, env, bob, gw2, "USD", 7)
-	xrplgoTesting.RequireIOUBalance(t, env, gw, alice, "USD", 0)
-	xrplgoTesting.RequireIOUBalance(t, env, gw, bob, "USD", -70)
-	xrplgoTesting.RequireIOUBalanceApprox(t, env, gw2, alice, "USD", -62.3, 0.0001)
-	xrplgoTesting.RequireIOUBalance(t, env, gw2, bob, "USD", -7)
+	jtx.RequireIOUBalance(t, env, alice, gw, "USD", 0)
+	jtx.RequireIOUBalanceApprox(t, env, alice, gw2, "USD", 62.3, 0.0001)
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 70)
+	jtx.RequireIOUBalance(t, env, bob, gw2, "USD", 7)
+	jtx.RequireIOUBalance(t, env, gw, alice, "USD", 0)
+	jtx.RequireIOUBalance(t, env, gw, bob, "USD", -70)
+	jtx.RequireIOUBalanceApprox(t, env, gw2, alice, "USD", -62.3, 0.0001)
+	jtx.RequireIOUBalance(t, env, gw2, bob, "USD", -7)
 }
 
 // TestPath_AlternativePathsLimitReturnedPaths tests limiting returned paths to best quality.
 // From rippled: Path_test::alternative_paths_limit_returned_paths_to_best_quality
 func TestPath_AlternativePathsLimitReturnedPaths(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	gw2 := xrplgoTesting.NewAccount("gateway2")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
-	dan := xrplgoTesting.NewAccount("dan")
+	gw := jtx.NewAccount("gateway")
+	gw2 := jtx.NewAccount("gateway2")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dan := jtx.NewAccount("dan")
 
-	for _, acc := range []*xrplgoTesting.Account{gw, gw2, alice, bob, carol, dan} {
-		env.FundAmount(acc, uint64(xrplgoTesting.XRP(10000)))
+	for _, acc := range []*jtx.Account{gw, gw2, alice, bob, carol, dan} {
+		env.FundAmount(acc, uint64(jtx.XRP(10000)))
 	}
 	env.Close()
 
@@ -1127,26 +1127,26 @@ func TestPath_AlternativePathsLimitReturnedPaths(t *testing.T) {
 
 	// alice and bob trust carol, dan, gw, and gw2 for USD; dan also trusts
 	// alice and bob so he can ripple between them.
-	for _, issuer := range []*xrplgoTesting.Account{carol, dan, gw, gw2} {
+	for _, issuer := range []*jtx.Account{carol, dan, gw, gw2} {
 		result := env.Submit(trustset.TrustLine(alice, "USD", issuer, "800").Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		result = env.Submit(trustset.TrustLine(bob, "USD", issuer, "800").Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	result := env.Submit(trustset.TrustLine(dan, "USD", alice, "800").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", bob, "800").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	result = env.Submit(PayIssued(gw2, alice, tx.NewIssuedAmountFromFloat64(100, "USD", gw2.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	result = env.Submit(PayIssued(carol, alice, tx.NewIssuedAmountFromFloat64(100, "USD", carol.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 	result = env.Submit(PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// find_paths(alice, bob, bob/USD(5)): exactly four single-hop paths
@@ -1179,36 +1179,36 @@ func TestPath_IssuesPathNegativeIssue5(t *testing.T) {
 	// Then: pathfind alice->bob for bob/USD(25) should find no paths
 	// Then: payment alice->bob alice/USD(25) should fail tecPATH_DRY
 	// Then: pathfind alice->bob for alice/USD(25) should find no paths
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
-	dan := xrplgoTesting.NewAccount("dan")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dan := jtx.NewAccount("dan")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(dan, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(dan, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", bob, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", bob, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", bob, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", alice, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", carol, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// bob pays carol 75 bob/USD
 	usd75 := tx.NewIssuedAmountFromFloat64(75, "USD", bob.Address)
 	result = env.Submit(PayIssued(bob, carol, usd75).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify: bob owes carol 75 USD
@@ -1254,17 +1254,17 @@ func TestPath_IssuesRippleClientIssue23Smaller(t *testing.T) {
 	// KEY INSIGHT: rippled's paths(Account("alice")["USD"]) runs the PATHFINDER
 	// with source issue {USD, alice}, NOT a literal path element. The pathfinder
 	// discovers the actual paths and attaches them to the transaction.
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
-	dan := xrplgoTesting.NewAccount("dan")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dan := jtx.NewAccount("dan")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(dan, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(dan, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust lines:
@@ -1273,13 +1273,13 @@ func TestPath_IssuesRippleClientIssue23Smaller(t *testing.T) {
 	// env.trust(Account("alice")["USD"](20), "carol"); => carol trusts alice for 20 USD
 	// env.trust(Account("carol")["USD"](20), "dan");   => dan trusts carol for 20 USD
 	result := env.Submit(trustset.TrustLine(bob, "USD", alice, "40").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", dan, "20").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", alice, "20").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", carol, "20").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob 55 USD via paths(alice/USD)
@@ -1299,7 +1299,7 @@ func TestPath_IssuesRippleClientIssue23Smaller(t *testing.T) {
 		Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Result: bob has 40 alice/USD + 15 dan/USD
@@ -1320,19 +1320,19 @@ func TestPath_IssuesRippleClientIssue23Larger(t *testing.T) {
 	// alice pays bob 50 USD via paths(alice/USD)
 	// Result: alice has -25 edward/USD, -25 carol/USD
 	//         bob has 25 edward/USD, 25 dan/USD
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
-	dan := xrplgoTesting.NewAccount("dan")
-	edward := xrplgoTesting.NewAccount("edward")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	dan := jtx.NewAccount("dan")
+	edward := jtx.NewAccount("edward")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(dan, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(edward, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.FundAmount(dan, uint64(jtx.XRP(10000)))
+	env.FundAmount(edward, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Trust lines:
@@ -1342,15 +1342,15 @@ func TestPath_IssuesRippleClientIssue23Larger(t *testing.T) {
 	// env.trust(Account("alice")["USD"](25), "carol");    => carol trusts alice for 25 USD
 	// env.trust(Account("carol")["USD"](75), "dan");      => dan trusts carol for 75 USD
 	result := env.Submit(trustset.TrustLine(edward, "USD", alice, "120").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", edward, "25").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", dan, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", alice, "25").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(dan, "USD", carol, "75").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob 50 USD via paths(alice/USD)
@@ -1368,7 +1368,7 @@ func TestPath_IssuesRippleClientIssue23Larger(t *testing.T) {
 		Build()
 
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Result from rippled:
@@ -1405,27 +1405,27 @@ var xrpIssue = []payment.Issue{{Currency: "XRP"}}
 // TestPath_PathFind01 tests Path Find: XRP -> XRP and XRP -> IOU.
 // From rippled: Path_test::path_find_01
 func TestPath_PathFind01(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	a1 := xrplgoTesting.NewAccount("A1")
-	a2 := xrplgoTesting.NewAccount("A2")
-	a3 := xrplgoTesting.NewAccount("A3")
-	g1 := xrplgoTesting.NewAccount("G1")
-	g2 := xrplgoTesting.NewAccount("G2")
-	g3 := xrplgoTesting.NewAccount("G3")
-	m1 := xrplgoTesting.NewAccount("M1")
+	a1 := jtx.NewAccount("A1")
+	a2 := jtx.NewAccount("A2")
+	a3 := jtx.NewAccount("A3")
+	g1 := jtx.NewAccount("G1")
+	g2 := jtx.NewAccount("G2")
+	g3 := jtx.NewAccount("G3")
+	m1 := jtx.NewAccount("M1")
 
-	env.FundAmount(a1, uint64(xrplgoTesting.XRP(100000)))
-	env.FundAmount(a2, uint64(xrplgoTesting.XRP(10000)))
-	for _, acc := range []*xrplgoTesting.Account{a3, g1, g2, g3, m1} {
-		env.FundAmount(acc, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(a1, uint64(jtx.XRP(100000)))
+	env.FundAmount(a2, uint64(jtx.XRP(10000)))
+	for _, acc := range []*jtx.Account{a3, g1, g2, g3, m1} {
+		env.FundAmount(acc, uint64(jtx.XRP(1000)))
 	}
 	env.Close()
 
 	for _, tl := range []struct {
-		holder *xrplgoTesting.Account
+		holder *jtx.Account
 		cur    string
-		issuer *xrplgoTesting.Account
+		issuer *jtx.Account
 		limit  string
 	}{
 		{a1, "XYZ", g1, "5000"},
@@ -1438,40 +1438,40 @@ func TestPath_PathFind01(t *testing.T) {
 		{m1, "ABC", g3, "100000"},
 	} {
 		result := env.Submit(trustset.TrustLine(tl.holder, tl.cur, tl.issuer, tl.limit).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
 	result := env.Submit(PayIssued(g1, a1, tx.NewIssuedAmountFromFloat64(3500, "XYZ", g1.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(g3, a1, tx.NewIssuedAmountFromFloat64(1200, "ABC", g3.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(g2, m1, tx.NewIssuedAmountFromFloat64(25000, "XYZ", g2.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(PayIssued(g3, m1, tx.NewIssuedAmountFromFloat64(25000, "ABC", g3.Address)).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// offer(M1, G1["XYZ"](1000), G2["XYZ"](1000)): pays G1/XYZ, gets G2/XYZ
 	result = env.CreateOffer(m1,
 		tx.NewIssuedAmountFromFloat64(1000, "XYZ", g2.Address),
 		tx.NewIssuedAmountFromFloat64(1000, "XYZ", g1.Address))
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	// offer(M1, XRP(10000), G3["ABC"](1000)): pays XRP, gets G3/ABC
 	result = env.CreateOffer(m1,
 		tx.NewIssuedAmountFromFloat64(1000, "ABC", g3.Address),
-		tx.NewXRPAmount(xrplgoTesting.XRP(10000)))
-	xrplgoTesting.RequireTxSuccess(t, result)
+		tx.NewXRPAmount(jtx.XRP(10000)))
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	t.Run("XRP to XRP", func(t *testing.T) {
-		pr := newPathRequest(a1.ID, a2.ID, tx.NewXRPAmount(xrplgoTesting.XRP(10)), nil, xrpIssue, false)
+		pr := newPathRequest(a1.ID, a2.ID, tx.NewXRPAmount(jtx.XRP(10)), nil, xrpIssue, false)
 		requireAllPathsEmpty(t, pr.Execute(env.Ledger()))
 	})
 
 	t.Run("XRP to non-existent account", func(t *testing.T) {
-		ghost := xrplgoTesting.NewAccount("A0")
-		pr := newPathRequest(a1.ID, ghost.ID, tx.NewXRPAmount(xrplgoTesting.XRP(200)), nil, xrpIssue, false)
+		ghost := jtx.NewAccount("A0")
+		pr := newPathRequest(a1.ID, ghost.ID, tx.NewXRPAmount(jtx.XRP(200)), nil, xrpIssue, false)
 		requireAllPathsEmpty(t, pr.Execute(env.Ledger()))
 	})
 
@@ -1483,7 +1483,7 @@ func TestPath_PathFind01(t *testing.T) {
 		require.NotEmpty(t, pfResult.Alternatives)
 		alt := pfResult.Alternatives[0]
 		require.True(t, alt.SourceAmount.IsNative())
-		require.EqualValues(t, xrplgoTesting.XRP(100), alt.SourceAmount.Drops(), "10 ABC at 10 XRP/ABC costs 100 XRP")
+		require.EqualValues(t, jtx.XRP(100), alt.SourceAmount.Drops(), "10 ABC at 10 XRP/ABC costs 100 XRP")
 		requireSamePaths(t, alt.PathsComputed,
 			[]payment.PathStep{bookStepIOU("ABC", g3)})
 	})
@@ -1496,7 +1496,7 @@ func TestPath_PathFind01(t *testing.T) {
 		require.NotEmpty(t, pfResult.Alternatives)
 		alt := pfResult.Alternatives[0]
 		require.True(t, alt.SourceAmount.IsNative())
-		require.EqualValues(t, xrplgoTesting.XRP(10), alt.SourceAmount.Drops())
+		require.EqualValues(t, jtx.XRP(10), alt.SourceAmount.Drops())
 		requireSamePaths(t, alt.PathsComputed,
 			[]payment.PathStep{bookStepIOU("ABC", g3), acctStep(g3)})
 	})
@@ -1509,7 +1509,7 @@ func TestPath_PathFind01(t *testing.T) {
 		require.NotEmpty(t, pfResult.Alternatives)
 		alt := pfResult.Alternatives[0]
 		require.True(t, alt.SourceAmount.IsNative())
-		require.EqualValues(t, xrplgoTesting.XRP(10), alt.SourceAmount.Drops())
+		require.EqualValues(t, jtx.XRP(10), alt.SourceAmount.Drops())
 		requireSamePaths(t, alt.PathsComputed,
 			[]payment.PathStep{bookStepIOU("ABC", g3), acctStep(g3), acctStep(a2)})
 	})
@@ -1518,48 +1518,48 @@ func TestPath_PathFind01(t *testing.T) {
 // TestPath_PathFind02 tests Path Find: non-XRP -> XRP.
 // From rippled: Path_test::path_find_02
 func TestPath_PathFind02(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	a1 := xrplgoTesting.NewAccount("A1")
-	a2 := xrplgoTesting.NewAccount("A2")
-	g3 := xrplgoTesting.NewAccount("G3")
-	m1 := xrplgoTesting.NewAccount("M1")
+	a1 := jtx.NewAccount("A1")
+	a2 := jtx.NewAccount("A2")
+	g3 := jtx.NewAccount("G3")
+	m1 := jtx.NewAccount("M1")
 
-	env.FundAmount(a1, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(a2, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(g3, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
+	env.FundAmount(a1, uint64(jtx.XRP(1000)))
+	env.FundAmount(a2, uint64(jtx.XRP(1000)))
+	env.FundAmount(g3, uint64(jtx.XRP(1000)))
+	env.FundAmount(m1, uint64(jtx.XRP(11000)))
 	env.Close()
 
 	for _, tl := range []struct {
-		holder *xrplgoTesting.Account
+		holder *jtx.Account
 		limit  string
 	}{{a1, "1000"}, {a2, "1000"}, {m1, "100000"}} {
 		result := env.Submit(trustset.TrustLine(tl.holder, "ABC", g3, tl.limit).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
 	for _, p := range []struct {
-		to     *xrplgoTesting.Account
+		to     *jtx.Account
 		amount float64
 	}{{a1, 1000}, {a2, 1000}, {m1, 1200}} {
 		result := env.Submit(PayIssued(g3, p.to, tx.NewIssuedAmountFromFloat64(p.amount, "ABC", g3.Address)).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
 	// offer(M1, G3["ABC"](1000), XRP(10000)): pays G3/ABC, gets XRP
 	result := env.CreateOffer(m1,
-		tx.NewXRPAmount(xrplgoTesting.XRP(10000)),
+		tx.NewXRPAmount(jtx.XRP(10000)),
 		tx.NewIssuedAmountFromFloat64(1000, "ABC", g3.Address))
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// A1 -> A2 XRP(10) with source currency ABC: 1 ABC through G3 and the
 	// ABC/XRP book.
 	srcCurrencies := []payment.Issue{{Currency: "ABC", Issuer: a1.ID}}
-	pr := newPathRequest(a1.ID, a2.ID, tx.NewXRPAmount(xrplgoTesting.XRP(10)), nil, srcCurrencies, false)
+	pr := newPathRequest(a1.ID, a2.ID, tx.NewXRPAmount(jtx.XRP(10)), nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	require.NotEmpty(t, pfResult.Alternatives)
@@ -1579,45 +1579,45 @@ func TestPath_PathFind04(t *testing.T) {
 	// A1 trusts Bitstamp (G1BS), A2 trusts SnapSwap (G2SW)
 	// M1 trusts both (acts as liquidity provider)
 	// Test path finding through liquidity provider without offers
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	a1 := xrplgoTesting.NewAccount("A1")
-	a2 := xrplgoTesting.NewAccount("A2")
-	g1bs := xrplgoTesting.NewAccount("G1BS")
-	g2sw := xrplgoTesting.NewAccount("G2SW")
-	m1 := xrplgoTesting.NewAccount("M1")
+	a1 := jtx.NewAccount("A1")
+	a2 := jtx.NewAccount("A2")
+	g1bs := jtx.NewAccount("G1BS")
+	g2sw := jtx.NewAccount("G2SW")
+	m1 := jtx.NewAccount("M1")
 
-	env.FundAmount(g1bs, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(g2sw, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(a1, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(a2, uint64(xrplgoTesting.XRP(1000)))
-	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
+	env.FundAmount(g1bs, uint64(jtx.XRP(1000)))
+	env.FundAmount(g2sw, uint64(jtx.XRP(1000)))
+	env.FundAmount(a1, uint64(jtx.XRP(1000)))
+	env.FundAmount(a2, uint64(jtx.XRP(1000)))
+	env.FundAmount(m1, uint64(jtx.XRP(11000)))
 	env.Close()
 
 	// Trust lines
 	result := env.Submit(trustset.TrustLine(a1, "HKD", g1bs, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(a2, "HKD", g2sw, "2000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(m1, "HKD", g1bs, "100000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(m1, "HKD", g2sw, "100000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund accounts with HKD
 	hkd1000a1 := tx.NewIssuedAmountFromFloat64(1000, "HKD", g1bs.Address)
 	result = env.Submit(PayIssued(g1bs, a1, hkd1000a1).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	hkd1000a2 := tx.NewIssuedAmountFromFloat64(1000, "HKD", g2sw.Address)
 	result = env.Submit(PayIssued(g2sw, a2, hkd1000a2).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	hkd1200m1 := tx.NewIssuedAmountFromFloat64(1200, "HKD", g1bs.Address)
 	result = env.Submit(PayIssued(g1bs, m1, hkd1200m1).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	hkd5000m1 := tx.NewIssuedAmountFromFloat64(5000, "HKD", g2sw.Address)
 	result = env.Submit(PayIssued(g2sw, m1, hkd5000m1).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Test 1: A1 -> A2, 10 HKD
@@ -1716,30 +1716,30 @@ func TestPath_PathFind04(t *testing.T) {
 // TestPath_PathFind05 tests non-XRP -> non-XRP, same currency.
 // From rippled: Path_test::path_find_05
 func TestPath_PathFind05(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	a1 := xrplgoTesting.NewAccount("A1")
-	a2 := xrplgoTesting.NewAccount("A2")
-	a3 := xrplgoTesting.NewAccount("A3")
-	a4 := xrplgoTesting.NewAccount("A4")
-	g1 := xrplgoTesting.NewAccount("G1")
-	g2 := xrplgoTesting.NewAccount("G2")
-	g3 := xrplgoTesting.NewAccount("G3")
-	g4 := xrplgoTesting.NewAccount("G4")
-	m1 := xrplgoTesting.NewAccount("M1")
-	m2 := xrplgoTesting.NewAccount("M2")
+	a1 := jtx.NewAccount("A1")
+	a2 := jtx.NewAccount("A2")
+	a3 := jtx.NewAccount("A3")
+	a4 := jtx.NewAccount("A4")
+	g1 := jtx.NewAccount("G1")
+	g2 := jtx.NewAccount("G2")
+	g3 := jtx.NewAccount("G3")
+	g4 := jtx.NewAccount("G4")
+	m1 := jtx.NewAccount("M1")
+	m2 := jtx.NewAccount("M2")
 
-	for _, acc := range []*xrplgoTesting.Account{a1, a2, a3, g1, g2, g3, g4} {
-		env.FundAmount(acc, uint64(xrplgoTesting.XRP(1000)))
+	for _, acc := range []*jtx.Account{a1, a2, a3, g1, g2, g3, g4} {
+		env.FundAmount(acc, uint64(jtx.XRP(1000)))
 	}
-	env.FundAmount(a4, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
-	env.FundAmount(m2, uint64(xrplgoTesting.XRP(11000)))
+	env.FundAmount(a4, uint64(jtx.XRP(10000)))
+	env.FundAmount(m1, uint64(jtx.XRP(11000)))
+	env.FundAmount(m2, uint64(jtx.XRP(11000)))
 	env.Close()
 
 	for _, tl := range []struct {
-		holder *xrplgoTesting.Account
-		issuer *xrplgoTesting.Account
+		holder *jtx.Account
+		issuer *jtx.Account
 		limit  string
 	}{
 		{a1, g1, "2000"},
@@ -1751,12 +1751,12 @@ func TestPath_PathFind05(t *testing.T) {
 		{m2, g2, "100000"},
 	} {
 		result := env.Submit(trustset.TrustLine(tl.holder, "HKD", tl.issuer, tl.limit).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
 	for _, p := range []struct {
-		from, to *xrplgoTesting.Account
+		from, to *jtx.Account
 		amount   float64
 	}{
 		{g1, a1, 1000},
@@ -1768,7 +1768,7 @@ func TestPath_PathFind05(t *testing.T) {
 		{g2, m2, 5000},
 	} {
 		result := env.Submit(PayIssued(p.from, p.to, tx.NewIssuedAmountFromFloat64(p.amount, "HKD", p.from.Address)).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
@@ -1776,23 +1776,23 @@ func TestPath_PathFind05(t *testing.T) {
 	result := env.CreateOffer(m1,
 		tx.NewIssuedAmountFromFloat64(1000, "HKD", g2.Address),
 		tx.NewIssuedAmountFromFloat64(1000, "HKD", g1.Address))
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	// offer(M2, XRP(10000), G2["HKD"](1000)): pays XRP, gets G2/HKD
 	result = env.CreateOffer(m2,
 		tx.NewIssuedAmountFromFloat64(1000, "HKD", g2.Address),
-		tx.NewXRPAmount(xrplgoTesting.XRP(10000)))
-	xrplgoTesting.RequireTxSuccess(t, result)
+		tx.NewXRPAmount(jtx.XRP(10000)))
+	jtx.RequireTxSuccess(t, result)
 	// offer(M2, G1["HKD"](1000), XRP(10000)): pays G1/HKD, gets XRP
 	result = env.CreateOffer(m2,
-		tx.NewXRPAmount(xrplgoTesting.XRP(10000)),
+		tx.NewXRPAmount(jtx.XRP(10000)),
 		tx.NewIssuedAmountFromFloat64(1000, "HKD", g1.Address))
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
-	hkd := func(value float64, issuer *xrplgoTesting.Account) tx.Amount {
+	hkd := func(value float64, issuer *jtx.Account) tx.Amount {
 		return tx.NewIssuedAmountFromFloat64(value, "HKD", issuer.Address)
 	}
-	findHKD := func(src, dst *xrplgoTesting.Account, sendAmt tx.Amount) *pathfinder.PathRequestResult {
+	findHKD := func(src, dst *jtx.Account, sendAmt tx.Amount) *pathfinder.PathRequestResult {
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: src.ID}}
 		pr := newPathRequest(src.ID, dst.ID, sendAmt, nil, srcCurrencies, false)
 		return pr.Execute(env.Ledger())
@@ -1863,24 +1863,24 @@ func TestPath_PathFind05(t *testing.T) {
 // TestPath_PathFind06 tests gateway to user path.
 // From rippled: Path_test::path_find_06
 func TestPath_PathFind06(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	a1 := xrplgoTesting.NewAccount("A1")
-	a2 := xrplgoTesting.NewAccount("A2")
-	a3 := xrplgoTesting.NewAccount("A3")
-	g1 := xrplgoTesting.NewAccount("G1")
-	g2 := xrplgoTesting.NewAccount("G2")
-	m1 := xrplgoTesting.NewAccount("M1")
+	a1 := jtx.NewAccount("A1")
+	a2 := jtx.NewAccount("A2")
+	a3 := jtx.NewAccount("A3")
+	g1 := jtx.NewAccount("G1")
+	g2 := jtx.NewAccount("G2")
+	m1 := jtx.NewAccount("M1")
 
-	env.FundAmount(m1, uint64(xrplgoTesting.XRP(11000)))
-	for _, acc := range []*xrplgoTesting.Account{a1, a2, a3, g1, g2} {
-		env.FundAmount(acc, uint64(xrplgoTesting.XRP(1000)))
+	env.FundAmount(m1, uint64(jtx.XRP(11000)))
+	for _, acc := range []*jtx.Account{a1, a2, a3, g1, g2} {
+		env.FundAmount(acc, uint64(jtx.XRP(1000)))
 	}
 	env.Close()
 
 	for _, tl := range []struct {
-		holder *xrplgoTesting.Account
-		issuer *xrplgoTesting.Account
+		holder *jtx.Account
+		issuer *jtx.Account
 		limit  string
 	}{
 		{a1, g1, "2000"},
@@ -1890,12 +1890,12 @@ func TestPath_PathFind06(t *testing.T) {
 		{m1, g2, "100000"},
 	} {
 		result := env.Submit(trustset.TrustLine(tl.holder, "HKD", tl.issuer, tl.limit).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
 	for _, p := range []struct {
-		from, to *xrplgoTesting.Account
+		from, to *jtx.Account
 		amount   float64
 	}{
 		{g1, a1, 1000},
@@ -1904,7 +1904,7 @@ func TestPath_PathFind06(t *testing.T) {
 		{g2, m1, 5000},
 	} {
 		result := env.Submit(PayIssued(p.from, p.to, tx.NewIssuedAmountFromFloat64(p.amount, "HKD", p.from.Address)).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 	}
 	env.Close()
 
@@ -1912,7 +1912,7 @@ func TestPath_PathFind06(t *testing.T) {
 	result := env.CreateOffer(m1,
 		tx.NewIssuedAmountFromFloat64(1000, "HKD", g2.Address),
 		tx.NewIssuedAmountFromFloat64(1000, "HKD", g1.Address))
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// E) Gateway to user: G1 -> A2, paths through M1 or the G2/HKD book.
@@ -1932,20 +1932,20 @@ func TestPath_PathFind06(t *testing.T) {
 // TestPath_ReceiveMax tests receive max in path finding.
 // From rippled: Path_test::receive_max
 func TestPath_ReceiveMax(t *testing.T) {
-	setup := func(t *testing.T) (env *xrplgoTesting.TestEnv, gw, alice, bob, charlie *xrplgoTesting.Account) {
+	setup := func(t *testing.T) (env *jtx.TestEnv, gw, alice, bob, charlie *jtx.Account) {
 		t.Helper()
-		env = xrplgoTesting.NewTestEnv(t)
-		gw = xrplgoTesting.NewAccount("gw")
-		alice = xrplgoTesting.NewAccount("alice")
-		bob = xrplgoTesting.NewAccount("bob")
-		charlie = xrplgoTesting.NewAccount("charlie")
-		for _, acc := range []*xrplgoTesting.Account{alice, bob, charlie, gw} {
-			env.FundAmount(acc, uint64(xrplgoTesting.XRP(10000)))
+		env = jtx.NewTestEnv(t)
+		gw = jtx.NewAccount("gw")
+		alice = jtx.NewAccount("alice")
+		bob = jtx.NewAccount("bob")
+		charlie = jtx.NewAccount("charlie")
+		for _, acc := range []*jtx.Account{alice, bob, charlie, gw} {
+			env.FundAmount(acc, uint64(jtx.XRP(10000)))
 		}
 		env.Close()
-		for _, acc := range []*xrplgoTesting.Account{alice, bob, charlie} {
+		for _, acc := range []*jtx.Account{alice, bob, charlie} {
 			result := env.Submit(trustset.TrustLine(acc, "USD", gw, "100").Build())
-			xrplgoTesting.RequireTxSuccess(t, result)
+			jtx.RequireTxSuccess(t, result)
 		}
 		env.Close()
 		return env, gw, alice, bob, charlie
@@ -1955,26 +1955,26 @@ func TestPath_ReceiveMax(t *testing.T) {
 		env, gw, alice, bob, charlie := setup(t)
 
 		result := env.Submit(PayIssued(gw, charlie, tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// offer(charlie, XRP(10), USD(10)): pays XRP, gets USD
 		result = env.CreateOffer(charlie,
 			tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address),
-			tx.NewXRPAmount(xrplgoTesting.XRP(10)))
-		xrplgoTesting.RequireTxSuccess(t, result)
+			tx.NewXRPAmount(jtx.XRP(10)))
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// find_paths(alice, bob, USD(-1), sendmax XRP(100))
 		dstAmount, _ := state.NewIssuedAmountFromDecimalString("-1", "USD", gw.Address)
-		sendMax := tx.NewXRPAmount(xrplgoTesting.XRP(100))
+		sendMax := tx.NewXRPAmount(jtx.XRP(100))
 		pr := newPathRequest(alice.ID, bob.ID, dstAmount, &sendMax, nil, true)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives)
 		alt := pfResult.Alternatives[0]
 		require.True(t, alt.SourceAmount.IsNative())
-		require.EqualValues(t, xrplgoTesting.XRP(10), alt.SourceAmount.Drops())
+		require.EqualValues(t, jtx.XRP(10), alt.SourceAmount.Drops())
 		require.False(t, alt.DestinationAmount.IsNative())
 		require.Equal(t, "USD", alt.DestinationAmount.Currency)
 		require.InDelta(t, 10.0, alt.DestinationAmount.Float64(), 0.0001)
@@ -1986,14 +1986,14 @@ func TestPath_ReceiveMax(t *testing.T) {
 		env, gw, alice, bob, charlie := setup(t)
 
 		result := env.Submit(PayIssued(gw, alice, tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address)).Build())
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// offer(charlie, USD(10), XRP(10)): pays USD, gets XRP
 		result = env.CreateOffer(charlie,
-			tx.NewXRPAmount(xrplgoTesting.XRP(10)),
+			tx.NewXRPAmount(jtx.XRP(10)),
 			tx.NewIssuedAmountFromFloat64(10, "USD", gw.Address))
-		xrplgoTesting.RequireTxSuccess(t, result)
+		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
 		// find_paths(alice, bob, drops(-1), sendmax USD(100))
@@ -2008,7 +2008,7 @@ func TestPath_ReceiveMax(t *testing.T) {
 		require.Equal(t, "USD", alt.SourceAmount.Currency)
 		require.InDelta(t, 10.0, alt.SourceAmount.Float64(), 0.0001)
 		require.True(t, alt.DestinationAmount.IsNative())
-		require.EqualValues(t, xrplgoTesting.XRP(10), alt.DestinationAmount.Drops())
+		require.EqualValues(t, jtx.XRP(10), alt.DestinationAmount.Drops())
 		requireSamePaths(t, alt.PathsComputed,
 			[]payment.PathStep{bookStepXRP()})
 	})
@@ -2048,31 +2048,31 @@ func TestPath_PathFind(t *testing.T) {
 	// alice pays bob 5 USD through gateway
 	// Reference: Path_test.cpp lines 376-408
 	// Expects: path through "gateway", source_amount = alice/USD(5)
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// Set up trust lines
 	result := env.Submit(trustset.TrustLine(alice, "USD", gw, "600").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(bob, "USD", gw, "700").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund alice and bob
 	usd70 := tx.NewIssuedAmountFromFloat64(70, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, alice, usd70).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", gw.Address)
 	result = env.Submit(PayIssued(gw, bob, usd50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Pathfinder: find_paths(env, "alice", "bob", gw/USD(5))
@@ -2092,7 +2092,7 @@ func TestPath_PathFind(t *testing.T) {
 	usd5 := tx.NewIssuedAmountFromFloat64(5, "USD", gw.Address)
 	payTx := PayIssued(alice, bob, usd5).Build()
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	aliceBalance := env.BalanceIOU(alice, "USD", gw)
@@ -2109,17 +2109,17 @@ func TestPath_PathFind(t *testing.T) {
 //	env(offer("carol", XRP(50), AUD(50)));
 //	env(pay("alice", "bob", AUD(10)), sendmax(XRP(100)), paths(XRP));
 func TestPath_ViaOffersViaGateway(t *testing.T) {
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	gw := xrplgoTesting.NewAccount("gateway")
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(gw, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(gw, uint64(jtx.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// gw has 1.1x transfer rate
@@ -2128,33 +2128,33 @@ func TestPath_ViaOffersViaGateway(t *testing.T) {
 
 	// bob and carol trust gw for AUD
 	result := env.Submit(trustset.TrustLine(bob, "AUD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "AUD", gw, "100").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Fund carol with AUD
 	aud50 := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
 	result = env.Submit(PayIssued(gw, carol, aud50).Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Carol creates offer: XRP(50) for AUD(50)
 	aud50Offer := tx.NewIssuedAmountFromFloat64(50, "AUD", gw.Address)
-	xrp50 := tx.NewXRPAmount(xrplgoTesting.XRP(50))
+	xrp50 := tx.NewXRPAmount(jtx.XRP(50))
 	result = env.CreateOffer(carol, aud50Offer, xrp50)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// alice pays bob AUD(10) using XRP via carol's offer
 	aud10 := tx.NewIssuedAmountFromFloat64(10, "AUD", gw.Address)
-	xrp100 := tx.NewXRPAmount(xrplgoTesting.XRP(100))
+	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	payTx := PayIssued(alice, bob, aud10).
 		SendMax(xrp100).
 		PathsXRP().
 		Build()
 	result = env.Submit(payTx)
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Verify: bob should have AUD(10)
@@ -2173,22 +2173,22 @@ func TestPath_IndirectPathsPathFind(t *testing.T) {
 	// alice -> bob -> carol trust chain (rippling)
 	// Pathfinder should find: path through bob, source_amount = alice/USD(5)
 	// Reference: Path_test.cpp lines 878-895
-	env := xrplgoTesting.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 
-	alice := xrplgoTesting.NewAccount("alice")
-	bob := xrplgoTesting.NewAccount("bob")
-	carol := xrplgoTesting.NewAccount("carol")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
 
-	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
-	env.FundAmount(carol, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
 	env.Close()
 
 	// alice -> bob -> carol trust chain
 	result := env.Submit(trustset.TrustLine(bob, "USD", alice, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	result = env.Submit(trustset.TrustLine(carol, "USD", bob, "1000").Build())
-	xrplgoTesting.RequireTxSuccess(t, result)
+	jtx.RequireTxSuccess(t, result)
 	env.Close()
 
 	// Pathfinder: find_paths(env, "alice", "carol", carol/USD(5))

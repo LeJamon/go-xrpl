@@ -132,7 +132,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -190,7 +190,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -284,7 +284,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	}
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -391,7 +391,7 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -454,7 +454,7 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 	}
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -509,7 +509,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	}
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -559,7 +559,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 	method := &handlers.TransactionEntryMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -581,7 +581,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -626,7 +626,7 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

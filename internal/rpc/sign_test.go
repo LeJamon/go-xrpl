@@ -16,7 +16,7 @@ import (
 
 func TestWalletPropose_RandomGeneration(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -50,7 +50,7 @@ func TestWalletPropose_RandomGeneration(t *testing.T) {
 
 func TestWalletPropose_RandomGenerationEd25519(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -70,7 +70,7 @@ func TestWalletPropose_RandomGenerationEd25519(t *testing.T) {
 
 func TestWalletPropose_FromPassphrase(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -99,7 +99,7 @@ func TestWalletPropose_FromPassphrase(t *testing.T) {
 
 func TestWalletPropose_FromPassphraseEd25519(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -119,7 +119,7 @@ func TestWalletPropose_FromPassphraseEd25519(t *testing.T) {
 
 func TestWalletPropose_FromSeed(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -141,7 +141,7 @@ func TestWalletPropose_FromSeed(t *testing.T) {
 
 func TestWalletPropose_FromSeedHex(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -158,7 +158,7 @@ func TestWalletPropose_FromSeedHex(t *testing.T) {
 
 func TestWalletPropose_InvalidKeyType(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -172,7 +172,7 @@ func TestWalletPropose_InvalidKeyType(t *testing.T) {
 
 func TestWalletPropose_InvalidSeed(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -186,7 +186,7 @@ func TestWalletPropose_InvalidSeed(t *testing.T) {
 
 func TestWalletPropose_InvalidSeedHex(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -200,7 +200,7 @@ func TestWalletPropose_InvalidSeedHex(t *testing.T) {
 
 func TestWalletPropose_SeedKeyTypeMismatch(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -218,7 +218,7 @@ func TestWalletPropose_SeedKeyTypeMismatch(t *testing.T) {
 
 func TestWalletPropose_LowEntropyPassphrase(t *testing.T) {
 	handler := &handlers.WalletProposeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -257,7 +257,7 @@ func TestSign_MissingTxJson(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -275,7 +275,7 @@ func TestSign_MissingCredentials(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -300,7 +300,7 @@ func TestSign_InvalidKeyType(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -327,7 +327,7 @@ func TestSign_InvalidSeed(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -357,7 +357,7 @@ func TestSign_AccountMismatch(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -381,7 +381,7 @@ func TestSign_AccountMismatch(t *testing.T) {
 
 func TestSign_LedgerServiceUnavailable(t *testing.T) {
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   nil,
@@ -405,7 +405,7 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 func TestSign_OfflineMode(t *testing.T) {
 	// No services needed for offline mode
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   nil,
@@ -449,7 +449,7 @@ func TestSign_SrcActNotFound(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -480,7 +480,7 @@ func TestSign_AutofillSequence(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -510,7 +510,7 @@ func TestSign_Offline_MissingSequence(t *testing.T) {
 	// Offline callers must supply Sequence themselves. Matches rippled
 	// transactionPreProcessImpl (TransactionSign.cpp:451-452).
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -536,7 +536,7 @@ func TestSign_Offline_MissingFee(t *testing.T) {
 	// Offline callers must supply Fee themselves. Matches rippled
 	// checkFee with doAutoFill == false (TransactionSign.cpp:893-894).
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -565,7 +565,7 @@ func TestSign_TicketSequence_AutofillsSequenceZero(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -615,7 +615,7 @@ func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -649,7 +649,7 @@ func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -678,7 +678,7 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -707,7 +707,7 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -738,7 +738,7 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -769,7 +769,7 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -799,7 +799,7 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -829,7 +829,7 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -857,7 +857,7 @@ func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
 	// never inspected — even invalid values pass. Matches rippled checkFee
 	// returning before reading them.
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -888,7 +888,7 @@ func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
 func TestSign_DeliverMax_APIv1(t *testing.T) {
 	// API v1: DeliverMax should be added for Payment, Amount kept
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -920,7 +920,7 @@ func TestSign_DeliverMax_APIv1(t *testing.T) {
 func TestSign_DeliverMax_APIv2(t *testing.T) {
 	// API v2: DeliverMax replaces Amount for Payment
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion2,
 	}
@@ -956,7 +956,7 @@ func TestSign_DeliverMax_APIv2(t *testing.T) {
 func TestSign_NoDeliverMax_NonPayment(t *testing.T) {
 	// Non-Payment: no DeliverMax regardless of API version
 	handler := &handlers.SignMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -985,7 +985,7 @@ func TestSign_NoDeliverMax_NonPayment(t *testing.T) {
 
 func TestSignFor_MissingAccount(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1006,7 +1006,7 @@ func TestSignFor_MissingAccount(t *testing.T) {
 
 func TestSignFor_MissingTxJson(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1022,7 +1022,7 @@ func TestSignFor_MissingTxJson(t *testing.T) {
 
 func TestSignFor_MissingCredentials(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1043,7 +1043,7 @@ func TestSignFor_MissingCredentials(t *testing.T) {
 
 func TestSignFor_InvalidAccountAddress(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1072,7 +1072,7 @@ func TestSignFor_InvalidAccountAddress(t *testing.T) {
 // not a missing-field error.
 func TestSignFor_InvalidAccountPrecedesMissingTxJson(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1090,7 +1090,7 @@ func TestSignFor_InvalidAccountPrecedesMissingTxJson(t *testing.T) {
 
 func TestSignFor_InvalidKeyType(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1116,7 +1116,7 @@ func TestSignFor_InvalidKeyType(t *testing.T) {
 func TestSignFor_ValidMultiSign(t *testing.T) {
 	// First generate a wallet to get the signer's account address from passphrase
 	proposeHandler := &handlers.WalletProposeMethod{}
-	proposeCtx := &types.RpcContext{
+	proposeCtx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1125,7 +1125,7 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 	signerAccount := proposeResult.(map[string]any)["account_id"].(string)
 
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1184,7 +1184,7 @@ func TestSubmitMultisigned_MissingTxJson(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1201,7 +1201,7 @@ func TestSubmitMultisigned_MissingAccount(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1228,7 +1228,7 @@ func TestSubmitMultisigned_NonEmptySigningPubKey(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1256,7 +1256,7 @@ func TestSubmitMultisigned_EmptySignersArray(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1284,7 +1284,7 @@ func TestSubmitMultisigned_InvalidSignerFormat(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1316,7 +1316,7 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1351,7 +1351,7 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1386,7 +1386,7 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1421,7 +1421,7 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -1462,7 +1462,7 @@ func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {
 
 func TestSubmitMultisigned_LedgerServiceUnavailable(t *testing.T) {
 	handler := &handlers.SubmitMultisignedMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   nil,

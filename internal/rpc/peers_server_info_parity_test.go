@@ -31,7 +31,7 @@ func TestPeersAndServerInfoShareSource(t *testing.T) {
 
 	ledger := &mockLedgerService{}
 	services := &types.ServiceContainer{Ledger: ledger}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.DefaultApiVersion,
@@ -57,7 +57,7 @@ func TestPeersAndServerInfoShareSource(t *testing.T) {
 func TestPeersAndServerInfoBothEmptyWithoutSource(t *testing.T) {
 	ledger := &mockLedgerService{}
 	services := &types.ServiceContainer{Ledger: ledger}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.DefaultApiVersion,

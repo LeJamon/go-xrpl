@@ -23,7 +23,7 @@ const (
 	feeLedgersInQueue          = 20
 )
 
-func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *FeeMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}

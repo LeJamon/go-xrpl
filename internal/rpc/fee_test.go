@@ -12,7 +12,7 @@ import (
 func feeRequest(t *testing.T, services *types.ServiceContainer) map[string]any {
 	t.Helper()
 	method := &handlers.FeeMethod{}
-	result, rpcErr := method.Handle(&types.RpcContext{
+	result, rpcErr := method.Handle(&types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

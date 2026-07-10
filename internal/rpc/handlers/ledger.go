@@ -22,7 +22,7 @@ var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 // LedgerMethod handles the ledger RPC method.
 type LedgerMethod struct{ BaseHandler }
 
-func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.LedgerSpecifier
 		Accounts     bool `json:"accounts,omitempty"`
@@ -48,7 +48,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	// accounts (LedgerToJson.cpp isFull/isExpanded).
 	if request.Full || request.Accounts {
 		if !ctx.Unlimited {
-			return nil, types.RpcErrorNoPermission("ledger")
+			return nil, types.RPCErrorNoPermission("ledger")
 		}
 	}
 	if request.Full {
@@ -145,7 +145,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 // call against fill.ledger (LedgerToJson.cpp:216-221). Returns nil when the
 // service can't supply a view for that ledger (mocks, unsupported selectors),
 // in which case the annotation is simply omitted.
-func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) types.LedgerStateView {
+func ownerFundsLedgerView(ctx *types.RPCContext, l types.LedgerReader) types.LedgerStateView {
 	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
 	if !ok {
 		return nil
@@ -222,7 +222,7 @@ func parseLedgerAmount(raw any) (state.Amount, bool) {
 // array rippled emits for accounts:true (LedgerToJson.cpp fillJsonState):
 // expanded SLE JSON in JSON mode, {hash, tx_blob} in binary mode, or bare
 // keys otherwise. The walk paginates GetLedgerData to cover every node.
-func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expanded bool) []any {
+func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expanded bool) []any {
 	ledgerIndex := strconv.FormatUint(uint64(l.Sequence()), 10)
 	state := make([]any, 0)
 	marker := ""
@@ -264,7 +264,7 @@ func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expan
 // fields plus the account, retry/preflight bookkeeping and the transaction
 // body (tx for API v1, merged tx_json for v2+). Returns nil when the queue is
 // empty or unwired.
-func buildLedgerQueueData(ctx *types.RpcContext, binary, expanded bool) []any {
+func buildLedgerQueueData(ctx *types.RPCContext, binary, expanded bool) []any {
 	if ctx.Services == nil || ctx.Services.QueueAllTxs == nil {
 		return nil
 	}

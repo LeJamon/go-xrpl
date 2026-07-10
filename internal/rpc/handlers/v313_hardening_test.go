@@ -88,7 +88,7 @@ func TestArraySizeRPCError(t *testing.T) {
 func TestReadLimitField(t *testing.T) {
 	r := LimitRange{Min: 10, Default: 200, Max: 400}
 
-	check := func(t *testing.T, params string, unlimited bool) (uint32, *types.RpcError) {
+	check := func(t *testing.T, params string, unlimited bool) (uint32, *types.RPCError) {
 		t.Helper()
 		return ReadLimitField(json.RawMessage(params), r, unlimited)
 	}

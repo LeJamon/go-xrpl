@@ -38,13 +38,13 @@ const (
 // AccountInfoMethod handles the account_info RPC method.
 type AccountInfoMethod struct{ BaseHandler }
 
-func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	// Parse the raw JSON to inspect field types before struct unmarshaling.
 	// This allows us to check for the "ident" alias and validate signer_lists type.
 	var rawFields map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawFields); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -64,7 +64,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			var ident string
 			if err := json.Unmarshal(identRaw, &ident); err != nil {
 				// ident is present but not a string
-				return nil, types.RpcErrorInvalidField("ident")
+				return nil, types.RPCErrorInvalidField("ident")
 			}
 			request.Account = ident
 		}
@@ -89,7 +89,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	// Queue is only valid for the current (open) ledger.
 	// Matching rippled: if queue=true but ledger is not open, return rpcINVALID_PARAMS.
 	if request.Queue && ledgerIndex != "current" {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
 	// API v2: signer_lists must be a bool if present.
@@ -99,7 +99,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			// Check if the raw JSON value is a boolean (true or false)
 			trimmed := strings.TrimSpace(string(signerListsRaw))
 			if trimmed != "true" && trimmed != "false" {
-				return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+				return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 			}
 		}
 	}
@@ -107,12 +107,12 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, request.Account, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+			return nil, types.RPCErrorLgrNotFound("Ledger not found.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
 	}
 
 	// Build account_data by decoding the full SLE binary via binarycodec,

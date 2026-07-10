@@ -21,11 +21,11 @@ import (
 // Reference: rippled Simulate.cpp
 type SimulateMethod struct{}
 
-func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var rawParams map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawParams); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	} else {
 		rawParams = make(map[string]json.RawMessage)
@@ -36,7 +36,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	var binaryOutput bool
 	if raw, ok := rawParams["binary"]; ok {
 		if err := json.Unmarshal(raw, &binaryOutput); err != nil {
-			return nil, types.RpcErrorInvalidField("binary")
+			return nil, types.RPCErrorInvalidField("binary")
 		}
 	}
 
@@ -44,7 +44,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// rippled checks these before parsing tx_json/tx_blob.
 	for _, field := range []string{"secret", "seed", "seed_hex", "passphrase"} {
 		if _, ok := rawParams[field]; ok {
-			return nil, types.RpcErrorInvalidField(field)
+			return nil, types.RPCErrorInvalidField(field)
 		}
 	}
 
@@ -52,14 +52,14 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	_, hasTxJsonRaw := rawParams["tx_json"]
 
 	if hasTxBlobRaw && hasTxJsonRaw {
-		return nil, types.RpcErrorInvalidParams("Can only include one of `tx_blob` and `tx_json`.")
+		return nil, types.RPCErrorInvalidParams("Can only include one of `tx_blob` and `tx_json`.")
 	}
 	if !hasTxBlobRaw && !hasTxJsonRaw {
-		return nil, types.RpcErrorInvalidParams("Neither `tx_blob` nor `tx_json` included.")
+		return nil, types.RPCErrorInvalidParams("Neither `tx_blob` nor `tx_json` included.")
 	}
 
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, types.RPCErrorInternal("Ledger service not available")
 	}
 
 	var txJsonMap map[string]any
@@ -67,30 +67,30 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if hasTxBlobRaw {
 		var txBlobStr string
 		if err := json.Unmarshal(rawParams["tx_blob"], &txBlobStr); err != nil {
-			return nil, types.RpcErrorInvalidField("tx_blob")
+			return nil, types.RPCErrorInvalidField("tx_blob")
 		}
 		if txBlobStr == "" {
-			return nil, types.RpcErrorInvalidField("tx_blob")
+			return nil, types.RPCErrorInvalidField("tx_blob")
 		}
 		decoded, err := binarycodec.Decode(txBlobStr)
 		if err != nil {
-			return nil, types.RpcErrorInvalidField("tx_blob")
+			return nil, types.RPCErrorInvalidField("tx_blob")
 		}
 		txJsonMap = decoded
 	} else {
 		var txObj map[string]any
 		if err := json.Unmarshal(rawParams["tx_json"], &txObj); err != nil {
-			return nil, types.RpcErrorExpectedField("tx_json", "object")
+			return nil, types.RPCErrorExpectedField("tx_json", "object")
 		}
 		txJsonMap = txObj
 	}
 
 	// Basic sanity checks for transaction shape (matching rippled getTxJsonFromParams).
 	if _, ok := txJsonMap["TransactionType"]; !ok {
-		return nil, types.RpcErrorMissingField("tx.TransactionType")
+		return nil, types.RPCErrorMissingField("tx.TransactionType")
 	}
 	if _, ok := txJsonMap["Account"]; !ok {
-		return nil, types.RpcErrorMissingField("tx.Account")
+		return nil, types.RPCErrorMissingField("tx.Account")
 	}
 
 	// rippled autofillTx() — Simulate.cpp:71-156. Steps run in the same
@@ -106,7 +106,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if _, hasFee := txJsonMap["Fee"]; !hasFee {
 		probe, marshalErr := json.Marshal(txJsonMap)
 		if marshalErr != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
+			return nil, types.RPCErrorInternal("Failed to marshal tx_json for fee autofill")
 		}
 		// rippled's simulate autofill uses the default fee_mult_max /
 		// fee_div_max (getCurrentNetworkFee default arguments).
@@ -115,9 +115,9 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if feeErr != nil {
 			var hfe *svcerr.HighFeeError
 			if errors.As(feeErr, &hfe) {
-				return nil, types.RpcErrorHighFee(hfe.Error())
+				return nil, types.RPCErrorHighFee(hfe.Error())
 			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
+			return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
 		}
 		txJsonMap["Fee"] = strconv.FormatUint(fee, 10)
 	}
@@ -138,7 +138,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if txnSig, ok := txJsonMap["TxnSignature"]; !ok {
 		txJsonMap["TxnSignature"] = ""
 	} else if sigStr, _ := txnSig.(string); sigStr != "" {
-		return nil, types.RpcErrorTxSigned()
+		return nil, types.RPCErrorTxSigned()
 	}
 
 	// 5. Sequence — rippled Simulate.cpp:140-146. Account format is checked
@@ -148,18 +148,18 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if _, hasSeq := txJsonMap["Sequence"]; !hasSeq {
 		accountStr, ok := txJsonMap["Account"].(string)
 		if !ok {
-			return nil, types.RpcErrorInvalidField("tx.Account")
+			return nil, types.RPCErrorInvalidField("tx.Account")
 		}
 		_, hasTicket := txJsonMap["TicketSequence"]
 		seq, seqErr := ctx.Services.Ledger.GetAutofillSequence(accountStr, hasTicket)
 		if seqErr != nil {
 			switch {
 			case errors.Is(seqErr, svcerr.ErrAccountMalformed):
-				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
+				return nil, types.RPCErrorSrcActMalformed("Invalid field 'tx.Account'.")
 			case errors.Is(seqErr, svcerr.ErrAccountNotFound):
-				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+				return nil, types.RPCErrorSrcActNotFound("Source account not found.")
 			default:
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
+				return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
 			}
 		}
 		txJsonMap["Sequence"] = seq
@@ -188,14 +188,14 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// the Sequence-supplied case where rippled's autofill skips the
 	// check and STParsedJSONObject surfaces invalid_field.
 	if accountStr, ok := txJsonMap["Account"].(string); !ok {
-		return nil, types.RpcErrorInvalidField("tx.Account")
+		return nil, types.RPCErrorInvalidField("tx.Account")
 	} else if !types.IsValidXRPLAddress(accountStr) {
-		return nil, types.RpcErrorInvalidField("tx.Account")
+		return nil, types.RPCErrorInvalidField("tx.Account")
 	}
 
 	// Reject Batch — rippled Simulate.cpp:345-348.
 	if txType, ok := txJsonMap["TransactionType"].(string); ok && txType == "Batch" {
-		return nil, types.RpcErrorNotImpl()
+		return nil, types.RPCErrorNotImpl()
 	}
 
 	// STParsedJSONObject parity — unknown-field surface (rippled
@@ -207,7 +207,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	defs := binarycodecdefs.Get()
 	for k := range txJsonMap {
 		if !defs.HasField(k) {
-			return nil, types.RpcErrorInvalidParams(
+			return nil, types.RPCErrorInvalidParams(
 				fmt.Sprintf("Field 'tx_json.%s' is unknown.", k))
 		}
 	}
@@ -225,7 +225,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// Marshal tx_json for parse + service call.
 	txJSON, err := json.Marshal(txJsonMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to marshal tx_json")
+		return nil, types.RPCErrorInternal("Failed to marshal tx_json")
 	}
 
 	// STTx ctor parity — rippled Simulate.cpp:332-343. A parse failure or
@@ -237,15 +237,15 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// underlying message text differs.
 	parsedTx, parseErr := tx.ParseJSON(txJSON)
 	if parseErr != nil {
-		return nil, types.RpcErrorInvalidTransaction(parseErr.Error())
+		return nil, types.RPCErrorInvalidTransaction(parseErr.Error())
 	}
 	if validateErr := parsedTx.Validate(); validateErr != nil {
-		return nil, types.RpcErrorInvalidTransaction(validateErr.Error())
+		return nil, types.RPCErrorInvalidTransaction(validateErr.Error())
 	}
 
 	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Simulation failed: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Simulation failed: %v", err))
 	}
 
 	// rippled overrides the tesSUCCESS message for simulate (Simulate.cpp:258-262).
@@ -308,27 +308,27 @@ func (m *SimulateMethod) RequiredCondition() types.Condition {
 // signer TxnSignature. The inline ordering is observable: a signed
 // TxnSignature on signers[0] returns rpcTX_SIGNED even when signers[2] is
 // structurally malformed.
-func processSigners(txJsonMap map[string]any) *types.RpcError {
+func processSigners(txJsonMap map[string]any) *types.RPCError {
 	signersRaw, ok := txJsonMap["Signers"]
 	if !ok {
 		return nil
 	}
 	signers, ok := signersRaw.([]any)
 	if !ok {
-		return types.RpcErrorInvalidField("tx.Signers")
+		return types.RPCErrorInvalidField("tx.Signers")
 	}
 	for i, entry := range signers {
 		entryObj, ok := entry.(map[string]any)
 		if !ok {
-			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+			return types.RPCErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
 		signerInner, ok := entryObj["Signer"]
 		if !ok {
-			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+			return types.RPCErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
 		signerObj, ok := signerInner.(map[string]any)
 		if !ok {
-			return types.RpcErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
+			return types.RPCErrorInvalidField("tx.Signers[" + strconv.Itoa(i) + "]")
 		}
 		if _, ok := signerObj["SigningPubKey"]; !ok {
 			signerObj["SigningPubKey"] = ""
@@ -336,7 +336,7 @@ func processSigners(txJsonMap map[string]any) *types.RpcError {
 		if txnSig, ok := signerObj["TxnSignature"]; !ok {
 			signerObj["TxnSignature"] = ""
 		} else if sigStr, _ := txnSig.(string); sigStr != "" {
-			return types.RpcErrorTxSigned()
+			return types.RPCErrorTxSigned()
 		}
 	}
 	return nil
@@ -347,7 +347,7 @@ func processSigners(txJsonMap map[string]any) *types.RpcError {
 // map[string]interface{}, but downstream consumers expect an integer
 // type). Values outside [0, math.MaxUint32] are rejected to mirror
 // rippled's STParsedJSONObject behaviour on UInt32 fields.
-func normalizeSequenceFields(txJsonMap map[string]any) *types.RpcError {
+func normalizeSequenceFields(txJsonMap map[string]any) *types.RPCError {
 	for _, k := range [...]string{"Sequence", "TicketSequence"} {
 		v, ok := txJsonMap[k]
 		if !ok {
@@ -380,7 +380,7 @@ func normalizeSequenceFields(txJsonMap map[string]any) *types.RpcError {
 			continue
 		}
 		if !valid {
-			return types.RpcErrorInvalidField("tx." + k)
+			return types.RPCErrorInvalidField("tx." + k)
 		}
 		txJsonMap[k] = val
 	}

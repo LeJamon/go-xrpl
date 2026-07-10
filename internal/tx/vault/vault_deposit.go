@@ -149,7 +149,7 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		return ter.TefINTERNAL
 	}
 	integral := asset.IsNative() || asset.IsMPT()
-	fix320 := config.GetRules().FixCleanup3_2_0Enabled()
+	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
 	if fix320 {
 		assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
 		assetsN = roundToVaultScale(assetsN, assetsTotalN, integral)

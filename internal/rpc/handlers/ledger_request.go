@@ -56,14 +56,14 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 // resolve a deep sequence's hash.
 type LedgerRequestMethod struct{ AdminHandler }
 
-func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerRequestMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		LedgerHash  string          `json:"ledger_hash,omitempty"`
 		LedgerIndex json.RawMessage `json:"ledger_index,omitempty"`
 	}
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters")
 		}
 	}
 
@@ -74,7 +74,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	hasHash := request.LedgerHash != ""
 	hasIndex := len(request.LedgerIndex) > 0
 	if (hasHash && hasIndex) || (!hasHash && !hasIndex) {
-		return nil, types.RpcErrorInvalidParams("Exactly one of ledger_hash and ledger_index can be set.")
+		return nil, types.RPCErrorInvalidParams("Exactly one of ledger_hash and ledger_index can be set.")
 	}
 
 	var targetHash [32]byte
@@ -83,7 +83,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if hasHash {
 		hb, err := hex.DecodeString(request.LedgerHash)
 		if err != nil || len(hb) != 32 {
-			return nil, types.RpcErrorInvalidParams("Invalid field 'ledger_hash'.")
+			return nil, types.RPCErrorInvalidParams("Invalid field 'ledger_hash'.")
 		}
 		copy(targetHash[:], hb)
 
@@ -93,7 +93,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	} else {
 		var idx int64
 		if err := json.Unmarshal(request.LedgerIndex, &idx); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid field 'ledger_index'.")
+			return nil, types.RPCErrorInvalidParams("Invalid field 'ledger_index'.")
 		}
 
 		// A sequence request needs a validated ledger to bound it and to
@@ -103,19 +103,19 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		validatedSeq := ctx.Services.Ledger.GetValidatedLedgerIndex()
 		if validatedSeq == 0 {
 			if ctx.ApiVersion == types.ApiVersion1 {
-				return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+				return nil, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
 					"Current ledger is unavailable.")
 			}
-			return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
+			return nil, types.NewRPCError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 				"Not synced to the network")
 		}
 		if idx <= 0 {
-			return nil, types.RpcErrorInvalidParams("Ledger index too small")
+			return nil, types.RPCErrorInvalidParams("Ledger index too small")
 		}
 		// Bound before the uint32 cast so a value past uint32 range can't wrap
 		// to a small in-range sequence and silently target a different ledger.
 		if idx > math.MaxUint32 || uint32(idx) >= validatedSeq {
-			return nil, types.RpcErrorInvalidParams("Ledger index too large")
+			return nil, types.RPCErrorInvalidParams("Ledger index too large")
 		}
 		targetSeq = uint32(idx)
 
@@ -133,7 +133,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 				// Acquiring a reference ledger only to learn the target's hash:
 				// rippled wraps the snapshot as lgrNotFound + acquiring
 				// (RPCHelpers.cpp:1096-1110).
-				result := types.RpcErrorLgrNotFound("acquiring ledger containing requested index").ErrorObject()
+				result := types.RPCErrorLgrNotFound("acquiring ledger containing requested index").ErrorObject()
 				if acquiring != nil {
 					result["acquiring"] = acquiring
 				}
@@ -145,7 +145,7 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 	}
 
-	return nil, types.RpcErrorLgrNotFound("Ledger not found")
+	return nil, types.RPCErrorLgrNotFound("Ledger not found")
 }
 
 // ledgerRequestSuccess builds the success response for a locally-available

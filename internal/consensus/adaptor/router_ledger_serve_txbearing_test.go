@@ -11,7 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
-	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
@@ -26,10 +26,10 @@ func closedLedgerWithPayment(t *testing.T) *service.Service {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	env := testenv.NewTestEnv(t)
+	env := jtx.NewTestEnv(t)
 	env.SetVerifySignatures(true)
-	master := testenv.MasterAccount()
-	alice := testenv.NewAccount("alice")
+	master := jtx.MasterAccount()
+	alice := jtx.NewAccount("alice")
 
 	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
 	env.SignWith(txn, master)

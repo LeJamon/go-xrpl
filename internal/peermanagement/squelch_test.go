@@ -88,7 +88,7 @@ func TestValidatorSlot_SelectsMaxPeers_AndSquelchesRest(t *testing.T) {
 	slot.mu.RUnlock()
 	assert.Equal(t, RelaySlotSelected, state, "slot should have transitioned to Selected")
 
-	selected := slot.GetSelected()
+	selected := slot.Selected()
 	assert.Equal(t, MaxSelectedPeers, len(selected),
 		"expected exactly %d selected peers, got %d", MaxSelectedPeers, len(selected))
 

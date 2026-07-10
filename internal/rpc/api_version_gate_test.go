@@ -26,7 +26,7 @@ func versionEchoServer(t *testing.T, beta bool) *Server {
 	srv.services.BetaRPCAPI = beta
 	srv.registry.Register("ping", &stubHandler{
 		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 			return map[string]any{"api_version": ctx.ApiVersion}, nil
 		},
 	})
@@ -182,7 +182,7 @@ func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	ws.services.BetaRPCAPI = beta
 	ws.methodRegistry.Register("ping", &stubHandler{
 		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 			return map[string]any{"api_version": ctx.ApiVersion}, nil
 		},
 	})

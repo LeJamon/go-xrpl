@@ -78,8 +78,8 @@ func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *types.ServiceContaine
 	return ws, services
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
-	return &types.RpcContext{
+func adminCtx(services *types.ServiceContainer) *types.RPCContext {
+	return &types.RPCContext{
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
@@ -87,13 +87,13 @@ func adminCtx(services *types.ServiceContainer) *types.RpcContext {
 	}
 }
 
-func subscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func subscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RPCError) {
 	t.Helper()
 	method := &handlers.SubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
 }
 
-func unsubscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func unsubscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RPCError) {
 	t.Helper()
 	method := &handlers.UnsubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
@@ -114,7 +114,7 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 	first := map[string]any{"type": "ledgerClosed", "ledger_index": float64(7)}
 	data, err := json.Marshal(first)
 	require.NoError(t, err)
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 
 	ev := sink.next(t)
 	assert.Equal(t, "event", ev.Method)
@@ -127,11 +127,11 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 	// rippled posts with this fixed User-Agent (createHTTPPost).
 	assert.Equal(t, "ripple-json-rpc/v1", ev.userAgent)
 
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	assert.Equal(t, float64(2), sink.next(t).Params["seq"], "sequence increments per event")
 
 	// Streams the url is not subscribed to are not delivered.
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubValidations, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubValidations, data, nil)
 	sink.expectNone(t)
 }
 
@@ -187,20 +187,20 @@ func TestRPCSub_BasicAuthCredentials(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	// base64("alice:secret")
 	assert.Equal(t, "Basic YWxpY2U6c2VjcmV0", sink.next(t).authorization)
 
 	// url_username on an existing subscription is ignored.
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"url_username":"mallory"}`)
 	require.Nil(t, rpcErr)
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	assert.Equal(t, "Basic YWxpY2U6c2VjcmV0", sink.next(t).authorization)
 
 	// The deprecated username/password members do update credentials.
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"username":"bob","password":"hunter2"}`)
 	require.Nil(t, rpcErr)
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	// base64("bob:hunter2")
 	assert.Equal(t, "Basic Ym9iOmh1bnRlcjI=", sink.next(t).authorization)
 }
@@ -239,15 +239,15 @@ func TestRPCSub_EmptyHostAcceptedAtSubscribe(t *testing.T) {
 	result, rpcErr := subscribeURL(t, services, `{"url":"http://","streams":["ledger"]}`)
 	require.Nil(t, rpcErr, "empty-host url must register, like rippled")
 	assert.NotNil(t, result)
-	assert.Equal(t, 1, ws.GetSubscriptionManager().ConnectionCount())
+	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
 
 	// A broadcast to the unconnectable endpoint must not panic or block —
 	// the delivery goroutine logs and drops it.
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 }
 
-// TestRPCSub_UnsubscribeRemovesEntry verifies the tryRemoveRpcSub
+// TestRPCSub_UnsubscribeRemovesEntry verifies the tryRemoveRPCSub
 // semantics: the registry entry is dropped once no stream subscriptions
 // remain, and an unknown url unsubscribes as silent success.
 func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
@@ -257,12 +257,12 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 
 	_, rpcErr := subscribeURL(t, services, `{`+urlParam+`,"streams":["ledger","transactions"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 1, ws.GetSubscriptionManager().ConnectionCount())
+	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
 
 	// A stream remains subscribed → entry kept.
 	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"streams":["ledger"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 1, ws.GetSubscriptionManager().ConnectionCount())
+	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
 	ws.urlSubs.mu.Lock()
 	assert.Len(t, ws.urlSubs.subs, 1)
 	ws.urlSubs.mu.Unlock()
@@ -270,7 +270,7 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 	// Last stream gone → entry and manager connection removed.
 	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"streams":["transactions"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 0, ws.GetSubscriptionManager().ConnectionCount())
+	assert.Equal(t, 0, ws.SubscriptionManager().ConnectionCount())
 	ws.urlSubs.mu.Lock()
 	assert.Empty(t, ws.urlSubs.subs)
 	ws.urlSubs.mu.Unlock()
@@ -281,7 +281,7 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 	assert.Equal(t, map[string]any{}, result)
 }
 
-// TestRPCSub_AccountsDontBlockRemoval mirrors NetworkOPs::tryRemoveRpcSub
+// TestRPCSub_AccountsDontBlockRemoval mirrors NetworkOPs::tryRemoveRPCSub
 // only scanning the stream maps: account subscriptions alone don't keep the
 // registry entry alive — like rippled, where dropping the registry's strong
 // reference destroys the subscriber, account subscriptions and all.
@@ -296,7 +296,7 @@ func TestRPCSub_AccountsDontBlockRemoval(t *testing.T) {
 
 	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"streams":["ledger"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 0, ws.GetSubscriptionManager().ConnectionCount(),
+	assert.Equal(t, 0, ws.SubscriptionManager().ConnectionCount(),
 		"entry must be removed when only account subscriptions remain")
 }
 
@@ -366,10 +366,10 @@ func TestRPCSub_ReuseSharesSubscriber(t *testing.T) {
 	require.Nil(t, rpcErr)
 	_, rpcErr = subscribeURL(t, services, `{`+urlParam+`,"streams":["validations"]}`)
 	require.Nil(t, rpcErr)
-	assert.Equal(t, 1, ws.GetSubscriptionManager().ConnectionCount())
+	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount())
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	assert.Equal(t, float64(1), sink.next(t).Params["seq"])
 	sink.expectNone(t)
 }
@@ -384,7 +384,7 @@ func TestRPCSub_MalformedStreamKeepsEntry(t *testing.T) {
 	_, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["nonsense"]}`)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcSTREAM_MALFORMED, rpcErr.Code)
-	assert.Equal(t, 1, ws.GetSubscriptionManager().ConnectionCount(),
+	assert.Equal(t, 1, ws.SubscriptionManager().ConnectionCount(),
 		"failed stream parse leaves the freshly created url entry, like rippled")
 }
 
@@ -398,9 +398,9 @@ func TestRPCSub_CloseStopsDelivery(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	require.NoError(t, ws.Close(t.Context()))
-	assert.Equal(t, 0, ws.GetSubscriptionManager().ConnectionCount())
+	assert.Equal(t, 0, ws.SubscriptionManager().ConnectionCount())
 
 	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
-	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
+	ws.SubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	sink.expectNone(t)
 }

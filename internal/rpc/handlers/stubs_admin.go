@@ -28,9 +28,9 @@ import (
 // own server_info; sequence numbers and proposer/converge counts stay numeric.
 type PrintMethod struct{ AdminHandler }
 
-func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *PrintMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, types.RPCErrorInternal("Ledger service not available")
 	}
 
 	out := map[string]any{}
@@ -135,13 +135,13 @@ func printSection(params json.RawMessage) string {
 // configured, matching rippled's getSHAMapStore().advisoryDelete() gate.
 type CanDeleteMethod struct{ AdminHandler }
 
-func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *CanDeleteMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if ctx.Services == nil {
-		return nil, types.RpcErrorNotEnabled("")
+		return nil, types.RPCErrorNotEnabled("")
 	}
 	store := ctx.Services.AdvisoryDeleteState
 	if store == nil || !store.AdvisoryDelete() {
-		return nil, types.RpcErrorNotEnabled("")
+		return nil, types.RPCErrorNotEnabled("")
 	}
 
 	var request struct {
@@ -161,14 +161,14 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 	stored, err := store.SetCanDelete(seq)
 	if err != nil {
-		return nil, types.RpcErrorInternal("failed to persist can_delete: " + err.Error())
+		return nil, types.RPCErrorInternal("failed to persist can_delete: " + err.Error())
 	}
 	return map[string]any{"can_delete": stored}, nil
 }
 
 // resolveCanDeleteSeq interprets the can_delete param into a ledger sequence,
 // mirroring the branch logic in rippled CanDelete.cpp:42-88.
-func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore, raw json.RawMessage) (uint32, *types.RpcError) {
+func resolveCanDeleteSeq(ctx *types.RPCContext, store types.AdvisoryDeleteStore, raw json.RawMessage) (uint32, *types.RPCError) {
 	// JSON number (rippled canDelete.isUInt()).
 	var num uint32
 	if err := json.Unmarshal(raw, &num); err == nil {
@@ -177,7 +177,7 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 
 	var str string
 	if err := json.Unmarshal(raw, &str); err != nil {
-		return 0, types.RpcErrorInvalidParams("")
+		return 0, types.RPCErrorInvalidParams("")
 	}
 	// rippled applies only boost::to_lower (CanDelete.cpp:53-54) — it does
 	// not trim, so whitespace-padded input falls through to invalidParams.
@@ -187,7 +187,7 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 	case isAllDigits(str):
 		n, err := strconv.ParseUint(str, 10, 32)
 		if err != nil {
-			return 0, types.RpcErrorInvalidParams("")
+			return 0, types.RPCErrorInvalidParams("")
 		}
 		return uint32(n), nil
 	case str == "never":
@@ -197,7 +197,7 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 	case str == "now":
 		seq := store.GetLastRotated()
 		if seq == 0 {
-			return 0, types.RpcErrorNotReady("")
+			return 0, types.RPCErrorNotReady("")
 		}
 		return seq, nil
 	}
@@ -209,12 +209,12 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 			copy(h[:], hb)
 			lr, lerr := ctx.Services.Ledger.GetLedgerByHash(h)
 			if lerr != nil || lr == nil {
-				return 0, types.RpcErrorLgrNotFound("ledgerNotFound")
+				return 0, types.RPCErrorLgrNotFound("ledgerNotFound")
 			}
 			return lr.Sequence(), nil
 		}
 	}
-	return 0, types.RpcErrorInvalidParams("")
+	return 0, types.RPCErrorInvalidParams("")
 }
 
 // isAllDigits reports whether s is non-empty and consists solely of ASCII
@@ -273,9 +273,9 @@ func uptimeText(d time.Duration) string {
 	return strings.Join(parts, ", ")
 }
 
-func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *GetCountsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, types.RPCErrorInternal("Ledger service not available")
 	}
 
 	result := map[string]any{
@@ -338,7 +338,7 @@ func rippledSeverityName(l xrpllog.Level) string {
 	}
 }
 
-func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LogLevelMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		Severity  string `json:"severity,omitempty"`
 		Partition string `json:"partition,omitempty"`
@@ -363,7 +363,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// SET: parse and apply the new level
 	lvl, ok := xrpllog.ParseLevel(request.Severity)
 	if !ok {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
 	if request.Partition != "" && !strings.EqualFold(request.Partition, "base") {
@@ -381,7 +381,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 // When logging is not file-backed (stdout/stderr) there is nothing to rotate.
 type LogRotateMethod struct{ AdminHandler }
 
-func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LogRotateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := xrpllog.Rotate(); err != nil {
 		if errors.Is(err, xrpllog.ErrLogNotRotatable) {
 			return map[string]any{

@@ -60,8 +60,8 @@ func (t *LoadFeeTrack) SetRemoteFee(f uint32) {
 	t.mu.Unlock()
 }
 
-// GetRemoteFee returns the last remote-reported fee factor.
-func (t *LoadFeeTrack) GetRemoteFee() uint32 {
+// RemoteFee returns the last remote-reported fee factor.
+func (t *LoadFeeTrack) RemoteFee() uint32 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.remoteFee
@@ -74,33 +74,33 @@ func (t *LoadFeeTrack) SetClusterFee(f uint32) {
 	t.mu.Unlock()
 }
 
-// GetClusterFee returns the last cluster-reported fee factor.
-func (t *LoadFeeTrack) GetClusterFee() uint32 {
+// ClusterFee returns the last cluster-reported fee factor.
+func (t *LoadFeeTrack) ClusterFee() uint32 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.clusterFee
 }
 
-// GetLocalFee returns the current local load factor.
-func (t *LoadFeeTrack) GetLocalFee() uint32 {
+// LocalFee returns the current local load factor.
+func (t *LoadFeeTrack) LocalFee() uint32 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.localFee
 }
 
-// GetLoadBase returns the reference (normal) fee factor.
-func (t *LoadFeeTrack) GetLoadBase() uint32 { return LoadBase }
+// LoadBase returns the reference (normal) fee factor.
+func (t *LoadFeeTrack) LoadBase() uint32 { return LoadBase }
 
-// GetLoadFactor returns max(cluster, local, remote).
-func (t *LoadFeeTrack) GetLoadFactor() uint32 {
+// LoadFactor returns max(cluster, local, remote).
+func (t *LoadFeeTrack) LoadFactor() uint32 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return max(t.clusterFee, t.localFee, t.remoteFee)
 }
 
-// GetScalingFactors returns (max(local,remote), max(remote,cluster)), the pair
+// ScalingFactors returns (max(local,remote), max(remote,cluster)), the pair
 // consumed by ScaleFeeLoad.
-func (t *LoadFeeTrack) GetScalingFactors() (feeFactor, remFee uint32) {
+func (t *LoadFeeTrack) ScalingFactors() (feeFactor, remFee uint32) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return max(t.localFee, t.remoteFee), max(t.remoteFee, t.clusterFee)
@@ -165,7 +165,7 @@ func ScaleFeeLoad(fee uint64, t *LoadFeeTrack, unlimited bool) (uint64, error) {
 	if t == nil {
 		return fee, nil
 	}
-	feeFactor, remFee := t.GetScalingFactors()
+	feeFactor, remFee := t.ScalingFactors()
 	if unlimited && feeFactor > remFee && feeFactor < 4*remFee {
 		feeFactor = remFee
 	}

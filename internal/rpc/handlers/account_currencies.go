@@ -13,7 +13,7 @@ import (
 // currencies the account can send and receive, derived from its trust lines.
 type AccountCurrenciesMethod struct{ BaseHandler }
 
-func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -47,12 +47,12 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
 	}
 
 	// Build response

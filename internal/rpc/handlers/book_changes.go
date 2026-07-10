@@ -81,7 +81,7 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 	}
 }
 
-func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.LedgerSpecifier
 	}

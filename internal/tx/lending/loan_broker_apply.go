@@ -332,7 +332,7 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineCo
 	if res := tx.RequireAuth(view, asset, accountID); res != ter.TesSUCCESS {
 		return res
 	}
-	amount, cres := roundCoverDeposit(config.GetRules().FixCleanup3_2_0Enabled(),
+	amount, cres := roundCoverDeposit(config.RequireRules().FixCleanup3_2_0Enabled(),
 		lendNum(b.CoverAvailable), amountToLendNum(l.Amount), assetIntegral(asset))
 	if cres != ter.TesSUCCESS {
 		return cres
@@ -418,7 +418,7 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if !amountAssetMatches(l.Amount, asset) {
 		return ter.TecWRONG_ASSET
 	}
-	fix320 := config.GetRules().FixCleanup3_2_0Enabled()
+	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
 	integral := assetIntegral(asset)
 	if res := canApplyToBrokerCover(fix320, lendNum(b.CoverAvailable), amountToLendNum(l.Amount), integral); res != ter.TesSUCCESS {
 		return res
@@ -598,7 +598,7 @@ func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineC
 			}
 		}
 	}
-	fix320 := config.GetRules().FixCleanup3_2_0Enabled()
+	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
 	claw, cres := l.clawAmount(b, vinfo, fix320)
 	if cres != ter.TesSUCCESS {
 		return cres

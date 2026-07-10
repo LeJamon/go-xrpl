@@ -15,12 +15,12 @@ package types
 // A small go-xrpl-specific block holds codes for conditions rippled does not
 // enumerate.
 
-// RpcError represents an XRPL RPC error with code and message.
+// RPCError represents an XRPL RPC error with code and message.
 //
 // ErrorException carries the rippled-style "error_exception" envelope
 // used when STTx construction throws (Simulate.cpp:338-342). Only the
 // `simulate` invalidTransaction path populates it today.
-type RpcError struct {
+type RPCError struct {
 	Code           int    `json:"error_code"`
 	ErrorString    string `json:"error"`
 	Type           string `json:"type"`
@@ -59,7 +59,7 @@ type RpcError struct {
 	overloaded bool
 
 	// logDetail carries the internal-error detail the caller passed to
-	// RpcErrorInternal. It is never serialized — the wire always shows the
+	// RPCErrorInternal. It is never serialized — the wire always shows the
 	// fixed InternalErrorMessage, matching rippled's fixed rpcINTERNAL entry —
 	// but the dispatcher logs it server-side (with method + client) so an
 	// unexpected storage/codec failure stays diagnosable without leaking
@@ -70,13 +70,13 @@ type RpcError struct {
 // InternalErrorMessage is the fixed wire text for every rpcINTERNAL response,
 // matching rippled's ErrorCodes.cpp errorInfo entry
 // ({rpcINTERNAL, "internal", "Internal error.", 500}). Detail passed to
-// RpcErrorInternal is logged server-side, never shipped to the client.
+// RPCErrorInternal is logged server-side, never shipped to the client.
 const InternalErrorMessage = "Internal error."
 
 // WithExtra returns a copy of the error carrying additional result fields that
 // the response builder merges into the error envelope, mirroring rippled's
 // RPC::injectError (which adds error keys to an existing result).
-func (e *RpcError) WithExtra(fields map[string]any) *RpcError {
+func (e *RPCError) WithExtra(fields map[string]any) *RPCError {
 	if e == nil {
 		return nil
 	}
@@ -89,14 +89,14 @@ func (e *RpcError) WithExtra(fields map[string]any) *RpcError {
 // (only the `error` field on the wire, no error_code / error_message). The
 // invalid-api_version rejection is bare on every transport that still carries
 // a JSON-RPC result envelope (WS, batch-via-result), so it counts as one.
-func (e RpcError) IsBareToken() bool {
+func (e RPCError) IsBareToken() bool {
 	return e.bareToken || e.invalidApiVersion
 }
 
 // IsInvalidApiVersion reports whether this error is the unsupported-api_version
 // rejection, whose wire shape rippled varies by transport (HTTP single → 400
 // bare string; batch element → make_json_error object; WS → bare token).
-func (e RpcError) IsInvalidApiVersion() bool {
+func (e RPCError) IsInvalidApiVersion() bool {
 	return e.invalidApiVersion
 }
 
@@ -108,7 +108,7 @@ func (e RpcError) IsInvalidApiVersion() bool {
 // result envelope (ServerHandler.cpp:482-486, 750-762) — so the transport
 // writers special-case it. It is distinct from the in-handler rpcNO_PERMISSION
 // rejection, which rides the normal result envelope on every transport.
-func (e RpcError) IsForbidden() bool {
+func (e RPCError) IsForbidden() bool {
 	return e.Code == RpcFORBIDDEN
 }
 
@@ -120,11 +120,11 @@ func (e RpcError) IsForbidden() bool {
 // "Server is overloaded"); WS → rpcError(rpcSLOW_DOWN) — so the transport
 // writers special-case it. It is distinct from the post-dispatch warning:"load"
 // path, which rides the normal result envelope.
-func (e RpcError) IsOverloaded() bool {
+func (e RPCError) IsOverloaded() bool {
 	return e.overloaded
 }
 
-func (e RpcError) Error() string {
+func (e RPCError) Error() string {
 	if e.Message != "" {
 		return e.Message
 	}
@@ -137,7 +137,7 @@ func (e RpcError) Error() string {
 // error must be embedded as a value inside an otherwise-successful result
 // (e.g. owner_info's per-ledger sections, where rippled assigns rpcError(...)
 // directly), rather than marshalling the struct.
-func (e RpcError) ErrorObject() map[string]any {
+func (e RPCError) ErrorObject() map[string]any {
 	return map[string]any{
 		"error":         e.ErrorString,
 		"error_code":    e.Code,
@@ -257,7 +257,7 @@ const (
 	// RpcINVALID_API_VERSION reports an unsupported api_version. rippled
 	// rejects this at the HTTP/ServerHandler layer (ServerHandler.cpp) and
 	// never reaches the error_code_i enum; go-xrpl surfaces it through the
-	// normal RpcError envelope, so it occupies rippled's explicitly-unused
+	// normal RPCError envelope, so it occupies rippled's explicitly-unused
 	// slot 38 to stay distinct from every real rippled code.
 	RpcINVALID_API_VERSION = 38
 
@@ -269,8 +269,8 @@ const (
 )
 
 // Standard error constructors
-func NewRpcError(code int, error, errorType, message string) *RpcError {
-	return &RpcError{
+func NewRPCError(code int, error, errorType, message string) *RPCError {
+	return &RPCError{
 		Code:        code,
 		ErrorString: error,
 		Type:        errorType,
@@ -279,110 +279,110 @@ func NewRpcError(code int, error, errorType, message string) *RpcError {
 }
 
 // Common error constructors matching rippled
-func RpcErrorUnknown(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "unknown", "unknown", message)
+func RPCErrorUnknown(message string) *RPCError {
+	return NewRPCError(RpcUNKNOWN, "unknown", "unknown", message)
 }
 
-func RpcErrorInvalidParams(message string) *RpcError {
-	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", message)
+func RPCErrorInvalidParams(message string) *RPCError {
+	return NewRPCError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", message)
 }
 
-func RpcErrorMethodNotFound(method string) *RpcError {
-	return NewRpcError(RpcMETHOD_NOT_FOUND, "unknownCmd", "unknownCmd", "Unknown method: "+method)
+func RPCErrorMethodNotFound(method string) *RPCError {
+	return NewRPCError(RpcMETHOD_NOT_FOUND, "unknownCmd", "unknownCmd", "Unknown method: "+method)
 }
 
-func RpcErrorLgrNotFound(message string) *RpcError {
-	return NewRpcError(RpcLGR_NOT_FOUND, "lgrNotFound", "lgrNotFound", message)
+func RPCErrorLgrNotFound(message string) *RPCError {
+	return NewRPCError(RpcLGR_NOT_FOUND, "lgrNotFound", "lgrNotFound", message)
 }
 
-func RpcErrorActNotFound(message string) *RpcError {
-	return NewRpcError(RpcACT_NOT_FOUND, "actNotFound", "actNotFound", message)
+func RPCErrorActNotFound(message string) *RPCError {
+	return NewRPCError(RpcACT_NOT_FOUND, "actNotFound", "actNotFound", message)
 }
 
-func RpcErrorActMalformed(message string) *RpcError {
-	return NewRpcError(RpcACT_MALFORMED, "actMalformed", "actMalformed", message)
+func RPCErrorActMalformed(message string) *RPCError {
+	return NewRPCError(RpcACT_MALFORMED, "actMalformed", "actMalformed", message)
 }
 
-func RpcErrorTxnNotFound(message string) *RpcError {
-	return NewRpcError(RpcTXN_NOT_FOUND, "txnNotFound", "txnNotFound", message)
+func RPCErrorTxnNotFound(message string) *RPCError {
+	return NewRPCError(RpcTXN_NOT_FOUND, "txnNotFound", "txnNotFound", message)
 }
 
-// RpcErrorIssueMalformed matches rippled rpcISSUE_MALFORMED (code 93, token
+// RPCErrorIssueMalformed matches rippled rpcISSUE_MALFORMED (code 93, token
 // "issueMalformed"), returned for an unparseable asset/asset2 issue object.
-func RpcErrorIssueMalformed() *RpcError {
-	return NewRpcError(RpcISSUE_MALFORMED, "issueMalformed", "issueMalformed", "Issue is malformed.")
+func RPCErrorIssueMalformed() *RPCError {
+	return NewRPCError(RpcISSUE_MALFORMED, "issueMalformed", "issueMalformed", "Issue is malformed.")
 }
 
-// RpcErrorInvalidHotWallet matches rippled rpcINVALID_HOTWALLET (code 30,
+// RPCErrorInvalidHotWallet matches rippled rpcINVALID_HOTWALLET (code 30,
 // token "invalidHotWallet", message "Invalid hotwallet.").
-func RpcErrorInvalidHotWallet() *RpcError {
-	return NewRpcError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
+func RPCErrorInvalidHotWallet() *RPCError {
+	return NewRPCError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
 }
 
-// RpcErrorInternal builds the fixed rpcINTERNAL envelope. The detail argument
+// RPCErrorInternal builds the fixed rpcINTERNAL envelope. The detail argument
 // is NOT put on the wire (that would leak internal storage/codec state and fork
 // the API byte-for-byte from rippled, which always returns "Internal error.");
 // it is retained on logDetail for the dispatcher to log server-side.
-func RpcErrorInternal(detail string) *RpcError {
-	e := NewRpcError(RpcINTERNAL, "internal", "internal", InternalErrorMessage)
+func RPCErrorInternal(detail string) *RPCError {
+	e := NewRPCError(RpcINTERNAL, "internal", "internal", InternalErrorMessage)
 	e.logDetail = detail
 	return e
 }
 
 // LogDetail returns the server-side-only internal-error detail (empty for
 // non-internal errors or an internal error built without detail).
-func (e *RpcError) LogDetail() string {
+func (e *RPCError) LogDetail() string {
 	if e == nil {
 		return ""
 	}
 	return e.logDetail
 }
 
-func RpcErrorNoPermission(method string) *RpcError {
-	return NewRpcError(RpcNO_PERMISSION, "noPermission", "noPermission",
+func RPCErrorNoPermission(method string) *RPCError {
+	return NewRPCError(RpcNO_PERMISSION, "noPermission", "noPermission",
 		"You don't have permission for this command.")
 }
 
-// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden",
+// RPCErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden",
 // message "Bad credentials." per the ErrorCodes.cpp errorInfo table). Used by
 // the WebSocket pre-dispatch admin gate, mirroring rippled
 // ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
 // requestRole returns Role::FORBID for an admin-required command. (The HTTP
 // single and batch transports render their own literal "Forbidden" strings,
 // not this message.)
-func RpcErrorForbidden(method string) *RpcError {
-	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden", "Bad credentials.")
+func RPCErrorForbidden(method string) *RPCError {
+	return NewRPCError(RpcFORBIDDEN, "forbidden", "forbidden", "Bad credentials.")
 }
 
-// RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
+// RPCErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
 // message string is fixed to match rippled's ErrorCodes.cpp:114 INFOS
 // entry so HTTP/WS clients see a byte-identical error_message.
-func RpcErrorTooBusy() *RpcError {
-	return NewRpcError(RpcTOO_BUSY, "tooBusy", "tooBusy",
+func RPCErrorTooBusy() *RPCError {
+	return NewRPCError(RpcTOO_BUSY, "tooBusy", "tooBusy",
 		"The server is too busy to help you now.")
 }
 
-func RpcErrorSlowDown(message string) *RpcError {
-	return NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
+func RPCErrorSlowDown(message string) *RPCError {
+	return NewRPCError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
 }
 
-// RpcErrorOverloaded is the per-IP resource-overload admission rejection
+// RPCErrorOverloaded is the per-IP resource-overload admission rejection
 // consulted before doCommand (rippled usage.disconnect(), ServerHandler.cpp:735).
 // It carries rpcSLOW_DOWN with rippled's canonical slowDown message so the WS /
 // result-envelope path renders rippled's WS overload code, and sets the
 // overloaded flag so the HTTP single (503 "Server is overloaded") and batch
 // (make_json_error(server_overloaded, ...)) writers can special-case it.
-func RpcErrorOverloaded() *RpcError {
-	e := RpcErrorSlowDown("You are placing too much load on the server.")
+func RPCErrorOverloaded() *RPCError {
+	e := RPCErrorSlowDown("You are placing too much load on the server.")
 	e.overloaded = true
 	return e
 }
 
-// RpcErrorNotStandalone mirrors rippled's ledger_accept handler
+// RPCErrorNotStandalone mirrors rippled's ledger_accept handler
 // (LedgerAccept.cpp:40), which emits a bare "notStandAlone" token with no
 // numeric code or message when the node is not in standalone mode.
-func RpcErrorNotStandalone(message string) *RpcError {
-	e := NewRpcError(RpcNOT_STANDALONE, "notStandAlone", "notStandAlone", message)
+func RPCErrorNotStandalone(message string) *RPCError {
+	e := NewRPCError(RpcNOT_STANDALONE, "notStandAlone", "notStandAlone", message)
 	e.bareToken = true
 	return e
 }
@@ -398,267 +398,267 @@ const InvalidApiVersionToken = "invalid_API_version" //nolint:gosec // G101: err
 // wrong_version = -32606).
 const WrongVersionJSONRPCCode = -32606
 
-// RpcErrorInvalidApiVersion reports an unsupported api_version. rippled rejects
+// RPCErrorInvalidApiVersion reports an unsupported api_version. rippled rejects
 // this at the ServerHandler transport layer, never through the error_code_i
 // enum, so the token is the bare jss::invalid_API_version and the per-transport
 // wire shape is finalized by the transport writers (see IsInvalidApiVersion).
 // The internal code stays at the go-xrpl slot 38 to keep this distinct from
 // every real rippled code; it is not emitted on the wire.
-func RpcErrorInvalidApiVersion(version string) *RpcError {
-	e := NewRpcError(RpcINVALID_API_VERSION, InvalidApiVersionToken, InvalidApiVersionToken, "")
+func RPCErrorInvalidApiVersion(version string) *RPCError {
+	e := NewRPCError(RpcINVALID_API_VERSION, InvalidApiVersionToken, InvalidApiVersionToken, "")
 	e.invalidApiVersion = true
 	return e
 }
 
-// RpcErrorNotEnabled returns rippled's rpcNOT_ENABLED (code 12, token
+// RPCErrorNotEnabled returns rippled's rpcNOT_ENABLED (code 12, token
 // "notEnabled"). An empty message defaults to rippled's canonical
 // "Not enabled in configuration." string from ErrorCodes.cpp's errorInfo
 // array. Reference: rippled ErrorCodes.h (rpcNOT_ENABLED) +
 // ErrorCodes.cpp (errorInfo[rpcNOT_ENABLED]).
-func RpcErrorNotEnabled(message string) *RpcError {
+func RPCErrorNotEnabled(message string) *RPCError {
 	if message == "" {
 		message = "Not enabled in configuration."
 	}
-	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", message)
+	return NewRPCError(RpcNOT_ENABLED, "notEnabled", "notEnabled", message)
 }
 
-// RpcErrorNotReady returns rippled's rpcNOT_READY (code 13, token
+// RPCErrorNotReady returns rippled's rpcNOT_READY (code 13, token
 // "notReady"). An empty message defaults to rippled's canonical
 // "Not ready to handle this request." string from ErrorCodes.cpp's errorInfo
 // array. Reference: rippled ErrorCodes.h (rpcNOT_READY) +
 // ErrorCodes.cpp (errorInfo[rpcNOT_READY]).
-func RpcErrorNotReady(message string) *RpcError {
+func RPCErrorNotReady(message string) *RPCError {
 	if message == "" {
 		message = "Not ready to handle this request."
 	}
-	return NewRpcError(RpcNOT_READY, "notReady", "notReady", message)
+	return NewRPCError(RpcNOT_READY, "notReady", "notReady", message)
 }
 
-// RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
+// RPCErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
 // "notSupported"). An empty message defaults to rippled's canonical
 // "Operation not supported." string from ErrorCodes.cpp's errorInfo array.
 // Reference: rippled ErrorCodes.h (rpcNOT_SUPPORTED) +
 // ErrorCodes.cpp (errorInfo[rpcNOT_SUPPORTED]).
-func RpcErrorNotSupported(message string) *RpcError {
+func RPCErrorNotSupported(message string) *RPCError {
 	if message == "" {
 		message = "Operation not supported."
 	}
-	return NewRpcError(RpcNOT_SUPPORTED, "notSupported", "notSupported", message)
+	return NewRPCError(RpcNOT_SUPPORTED, "notSupported", "notSupported", message)
 }
 
-// RpcErrorNoEvents returns rippled's rpcNO_EVENTS (code 7, token "noEvents"),
+// RPCErrorNoEvents returns rippled's rpcNO_EVENTS (code 7, token "noEvents"),
 // returned by handlers whose work requires a subscription-capable transport
 // (path_find, etc.) when invoked over plain JSON-RPC. An empty message
 // defaults to rippled's canonical "Current transport does not support events."
 // string. Reference: rippled ErrorCodes.h (rpcNO_EVENTS) +
 // ErrorCodes.cpp (errorInfo[rpcNO_EVENTS]) +
 // rippled handler PathFind.cpp (rpcError(rpcNO_EVENTS) on !context.infoSub).
-func RpcErrorNoEvents(message string) *RpcError {
+func RPCErrorNoEvents(message string) *RPCError {
 	if message == "" {
 		message = "Current transport does not support events."
 	}
-	return NewRpcError(RpcNO_EVENTS, "noEvents", "noEvents", message)
+	return NewRPCError(RpcNO_EVENTS, "noEvents", "noEvents", message)
 }
 
-func RpcErrorAmendmentBlocked() *RpcError {
-	return NewRpcError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
+func RPCErrorAmendmentBlocked() *RPCError {
+	return NewRPCError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
 }
 
-// RpcErrorBadFeature returns rippled's rpcBAD_FEATURE (code 40, token
+// RPCErrorBadFeature returns rippled's rpcBAD_FEATURE (code 40, token
 // "badFeature"): the requested amendment is unknown or invalid.
-func RpcErrorBadFeature(message string) *RpcError {
-	return NewRpcError(RpcBAD_FEATURE, "badFeature", "badFeature", message)
+func RPCErrorBadFeature(message string) *RPCError {
+	return NewRPCError(RpcBAD_FEATURE, "badFeature", "badFeature", message)
 }
 
-// RpcErrorNoPathRequest returns an error when close/status is called without an active path_find session
-func RpcErrorNoPathRequest() *RpcError {
-	return NewRpcError(RpcNO_PF_REQUEST, "noPathRequest", "noPathRequest", "No pathfinding request in progress.")
+// RPCErrorNoPathRequest returns an error when close/status is called without an active path_find session
+func RPCErrorNoPathRequest() *RPCError {
+	return NewRPCError(RpcNO_PF_REQUEST, "noPathRequest", "noPathRequest", "No pathfinding request in progress.")
 }
 
-// RpcErrorObjectNotFound returns an error for object not found (matches rippled rpcOBJECT_NOT_FOUND)
-func RpcErrorObjectNotFound(message string) *RpcError {
-	return NewRpcError(RpcOBJECT_NOT_FOUND, "objectNotFound", "objectNotFound", message)
+// RPCErrorObjectNotFound returns an error for object not found (matches rippled rpcOBJECT_NOT_FOUND)
+func RPCErrorObjectNotFound(message string) *RPCError {
+	return NewRPCError(RpcOBJECT_NOT_FOUND, "objectNotFound", "objectNotFound", message)
 }
 
-// RpcErrorBadCredentials returns an error for credential validation failures (matches rippled rpcBAD_CREDENTIALS).
-func RpcErrorBadCredentials(message string) *RpcError {
-	return NewRpcError(RpcBAD_CREDENTIALS, "badCredentials", "badCredentials", message)
+// RPCErrorBadCredentials returns an error for credential validation failures (matches rippled rpcBAD_CREDENTIALS).
+func RPCErrorBadCredentials(message string) *RPCError {
+	return NewRPCError(RpcBAD_CREDENTIALS, "badCredentials", "badCredentials", message)
 }
 
-// RpcErrorHighFee returns an error when the auto-filled fee exceeds the requested limit (matches rippled rpcHIGH_FEE).
-func RpcErrorHighFee(message string) *RpcError {
-	return NewRpcError(RpcHIGH_FEE, "highFee", "highFee", message)
+// RPCErrorHighFee returns an error when the auto-filled fee exceeds the requested limit (matches rippled rpcHIGH_FEE).
+func RPCErrorHighFee(message string) *RPCError {
+	return NewRPCError(RpcHIGH_FEE, "highFee", "highFee", message)
 }
 
-// RpcErrorExpectedField returns an error for a field that is not of the expected type
+// RPCErrorExpectedField returns an error for a field that is not of the expected type
 // (matches rippled's expected_field_message: "Invalid field '<name>', not <type>.")
-func RpcErrorExpectedField(field, expectedType string) *RpcError {
-	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+func RPCErrorExpectedField(field, expectedType string) *RPCError {
+	return NewRPCError(RpcINVALID_PARAMS, "invalidParams", "invalidParams",
 		"Invalid field '"+field+"', not "+expectedType+".")
 }
 
-// RpcErrorExpectedFieldHighFee returns a highFee error for a field that is not of the expected type.
+// RPCErrorExpectedFieldHighFee returns a highFee error for a field that is not of the expected type.
 // rippled returns rpcHIGH_FEE (not rpcINVALID_PARAMS) when fee_mult_max or fee_div_max is not an integer.
-func RpcErrorExpectedFieldHighFee(field, expectedType string) *RpcError {
-	return NewRpcError(RpcHIGH_FEE, "highFee", "highFee",
+func RPCErrorExpectedFieldHighFee(field, expectedType string) *RPCError {
+	return NewRPCError(RpcHIGH_FEE, "highFee", "highFee",
 		"Invalid field '"+field+"', not "+expectedType+".")
 }
 
-// RpcErrorMalformedField reports a present-but-wrong-type selector subfield.
+// RPCErrorMalformedField reports a present-but-wrong-type selector subfield.
 // It carries a field-specific token (e.g. "malformedBroker", "malformedSeq"),
 // the rpcINVALID_PARAMS code, and rippled's expected_field_message, matching the
 // invalidFieldError path in rippled's ledger_entry field parsers.
-func RpcErrorMalformedField(token, field, expectedType string) *RpcError {
-	return NewRpcError(RpcINVALID_PARAMS, token, token,
+func RPCErrorMalformedField(token, field, expectedType string) *RPCError {
+	return NewRPCError(RpcINVALID_PARAMS, token, token,
 		"Invalid field '"+field+"', not "+expectedType+".")
 }
 
-// RpcErrorMalformedRequestMissingField reports an absent required selector
+// RPCErrorMalformedRequestMissingField reports an absent required selector
 // subfield. rippled's missingFieldError leaves the token at its "malformedRequest"
 // default and sets the message to missing_field_message.
-func RpcErrorMalformedRequestMissingField(field string) *RpcError {
-	return NewRpcError(RpcINVALID_PARAMS, "malformedRequest", "malformedRequest",
+func RPCErrorMalformedRequestMissingField(field string) *RPCError {
+	return NewRPCError(RpcINVALID_PARAMS, "malformedRequest", "malformedRequest",
 		"Missing field '"+field+"'.")
 }
 
-// RpcErrorSigningMalformed returns an error when a transaction's signing is malformed
+// RPCErrorSigningMalformed returns an error when a transaction's signing is malformed
 // (matches rippled rpcSIGNING_MALFORMED, code 63, token "signingMalformed").
-func RpcErrorSigningMalformed() *RpcError {
-	return NewRpcError(RpcSIGNING_MALFORMED, "signingMalformed", "signingMalformed", "Signing of transaction is malformed.")
+func RPCErrorSigningMalformed() *RPCError {
+	return NewRPCError(RpcSIGNING_MALFORMED, "signingMalformed", "signingMalformed", "Signing of transaction is malformed.")
 }
 
-// RpcErrorPublicMalformed returns the error rippled emits for an unparseable
+// RPCErrorPublicMalformed returns the error rippled emits for an unparseable
 // public key (matches rippled rpcPUBLIC_MALFORMED, code 62, token
 // "publicMalformed"; see ErrorCodes.cpp:103).
-func RpcErrorPublicMalformed() *RpcError {
-	return NewRpcError(RpcPUBLIC_MALFORMED, "publicMalformed", "publicMalformed", "Public key is malformed.")
+func RPCErrorPublicMalformed() *RPCError {
+	return NewRPCError(RpcPUBLIC_MALFORMED, "publicMalformed", "publicMalformed", "Public key is malformed.")
 }
 
-// RpcErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
-func RpcErrorMissingField(field string) *RpcError {
-	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
+// RPCErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
+func RPCErrorMissingField(field string) *RPCError {
+	return NewRPCError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
 }
 
-// RpcErrorFieldNotFoundTransaction matches rippled TransactionEntry.cpp:48,
+// RPCErrorFieldNotFoundTransaction matches rippled TransactionEntry.cpp:48,
 // which sets the bare "fieldNotFoundTransaction" token on the result body
 // without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
-func RpcErrorFieldNotFoundTransaction() *RpcError {
-	e := NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+func RPCErrorFieldNotFoundTransaction() *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
 	e.bareToken = true
 	return e
 }
 
-// RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
-func RpcErrorInvalidField(field string) *RpcError {
-	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Invalid field '"+field+"'.")
+// RPCErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
+func RPCErrorInvalidField(field string) *RPCError {
+	return NewRPCError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Invalid field '"+field+"'.")
 }
 
-// RpcErrorTxSigned returns an error when a transaction is pre-signed but should not be
+// RPCErrorTxSigned returns an error when a transaction is pre-signed but should not be
 // (matches rippled rpcTX_SIGNED, code 96, token "transactionSigned").
-func RpcErrorTxSigned() *RpcError {
-	return NewRpcError(RpcTX_SIGNED, "transactionSigned", "transactionSigned", "Transaction should not be signed.")
+func RPCErrorTxSigned() *RPCError {
+	return NewRPCError(RpcTX_SIGNED, "transactionSigned", "transactionSigned", "Transaction should not be signed.")
 }
 
-// RpcErrorSrcActMalformed returns an error when the source account address is malformed
+// RPCErrorSrcActMalformed returns an error when the source account address is malformed
 // (matches rippled rpcSRC_ACT_MALFORMED, code 65, token "srcActMalformed").
-func RpcErrorSrcActMalformed(message string) *RpcError {
-	return NewRpcError(RpcSRC_ACT_MALFORMED, "srcActMalformed", "srcActMalformed", message)
+func RPCErrorSrcActMalformed(message string) *RPCError {
+	return NewRPCError(RpcSRC_ACT_MALFORMED, "srcActMalformed", "srcActMalformed", message)
 }
 
-// RpcErrorNotImpl returns an error for unimplemented features
+// RPCErrorNotImpl returns an error for unimplemented features
 // (matches rippled rpcNOT_IMPL, code 74, token "notImpl").
-func RpcErrorNotImpl() *RpcError {
-	return NewRpcError(RpcNOT_IMPL, "notImpl", "notImpl", "Not implemented.")
+func RPCErrorNotImpl() *RPCError {
+	return NewRPCError(RpcNOT_IMPL, "notImpl", "notImpl", "Not implemented.")
 }
 
-// RpcErrorOracleMalformed returns an error for malformed oracle requests
+// RPCErrorOracleMalformed returns an error for malformed oracle requests
 // (matches rippled rpcORACLE_MALFORMED, code 94, token "oracleMalformed").
-func RpcErrorOracleMalformed() *RpcError {
-	return NewRpcError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
+func RPCErrorOracleMalformed() *RPCError {
+	return NewRPCError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
 }
 
-// RpcErrorEntryNotFound returns rippled's rpcENTRY_NOT_FOUND (code 98, token
+// RPCErrorEntryNotFound returns rippled's rpcENTRY_NOT_FOUND (code 98, token
 // "entryNotFound"). rippled 3.0.0 promoted the ledger_entry handler's missing
 // entry from a bare token to RPC::make_error(rpcENTRY_NOT_FOUND)
 // (LedgerEntry.cpp:838,850; ErrorCodes.cpp:121), so it now carries the numeric
 // code and an error_message. An empty message defaults to rippled's canonical
 // "Entry not found." string. The bare-token form survives as
-// RpcErrorEntryNotFoundBare for the handlers rippled left unchanged.
-func RpcErrorEntryNotFound(message string) *RpcError {
+// RPCErrorEntryNotFoundBare for the handlers rippled left unchanged.
+func RPCErrorEntryNotFound(message string) *RPCError {
 	if message == "" {
 		message = "Entry not found."
 	}
-	return NewRpcError(RpcENTRY_NOT_FOUND, "entryNotFound", "entryNotFound", message)
+	return NewRPCError(RpcENTRY_NOT_FOUND, "entryNotFound", "entryNotFound", message)
 }
 
-// RpcErrorEntryNotFoundBare returns the bare "entryNotFound" token (no numeric
+// RPCErrorEntryNotFoundBare returns the bare "entryNotFound" token (no numeric
 // code or error_message) that rippled still emits via a direct
 // jvResult[jss::error] assignment in handlers not covered by the 3.0.0
 // ledger_entry refactor (VaultInfo.cpp:101), so the code is rpcUNKNOWN (-1).
-func RpcErrorEntryNotFoundBare(message string) *RpcError {
-	e := NewRpcError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
+func RPCErrorEntryNotFoundBare(message string) *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
 	e.bareToken = true
 	return e
 }
 
-// RpcErrorUnexpectedLedgerType returns rippled's rpcUNEXPECTED_LEDGER_TYPE
+// RPCErrorUnexpectedLedgerType returns rippled's rpcUNEXPECTED_LEDGER_TYPE
 // (code 99, token "unexpectedLedgerType"), emitted by the 3.0.0 ledger_entry
 // handler when the object found does not match the type implied by the request
 // selector (LedgerEntry.cpp:853-856; ErrorCodes.cpp:122).
-func RpcErrorUnexpectedLedgerType() *RpcError {
-	return NewRpcError(RpcUNEXPECTED_LEDGER_TYPE, "unexpectedLedgerType", "unexpectedLedgerType", "Unexpected ledger type.")
+func RPCErrorUnexpectedLedgerType() *RPCError {
+	return NewRPCError(RpcUNEXPECTED_LEDGER_TYPE, "unexpectedLedgerType", "unexpectedLedgerType", "Unexpected ledger type.")
 }
 
-// RpcErrorTransactionNotFound returns the error rippled's transaction_entry
+// RPCErrorTransactionNotFound returns the error rippled's transaction_entry
 // handler emits when the transaction is absent (TransactionEntry.cpp:71): a bare
 // "transactionNotFound" token with no numeric code and no error_message. Note
 // the token differs from the `tx` command's "txnNotFound" (rpcTXN_NOT_FOUND=29).
-func RpcErrorTransactionNotFound(message string) *RpcError {
-	e := NewRpcError(RpcUNKNOWN, "transactionNotFound", "transactionNotFound", message)
+func RPCErrorTransactionNotFound(message string) *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "transactionNotFound", "transactionNotFound", message)
 	e.bareToken = true
 	return e
 }
 
-// RpcErrorNotYetImplemented returns the error rippled's transaction_entry
+// RPCErrorNotYetImplemented returns the error rippled's transaction_entry
 // handler emits when the resolved ledger is the open (current) one
 // (TransactionEntry.cpp:50-56, "We don't work on ledger current"): a bare
 // "notYetImplemented" token with no numeric code and no error_message.
-func RpcErrorNotYetImplemented() *RpcError {
-	e := NewRpcError(RpcUNKNOWN, "notYetImplemented", "notYetImplemented", "")
+func RPCErrorNotYetImplemented() *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "notYetImplemented", "notYetImplemented", "")
 	e.bareToken = true
 	return e
 }
 
-// RpcErrorUnknownOption returns an error when no valid selector is provided
+// RPCErrorUnknownOption returns an error when no valid selector is provided
 // (matches rippled "unknownOption", a bare token with no numeric code, -1).
-func RpcErrorUnknownOption(message string) *RpcError {
-	e := NewRpcError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
+func RPCErrorUnknownOption(message string) *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
 	e.bareToken = true
 	return e
 }
 
-// RpcErrorSrcActMissing returns an error when the source account is not provided
+// RPCErrorSrcActMissing returns an error when the source account is not provided
 // (matches rippled rpcSRC_ACT_MISSING, code 66, token "srcActMissing").
-func RpcErrorSrcActMissing(message string) *RpcError {
-	return NewRpcError(RpcSRC_ACT_MISSING, "srcActMissing", "srcActMissing", message)
+func RPCErrorSrcActMissing(message string) *RPCError {
+	return NewRPCError(RpcSRC_ACT_MISSING, "srcActMissing", "srcActMissing", message)
 }
 
-// RpcErrorSrcActNotFound returns an error when the source account does not
+// RPCErrorSrcActNotFound returns an error when the source account does not
 // exist in the ledger (matches rippled rpcSRC_ACT_NOT_FOUND, code 67, token
 // "srcActNotFound"; see rippled ErrorCodes.cpp:109).
-func RpcErrorSrcActNotFound(message string) *RpcError {
-	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "srcActNotFound", message)
+func RPCErrorSrcActNotFound(message string) *RPCError {
+	return NewRPCError(RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "srcActNotFound", message)
 }
 
-// RpcErrorInvalidTransaction returns the envelope rippled emits when STTx
+// RPCErrorInvalidTransaction returns the envelope rippled emits when STTx
 // construction throws (Simulate.cpp:338-342): `error: "invalidTransaction"`
 // + `error_exception: <reason>`. The error_code matches rippled's
 // behaviour of leaving the field at the default rpcINVALID_PARAMS slot
 // (the manual `jvResult[jss::error] = "invalidTransaction"` path does
 // not go through `RPC::make_error`, so callers should not depend on the
 // code value).
-func RpcErrorInvalidTransaction(exception string) *RpcError {
-	return &RpcError{
+func RPCErrorInvalidTransaction(exception string) *RPCError {
+	return &RPCError{
 		Code:           RpcINVALID_PARAMS,
 		ErrorString:    "invalidTransaction",
 		Type:           "invalidTransaction",
@@ -666,118 +666,118 @@ func RpcErrorInvalidTransaction(exception string) *RpcError {
 	}
 }
 
-// RpcErrorSrcCurMalformed returns an error when a source currency is malformed
+// RPCErrorSrcCurMalformed returns an error when a source currency is malformed
 // (matches rippled rpcSRC_CUR_MALFORMED, code 69, token "srcCurMalformed").
-func RpcErrorSrcCurMalformed(message string) *RpcError {
-	return NewRpcError(RpcSRC_CUR_MALFORMED, "srcCurMalformed", "srcCurMalformed", message)
+func RPCErrorSrcCurMalformed(message string) *RPCError {
+	return NewRPCError(RpcSRC_CUR_MALFORMED, "srcCurMalformed", "srcCurMalformed", message)
 }
 
-// RpcErrorDstAmtMalformed returns an error when a destination amount/currency
+// RPCErrorDstAmtMalformed returns an error when a destination amount/currency
 // is malformed (matches rippled rpcDST_AMT_MALFORMED, code 51, token
 // "dstAmtMalformed"). Used for taker_gets.currency parse failures per
 // rippled BookOffers.cpp:90-96.
-func RpcErrorDstAmtMalformed(message string) *RpcError {
-	return NewRpcError(RpcDST_AMT_MALFORMED, "dstAmtMalformed", "dstAmtMalformed", message)
+func RPCErrorDstAmtMalformed(message string) *RPCError {
+	return NewRPCError(RpcDST_AMT_MALFORMED, "dstAmtMalformed", "dstAmtMalformed", message)
 }
 
-// RpcErrorSrcIsrMalformed returns an error when a source issuer is malformed
+// RPCErrorSrcIsrMalformed returns an error when a source issuer is malformed
 // (matches rippled rpcSRC_ISR_MALFORMED, code 70, token "srcIsrMalformed").
-func RpcErrorSrcIsrMalformed(message string) *RpcError {
-	return NewRpcError(RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "srcIsrMalformed", message)
+func RPCErrorSrcIsrMalformed(message string) *RPCError {
+	return NewRPCError(RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "srcIsrMalformed", message)
 }
 
-// RpcErrorDstIsrMalformed returns an error when a destination issuer is
+// RPCErrorDstIsrMalformed returns an error when a destination issuer is
 // malformed (matches rippled rpcDST_ISR_MALFORMED, code 53, token
 // "dstIsrMalformed").
-func RpcErrorDstIsrMalformed(message string) *RpcError {
-	return NewRpcError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
+func RPCErrorDstIsrMalformed(message string) *RPCError {
+	return NewRPCError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
 }
 
-// RpcErrorDstActMissing returns an error when the destination account is not
+// RPCErrorDstActMissing returns an error when the destination account is not
 // provided (matches rippled rpcDST_ACT_MISSING, code 49, token
 // "dstActMissing").
-func RpcErrorDstActMissing(message string) *RpcError {
-	return NewRpcError(RpcDST_ACT_MISSING, "dstActMissing", "dstActMissing", message)
+func RPCErrorDstActMissing(message string) *RPCError {
+	return NewRPCError(RpcDST_ACT_MISSING, "dstActMissing", "dstActMissing", message)
 }
 
-// RpcErrorDstActMalformed returns an error when the destination account
+// RPCErrorDstActMalformed returns an error when the destination account
 // address is malformed (matches rippled rpcDST_ACT_MALFORMED, code 48, token
 // "dstActMalformed").
-func RpcErrorDstActMalformed(message string) *RpcError {
-	return NewRpcError(RpcDST_ACT_MALFORMED, "dstActMalformed", "dstActMalformed", message)
+func RPCErrorDstActMalformed(message string) *RPCError {
+	return NewRPCError(RpcDST_ACT_MALFORMED, "dstActMalformed", "dstActMalformed", message)
 }
 
-// RpcErrorDstAmtMissing returns an error when the destination amount is not
+// RPCErrorDstAmtMissing returns an error when the destination amount is not
 // provided (matches rippled rpcDST_AMT_MISSING, code 52, token
 // "dstAmtMissing").
-func RpcErrorDstAmtMissing(message string) *RpcError {
-	return NewRpcError(RpcDST_AMT_MISSING, "dstAmtMissing", "dstAmtMissing", message)
+func RPCErrorDstAmtMissing(message string) *RPCError {
+	return NewRPCError(RpcDST_AMT_MISSING, "dstAmtMissing", "dstAmtMissing", message)
 }
 
-// RpcErrorSendMaxMalformed returns an error when send_max is malformed
+// RPCErrorSendMaxMalformed returns an error when send_max is malformed
 // (matches rippled rpcSENDMAX_MALFORMED, code 64, token "sendMaxMalformed").
-func RpcErrorSendMaxMalformed(message string) *RpcError {
-	return NewRpcError(RpcSENDMAX_MALFORMED, "sendMaxMalformed", "sendMaxMalformed", message)
+func RPCErrorSendMaxMalformed(message string) *RPCError {
+	return NewRPCError(RpcSENDMAX_MALFORMED, "sendMaxMalformed", "sendMaxMalformed", message)
 }
 
-// RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
+// RPCErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
 // returned when taker_pays and taker_gets describe the same asset.
 // Reference: ErrorCodes.cpp:62 "No such market.".
-func RpcErrorBadMarket() *RpcError {
-	return NewRpcError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
+func RPCErrorBadMarket() *RPCError {
+	return NewRPCError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
 }
 
-// RpcErrorMalformedStream matches rippled rpcSTREAM_MALFORMED (code 71, token
+// RPCErrorMalformedStream matches rippled rpcSTREAM_MALFORMED (code 71, token
 // "malformedStream", message "Stream malformed."), returned for an unknown
 // stream name in subscribe/unsubscribe.
-func RpcErrorMalformedStream() *RpcError {
-	return NewRpcError(RpcSTREAM_MALFORMED, "malformedStream", "malformedStream", "Stream malformed.")
+func RPCErrorMalformedStream() *RPCError {
+	return NewRPCError(RpcSTREAM_MALFORMED, "malformedStream", "malformedStream", "Stream malformed.")
 }
 
-// RpcErrorBadIssuer matches rippled rpcBAD_ISSUER (code 41, token "badIssuer",
+// RPCErrorBadIssuer matches rippled rpcBAD_ISSUER (code 41, token "badIssuer",
 // message "Issuer account malformed."), returned when a book subscription's
 // taker does not parse as an account (Subscribe.cpp:301-305).
-func RpcErrorBadIssuer() *RpcError {
-	return NewRpcError(RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed.")
+func RPCErrorBadIssuer() *RPCError {
+	return NewRPCError(RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed.")
 }
 
-// RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
+// RPCErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
 // "domainMalformed"), returned when a request's domain parameter does not
 // parse as a uint256 hex string. Callers pass the message rippled would emit
 // for their callsite (e.g. BookOffers.cpp:183 uses "Unable to parse domain.",
 // overriding the ErrorCodes.cpp:120 default "Domain is malformed.").
-func RpcErrorDomainMalformed(message string) *RpcError {
+func RPCErrorDomainMalformed(message string) *RPCError {
 	if message == "" {
 		message = "Domain is malformed."
 	}
-	return NewRpcError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", message)
+	return NewRPCError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", message)
 }
 
-// RpcErrorDstActNotFound returns an error when the destination account is not found
+// RPCErrorDstActNotFound returns an error when the destination account is not found
 // (matches rippled rpcDST_ACT_NOT_FOUND, code 50, token "dstActNotFound").
-func RpcErrorDstActNotFound(message string) *RpcError {
-	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
+func RPCErrorDstActNotFound(message string) *RPCError {
+	return NewRPCError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
 }
 
-// RpcErrorWrongNetwork matches rippled rpcWRONG_NETWORK (code 4, token
+// RPCErrorWrongNetwork matches rippled rpcWRONG_NETWORK (code 4, token
 // "wrongNetwork"). The tx handler passes the rippled message that names the
 // CTID's network id (Tx.cpp:317-320); an empty message defaults to the
 // ErrorCodes.cpp:99 "Wrong network." string.
-func RpcErrorWrongNetwork(message string) *RpcError {
+func RPCErrorWrongNetwork(message string) *RPCError {
 	if message == "" {
 		message = "Wrong network."
 	}
-	return NewRpcError(RpcWRONG_NETWORK, "wrongNetwork", "wrongNetwork", message)
+	return NewRPCError(RpcWRONG_NETWORK, "wrongNetwork", "wrongNetwork", message)
 }
 
-// RpcErrorInvalidLgrRange matches rippled rpcINVALID_LGR_RANGE (code 79, token
+// RPCErrorInvalidLgrRange matches rippled rpcINVALID_LGR_RANGE (code 79, token
 // "invalidLgrRange", message "Ledger range is invalid.").
-func RpcErrorInvalidLgrRange() *RpcError {
-	return NewRpcError(RpcINVALID_LGR_RANGE, "invalidLgrRange", "invalidLgrRange", "Ledger range is invalid.")
+func RPCErrorInvalidLgrRange() *RPCError {
+	return NewRPCError(RpcINVALID_LGR_RANGE, "invalidLgrRange", "invalidLgrRange", "Ledger range is invalid.")
 }
 
-// RpcErrorExcessiveLgrRange matches rippled rpcEXCESSIVE_LGR_RANGE (code 78,
+// RPCErrorExcessiveLgrRange matches rippled rpcEXCESSIVE_LGR_RANGE (code 78,
 // token "excessiveLgrRange", message "Ledger range exceeds 1000.").
-func RpcErrorExcessiveLgrRange() *RpcError {
-	return NewRpcError(RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "excessiveLgrRange", "Ledger range exceeds 1000.")
+func RPCErrorExcessiveLgrRange() *RPCError {
+	return NewRPCError(RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "excessiveLgrRange", "Ledger range exceeds 1000.")
 }

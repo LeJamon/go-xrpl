@@ -192,7 +192,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -285,7 +285,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	t.Run("Invalid hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
 		mock.gatewayBalancesErr = fmt.Errorf("%w: asdf", svcerr.ErrInvalidHotWallet)
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -311,7 +311,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	t.Run("Invalid hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
 		mock.gatewayBalancesErr = fmt.Errorf("%w: asdf", svcerr.ErrInvalidHotWallet)
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
@@ -337,7 +337,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	t.Run("Empty-string hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
 		mock.gatewayBalancesErr = nil
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -357,7 +357,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	t.Run("Empty-string hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
 		mock.gatewayBalancesErr = nil
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
@@ -375,7 +375,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	t.Run("Null hotwallet is a valid empty hotwallet set", func(t *testing.T) {
 		mock.gatewayBalancesErr = nil
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -397,7 +397,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -634,7 +634,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -714,7 +714,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 // TestGatewayBalancesServiceUnavailable tests behavior when ledger service is not available
 func TestGatewayBalancesServiceUnavailable(t *testing.T) {
 	method := &handlers.GatewayBalancesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -758,7 +758,7 @@ func TestGatewayBalancesResponseFields(t *testing.T) {
 	services := newGatewayBalancesTestServices(mock)
 
 	method := &handlers.GatewayBalancesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

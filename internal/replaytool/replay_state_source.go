@@ -88,7 +88,7 @@ func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheM
 }
 
 func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
-	snapshot, err := s.client.GetSnapshot(ctx, ledgerIndex)
+	snapshot, err := s.client.Snapshot(ctx, ledgerIndex)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}

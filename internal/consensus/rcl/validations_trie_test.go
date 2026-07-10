@@ -93,19 +93,19 @@ func TestValidationTracker_TrieDeepestSharedAncestor(t *testing.T) {
 
 	// Flat count: abc has 1, abd has 0, abde has 2.
 	// Trie branchSupport: abc=1, abd=2 (via abde), abde=2.
-	if got := vt.GetTrustedSupport(abd.ID()); got != 2 {
+	if got := vt.TrustedSupport(abd.ID()); got != 2 {
 		t.Errorf("GetTrustedSupport(abd) via trie: got %d, want 2 (branchSupport)", got)
 	}
-	if got := vt.GetTrustedSupport(abde.ID()); got != 2 {
+	if got := vt.TrustedSupport(abde.ID()); got != 2 {
 		t.Errorf("GetTrustedSupport(abde): got %d, want 2", got)
 	}
-	if got := vt.GetTrustedSupport(abc.ID()); got != 1 {
+	if got := vt.TrustedSupport(abc.ID()); got != 1 {
 		t.Errorf("GetTrustedSupport(abc): got %d, want 1", got)
 	}
 
 	// Unknown ancestry falls back to flat count (zero here).
 	unknown := consensus.LedgerID{0xff}
-	if got := vt.GetTrustedSupport(unknown); got != 0 {
+	if got := vt.TrustedSupport(unknown); got != 0 {
 		t.Errorf("GetTrustedSupport(unknown) should fall back to 0, got %d", got)
 	}
 }
@@ -134,7 +134,7 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
 		t.Fatal("first Add should succeed")
 	}
-	if vt.GetTrustedSupport(abc.ID()) != 1 {
+	if vt.TrustedSupport(abc.ID()) != 1 {
 		t.Errorf("abc support after first validation should be 1")
 	}
 
@@ -144,10 +144,10 @@ func TestValidationTracker_TrieNewerValidationReplacesOld(t *testing.T) {
 	}
 
 	// abc's tip should have been removed; only abde contributes.
-	if got := vt.GetTrustedSupport(abc.ID()); got != 0 {
+	if got := vt.TrustedSupport(abc.ID()); got != 0 {
 		t.Errorf("abc support after switch: got %d, want 0", got)
 	}
-	if got := vt.GetTrustedSupport(abde.ID()); got != 1 {
+	if got := vt.TrustedSupport(abde.ID()); got != 1 {
 		t.Errorf("abde support after switch: got %d, want 1", got)
 	}
 }
@@ -176,7 +176,7 @@ func TestValidationTracker_TrieNegUNLExcluded(t *testing.T) {
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 
 	// Only n1 counts toward support; n2 on negUNL is excluded.
-	if got := vt.GetTrustedSupport(abc.ID()); got != 1 {
+	if got := vt.TrustedSupport(abc.ID()); got != 1 {
 		t.Errorf("negUNL validator should not contribute to support: got %d, want 1", got)
 	}
 }
@@ -232,15 +232,15 @@ func TestValidationTracker_TrieNegUNLSteersButExcludedFromQuorum(t *testing.T) {
 	}
 
 	// Quorum/support: negUNL validators contribute nothing.
-	if got := vt.GetTrustedSupport(ac.ID()); got != 0 {
+	if got := vt.TrustedSupport(ac.ID()); got != 0 {
 		t.Errorf("GetTrustedSupport(ac) must exclude negUNL backers: got %d, want 0", got)
 	}
-	if got := vt.GetTrustedSupport(ab.ID()); got != 1 {
+	if got := vt.TrustedSupport(ab.ID()); got != 1 {
 		t.Errorf("GetTrustedSupport(ab): got %d, want 1", got)
 	}
 	// Even at the shared ancestor, only the single non-negUNL validator
 	// counts — the descendant negUNL tips are filtered out.
-	if got := vt.GetTrustedSupport(a.ID()); got != 1 {
+	if got := vt.TrustedSupport(a.ID()); got != 1 {
 		t.Errorf("GetTrustedSupport(a) must exclude negUNL descendants: got %d, want 1", got)
 	}
 }
@@ -370,7 +370,7 @@ func TestValidationTracker_TrieDisabled_FallsBack(t *testing.T) {
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 
 	// Without ancestry provider, GetTrustedSupport returns flat count.
-	if got := vt.GetTrustedSupport(abc.ID()); got != 2 {
+	if got := vt.TrustedSupport(abc.ID()); got != 2 {
 		t.Errorf("without trie: got %d, want 2 (flat count)", got)
 	}
 
@@ -408,7 +408,7 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 	vt.Add(makeTrustedValidation(n2, abd.ID(), abd.Seq(), now))
 
 	// Both validators back the common ancestor "ab" through their tips.
-	if got := vt.GetTrustedSupport(ab.ID()); got != 2 {
+	if got := vt.TrustedSupport(ab.ID()); got != 2 {
 		t.Fatalf("pre-expire branchSupport(ab): got %d, want 2", got)
 	}
 
@@ -419,10 +419,10 @@ func TestValidationTracker_ExpireOldDropsTrieTip(t *testing.T) {
 
 	// After expiry the trie must drop both tips. branchSupport on any
 	// ancestor falls to 0 — no phantom support survives.
-	if got := vt.GetTrustedSupport(ab.ID()); got != 0 {
+	if got := vt.TrustedSupport(ab.ID()); got != 0 {
 		t.Errorf("post-expire branchSupport(ab): got %d, want 0 (trie tip leaked)", got)
 	}
-	if got := vt.GetTrustedSupport(abc.ID()); got != 0 {
+	if got := vt.TrustedSupport(abc.ID()); got != 0 {
 		t.Errorf("post-expire branchSupport(abc): got %d, want 0", got)
 	}
 }
@@ -453,14 +453,14 @@ func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
 	}
 }
 
-// TestValidationTracker_GetJsonTrie verifies the debug introspection dump:
+// TestValidationTracker_GetJSONTrie verifies the debug introspection dump:
 // nil while the trie is disabled, and a marshalable support snapshot once an
 // ancestry provider is wired and a trusted validation is inserted.
-func TestValidationTracker_GetJsonTrie(t *testing.T) {
+func TestValidationTracker_GetJSONTrie(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 
-	if js := vt.GetJsonTrie(); js != nil {
-		t.Fatalf("GetJsonTrie with no ancestry provider must be nil, got %v", js)
+	if js := vt.GetJSONTrie(); js != nil {
+		t.Fatalf("GetJSONTrie with no ancestry provider must be nil, got %v", js)
 	}
 
 	now := time.Now()
@@ -478,12 +478,12 @@ func TestValidationTracker_GetJsonTrie(t *testing.T) {
 		t.Fatal("Add(n1->abc) should succeed")
 	}
 
-	js := vt.GetJsonTrie()
+	js := vt.GetJSONTrie()
 	if js == nil {
-		t.Fatal("GetJsonTrie with a wired trie must be non-nil")
+		t.Fatal("GetJSONTrie with a wired trie must be non-nil")
 	}
 	if _, err := json.Marshal(js); err != nil {
-		t.Fatalf("GetJsonTrie output not JSON-marshalable: %v", err)
+		t.Fatalf("GetJSONTrie output not JSON-marshalable: %v", err)
 	}
 	seqSupport, ok := js["seq_support"].(map[string]uint32)
 	if !ok || seqSupport["3"] != 1 {

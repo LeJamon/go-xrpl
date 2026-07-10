@@ -444,9 +444,7 @@ func TestCreateFailed(t *testing.T) {
 		cc := credtx.NewCredentialCreate(issuer.Address, "", credTypeHex)
 		cc.Fee = "10"
 		result := env.Submit(cc)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Subject set to xrpAccount()"
@@ -456,9 +454,7 @@ func TestCreateFailed(t *testing.T) {
 		cc := credtx.NewCredentialCreate(issuer.Address, xrpAccount, credTypeHex)
 		cc.Fee = "10"
 		result := env.Submit(cc)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s (rippled rejects zero account in preflight)", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, no credentialType param."
@@ -466,18 +462,14 @@ func TestCreateFailed(t *testing.T) {
 		cc := credtx.NewCredentialCreate(issuer.Address, subject.Address, "")
 		cc.Fee = "10"
 		result := env.Submit(cc)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, empty credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
 		tx := credential.CredentialCreate(issuer, subject, "").Build()
 		result := env.Submit(tx)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, credentialType length > maxCredentialTypeLength."
@@ -485,9 +477,7 @@ func TestCreateFailed(t *testing.T) {
 		longCredType := strings.Repeat("a", 65)
 		tx := credential.CredentialCreate(issuer, subject, longCredType).Build()
 		result := env.Submit(tx)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, URI length > 256."
@@ -495,9 +485,7 @@ func TestCreateFailed(t *testing.T) {
 		longURI := strings.Repeat("a", 257)
 		tx := credential.CredentialCreate(issuer, subject, credType).URI(longURI).Build()
 		result := env.Submit(tx)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Reference: rippled "Credentials fail, URI empty."
@@ -531,9 +519,7 @@ func TestCreateFailed(t *testing.T) {
 		tx := credential.CredentialCreate(issuer, subject, credType).
 			Expiration(now - 1).Build()
 		result := env.Submit(tx)
-		if result.Code != "tecEXPIRED" {
-			t.Errorf("Expected tecEXPIRED, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
 		env.Close()
 	})
 
@@ -545,9 +531,7 @@ func TestCreateFailed(t *testing.T) {
 		cc := credtx.NewCredentialCreate(issuer.Address, subject.Address, credTypeHex)
 		cc.Fee = "-1"
 		result := env.Submit(cc)
-		if result.Code != "temBAD_FEE" {
-			t.Errorf("Expected temBAD_FEE for negative fee, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemBAD_FEE)
 	})
 
 	// Reference: rippled "Credentials fail, duplicate."
@@ -563,9 +547,7 @@ func TestCreateFailed(t *testing.T) {
 		// Second create should fail with tecDUPLICATE
 		tx2 := credential.CredentialCreate(issuer, subject, credType).Build()
 		result2 := env.Submit(tx2)
-		if result2.Code != "tecDUPLICATE" {
-			t.Errorf("Expected tecDUPLICATE, got %s", result2.Code)
-		}
+		jtx.RequireTxClaimed(t, result2, jtx.TecDUPLICATE)
 		env.Close()
 
 		// Verify credential still present after failed duplicate attempt
@@ -586,9 +568,7 @@ func TestCreateFailed(t *testing.T) {
 		// Do NOT fund nonExistent — it should not exist in the ledger
 		tx := credential.CredentialCreate(issuer, nonExistent, credType).Build()
 		result := env.Submit(tx)
-		if result.Code != "tecNO_TARGET" {
-			t.Errorf("Expected tecNO_TARGET, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_TARGET)
 		env.Close()
 	})
 
@@ -597,9 +577,7 @@ func TestCreateFailed(t *testing.T) {
 	t.Run("InvalidFlags", func(t *testing.T) {
 		tx := credential.CredentialCreate(issuer, subject, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
-		if result.Code != "temINVALID_FLAG" {
-			t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
 }
 
@@ -622,9 +600,7 @@ func TestCreateReserve(t *testing.T) {
 	// Create should fail with insufficient reserve
 	tx := credential.CredentialCreate(issuer, subject, credType).Build()
 	result := env.Submit(tx)
-	if result.Code != "tecINSUFFICIENT_RESERVE" {
-		t.Errorf("Expected tecINSUFFICIENT_RESERVE, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 }
 
@@ -644,9 +620,7 @@ func TestAcceptFailed(t *testing.T) {
 	t.Run("CredentialNotExist", func(t *testing.T) {
 		tx := credential.CredentialAccept(subject, issuer, credType).Build()
 		result := env.Submit(tx)
-		if result.Code != "tecNO_ENTRY" {
-			t.Errorf("Expected tecNO_ENTRY, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 		env.Close()
 	})
 
@@ -656,27 +630,21 @@ func TestAcceptFailed(t *testing.T) {
 		ca := credtx.NewCredentialAccept(subject.Address, xrpAccount, credTypeHex)
 		ca.Fee = "10"
 		result := env.Submit(ca)
-		if result.Code != "temINVALID_ACCOUNT_ID" {
-			t.Errorf("Expected temINVALID_ACCOUNT_ID, got %s (rippled rejects zero account in preflight)", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_ACCOUNT_ID)
 	})
 
 	// Reference: rippled "CredentialsAccept fail, invalid credentialType param."
 	t.Run("EmptyCredentialType", func(t *testing.T) {
 		tx := credential.CredentialAccept(subject, issuer, "").Build()
 		result := env.Submit(tx)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Test: Invalid flags
 	t.Run("InvalidFlags", func(t *testing.T) {
 		tx := credential.CredentialAccept(subject, issuer, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
-		if result.Code != "temINVALID_FLAG" {
-			t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
 
 	// Reference: rippled "CredentialsAccept fail, invalid fee."
@@ -686,9 +654,7 @@ func TestAcceptFailed(t *testing.T) {
 		ca := credtx.NewCredentialAccept(subject.Address, issuer.Address, credTypeHex)
 		ca.Fee = "-1"
 		result := env.Submit(ca)
-		if result.Code != "temBAD_FEE" {
-			t.Errorf("Expected temBAD_FEE for negative fee, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemBAD_FEE)
 	})
 
 	// Reference: rippled "CredentialsAccept fail, lsfAccepted already set."
@@ -708,9 +674,7 @@ func TestAcceptFailed(t *testing.T) {
 		// Try to accept again - should fail with tecDUPLICATE
 		acceptTx2 := credential.CredentialAccept(subject, issuer, credType).Build()
 		result2 := env.Submit(acceptTx2)
-		if result2.Code != "tecDUPLICATE" {
-			t.Errorf("Expected tecDUPLICATE, got %s", result2.Code)
-		}
+		jtx.RequireTxClaimed(t, result2, jtx.TecDUPLICATE)
 		env.Close()
 
 		// Verify credential still present after failed re-accept
@@ -746,9 +710,7 @@ func TestAcceptFailed(t *testing.T) {
 		// Credentials are now expired
 		acceptTx := credential.CredentialAccept(subject, issuer, credType2).Build()
 		result = env.Submit(acceptTx)
-		if result.Code != "tecEXPIRED" {
-			t.Errorf("Expected tecEXPIRED, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecEXPIRED)
 		env.Close()
 
 		// Verify that expired credentials were auto-deleted
@@ -789,9 +751,7 @@ func TestAcceptFailed(t *testing.T) {
 		// Try to accept — issuer no longer exists
 		acceptTx := credential.CredentialAccept(subject, issuer, ct).Build()
 		result = env.Submit(acceptTx)
-		if result.Code != "tecNO_ISSUER" {
-			t.Errorf("Expected tecNO_ISSUER, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ISSUER)
 		env.Close()
 
 		// Credential should have been cleaned up when issuer was deleted
@@ -834,9 +794,7 @@ func TestAcceptReserve(t *testing.T) {
 	// Accept should fail - subject doesn't have reserve
 	acceptTx := credential.CredentialAccept(subject, issuer, credType).Build()
 	result = env.Submit(acceptTx)
-	if result.Code != "tecINSUFFICIENT_RESERVE" {
-		t.Errorf("Expected tecINSUFFICIENT_RESERVE, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 
 	// Verify credential still present after failed accept
@@ -868,9 +826,7 @@ func TestDeleteFailed(t *testing.T) {
 	t.Run("CredentialNotExist", func(t *testing.T) {
 		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
 		result := env.Submit(tx)
-		if result.Code != "tecNO_ENTRY" {
-			t.Errorf("Expected tecNO_ENTRY, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 		env.Close()
 	})
 
@@ -882,9 +838,7 @@ func TestDeleteFailed(t *testing.T) {
 		cd.Issuer = issuer.Address
 		cd.Fee = "10"
 		result := env.Submit(cd)
-		if result.Code != "temINVALID_ACCOUNT_ID" {
-			t.Errorf("Expected temINVALID_ACCOUNT_ID, got %s (rippled rejects zero account in preflight)", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_ACCOUNT_ID)
 		env.Close()
 	})
 
@@ -896,9 +850,7 @@ func TestDeleteFailed(t *testing.T) {
 		cd.Issuer = xrpAccount
 		cd.Fee = "10"
 		result := env.Submit(cd)
-		if result.Code != "temINVALID_ACCOUNT_ID" {
-			t.Errorf("Expected temINVALID_ACCOUNT_ID, got %s (rippled rejects zero account in preflight)", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_ACCOUNT_ID)
 		env.Close()
 	})
 
@@ -906,18 +858,14 @@ func TestDeleteFailed(t *testing.T) {
 	t.Run("EmptyCredentialType", func(t *testing.T) {
 		tx := credential.CredentialDelete(subject, subject, issuer, "").Build()
 		result := env.Submit(tx)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Test: Invalid flags
 	t.Run("InvalidFlags", func(t *testing.T) {
 		tx := credential.CredentialDelete(subject, subject, issuer, credType).Flags(0x00010000).Build()
 		result := env.Submit(tx)
-		if result.Code != "temINVALID_FLAG" {
-			t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
 
 	// Reference: rippled "Other account can't delete credentials without expiration"
@@ -932,9 +880,7 @@ func TestDeleteFailed(t *testing.T) {
 		// Other account tries to delete - should fail
 		deleteTx := credential.CredentialDelete(other, subject, issuer, credType2).Build()
 		result := env.Submit(deleteTx)
-		if result.Code != "tecNO_PERMISSION" {
-			t.Errorf("Expected tecNO_PERMISSION, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
 
 		// Verify credential still present after failed delete
@@ -965,9 +911,7 @@ func TestDeleteFailed(t *testing.T) {
 		// Other account can't delete credentials that are not yet expired
 		deleteTx := credential.CredentialDelete(other, subject, issuer, credType).Build()
 		result = env.Submit(deleteTx)
-		if result.Code != "tecNO_PERMISSION" {
-			t.Errorf("Expected tecNO_PERMISSION, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
 
 		// Verify credential still present
@@ -991,9 +935,7 @@ func TestDeleteFailed(t *testing.T) {
 		cd.Issuer = ""
 		cd.Fee = "10"
 		result := env.Submit(cd)
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 		env.Close()
 	})
 
@@ -1006,9 +948,7 @@ func TestDeleteFailed(t *testing.T) {
 		cd.Issuer = issuer.Address
 		cd.Fee = "-1"
 		result := env.Submit(cd)
-		if result.Code != "temBAD_FEE" {
-			t.Errorf("Expected temBAD_FEE for negative fee, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemBAD_FEE)
 	})
 }
 
@@ -1157,25 +1097,19 @@ func TestEnabled(t *testing.T) {
 	t.Run("CreateDisabled", func(t *testing.T) {
 		tx := credential.CredentialCreate(issuer, subject, credType).Build()
 		result := env.Submit(tx)
-		if result.Code != "temDISABLED" {
-			t.Errorf("Expected temDISABLED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	})
 
 	t.Run("AcceptDisabled", func(t *testing.T) {
 		tx := credential.CredentialAccept(subject, issuer, credType).Build()
 		result := env.Submit(tx)
-		if result.Code != "temDISABLED" {
-			t.Errorf("Expected temDISABLED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	})
 
 	t.Run("DeleteDisabled", func(t *testing.T) {
 		tx := credential.CredentialDelete(subject, subject, issuer, credType).Build()
 		result := env.Submit(tx)
-		if result.Code != "temDISABLED" {
-			t.Errorf("Expected temDISABLED, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	})
 }
 

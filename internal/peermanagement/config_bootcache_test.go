@@ -69,7 +69,7 @@ func TestDiscovery_MarkConnected_FeedsBootCache(t *testing.T) {
 	d.MarkConnected(addr, PeerID(1))
 
 	found := false
-	for _, e := range d.bootCache.GetEndpoints(10) {
+	for _, e := range d.bootCache.Endpoints(10) {
 		if e.Address == addr {
 			found = true
 		}

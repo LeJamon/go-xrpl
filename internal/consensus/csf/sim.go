@@ -93,8 +93,8 @@ func (s *Sim) AllPeers() *PeerGroup {
 	return s.allPeers
 }
 
-// GetPeer returns the peer with the given ID, or nil.
-func (s *Sim) GetPeer(id PeerID) *Peer {
+// Peer returns the peer with the given ID, or nil.
+func (s *Sim) Peer(id PeerID) *Peer {
 	if s.registry == nil {
 		return nil
 	}

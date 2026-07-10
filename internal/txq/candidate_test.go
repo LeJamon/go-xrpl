@@ -173,7 +173,7 @@ func TestAccountQueue_GetPrevTx(t *testing.T) {
 	aq.Add(c3)
 
 	// Get prev for seq 3 should be seq 2
-	prev := aq.GetPrevTx(NewSeqProxySequence(3))
+	prev := aq.PrevTx(NewSeqProxySequence(3))
 	if prev == nil {
 		t.Fatal("GetPrevTx(3) should not be nil")
 	}
@@ -182,7 +182,7 @@ func TestAccountQueue_GetPrevTx(t *testing.T) {
 	}
 
 	// Get prev for seq 1 should be nil
-	prev = aq.GetPrevTx(NewSeqProxySequence(1))
+	prev = aq.PrevTx(NewSeqProxySequence(1))
 	if prev != nil {
 		t.Error("GetPrevTx(1) should be nil")
 	}
@@ -203,7 +203,7 @@ func TestAccountQueue_GetFirstSeqTx(t *testing.T) {
 	aq.Add(ticket)
 
 	// Should be nil since no sequence-based tx
-	first := aq.GetFirstSeqTx()
+	first := aq.FirstSeqTx()
 	if first != nil {
 		t.Error("GetFirstSeqTx should be nil with only tickets")
 	}
@@ -224,7 +224,7 @@ func TestAccountQueue_GetFirstSeqTx(t *testing.T) {
 	aq.Add(c1)
 	aq.Add(c2)
 
-	first = aq.GetFirstSeqTx()
+	first = aq.FirstSeqTx()
 	if first == nil {
 		t.Fatal("GetFirstSeqTx should not be nil")
 	}
@@ -262,7 +262,7 @@ func TestAccountQueue_GetSortedCandidates(t *testing.T) {
 	aq.Add(c1)
 	aq.Add(c2)
 
-	sorted := aq.GetSortedCandidates()
+	sorted := aq.SortedCandidates()
 	if len(sorted) != 3 {
 		t.Fatalf("GetSortedCandidates length = %d, want 3", len(sorted))
 	}

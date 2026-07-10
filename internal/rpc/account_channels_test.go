@@ -190,7 +190,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -293,7 +293,7 @@ func TestAccountChannelsSimple(t *testing.T) {
 	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -488,7 +488,7 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -581,7 +581,7 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -781,7 +781,7 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -909,7 +909,7 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 // TestAccountChannelsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountChannelsServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -953,7 +953,7 @@ func TestAccountChannelsMultipleChannels(t *testing.T) {
 	services := newAccountChannelsTestServices(mock)
 
 	method := &handlers.AccountChannelsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

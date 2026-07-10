@@ -3,15 +3,15 @@ package clawback
 import (
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/clawback"
 )
 
 // ClawbackBuilder provides a fluent interface for building Clawback transactions.
 type ClawbackBuilder struct {
-	issuer   *testing.Account
-	holder   *testing.Account
+	issuer   *jtx.Account
+	holder   *jtx.Account
 	currency string
 	amount   float64
 	fee      uint64
@@ -25,7 +25,7 @@ type ClawbackBuilder struct {
 // currency is the currency code (e.g. "USD").
 // amount is the amount to claw back (positive).
 // Matches rippled's claw(alice, bob["USD"](200)).
-func Claw(issuer, holder *testing.Account, currency string, amount float64) *ClawbackBuilder {
+func Claw(issuer, holder *jtx.Account, currency string, amount float64) *ClawbackBuilder {
 	return &ClawbackBuilder{
 		issuer:   issuer,
 		holder:   holder,

@@ -149,7 +149,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	snapshot := q.feeMetrics.GetSnapshot()
+	snapshot := q.feeMetrics.Snapshot()
 	requiredFeeLevel := ScaleFeeLevel(snapshot, txInLedger)
 
 	// Only attempt direct apply if sequence matches or is a ticket.
@@ -316,7 +316,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// Sequence validation within the multiTxn path.
 		// Reference: TxQ.cpp:1006-1041
 		if requiresMultiTxn && !seqProxy.IsTicket {
-			prevTx := aq.GetPrevTx(seqProxy)
+			prevTx := aq.PrevTx(seqProxy)
 			// Front-of-queue is keyed solely on the predecessor's SeqProxy, like
 			// rippled (txSeqProx < prevIter->first, TxQ.cpp:1019). A stale
 			// predecessor (< acctSeq) is left to the after-entries branch, which
@@ -483,7 +483,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if feeLevel > endEffectiveFeeLevel {
 			// Drop the last (highest-sequence) transaction from the target account.
 			// Reference: rippled TxQ.cpp:1297-1306
-			sorted := endAccount.GetSortedCandidates()
+			sorted := endAccount.SortedCandidates()
 			var dropCandidate *Candidate
 			if n := len(sorted); n > 0 {
 				dropCandidate = sorted[n-1]
@@ -566,7 +566,7 @@ func (q *TxQ) tryClearAccountQueue(
 
 	// Compute the required total fee level for clearing dist+1 transactions.
 	// This is the sum of escalated fees for positions [txInLedger+1, txInLedger+dist+1].
-	snapshot := q.feeMetrics.GetSnapshot()
+	snapshot := q.feeMetrics.Snapshot()
 	requiredTotalFeeLevel, ok := EscalatedSeriesFeeLevel(snapshot, txInLedger, 0, dist+1)
 	if !ok {
 		// Overflow, can't verify
@@ -705,7 +705,7 @@ func (q *TxQ) getNextQueuableSeq(aq *AccountQueue, acctSeq uint32) uint32 {
 	acctSeqProx := NewSeqProxySequence(acctSeq)
 
 	// Get all sequence-based transactions sorted by SeqProxy.
-	sorted := aq.GetSortedCandidates()
+	sorted := aq.SortedCandidates()
 
 	// Find the first relevant sequence-based transaction (>= acctSeqProx).
 	startIdx := -1

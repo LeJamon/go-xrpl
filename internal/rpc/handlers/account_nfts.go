@@ -13,7 +13,7 @@ import (
 // owns, read from its NFTokenPage entries.
 type AccountNftsMethod struct{ BaseHandler }
 
-func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -52,12 +52,12 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
 	}
 
 	// Build NFTs array with proper field handling

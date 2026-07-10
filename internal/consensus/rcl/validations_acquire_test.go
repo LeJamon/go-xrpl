@@ -164,7 +164,7 @@ func TestValidationTracker_GetTrustedSupportPollReplaysParked(t *testing.T) {
 	vt.Add(makeTrustedValidation(n1, abcd.ID(), abcd.Seq(), now))
 
 	provider.add(abcd)
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 1 {
+	if got := vt.TrustedSupport(abcd.ID()); got != 1 {
 		t.Fatalf("GetTrustedSupport must replay parked validations: got %d, want 1", got)
 	}
 }
@@ -307,7 +307,7 @@ func TestValidationTracker_FlushStaleUnparks(t *testing.T) {
 	if _, _, ok := vt.GetPreferred(0); ok {
 		t.Fatal("flushed-stale parked validation must not replay into the trie")
 	}
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
+	if got := vt.TrustedSupport(abcd.ID()); got != 0 {
 		t.Fatalf("phantom trie tip after flush+acquire: support %d, want 0", got)
 	}
 }
@@ -340,7 +340,7 @@ func TestValidationTracker_DetrustedParkedValidationNotReplayed(t *testing.T) {
 	if _, _, ok := vt.GetPreferred(0); ok {
 		t.Fatal("de-trusted parked validation must not replay after acquisition")
 	}
-	if got := vt.GetTrustedSupport(abcd.ID()); got != 0 {
+	if got := vt.TrustedSupport(abcd.ID()); got != 0 {
 		t.Fatalf("de-trusted parked validation counted as support: got %d, want 0", got)
 	}
 }

@@ -17,7 +17,7 @@ import (
 // NetworkOPsImp::getOwnerInfo.
 type OwnerInfoMethod struct{}
 
-func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *OwnerInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		Account *string `json:"account"`
 		Ident   *string `json:"ident"`
@@ -25,14 +25,14 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	// rippled OwnerInfo.cpp:37-41 — missing only when neither account nor
 	// ident is present. A present-but-empty value is handled below.
 	if request.Account == nil && request.Ident == nil {
-		return nil, types.RpcErrorMissingField("account")
+		return nil, types.RPCErrorMissingField("account")
 	}
 	strIdent := ""
 	if request.Account != nil {
@@ -46,7 +46,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	// string included) is not a top-level error: each section carries
 	// actMalformed while the overall response stays a success.
 	if !types.IsValidClassicAddress(strIdent) {
-		malformed := types.RpcErrorActMalformed("Account malformed.").ErrorObject()
+		malformed := types.RPCErrorActMalformed("Account malformed.").ErrorObject()
 		return map[string]any{
 			"accepted": malformed,
 			"current":  malformed,
@@ -58,7 +58,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 	walker, ok := ctx.Services.Ledger.(types.OwnerDirectoryReader)
 	if !ok {
-		return nil, types.RpcErrorInternal("owner_info: ledger service cannot walk owner directories")
+		return nil, types.RPCErrorInternal("owner_info: ledger service cannot walk owner directories")
 	}
 
 	accepted, rpcErr := ownerInfoSection(ctx, walker, strIdent, "closed")
@@ -80,10 +80,10 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // map. Mirroring rippled's getOwnerInfo, the "offers" / "ripple_lines" keys are
 // emitted only when that object type is present, so an account with no owner
 // directory yields an empty object.
-func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *types.RpcError) {
+func ownerInfoSection(ctx *types.RPCContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *types.RPCError) {
 	result, err := walker.GetOwnerInfo(ctx.Context, account, ledgerIndex)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
 	}
 
 	section := make(map[string]any)
@@ -141,7 +141,7 @@ func (m *OwnerInfoMethod) RequiredCondition() types.Condition {
 //	This stub exists for completeness but may never need implementation.
 type LedgerDiffMethod struct{ AdminHandler }
 
-func (m *LedgerDiffMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
+func (m *LedgerDiffMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+	return nil, types.NewRPCError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
 		"ledger_diff is only available via gRPC in rippled — JSON-RPC not supported")
 }

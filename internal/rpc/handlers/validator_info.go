@@ -29,14 +29,14 @@ type validatorInfoResponse struct {
 	Domain string  `json:"domain,omitempty"`
 }
 
-func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+func (m *ValidatorInfoMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 	if ctx.Services == nil || len(ctx.Services.ValidatorPublicKey) == 0 {
-		return nil, types.RpcErrorInvalidParams("not a validator")
+		return nil, types.RPCErrorInvalidParams("not a validator")
 	}
 
 	validationPK := ctx.Services.ValidatorPublicKey
 	if len(validationPK) != 33 {
-		return nil, types.RpcErrorInternal("validator public key has invalid length")
+		return nil, types.RPCErrorInternal("validator public key has invalid length")
 	}
 
 	var keyArr [33]byte
@@ -49,7 +49,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(masterKey[:])
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("encode master key: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("encode master key: %v", err))
 	}
 	resp := validatorInfoResponse{MasterKey: masterB58}
 
@@ -61,7 +61,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 	if masterKey != keyArr {
 		ephB58, err := addresscodec.EncodeNodePublicKey(keyArr[:])
 		if err != nil {
-			return nil, types.RpcErrorInternal(fmt.Sprintf("encode ephemeral key: %v", err))
+			return nil, types.RPCErrorInternal(fmt.Sprintf("encode ephemeral key: %v", err))
 		}
 		resp.EphemeralKey = ephB58
 

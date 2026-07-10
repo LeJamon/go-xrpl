@@ -10,7 +10,7 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTSellOffers
 type NftSellOffersMethod struct{ BaseHandler }
 
-func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *NftSellOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}

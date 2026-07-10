@@ -17,11 +17,11 @@ import (
 
 type stubHandler struct {
 	role    types.Role
-	handle  func(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError)
+	handle  func(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError)
 	apiVers []int
 }
 
-func (s *stubHandler) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (s *stubHandler) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if s.handle != nil {
 		return s.handle(ctx, params)
 	}
@@ -82,8 +82,8 @@ func TestPostBodyLimit(t *testing.T) {
 func TestInternalErrorMessageNotLeakedOnWire(t *testing.T) {
 	const secret = "pebble internal key 0xdeadbeef corrupt at offset 4096"
 	srv := newHardeningServer(t, time.Second, "account_info", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInternal("Failed to get account info: " + secret)
+		handle: func(*types.RPCContext, json.RawMessage) (any, *types.RPCError) {
+			return nil, types.RPCErrorInternal("Failed to get account info: " + secret)
 		},
 	})
 
@@ -149,7 +149,7 @@ func TestBatchElementCap(t *testing.T) {
 func TestRoleNotElevatableByHeader(t *testing.T) {
 	var observedRole types.Role
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 			observedRole = ctx.Role
 			return map[string]any{"ok": true}, nil
 		},
@@ -180,7 +180,7 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 	var observedRole types.Role
 	var observedClientIP string
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 			observedRole = ctx.Role
 			observedClientIP = ctx.ClientIP
 			return map[string]any{"ok": true}, nil
@@ -214,8 +214,8 @@ func TestTrustedProxyAttributesClientIPButNotAdmin(t *testing.T) {
 // original values never appear on the wire.
 func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "submit", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			return nil, types.RpcErrorInvalidParams("bad")
+		handle: func(*types.RPCContext, json.RawMessage) (any, *types.RPCError) {
+			return nil, types.RPCErrorInvalidParams("bad")
 		},
 	})
 
@@ -271,7 +271,7 @@ func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 // envelope to the client instead of crashing the server goroutine.
 func TestHandlerPanicRecovered(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "panic", &stubHandler{
-		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
+		handle: func(*types.RPCContext, json.RawMessage) (any, *types.RPCError) {
 			panic("synthetic panic")
 		},
 	})
@@ -296,7 +296,7 @@ func TestHandlerPanicRecovered(t *testing.T) {
 func TestDispatchHasDeadline(t *testing.T) {
 	var observed context.Context
 	srv := newHardeningServer(t, 250*time.Millisecond, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 			observed = ctx.Context
 			return map[string]any{"ok": true}, nil
 		},
@@ -320,9 +320,9 @@ func TestDispatchHasDeadline(t *testing.T) {
 // presents an X-User header is RoleIdentified (unlimited resources) but
 // is NOT admin. Without X-User the same peer is RoleProxy.
 func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
-	var observed *types.RpcContext
+	var observed *types.RPCContext
 	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{
-		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
+		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
 			observed = ctx
 			return map[string]any{"ok": true}, nil
 		},
