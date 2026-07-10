@@ -73,7 +73,46 @@ func (m *MPTokenIssuanceDestroy) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureMPTokensV1}
 }
 
-// Reference: rippled MPTokenIssuanceDestroy.cpp preclaim() + doApply()
+// Preclaim runs MPTokenIssuanceDestroy's ledger-aware checks: the issuance must
+// exist (tecOBJECT_NOT_FOUND), the caller must be its issuer (tecNO_PERMISSION),
+// and it must carry no outstanding or locked balances (tecHAS_OBLIGATIONS).
+// Extracting these from Apply makes them visible to the preclaim-only paths (TxQ
+// admission, simulate), matching rippled where they live in
+// MPTokenIssuanceDestroy::preclaim.
+// Reference: rippled MPTokenIssuanceDestroy.cpp preclaim().
+func (m *MPTokenIssuanceDestroy) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	var mptID [24]byte
+	issuanceIDBytes, decErr := hex.DecodeString(m.MPTokenIssuanceID)
+	if decErr != nil || len(issuanceIDBytes) != 24 {
+		return ter.TemINVALID
+	}
+	copy(mptID[:], issuanceIDBytes)
+
+	issuanceRaw, readErr := view.Read(keylet.MPTIssuance(mptID))
+	if readErr != nil || issuanceRaw == nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	issuance, parseErr := state.ParseMPTokenIssuance(issuanceRaw)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	accountID, acctErr := state.DecodeAccountID(m.Account)
+	if acctErr != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	if issuance.Issuer != accountID {
+		return ter.TecNO_PERMISSION
+	}
+	if issuance.OutstandingAmount != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
+	if issuance.LockedAmount != nil && *issuance.LockedAmount != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled MPTokenIssuanceDestroy.cpp doApply()
 func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("mptoken issuance destroy apply",
 		"account", m.Account,
@@ -103,26 +142,6 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		ctx.Log.Error("mptoken issuance destroy: failed to parse issuance", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	// Caller must be the issuer
-	if issuance.Issuer != ctx.AccountID {
-		ctx.Log.Warn("mptoken issuance destroy: caller is not issuer")
-		return ter.TecNO_PERMISSION
-	}
-
-	// Cannot destroy with outstanding balances
-	if issuance.OutstandingAmount != 0 {
-		ctx.Log.Warn("mptoken issuance destroy: has outstanding obligations",
-			"outstandingAmount", issuance.OutstandingAmount,
-		)
-		return ter.TecHAS_OBLIGATIONS
-	}
-	if issuance.LockedAmount != nil && *issuance.LockedAmount != 0 {
-		ctx.Log.Warn("mptoken issuance destroy: has locked obligations",
-			"lockedAmount", *issuance.LockedAmount,
-		)
-		return ter.TecHAS_OBLIGATIONS
 	}
 
 	// doApply: remove from owner directory

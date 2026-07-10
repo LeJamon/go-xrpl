@@ -169,7 +169,33 @@ func (d *DelegateSet) PreflightRules(rules *amendment.Rules) error {
 	return nil
 }
 
-// Reference: rippled DelegateSet.cpp preclaim() + doApply()
+// Preclaim runs DelegateSet's ledger-aware checks: the Authorize target account
+// must exist (tecNO_TARGET) and a clear (empty-permissions) request must target an
+// existing delegate entry (tecNO_ENTRY). Extracting these from Apply makes them
+// visible to the preclaim-only paths (TxQ admission, simulate), matching rippled
+// where they live in DelegateSet::preclaim.
+// Reference: rippled DelegateSet.cpp preclaim().
+func (d *DelegateSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, acctErr := state.DecodeAccountID(d.Account)
+	if acctErr != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	authorizeID, err := state.DecodeAccountID(d.Authorize)
+	if err != nil {
+		return ter.TecNO_TARGET
+	}
+	if exists, _ := view.Exists(keylet.Account(authorizeID)); !exists {
+		return ter.TecNO_TARGET
+	}
+	if len(d.permissionValues()) == 0 {
+		if exists, _ := view.Exists(keylet.Delegate(accountID, authorizeID)); !exists {
+			return ter.TecNO_ENTRY
+		}
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled DelegateSet.cpp doApply()
 func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("delegate set apply",
 		"account", d.Account,
@@ -177,13 +203,8 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		"permissions", d.Permissions,
 	)
 
-	// Preclaim: verify authorize target exists
-	// Reference: rippled DelegateSet.cpp preclaim()
 	authorizeID, err := state.DecodeAccountID(d.Authorize)
 	if err != nil {
-		return ter.TecNO_TARGET
-	}
-	if exists, _ := ctx.View.Exists(keylet.Account(authorizeID)); !exists {
 		return ter.TecNO_TARGET
 	}
 
@@ -192,12 +213,6 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	existingData, readErr := ctx.View.Read(delegateKey)
 	delegateExists := readErr == nil && existingData != nil
-
-	// Preclaim: deleting a delegate object that does not exist is invalid.
-	// Reference: rippled DelegateSet.cpp preclaim().
-	if len(permValues) == 0 && !delegateExists {
-		return ter.TecNO_ENTRY
-	}
 
 	if delegateExists {
 		// Empty permissions -- delete the delegate entry.

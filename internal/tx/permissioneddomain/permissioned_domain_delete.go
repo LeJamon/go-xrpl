@@ -66,7 +66,38 @@ func (p *PermissionedDomainDelete) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePermissionedDomains}
 }
 
-// Reference: rippled PermissionedDomainDelete.cpp preclaim() + doApply()
+// Preclaim runs PermissionedDomainDelete's ledger-aware checks: the domain must
+// exist (tecNO_ENTRY) and the caller must own it (tecNO_PERMISSION). Extracting
+// these from Apply makes them visible to the preclaim-only paths (TxQ admission,
+// simulate), matching rippled where they live in PermissionedDomainDelete::preclaim.
+// Reference: rippled PermissionedDomainDelete.cpp preclaim().
+func (p *PermissionedDomainDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	domainBytes, decErr := hex.DecodeString(p.DomainID)
+	if decErr != nil || len(domainBytes) != 32 {
+		return ter.TemINVALID
+	}
+	var domainID [32]byte
+	copy(domainID[:], domainBytes)
+
+	existingData, readErr := view.Read(keylet.PermissionedDomainByID(domainID))
+	if readErr != nil || existingData == nil {
+		return ter.TecNO_ENTRY
+	}
+	existing, parseErr := state.ParsePermissionedDomain(existingData)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	accountID, acctErr := state.DecodeAccountID(p.Account)
+	if acctErr != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	if existing.Owner != accountID {
+		return ter.TecNO_PERMISSION
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled PermissionedDomainDelete.cpp doApply()
 func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("permissioned domain delete apply",
 		"account", p.Account,
@@ -95,13 +126,6 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if err != nil {
 		ctx.Log.Error("permissioned domain delete: failed to parse domain", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	// Preclaim: verify caller owns the domain
-	// Reference: rippled PermissionedDomainDelete.cpp preclaim() lines 57-61
-	if existing.Owner != ctx.AccountID {
-		ctx.Log.Warn("permissioned domain delete: caller is not owner")
-		return ter.TecNO_PERMISSION
 	}
 
 	// Remove from owner directory
