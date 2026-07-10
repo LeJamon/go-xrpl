@@ -292,6 +292,63 @@ func (a *AccountSet) EnableDefaultRipple() {
 	a.SetFlag = &flag
 }
 
+// Preclaim runs AccountSet's ledger-aware gates in rippled AccountSet::preclaim
+// order: the RequireAuth owner-directory gate before the Clawback/NoFreeze
+// mutual-exclusion gates. go-xrpl previously folded both into Apply with Clawback
+// first; that mis-ordered the TER for an account that both enables auth (a legacy
+// tfRequireAuth) and sets AllowTrustLineClawback while already carrying NoFreeze
+// with a non-empty owner directory — rippled returns tecOWNERS from the
+// RequireAuth gate, not tecNO_PERMISSION from the Clawback gate. The flag
+// mutations stay in Apply (rippled doApply).
+func (a *AccountSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(a.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	sle, err := tx.ReadAccountRoot(view, accountID)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if sle == nil {
+		return ter.TerNO_ACCOUNT
+	}
+
+	var uSetFlag uint32
+	if a.SetFlag != nil {
+		uSetFlag = *a.SetFlag
+	}
+	uTxFlags := a.GetFlags()
+	bSetRequireAuth := (uTxFlags&AccountSetTxFlagRequireAuth != 0) || uSetFlag == AccountSetFlagRequireAuth
+
+	// RequireAuth: enabling auth requires an empty owner directory. Under an
+	// open-ledger retry this is terOWNERS (retry when the directory may drain
+	// later); otherwise tecOWNERS.
+	if bSetRequireAuth && (sle.Flags&state.LsfRequireAuth) == 0 {
+		if !ownerDirIsEmpty(view, accountID) {
+			if (config.ApplyFlags & tx.TapRETRY) != 0 {
+				return ter.TerOWNERS
+			}
+			return ter.TecOWNERS
+		}
+	}
+
+	// Clawback / NoFreeze mutual exclusion (gated on the Clawback amendment).
+	rules := view.Rules()
+	if rules != nil && rules.Enabled(amendment.FeatureClawback) {
+		if uSetFlag == AccountSetFlagAllowTrustLineClawback {
+			if sle.Flags&state.LsfNoFreeze != 0 {
+				return ter.TecNO_PERMISSION
+			}
+			if !ownerDirIsEmpty(view, accountID) {
+				return ter.TecOWNERS
+			}
+		} else if uSetFlag == AccountSetFlagNoFreeze && sle.Flags&state.LsfAllowTrustLineClawback != 0 {
+			return ter.TecNO_PERMISSION
+		}
+	}
+	return ter.TesSUCCESS
+}
+
 func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("account set apply",
 		"account", a.Account,
@@ -322,34 +379,9 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	bSetDisallowXRP := (uTxFlags&AccountSetTxFlagDisallowXRP != 0) || uSetFlag == AccountSetFlagDisallowXRP
 	bClearDisallowXRP := (uTxFlags&AccountSetTxFlagAllowXRP != 0) || uClearFlag == AccountSetFlagDisallowXRP
 
-	// Clawback / NoFreeze mutual exclusion preclaim checks
-	// Reference: rippled SetAccount.cpp preclaim() lines 281-307
-	if ctx.Rules().Enabled(amendment.FeatureClawback) {
-		if uSetFlag == AccountSetFlagAllowTrustLineClawback {
-			if uFlagsIn&state.LsfNoFreeze != 0 {
-				return ter.TecNO_PERMISSION
-			}
-			if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
-				return ter.TecOWNERS
-			}
-		}
-		if uSetFlag == AccountSetFlagNoFreeze && uFlagsIn&state.LsfAllowTrustLineClawback != 0 {
-			return ter.TecNO_PERMISSION
-		}
-	}
-
-	// RequireAuth
-	// Reference: rippled SetAccount.cpp preclaim() lines 269-276
-	// dirIsEmpty() checks whether the owner directory has any entries.
-	//
-	// In rippled, this returns terOWNERS (retry) when tapRETRY is set (open ledger)
-	// and tecOWNERS (claim fee) otherwise. go-xrpl has no open-ledger retry mechanism
-	// (tapRETRY), so we always return tecOWNERS — equivalent to the closed-ledger
-	// (consensus) path in rippled.
+	// RequireAuth flag mutation. The owner-directory gate and the Clawback /
+	// NoFreeze mutual-exclusion gates run in Preclaim (rippled AccountSet::preclaim).
 	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
-		if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
-			return ter.TecOWNERS
-		}
 		uFlagsOut |= state.LsfRequireAuth
 	}
 	if bClearRequireAuth && (uFlagsIn&state.LsfRequireAuth) != 0 {
