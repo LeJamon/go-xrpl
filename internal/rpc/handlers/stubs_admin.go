@@ -350,7 +350,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// GET: return current levels snapshot
 	if request.Severity == "" {
-		global, partitions := xrpllog.GetCurrentLevels()
+		global, partitions := xrpllog.Levels()
 		levels := map[string]string{
 			"base": rippledSeverityName(global),
 		}

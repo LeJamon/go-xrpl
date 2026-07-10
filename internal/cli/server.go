@@ -96,10 +96,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	logHandler := xrpllog.NewHandler(logCfg)
-	rootLogger := xrpllog.New(logHandler, logCfg)
-	xrpllog.SetRoot(rootLogger)
-	xrpllog.SetRootConfig(logCfg)
+	rootLogger, logHandler := xrpllog.Init(logCfg)
 	// Route subsystems that log through slog.Default() (consensus adaptor,
 	// inbound-ledger, validator-list) through the same configured handler so
 	// they honour the operator's level, format, output file, and rotation.
@@ -216,13 +213,13 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	// Initialize ledger service
 	cfg := service.Config{
-		Standalone:     standalone,
-		NetworkID:      uint32(networkID),
-		NodeStore:      db,
-		RelationalDB:   repoManager,
-		Logger:         rootLogger,
-		Table: amendmentTable,
-		TxQ:            &txqCfg,
+		Standalone:   standalone,
+		NetworkID:    uint32(networkID),
+		NodeStore:    db,
+		RelationalDB: repoManager,
+		Logger:       rootLogger,
+		Table:        amendmentTable,
+		TxQ:          &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
 
