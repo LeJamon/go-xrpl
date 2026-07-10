@@ -197,14 +197,12 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	channelSLE := newPayChannelData(p, accountID, destID, amount)
 	channelData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
-		ctx.Log.Error("payment channel create: failed to serialize channel", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializePayChannelFromData", err)
 	}
 
 	// Insert channel
 	if err := ctx.View.Insert(channelKey, channelData); err != nil {
-		ctx.Log.Error("payment channel create: failed to insert channel", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("insert pay channel", err)
 	}
 
 	// DirInsert into owner directory
@@ -242,10 +240,10 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Re-serialize with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializePayChannelFromData", err)
 	}
 	if err := ctx.View.Update(channelKey, updatedData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("update pay channel", err)
 	}
 
 	// Deduct amount from account and increment OwnerCount

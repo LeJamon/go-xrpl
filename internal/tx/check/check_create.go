@@ -198,12 +198,12 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	checkSLE := newCheckData(c, accountID, destID, sequence, c.SendMax)
 	checkData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeCheckFromData", err)
 	}
 
 	// Insert check
 	if err := ctx.View.Insert(checkKey, checkData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("insert check", err)
 	}
 
 	// Insert check into destination's owner directory (not self-send).
@@ -236,10 +236,10 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Re-serialize check with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeCheckFromData", err)
 	}
 	if err := ctx.View.Update(checkKey, updatedData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("update check", err)
 	}
 
 	// Increase owner count

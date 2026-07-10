@@ -424,14 +424,12 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		e.FinishAfter, e.CancelAfter, condition,
 		e.GetCommon().SourceTag, e.DestinationTag, seqPtr)
 	if err != nil {
-		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeEscrow", err)
 	}
 
 	// Insert escrow - creation tracked automatically by ApplyStateTable
 	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
-		ctx.Log.Error("escrow create: failed to insert escrow", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("insert escrow", err)
 	}
 
 	// Deduct the escrow amount from the sender.
