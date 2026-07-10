@@ -7,12 +7,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// JsonMethod handles the json RPC method.
+// JSONMethod handles the json RPC method.
 // This is a proxy that forwards calls to other RPC methods.
 // Reference: rippled JSON.cpp
-type JsonMethod struct{ BaseHandler }
+type JSONMethod struct{ BaseHandler }
 
-func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *JSONMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params,omitempty"`
@@ -20,16 +20,16 @@ func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	if request.Method == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: method")
+		return nil, types.RPCErrorInvalidParams("Missing required parameter: method")
 	}
 
 	if ctx.Services == nil || ctx.Services.Dispatcher == nil {
-		return nil, types.RpcErrorInternal("Method dispatcher not available")
+		return nil, types.RPCErrorInternal("Method dispatcher not available")
 	}
 
 	// The params field in the json method can be either:

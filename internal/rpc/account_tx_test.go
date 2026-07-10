@@ -48,7 +48,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -192,7 +192,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("Default ledger_index_min=-1 and ledger_index_max=-1", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -226,7 +226,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 	})
 
 	t.Run("ledger_index_min=0 and ledger_index_max=0 (omitted)", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -257,7 +257,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 	})
 
 	t.Run("Specific ledger range with transactions", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -322,7 +322,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 	metaBytes, _ := hex.DecodeString("201C00000001")
 
 	t.Run("Binary mode returns tx_blob and meta_blob as hex (API v2)", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
@@ -386,7 +386,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 	})
 
 	t.Run("JSON mode returns decoded tx and meta objects", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -448,7 +448,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -539,7 +539,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -636,7 +636,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -770,7 +770,7 @@ func TestAccountTxEmptyAccount(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -848,7 +848,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 	}
 
 	t.Run("Binary mode - API v2 fields", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
@@ -895,7 +895,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 	})
 
 	t.Run("JSON mode - hash at entry level", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
@@ -959,7 +959,7 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -975,7 +975,7 @@ func TestAccountTxServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -998,7 +998,7 @@ func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 	services := newTestServicesAccountTx(mock)
 
 	method := &handlers.AccountTxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1050,7 +1050,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1155,7 +1155,7 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1228,7 +1228,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1300,7 +1300,7 @@ func TestAccountTxValidatedField(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1361,7 +1361,7 @@ func TestAccountTxAccountPassedToService(t *testing.T) {
 
 	method := &handlers.AccountTxMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

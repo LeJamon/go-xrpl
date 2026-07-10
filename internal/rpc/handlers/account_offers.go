@@ -13,7 +13,7 @@ import (
 // entries the account currently owns.
 type AccountOffersMethod struct{ BaseHandler }
 
-func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -52,12 +52,12 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, types.RPCErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
 	}
 
 	// Build response

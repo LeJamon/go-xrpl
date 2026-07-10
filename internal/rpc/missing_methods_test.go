@@ -72,7 +72,7 @@ func TestFetchInfoMethod(t *testing.T) {
 	method := &handlers.FetchInfoMethod{}
 
 	t.Run("Returns response with clear flag", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -90,7 +90,7 @@ func TestFetchInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Returns response without clear flag", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -125,7 +125,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 	method := &handlers.OwnerInfoMethod{}
 
 	t.Run("Missing account parameter returns error", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -140,7 +140,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Empty account returns per-section actMalformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -172,7 +172,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 			Offers:      []types.AccountObjectItem{{Index: "aa", LedgerEntryType: "Offer", Data: []byte{0x01}}},
 			RippleLines: []types.AccountObjectItem{{Index: "bb", LedgerEntryType: "RippleState", Data: []byte{0x02}}},
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -199,7 +199,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 		nfMock := newMockLedgerServiceMissingMethods()
 		// The default mock returns an empty OwnerInfoResult, mirroring an
 		// account with no owner directory.
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -220,7 +220,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Malformed account returns per-section actMalformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -241,7 +241,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 	})
 
 	t.Run("X-address is rejected as malformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -276,7 +276,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 
 	t.Run("Current ledger returns error when GetLedgerBySequence not implemented", func(t *testing.T) {
 		// The mock returns "not implemented" for GetLedgerBySequence
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -293,7 +293,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 	})
 
 	t.Run("Validated ledger returns error when GetLedgerBySequence not implemented", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -329,8 +329,8 @@ func TestLedgerRequestMethod(t *testing.T) {
 
 	method := &handlers.LedgerRequestMethod{}
 
-	newCtx := func() *types.RpcContext {
-		return &types.RpcContext{
+	newCtx := func() *types.RPCContext {
+		return &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -384,7 +384,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 	t.Run("Unavailable when no cleaner is wired", func(t *testing.T) {
 		// The verifier is only wired when a node store is configured; with no
 		// cleaner the handler reports the service unavailable.
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -412,7 +412,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 				Failures:     1,
 			}
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -451,7 +451,7 @@ func TestLedgerDiffMethod(t *testing.T) {
 	method := &handlers.LedgerDiffMethod{}
 
 	t.Run("Returns gRPC only error", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -482,7 +482,7 @@ func TestSimulateMethod(t *testing.T) {
 
 	t.Run("Missing tx_json and tx_blob returns error", func(t *testing.T) {
 		// Based on Simulate_test.cpp::testParamErrors - "No params"
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -499,7 +499,7 @@ func TestSimulateMethod(t *testing.T) {
 
 	t.Run("Both tx_json and tx_blob returns not implemented (stub)", func(t *testing.T) {
 		// simulate is a stub - returns RpcNOT_IMPL regardless of params
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -536,7 +536,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 	method := &handlers.TxReduceRelayMethod{}
 
 	t.Run("Returns zeroed txr_* metrics when overlay not wired", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -566,7 +566,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 				MissingTxFreq:   7,
 			}
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -606,7 +606,7 @@ func TestConnectMethod(t *testing.T) {
 
 	t.Run("Standalone mode returns notSynced error", func(t *testing.T) {
 		// Based on Connect_test.cpp::testErrors
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -627,7 +627,7 @@ func TestConnectMethod(t *testing.T) {
 		// rippled checks standalone before the ip field (Connect.cpp:41), so
 		// connect "{}" in standalone is notSynced, not a missing-field error
 		// (Connect_test.cpp::testErrors).
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -648,7 +648,7 @@ func TestConnectMethod(t *testing.T) {
 			Ledger:      mock,
 			PeerConnect: func(string) error { return nil },
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -671,7 +671,7 @@ func TestConnectMethod(t *testing.T) {
 				return nil
 			},
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -697,7 +697,7 @@ func TestConnectMethod(t *testing.T) {
 			Ledger:      mock,
 			PeerConnect: func(addr string) error { got <- addr; return nil },
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -728,7 +728,7 @@ func TestPrintMethod(t *testing.T) {
 	method := &handlers.PrintMethod{}
 
 	t.Run("Returns status message", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -757,7 +757,7 @@ func TestPrintMethod(t *testing.T) {
 				CurrentDurationUs: 500,
 			}
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -792,7 +792,7 @@ func TestPrintMethod(t *testing.T) {
 	})
 
 	t.Run("Subtree selector narrows output", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -835,7 +835,7 @@ func TestValidatorInfoMethod(t *testing.T) {
 
 	t.Run("Non-validator returns error", func(t *testing.T) {
 		// Based on ValidatorInfo_test.cpp::testErrors
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -866,7 +866,7 @@ func TestCanDeleteMethod(t *testing.T) {
 
 	t.Run("Returns not enabled error (requires SHAMapStore)", func(t *testing.T) {
 		// can_delete requires SHAMapStore advisory delete configuration
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -900,7 +900,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	validOracle := `{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "oracle_document_id": 1}`
 
 	t.Run("Missing oracles parameter returns missing_field_error", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -918,7 +918,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Empty oracles array returns oracleMalformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -935,7 +935,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Oracles not array returns oracleMalformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -952,7 +952,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Missing base_asset returns missing_field_error", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -969,7 +969,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Missing quote_asset returns missing_field_error", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -986,7 +986,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Trim=0 returns invalidParams", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1002,7 +1002,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Trim=26 returns invalidParams", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1018,7 +1018,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid base_asset returns invalidParams", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1043,7 +1043,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Oracle entry missing account returns oracleMalformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1060,7 +1060,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Oracle entry missing oracle_document_id returns oracleMalformed", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1077,7 +1077,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid trim type returns invalidParams", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1094,7 +1094,7 @@ func TestGetAggregatePriceMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid time_threshold type returns invalidParams", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1126,7 +1126,7 @@ func TestGetCountsMethod(t *testing.T) {
 
 	t.Run("Returns server counts info", func(t *testing.T) {
 		// get_counts returns server statistics
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1156,7 +1156,7 @@ func TestGetCountsMethod(t *testing.T) {
 				},
 			}
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1191,7 +1191,7 @@ func TestGetCountsMethod(t *testing.T) {
 		svc.GetCounts = func() types.CountsResult {
 			return types.CountsResult{Standalone: false, LocalTxs: 0}
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1220,7 +1220,7 @@ func TestLogLevelMethod(t *testing.T) {
 
 	method := &handlers.LogLevelMethod{}
 
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -1328,7 +1328,7 @@ func TestLogRotateMethod(t *testing.T) {
 	method := &handlers.LogRotateMethod{}
 
 	t.Run("Returns rotation message", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1362,7 +1362,7 @@ func TestAMMInfoMethod(t *testing.T) {
 		// The mock returns "not implemented" for GetLedgerEntry; rippled's
 		// AMMInfo returns actMalformed when the amm_account is absent from
 		// the ledger.
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1382,7 +1382,7 @@ func TestAMMInfoMethod(t *testing.T) {
 	t.Run("Returns actMalformed when amm_account is unparseable", func(t *testing.T) {
 		// rippled's AMMInfo also returns actMalformed (not invalidParams)
 		// when the amm_account fails to parse as an account.
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1400,7 +1400,7 @@ func TestAMMInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Returns AMM not found when looking up by assets", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1421,7 +1421,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 	t.Run("Invalid parameters - neither assets nor amm_account", func(t *testing.T) {
 		// Based on AMMInfo_test.cpp::testErrors - "Invalid parameters"
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1437,7 +1437,7 @@ func TestAMMInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid parameters - both assets and amm_account", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1471,7 +1471,7 @@ func TestVaultInfoMethod(t *testing.T) {
 
 	t.Run("Returns vault not found when vault does not exist", func(t *testing.T) {
 		// The mock returns "not implemented" for GetLedgerEntry, which becomes Vault not found
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1488,7 +1488,7 @@ func TestVaultInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Returns vault not found when looking up by owner+seq", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1505,7 +1505,7 @@ func TestVaultInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid vault_id format returns error", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1521,7 +1521,7 @@ func TestVaultInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid parameters - neither vault_id nor owner+seq", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1537,7 +1537,7 @@ func TestVaultInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid parameters - both vault_id and owner", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1569,7 +1569,7 @@ func TestUnlListMethod(t *testing.T) {
 	method := &handlers.UnlListMethod{}
 
 	t.Run("Returns empty UNL with no validator list", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1595,7 +1595,7 @@ func TestUnlListMethod(t *testing.T) {
 			}
 			return key
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1647,7 +1647,7 @@ func TestBlackListMethod(t *testing.T) {
 	method := &handlers.BlackListMethod{}
 
 	t.Run("Returns empty object when overlay not wired", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1672,7 +1672,7 @@ func TestBlackListMethod(t *testing.T) {
 				}
 			},
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1697,7 +1697,7 @@ func TestBlackListMethod(t *testing.T) {
 				return map[string]any{}
 			},
 		}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
@@ -1718,7 +1718,7 @@ func TestBlackListMethod(t *testing.T) {
 
 func TestMissingMethodsServiceUnavailable(t *testing.T) {
 	// Test all methods handle nil Services gracefully
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -1771,7 +1771,7 @@ func TestMissingMethodsServiceUnavailable(t *testing.T) {
 
 func TestMissingMethodsNilLedgerService(t *testing.T) {
 	// Test all methods handle nil Ledger gracefully
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

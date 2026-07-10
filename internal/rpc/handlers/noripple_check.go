@@ -12,7 +12,7 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/NoRippleCheck.cpp
 type NoRippleCheckMethod struct{ BaseHandler }
 
-func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -31,12 +31,12 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// rippled: missing_field_error("role")
 	if request.Role == "" {
-		return nil, types.RpcErrorMissingField("role")
+		return nil, types.RPCErrorMissingField("role")
 	}
 
 	// rippled: invalid_field_error("role")
 	if request.Role != "gateway" && request.Role != "user" {
-		return nil, types.RpcErrorInvalidField("role")
+		return nil, types.RPCErrorInvalidField("role")
 	}
 
 	// API v2+ requires transactions to be a boolean
@@ -47,7 +47,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			if txField, ok := rawParams["transactions"]; ok {
 				var boolVal bool
 				if err := json.Unmarshal(txField, &boolVal); err != nil {
-					return nil, types.RpcErrorInvalidField("transactions")
+					return nil, types.RPCErrorInvalidField("transactions")
 				}
 			}
 		}
@@ -80,15 +80,15 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RpcErrorInternal(err.Error())
+		return nil, types.RPCErrorInternal(err.Error())
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format

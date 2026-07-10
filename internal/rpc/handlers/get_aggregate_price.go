@@ -23,13 +23,13 @@ type PriceDataPoint struct {
 	LastUpdateTime uint32
 }
 
-func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *GetAggregatePriceMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	// Parse into raw map first for field-presence detection (matching rippled's
 	// isMember() checks which distinguish "absent" from "present but invalid").
 	var raw map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &raw); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 	if raw == nil {
@@ -39,28 +39,28 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// rippled: !params.isMember(jss::oracles) -> missing_field_error
 	oraclesRaw, hasOracles := raw["oracles"]
 	if !hasOracles {
-		return nil, types.RpcErrorMissingField("oracles")
+		return nil, types.RPCErrorMissingField("oracles")
 	}
 	// rippled: !isArray() || size()==0 || size()>200 -> rpcORACLE_MALFORMED
 	var oracles []json.RawMessage
 	if err := json.Unmarshal(oraclesRaw, &oracles); err != nil {
 		// Not an array
-		return nil, types.RpcErrorOracleMalformed()
+		return nil, types.RPCErrorOracleMalformed()
 	}
 	const maxOracles = 200
 	if len(oracles) == 0 || len(oracles) > maxOracles {
-		return nil, types.RpcErrorOracleMalformed()
+		return nil, types.RPCErrorOracleMalformed()
 	}
 
 	// rippled: !params.isMember(jss::base_asset) -> missing_field_error
 	baseAssetRaw, hasBaseAsset := raw["base_asset"]
 	if !hasBaseAsset {
-		return nil, types.RpcErrorMissingField("base_asset")
+		return nil, types.RPCErrorMissingField("base_asset")
 	}
 	// rippled: !params.isMember(jss::quote_asset) -> missing_field_error
 	quoteAssetRaw, hasQuoteAsset := raw["quote_asset"]
 	if !hasQuoteAsset {
-		return nil, types.RpcErrorMissingField("quote_asset")
+		return nil, types.RPCErrorMissingField("quote_asset")
 	}
 
 	// rippled: if present, must be valid uint; then if present, must be 1..25
@@ -71,11 +71,11 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		hasTrim = true
 		v, err := parseUintParam(trimRaw)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		trimValue = v
 		if trimValue == 0 || trimValue > maxTrim {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
@@ -84,7 +84,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if ttRaw, ok := raw["time_threshold"]; ok {
 		v, err := parseUintParam(ttRaw)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		timeThreshold = v
 	}
@@ -92,11 +92,11 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// rippled: empty or invalid currency -> rpcINVALID_PARAMS
 	baseAsset, err := parseCurrencyParam(baseAssetRaw)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	quoteAsset, err := parseCurrencyParam(quoteAssetRaw)
 	if err != nil {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -122,7 +122,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	for _, oracleRaw := range oracles {
 		var oracleSpec map[string]any
 		if err := json.Unmarshal(oracleRaw, &oracleSpec); err != nil {
-			return nil, types.RpcErrorOracleMalformed()
+			return nil, types.RPCErrorOracleMalformed()
 		}
 
 		// rippled: missing account or oracle_document_id -> rpcORACLE_MALFORMED
@@ -130,23 +130,23 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		docIDRaw, hasDocID := oracleSpec["oracle_document_id"]
 
 		if !hasAccount || !hasDocID {
-			return nil, types.RpcErrorOracleMalformed()
+			return nil, types.RPCErrorOracleMalformed()
 		}
 
 		// rippled: invalid oracle_document_id (not uint) -> rpcINVALID_PARAMS
 		documentID, ok := parseOracleDocumentID(docIDRaw)
 		if !ok {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 
 		// rippled: invalid account (not valid base58) -> rpcINVALID_PARAMS
 		accountStr, ok := accountRaw.(string)
 		if !ok {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		_, accountBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(accountStr)
 		if decodeErr != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		var accountID [20]byte
 		copy(accountID[:], accountBytes)
@@ -160,7 +160,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 			}
 		}
 		if allZero {
-			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 
 		oracleKeylet := keylet.Oracle(accountID, documentID)
@@ -252,7 +252,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	// rippled: prices.empty() -> rpcOBJECT_NOT_FOUND
 	if len(prices) == 0 {
-		return nil, types.RpcErrorObjectNotFound("Object not found.")
+		return nil, types.RPCErrorObjectNotFound("Object not found.")
 	}
 
 	// Find the latest update time
@@ -294,7 +294,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 			filtered = prices
 		}
 		if len(filtered) == 0 {
-			return nil, types.RpcErrorInternal("Internal error.")
+			return nil, types.RPCErrorInternal("Internal error.")
 		}
 		prices = filtered
 	}

@@ -123,7 +123,7 @@ func TestLedgerOwnerFunds(t *testing.T) {
 	mock := &ownerFundsLedgerMock{ledgerMock: base, view: view, reader: reader}
 	services := &types.ServiceContainer{Ledger: mock}
 
-	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	method := &handlers.LedgerMethod{}
 	paramsJSON, _ := json.Marshal(map[string]any{
 		"ledger_index": 2,

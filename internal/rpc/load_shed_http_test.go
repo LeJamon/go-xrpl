@@ -22,7 +22,7 @@ func TestNewServerWiresClientLoadShedder(t *testing.T) {
 }
 
 // 503 status mapping matches rippled ErrorCodes.cpp:114 (rpcTOO_BUSY row).
-func TestRpcTooBusyReturnsHTTP503(t *testing.T) {
+func TestRPCTooBusyReturnsHTTP503(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	srv := NewServer(time.Second, services)
 	srv.registry.Register("book_offers", &handlers.BookOffersMethod{})

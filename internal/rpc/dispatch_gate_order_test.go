@@ -75,13 +75,13 @@ func TestDispatchGateOrder(t *testing.T) {
 			if c.saturated {
 				services.ClientLoad = saturatedShedder()
 			}
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				ApiVersion: c.apiVersion,
 				Role:       types.RoleGuest, // non-admin caller
 				Services:   services,
 			}
 
-			result, rpcErr := dispatchMethod(reg, nil, services, ctx, c.method, nil, types.RpcErrorForbidden, rpcLog())
+			result, rpcErr := dispatchMethod(reg, nil, services, ctx, c.method, nil, types.RPCErrorForbidden, rpcLog())
 
 			if !c.wantErr {
 				require.Nil(t, rpcErr)

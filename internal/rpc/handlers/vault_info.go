@@ -14,7 +14,7 @@ import (
 // VaultInfoMethod handles the vault_info RPC method
 type VaultInfoMethod struct{ BaseHandler }
 
-func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.LedgerSpecifier
 		VaultID string `json:"vault_id,omitempty"`
@@ -32,10 +32,10 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	// Validate parameter combinations
 	if hasVaultID && (hasOwner || hasSeq) {
-		return nil, types.RpcErrorInvalidParams("Cannot specify vault_id with owner/seq")
+		return nil, types.RPCErrorInvalidParams("Cannot specify vault_id with owner/seq")
 	}
 	if !hasVaultID && (!hasOwner || !hasSeq) {
-		return nil, types.RpcErrorInvalidParams("Must specify either vault_id or (owner + seq)")
+		return nil, types.RPCErrorInvalidParams("Must specify either vault_id or (owner + seq)")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -53,14 +53,14 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		// Direct vault ID lookup
 		vaultIDBytes, err := hex.DecodeString(request.VaultID)
 		if err != nil || len(vaultIDBytes) != 32 {
-			return nil, types.RpcErrorInvalidParams("Invalid vault_id: must be 64-character hex string")
+			return nil, types.RPCErrorInvalidParams("Invalid vault_id: must be 64-character hex string")
 		}
 		copy(vaultKey[:], vaultIDBytes)
 	} else {
 		// Lookup by owner + seq
 		_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(request.Owner)
 		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid owner address: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid owner address: %v", err))
 		}
 		var ownerID [20]byte
 		copy(ownerID[:], ownerBytes)
@@ -74,12 +74,12 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
-		return nil, types.RpcErrorEntryNotFoundBare("Vault not found")
+		return nil, types.RPCErrorEntryNotFoundBare("Vault not found")
 	}
 
 	vaultDecoded, decodeErr := binarycodec.Decode(hex.EncodeToString(vaultEntry.Node))
 	if decodeErr != nil {
-		return nil, types.RpcErrorInternal("Failed to decode Vault: " + decodeErr.Error())
+		return nil, types.RPCErrorInternal("Failed to decode Vault: " + decodeErr.Error())
 	}
 
 	// Get the ShareMPTID to lookup the MPToken issuance

@@ -1314,7 +1314,7 @@ func TestGetSubscribeResponse(t *testing.T) {
 // call." branch when context.infoSub is null and no `url` param is provided).
 func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 	method := &handlers.SubscribeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1331,7 +1331,7 @@ func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 // "Must be a JSON-RPC call." gate as Subscribe.cpp).
 func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 	method := &handlers.UnsubscribeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1359,7 +1359,7 @@ func TestSubscribeURLGating(t *testing.T) {
 
 	for name, method := range methods {
 		t.Run(name+": url from non-admin is noPermission", func(t *testing.T) {
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
 			}
@@ -1371,7 +1371,7 @@ func TestSubscribeURLGating(t *testing.T) {
 		})
 
 		t.Run(name+": url from admin is notSupported", func(t *testing.T) {
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				Role:       types.RoleAdmin,
 				ApiVersion: types.ApiVersion1,
 			}
@@ -1803,7 +1803,7 @@ func TestWebSocketSnapshot_Single(t *testing.T) {
 	ws := &WebSocketServer{services: services}
 
 	offers, err := ws.snapshotBook(
-		&types.RpcContext{Context: context.Background(), Services: services},
+		&types.RPCContext{Context: context.Background(), Services: services},
 		types.Amount{Currency: "XRP"},
 		types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		"",
@@ -1827,7 +1827,7 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 	}
 	services := types.NewServiceContainer(mock)
 	ws := &WebSocketServer{services: services}
-	ctx := &types.RpcContext{Context: context.Background(), Services: services}
+	ctx := &types.RPCContext{Context: context.Background(), Services: services}
 
 	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "")
 	require.NoError(t, err)

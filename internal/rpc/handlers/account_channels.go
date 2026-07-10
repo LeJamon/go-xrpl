@@ -14,7 +14,7 @@ import (
 // destination_account.
 type AccountChannelsMethod struct{ BaseHandler }
 
-func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -33,7 +33,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	// Validate destination_account parameter if provided (rippled: rpcACT_MALFORMED)
 	if request.DestinationAccount != "" {
 		if !types.IsValidXRPLAddress(request.DestinationAccount) {
-			return nil, types.RpcErrorActMalformed("Destination account malformed.")
+			return nil, types.RPCErrorActMalformed("Destination account malformed.")
 		}
 	}
 
@@ -69,12 +69,12 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, types.RPCErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}
 
 	// Build channels array with proper field handling

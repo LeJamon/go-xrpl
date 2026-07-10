@@ -35,7 +35,7 @@ var (
 	_ types.MethodHandler = (*GatewayBalancesMethod)(nil)
 	_ types.MethodHandler = (*GetAggregatePriceMethod)(nil)
 	_ types.MethodHandler = (*GetCountsMethod)(nil)
-	_ types.MethodHandler = (*JsonMethod)(nil)
+	_ types.MethodHandler = (*JSONMethod)(nil)
 	_ types.MethodHandler = (*LedgerAcceptMethod)(nil)
 	_ types.MethodHandler = (*LedgerCleanerMethod)(nil)
 	_ types.MethodHandler = (*LedgerClosedMethod)(nil)

@@ -66,10 +66,10 @@ type ValidationHistorian interface {
 	// fast-advancing retention floor.
 	SetSeqToKeep(low, high uint32)
 
-	// GetJsonTrie returns a JSON-serializable snapshot of the ancestry trie's
+	// GetJSONTrie returns a JSON-serializable snapshot of the ancestry trie's
 	// support state for debugging preferred-ledger divergence, or nil when the
 	// trie is disabled.
-	GetJsonTrie() map[string]any
+	GetJSONTrie() map[string]any
 }
 
 // WireableAdaptor is an optional extension engine wires after constructing its

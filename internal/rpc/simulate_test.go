@@ -103,7 +103,7 @@ func TestSimulateMethod_ParamErrors(t *testing.T) {
 	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -254,7 +254,7 @@ func TestSimulateMethod_TxnSignature(t *testing.T) {
 	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -323,7 +323,7 @@ func TestSimulateMethod_SignedMultisig(t *testing.T) {
 	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -433,7 +433,7 @@ func TestSimulateMethod_BatchRejection(t *testing.T) {
 	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -461,7 +461,7 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -504,7 +504,7 @@ func TestSimulateMethod_SrcActMalformed(t *testing.T) {
 	services := newSimulateTestServices(mock)
 
 	method := &handlers.SimulateMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -530,8 +530,8 @@ func TestSimulateMethod_SrcActMalformed(t *testing.T) {
 func TestSimulateMethod_SequenceFeeAutofill(t *testing.T) {
 	method := &handlers.SimulateMethod{}
 
-	makeCtx := func(mock *mockLedgerServiceSimulate) *types.RpcContext {
-		return &types.RpcContext{
+	makeCtx := func(mock *mockLedgerServiceSimulate) *types.RPCContext {
+		return &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -975,7 +975,7 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 			Metadata:            &types.SubmitMetadata{JSON: metaJSON, Blob: []byte{0xAB, 0xCD}},
 		}
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -1010,7 +1010,7 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 			Metadata:            nil,
 		}
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -1049,7 +1049,7 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 			Metadata:            &types.SubmitMetadata{Blob: []byte{0xDE, 0xAD, 0xBE, 0xEF}},
 		}
 
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -1106,7 +1106,7 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 		Metadata:            &types.SubmitMetadata{JSON: realMeta, Blob: []byte{0x00}},
 	}
 
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -1153,7 +1153,7 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 func TestSimulateMethod_UnknownField(t *testing.T) {
 	method := &handlers.SimulateMethod{}
 	mock := newMockLedgerServiceSimulate()
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -1200,7 +1200,7 @@ func TestSimulateMethod_MetaSyntheticFields(t *testing.T) {
 		},
 	}
 
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,
@@ -1237,7 +1237,7 @@ func TestSimulateMethod_MetaSyntheticFields(t *testing.T) {
 func TestSimulateMethod_MissingRequiredField(t *testing.T) {
 	method := &handlers.SimulateMethod{}
 	mock := newMockLedgerServiceSimulate()
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion2,

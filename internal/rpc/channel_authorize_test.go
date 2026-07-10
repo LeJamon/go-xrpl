@@ -19,7 +19,7 @@ import (
 
 func TestChannelAuthorize_MissingChannelID(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -36,7 +36,7 @@ func TestChannelAuthorize_MissingChannelID(t *testing.T) {
 
 func TestChannelAuthorize_MissingAmount(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -53,7 +53,7 @@ func TestChannelAuthorize_MissingAmount(t *testing.T) {
 
 func TestChannelAuthorize_MissingSecret(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -70,7 +70,7 @@ func TestChannelAuthorize_MissingSecret(t *testing.T) {
 
 func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -89,7 +89,7 @@ func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 
 func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -108,7 +108,7 @@ func TestChannelAuthorize_SecretNotAllowedWithKeyType(t *testing.T) {
 
 func TestChannelAuthorize_BadKeyType(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion2,
 	}
 
@@ -127,7 +127,7 @@ func TestChannelAuthorize_BadKeyType(t *testing.T) {
 
 func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -145,7 +145,7 @@ func TestChannelAuthorize_ChannelIDTooShort(t *testing.T) {
 
 func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -162,7 +162,7 @@ func TestChannelAuthorize_ChannelIDTooLong(t *testing.T) {
 
 func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -179,7 +179,7 @@ func TestChannelAuthorize_ChannelIDNotHex(t *testing.T) {
 
 func TestChannelAuthorize_NegativeAmount(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -197,7 +197,7 @@ func TestChannelAuthorize_NegativeAmount(t *testing.T) {
 
 func TestChannelAuthorize_AmountOverflow(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -214,7 +214,7 @@ func TestChannelAuthorize_AmountOverflow(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -238,7 +238,7 @@ func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -260,7 +260,7 @@ func TestChannelAuthorize_ValidWithSeed(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -282,7 +282,7 @@ func TestChannelAuthorize_ValidWithPassphrase(t *testing.T) {
 
 func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -305,7 +305,7 @@ func TestChannelAuthorize_ValidWithSeedHex(t *testing.T) {
 
 func TestChannelAuthorize_ValidEd25519(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -330,7 +330,7 @@ func TestChannelAuthorize_ValidEd25519(t *testing.T) {
 
 func TestChannelAuthorize_MaxAmount(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -363,7 +363,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 
 	// Authorize
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RpcContext{
+	authorizeCtx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -383,7 +383,7 @@ func TestChannelAuthorizeAndVerify_Integration(t *testing.T) {
 
 	// Verify
 	verifyHandler := &handlers.ChannelVerifyMethod{}
-	verifyCtx := &types.RpcContext{
+	verifyCtx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -415,7 +415,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 
 	// Authorize
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RpcContext{
+	authorizeCtx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -435,7 +435,7 @@ func TestChannelAuthorizeAndVerify_IntegrationEd25519(t *testing.T) {
 
 	// Verify
 	verifyHandler := &handlers.ChannelVerifyMethod{}
-	verifyCtx := &types.RpcContext{
+	verifyCtx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -480,7 +480,7 @@ func TestChannelAuthorize_MessageFormat(t *testing.T) {
 
 func TestChannelAuthorize_BadSeed(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		ApiVersion: types.ApiVersion1,
 	}
 

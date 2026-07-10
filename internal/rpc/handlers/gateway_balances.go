@@ -13,7 +13,7 @@ import (
 // GatewayBalancesMethod handles the gateway_balances RPC method
 type GatewayBalancesMethod struct{ BaseHandler }
 
-func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -45,9 +45,9 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 				hotWallets = []string{singleWallet}
 			} else if string(bytes.TrimSpace(request.HotWallet)) != "null" {
 				if ctx.ApiVersion < 2 {
-					return nil, types.RpcErrorInvalidHotWallet()
+					return nil, types.RPCErrorInvalidHotWallet()
 				}
-				return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
+				return nil, types.RPCErrorInvalidParams("Invalid field 'hotwallet'.")
 			}
 		} else {
 			// Try to parse as an array of strings
@@ -57,9 +57,9 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			} else {
 				// Invalid hotwallet format
 				if ctx.ApiVersion < 2 {
-					return nil, types.RpcErrorInvalidHotWallet()
+					return nil, types.RPCErrorInvalidHotWallet()
 				}
-				return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
+				return nil, types.RPCErrorInvalidParams("Invalid field 'hotwallet'.")
 			}
 		}
 	}
@@ -81,18 +81,18 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidHotWallet) {
 			if ctx.ApiVersion < 2 {
-				return nil, types.RpcErrorInvalidHotWallet()
+				return nil, types.RPCErrorInvalidHotWallet()
 			}
-			return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
+			return nil, types.RPCErrorInvalidParams("Invalid field 'hotwallet'.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
 	}
 
 	// Build response matching rippled's GatewayBalances.cpp format: rippled only

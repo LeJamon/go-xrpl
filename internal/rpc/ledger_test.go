@@ -129,7 +129,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -202,7 +202,7 @@ func TestLedgerBadInput(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -258,7 +258,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -311,7 +311,7 @@ func TestLedgerFullOption(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -406,7 +406,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 
 	// A non-unlimited (guest) role is denied: rippled gates accounts/full
 	// behind isUnlimited else rpcNO_PERMISSION (LedgerHandler.cpp:66-72).
-	guestCtx := &types.RpcContext{
+	guestCtx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -418,7 +418,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 
 	// An unlimited (admin) role is permitted and dumps the state into the
 	// ledger object's accountState array.
-	adminCtx := &types.RpcContext{
+	adminCtx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -461,7 +461,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -541,7 +541,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -610,7 +610,7 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerMethod{}
 
 	t.Run("Nil services", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -625,7 +625,7 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -651,7 +651,7 @@ func TestLedgerNilLedgerReturned(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -703,7 +703,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

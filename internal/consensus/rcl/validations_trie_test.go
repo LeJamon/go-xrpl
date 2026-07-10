@@ -453,14 +453,14 @@ func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
 	}
 }
 
-// TestValidationTracker_GetJsonTrie verifies the debug introspection dump:
+// TestValidationTracker_GetJSONTrie verifies the debug introspection dump:
 // nil while the trie is disabled, and a marshalable support snapshot once an
 // ancestry provider is wired and a trusted validation is inserted.
-func TestValidationTracker_GetJsonTrie(t *testing.T) {
+func TestValidationTracker_GetJSONTrie(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 
-	if js := vt.GetJsonTrie(); js != nil {
-		t.Fatalf("GetJsonTrie with no ancestry provider must be nil, got %v", js)
+	if js := vt.GetJSONTrie(); js != nil {
+		t.Fatalf("GetJSONTrie with no ancestry provider must be nil, got %v", js)
 	}
 
 	now := time.Now()
@@ -478,12 +478,12 @@ func TestValidationTracker_GetJsonTrie(t *testing.T) {
 		t.Fatal("Add(n1->abc) should succeed")
 	}
 
-	js := vt.GetJsonTrie()
+	js := vt.GetJSONTrie()
 	if js == nil {
-		t.Fatal("GetJsonTrie with a wired trie must be non-nil")
+		t.Fatal("GetJSONTrie with a wired trie must be non-nil")
 	}
 	if _, err := json.Marshal(js); err != nil {
-		t.Fatalf("GetJsonTrie output not JSON-marshalable: %v", err)
+		t.Fatalf("GetJSONTrie output not JSON-marshalable: %v", err)
 	}
 	seqSupport, ok := js["seq_support"].(map[string]uint32)
 	if !ok || seqSupport["3"] != 1 {

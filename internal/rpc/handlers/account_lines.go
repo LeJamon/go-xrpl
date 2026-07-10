@@ -14,7 +14,7 @@ import (
 // default state on the account's side.
 type AccountLinesMethod struct{ BaseHandler }
 
-func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -34,7 +34,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	// Validate peer parameter if provided (rippled: rpcACT_MALFORMED)
 	if request.Peer != "" {
 		if !types.IsValidXRPLAddress(request.Peer) {
-			return nil, types.RpcErrorActMalformed("Malformed peer account.")
+			return nil, types.RPCErrorActMalformed("Malformed peer account.")
 		}
 	}
 
@@ -62,12 +62,12 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, types.RPCErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
 	}
 
 	// Filter out default-state trust lines when ignore_default is true

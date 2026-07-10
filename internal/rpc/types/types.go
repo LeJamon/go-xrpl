@@ -82,7 +82,7 @@ type PeerSource interface {
 }
 
 // RPC Context contains request-specific information
-type RpcContext struct {
+type RPCContext struct {
 	Context    context.Context
 	Role       Role
 	ApiVersion int
@@ -97,7 +97,7 @@ type RpcContext struct {
 	// Services is the per-request service container handlers read to
 	// reach the ledger service, dispatcher, manifest cache, etc. The
 	// HTTP/WebSocket dispatchers populate this from the server's wired
-	// container; tests construct RpcContext directly with whatever
+	// container; tests construct RPCContext directly with whatever
 	// fixtures they need. Replaces the former package-level
 	// types.Services global.
 	Services *ServiceContainer
@@ -110,7 +110,7 @@ type RpcContext struct {
 
 // Method handler interface - all RPC methods implement this
 type MethodHandler interface {
-	Handle(ctx *RpcContext, params json.RawMessage) (any, *RpcError)
+	Handle(ctx *RPCContext, params json.RawMessage) (any, *RPCError)
 	RequiredRole() Role
 	SupportedApiVersions() []int
 	RequiredCondition() Condition

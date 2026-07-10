@@ -67,7 +67,7 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
 // rpcINVALID_PARAMS; on reuse, credentials are only updated via the
 // deprecated username/password members. The caller has already verified the
 // admin role.
-func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RPCContext, request types.SubscriptionRequest) (map[string]any, *types.RPCError) {
 	sub, rpcErr := r.findOrCreate(request)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -83,7 +83,7 @@ func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 // Unsubscribe removes the listed streams/accounts/books from the url's
 // subscriber and drops the registry entry once no stream subscriptions
 // remain. An unknown url is silent success (Unsubscribe.cpp:52-53).
-func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
+func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RPCContext, request types.SubscriptionRequest) (map[string]any, *types.RPCError) {
 	r.mu.Lock()
 	sub, ok := r.subs[request.URL]
 	r.mu.Unlock()
@@ -97,13 +97,13 @@ func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 	return map[string]any{}, nil
 }
 
-func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest) (*rpcSub, *types.RpcError) {
+func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest) (*rpcSub, *types.RPCError) {
 	username, password, usernameSet, passwordSet := request.URLCredentials()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return nil, types.RpcErrorInternal("Internal error.")
+		return nil, types.RPCErrorInternal("Internal error.")
 	}
 	if sub, ok := r.subs[request.URL]; ok {
 		// Credentials on an existing url subscription are only updated via
@@ -140,7 +140,7 @@ func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest
 }
 
 // tryRemove drops the url's registry entry once it holds no stream
-// subscriptions, mirroring NetworkOPs::tryRemoveRpcSub. Account and book
+// subscriptions, mirroring NetworkOPs::tryRemoveRPCSub. Account and book
 // subscriptions don't keep the entry alive: in rippled the registry holds
 // the only strong reference, so removal destroys the subscriber and its
 // remaining subscriptions with it — here the manager connection and the
@@ -190,15 +190,15 @@ func (r *URLSubscriptionRegistry) Close() {
 // supported."). An empty host ("http://") is accepted, matching rippled's
 // parseUrl host group: registration succeeds and each delivery just fails
 // harmlessly at connect.
-func parseRPCSubURL(raw string) (string, *types.RpcError) {
-	parseErr := types.RpcErrorInvalidParams("Failed to parse url.")
+func parseRPCSubURL(raw string) (string, *types.RPCError) {
+	parseErr := types.RPCErrorInvalidParams("Failed to parse url.")
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme == "" {
 		return "", parseErr
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return "", types.RpcErrorInvalidParams("Only http and https is supported.")
+		return "", types.RPCErrorInvalidParams("Only http and https is supported.")
 	}
 	port := u.Port()
 	if port == "" {

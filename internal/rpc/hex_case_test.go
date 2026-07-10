@@ -33,7 +33,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 		}
 
 		method := &handlers.LedgerClosedMethod{}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -67,7 +67,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 		}
 
 		method := &handlers.AccountObjectsMethod{}
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,

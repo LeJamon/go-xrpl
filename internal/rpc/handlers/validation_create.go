@@ -24,17 +24,17 @@ type validationCreateRequest struct {
 	Secret *string `json:"secret,omitempty"`
 }
 
-func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *ValidationCreateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request validationCreateRequest
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	seed, ok := validationSeed(request.Secret)
 	if !ok {
-		return nil, &types.RpcError{
+		return nil, &types.RPCError{
 			Code:        types.RpcBAD_SEED,
 			ErrorString: "badSeed",
 			Type:        "badSeed",
@@ -47,34 +47,34 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	algo := secp256k1.Algorithm{}
 	privHex, pubHex, err := algo.DeriveKeypair(seed, true)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive validator keypair: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to derive validator keypair: %v", err))
 	}
 
 	pubBytes, err := hex.DecodeString(pubHex)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode public key: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to decode public key: %v", err))
 	}
 	validationPublicKey, err := addresscodec.EncodeNodePublicKey(pubBytes)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode validation public key: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode validation public key: %v", err))
 	}
 
 	// DeriveKeypair returns the private key as "00"+64 hex; the NodePrivate
 	// token encodes the raw 32-byte key, so drop the leading "00".
 	privBytes, err := hex.DecodeString(privHex[2:])
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode private key: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to decode private key: %v", err))
 	}
 	validationPrivateKey := addresscodec.Base58CheckEncode(privBytes, addresscodec.NodePrivateKeyPrefix)
 
 	encodedSeed, err := addresscodec.EncodeSeed(seed, algo)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode seed: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode seed: %v", err))
 	}
 
 	validationKey, err := rfc1751.SeedToEnglish(seed)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode RFC-1751 key: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode RFC-1751 key: %v", err))
 	}
 
 	return map[string]any{

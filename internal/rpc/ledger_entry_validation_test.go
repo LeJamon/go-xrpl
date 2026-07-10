@@ -20,7 +20,7 @@ func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -116,7 +116,7 @@ func TestLedgerEntryNFTOfferAlias(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

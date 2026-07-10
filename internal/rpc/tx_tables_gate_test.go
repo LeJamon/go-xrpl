@@ -17,8 +17,8 @@ type txTablesOffLedger struct{ *mockLedgerService }
 
 func (m *txTablesOffLedger) UseTxTables() bool { return false }
 
-func newTxTablesOffContext() *types.RpcContext {
-	return &types.RpcContext{
+func newTxTablesOffContext() *types.RPCContext {
+	return &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -26,7 +26,7 @@ func newTxTablesOffContext() *types.RpcContext {
 	}
 }
 
-func assertNotEnabled(t *testing.T, result any, rpcErr *types.RpcError) {
+func assertNotEnabled(t *testing.T, result any, rpcErr *types.RPCError) {
 	t.Helper()
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)

@@ -15,7 +15,7 @@ import (
 // LedgerDataMethod handles the ledger_data RPC method
 type LedgerDataMethod struct{ BaseHandler }
 
-func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	// Parse parameters
 	var request struct {
 		types.LedgerSpecifier
@@ -60,11 +60,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if request.Marker != nil {
 		var m string
 		if err := json.Unmarshal(request.Marker, &m); err != nil {
-			return nil, types.RpcErrorExpectedField("marker", "valid")
+			return nil, types.RPCErrorExpectedField("marker", "valid")
 		}
 		switch m {
 		case "":
-			return nil, types.RpcErrorExpectedField("marker", "valid")
+			return nil, types.RPCErrorExpectedField("marker", "valid")
 		case "0":
 			// The all-zero key: iterate from the first entry but, being a
 			// present marker, omit the base-ledger header. Normalize to the
@@ -83,9 +83,9 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		// rippled's doLedgerData rejects a present-but-unparseable marker with
 		// expected_field_error(jss::marker, "valid").
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorExpectedField("marker", "valid")
+			return nil, types.RPCErrorExpectedField("marker", "valid")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}
 
 	// Build state array based on binary flag

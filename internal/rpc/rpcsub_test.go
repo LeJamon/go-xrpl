@@ -78,8 +78,8 @@ func newRPCSubTestServer(t *testing.T) (*WebSocketServer, *types.ServiceContaine
 	return ws, services
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RpcContext {
-	return &types.RpcContext{
+func adminCtx(services *types.ServiceContainer) *types.RPCContext {
+	return &types.RPCContext{
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
@@ -87,13 +87,13 @@ func adminCtx(services *types.ServiceContainer) *types.RpcContext {
 	}
 }
 
-func subscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func subscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RPCError) {
 	t.Helper()
 	method := &handlers.SubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
 }
 
-func unsubscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RpcError) {
+func unsubscribeURL(t *testing.T, services *types.ServiceContainer, params string) (any, *types.RPCError) {
 	t.Helper()
 	method := &handlers.UnsubscribeMethod{}
 	return method.Handle(adminCtx(services), json.RawMessage(params))
@@ -247,7 +247,7 @@ func TestRPCSub_EmptyHostAcceptedAtSubscribe(t *testing.T) {
 	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 }
 
-// TestRPCSub_UnsubscribeRemovesEntry verifies the tryRemoveRpcSub
+// TestRPCSub_UnsubscribeRemovesEntry verifies the tryRemoveRPCSub
 // semantics: the registry entry is dropped once no stream subscriptions
 // remain, and an unknown url unsubscribes as silent success.
 func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
@@ -281,7 +281,7 @@ func TestRPCSub_UnsubscribeRemovesEntry(t *testing.T) {
 	assert.Equal(t, map[string]any{}, result)
 }
 
-// TestRPCSub_AccountsDontBlockRemoval mirrors NetworkOPs::tryRemoveRpcSub
+// TestRPCSub_AccountsDontBlockRemoval mirrors NetworkOPs::tryRemoveRPCSub
 // only scanning the stream maps: account subscriptions alone don't keep the
 // registry entry alive — like rippled, where dropping the registry's strong
 // reference destroys the subscriber, account subscriptions and all.

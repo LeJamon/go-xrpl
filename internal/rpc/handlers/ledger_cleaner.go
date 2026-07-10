@@ -24,9 +24,9 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 	return types.NeedsNetworkConnection
 }
 
-func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *LedgerCleanerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure == nil {
-		return nil, types.RpcErrorInternal("Ledger cleaner service not available")
+		return nil, types.RPCErrorInternal("Ledger cleaner service not available")
 	}
 
 	var req struct {
@@ -39,7 +39,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, types.RpcErrorInvalidParams("ledger_cleaner: malformed params")
+			return nil, types.RPCErrorInvalidParams("ledger_cleaner: malformed params")
 		}
 	}
 

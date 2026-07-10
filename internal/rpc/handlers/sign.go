@@ -11,7 +11,7 @@ import (
 // SignMethod handles the sign RPC method
 type SignMethod struct{}
 
-func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *SignMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		TxJson          json.RawMessage `json:"tx_json"`
 		Secret          string          `json:"secret,omitempty"`
@@ -26,12 +26,12 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	if len(request.TxJson) == 0 {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: tx_json")
+		return nil, types.RPCErrorInvalidParams("Missing required parameter: tx_json")
 	}
 
 	// Sign the transaction using the shared helper

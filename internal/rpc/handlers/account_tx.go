@@ -17,7 +17,7 @@ import (
 // affected the account over a validated-ledger range, oldest- or newest-first.
 type AccountTxMethod struct{ BaseHandler }
 
-func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		LedgerIndexMin *json.RawMessage `json:"ledger_index_min,omitempty"`
@@ -48,14 +48,14 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if request.LedgerIndexMin != nil {
 		var v int32
 		if err := json.Unmarshal(*request.LedgerIndexMin, &v); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid field 'ledger_index_min'.")
+			return nil, types.RPCErrorInvalidParams("Invalid field 'ledger_index_min'.")
 		}
 		ledgerIndexMin = v
 	}
 	if request.LedgerIndexMax != nil {
 		var v int32
 		if err := json.Unmarshal(*request.LedgerIndexMax, &v); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid field 'ledger_index_max'.")
+			return nil, types.RPCErrorInvalidParams("Invalid field 'ledger_index_max'.")
 		}
 		ledgerIndexMax = v
 	}
@@ -65,7 +65,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	// API v2: reject conflicting ledger parameters (ledger_index_min/max vs ledger_hash/ledger_index)
 	if ctx.ApiVersion > 1 && hasMinMax && hasLedgerSpec {
-		return nil, types.RpcErrorInvalidParams("invalidParams")
+		return nil, types.RPCErrorInvalidParams("invalidParams")
 	}
 
 	// When a single ledger is named via ledger_hash/ledger_index and no
@@ -97,11 +97,11 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				case json.Number:
 					n, convErr := v.Int64()
 					if convErr != nil {
-						return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+						return nil, types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 					}
 					marker.LedgerSeq = uint32(n)
 				default:
-					return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+					return nil, types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 				}
 			}
 			if seq, ok := markerMap["seq"]; ok {
@@ -111,15 +111,15 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				case json.Number:
 					n, convErr := v.Int64()
 					if convErr != nil {
-						return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+						return nil, types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 					}
 					marker.TxnSeq = uint32(n)
 				default:
-					return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+					return nil, types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 				}
 			}
 		} else {
-			return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+			return nil, types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 		}
 	}
 
@@ -142,12 +142,12 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
-			return nil, types.RpcErrorNotEnabled("")
+			return nil, types.RPCErrorNotEnabled("")
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
 	}
 
 	// Cache for ledger lookups by sequence, to avoid repeated lookups

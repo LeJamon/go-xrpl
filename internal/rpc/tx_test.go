@@ -80,7 +80,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -287,7 +287,7 @@ func TestTxMethodLookupByHash(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -403,7 +403,7 @@ func TestTxMethodBinaryOption(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1036,7 +1036,7 @@ func TestTxMethodLedgerRange(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1146,7 +1146,7 @@ func TestTxMethodInvalidLedgerRange(t *testing.T) {
 	mock := newMockLedgerServiceTx()
 	services := servicesForTx(mock)
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1264,7 +1264,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1411,7 +1411,7 @@ func TestTxMethodResponseFields(t *testing.T) {
 // TestTxMethodServiceUnavailable tests behavior when ledger service is not available
 func TestTxMethodServiceUnavailable(t *testing.T) {
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1435,7 +1435,7 @@ func TestTxMethodServiceUnavailable(t *testing.T) {
 // TestTxMethodServiceNilLedger tests behavior when ledger service is nil
 func TestTxMethodServiceNilLedger(t *testing.T) {
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1512,7 +1512,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 
 	for _, version := range apiVersions {
 		t.Run(fmt.Sprintf("API Version %d", version), func(t *testing.T) {
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,
@@ -1637,7 +1637,7 @@ func TestTxMethodEdgeCases(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1719,7 +1719,7 @@ func TestTxMethodInternalErrors(t *testing.T) {
 	services := servicesForTx(mock)
 
 	method := &handlers.TxMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

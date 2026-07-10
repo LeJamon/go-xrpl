@@ -15,7 +15,7 @@ import (
 // Based on rippled ManifestRPC_test.cpp testErrors() - manifest with no public key
 func TestManifestMissingPublicKey(t *testing.T) {
 	method := &handlers.ManifestMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -54,7 +54,7 @@ func TestManifestMissingPublicKey(t *testing.T) {
 // Based on rippled ManifestRPC_test.cpp testErrors() - manifest with malformed public key
 func TestManifestMalformedPublicKey(t *testing.T) {
 	method := &handlers.ManifestMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -93,7 +93,7 @@ func TestManifestMalformedPublicKey(t *testing.T) {
 // Based on rippled ManifestRPC_test.cpp testLookup()
 func TestManifestValidKeyReturnsRequested(t *testing.T) {
 	method := &handlers.ManifestMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

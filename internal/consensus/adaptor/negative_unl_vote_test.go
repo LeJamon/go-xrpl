@@ -75,7 +75,7 @@ func (s *stubHistorian) SetSeqToKeep(low, high uint32) {
 	s.keepLow, s.keepHigh = low, high
 }
 
-func (s *stubHistorian) GetJsonTrie() map[string]any { return nil }
+func (s *stubHistorian) GetJSONTrie() map[string]any { return nil }
 
 func TestAdaptor_NegativeUNL_NilVoterReturnsNil(t *testing.T) {
 	// Adaptor constructed without master keys → voter is nil.

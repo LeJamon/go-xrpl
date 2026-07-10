@@ -23,7 +23,7 @@ func TestAccountInfoPseudoAccount(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.AccountInfoMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

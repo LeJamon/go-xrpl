@@ -15,7 +15,7 @@ import (
 // TxHistoryMethod handles the tx_history RPC method
 type TxHistoryMethod struct{}
 
-func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *TxHistoryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		Start uint32 `json:"start,omitempty"`
 	}
@@ -33,9 +33,9 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
-			return nil, types.RpcErrorNotEnabled("")
+			return nil, types.RPCErrorNotEnabled("")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
 	}
 
 	// Build transactions array with deserialized JSON

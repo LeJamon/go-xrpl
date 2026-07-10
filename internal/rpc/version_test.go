@@ -17,7 +17,7 @@ import (
 // firstVersion/goodVersion/lastVersion = "1.0.0", RPCHelpers.cpp:1001-1003).
 func TestVersionReturnsVersionInfo(t *testing.T) {
 	method := &handlers.VersionMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -73,7 +73,7 @@ func TestVersionV2ShapeNumericNoGood(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: tc.version,
@@ -118,7 +118,7 @@ func TestVersionLastTracksBetaFlag(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
@@ -146,7 +146,7 @@ func TestVersionLastTracksBetaFlag(t *testing.T) {
 // RPCHelpers.h:227-229).
 func TestVersionResponseStructure(t *testing.T) {
 	method := &handlers.VersionMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -183,7 +183,7 @@ func TestVersionResponseStructure(t *testing.T) {
 // TestVersionNoParamsNeeded tests that the method works without any params.
 func TestVersionNoParamsNeeded(t *testing.T) {
 	method := &handlers.VersionMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

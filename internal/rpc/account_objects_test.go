@@ -49,7 +49,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -193,7 +193,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -320,7 +320,7 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -379,7 +379,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -455,7 +455,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -525,7 +525,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -669,7 +669,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -771,7 +771,7 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -787,7 +787,7 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Ledger is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -829,7 +829,7 @@ func TestAccountObjectsInvalidAccountTypes(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -880,7 +880,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -942,7 +942,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -998,7 +998,7 @@ func TestAccountObjectsAccountEcho(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1058,7 +1058,7 @@ func TestAccountObjectsApiVersions(t *testing.T) {
 
 	for _, version := range versions {
 		t.Run("api_version_"+string(rune('0'+version)), func(t *testing.T) {
-			ctx := &types.RpcContext{
+			ctx := &types.RPCContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,

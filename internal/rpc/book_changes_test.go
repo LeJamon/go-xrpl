@@ -129,7 +129,7 @@ func TestBookChangesValidLedgerIndexVariants(t *testing.T) {
 	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -200,7 +200,7 @@ func TestBookChangesInvalidLedger(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -233,7 +233,7 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -271,7 +271,7 @@ func TestBookChangesResponseStructure(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -344,7 +344,7 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -373,7 +373,7 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 	method := &handlers.BookChangesMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -394,7 +394,7 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RpcContext{
+		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -445,7 +445,7 @@ func TestBookChangesNilParams(t *testing.T) {
 	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RpcContext{
+	ctx := &types.RPCContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

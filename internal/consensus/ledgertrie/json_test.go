@@ -10,12 +10,12 @@ import (
 
 func hexID(id consensus.LedgerID) string { return fmt.Sprintf("%X", id[:]) }
 
-func TestTrie_GetJson_Empty(t *testing.T) {
+func TestTrie_GetJSON_Empty(t *testing.T) {
 	tr, _ := newTestTrie()
 
-	js := tr.GetJson()
+	js := tr.GetJSON()
 	if _, err := json.Marshal(js); err != nil {
-		t.Fatalf("GetJson output not JSON-marshalable: %v", err)
+		t.Fatalf("GetJSON output not JSON-marshalable: %v", err)
 	}
 
 	seqSupport, ok := js["seq_support"].(map[string]uint32)
@@ -41,7 +41,7 @@ func TestTrie_GetJson_Empty(t *testing.T) {
 	}
 }
 
-func TestTrie_GetJson_Structure(t *testing.T) {
+func TestTrie_GetJSON_Structure(t *testing.T) {
 	tr, b := newTestTrie()
 	a := b.Build("a")
 	abc := b.Build("abc")
@@ -49,11 +49,11 @@ func TestTrie_GetJson_Structure(t *testing.T) {
 	tr.Insert(abc, 1)
 	tr.Insert(abcd, 1)
 
-	js := tr.GetJson()
+	js := tr.GetJSON()
 
 	// Marshalable: this is how the adaptor emits the ValidationTrie log.
 	if _, err := json.Marshal(js); err != nil {
-		t.Fatalf("GetJson output not JSON-marshalable: %v", err)
+		t.Fatalf("GetJSON output not JSON-marshalable: %v", err)
 	}
 
 	seqSupport := js["seq_support"].(map[string]uint32)

@@ -98,7 +98,7 @@ var validLedgerEntryTypeNames = map[string]bool{
 	"xchain_owned_create_account_claim_id": true,
 }
 
-func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -143,10 +143,10 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			typeLower := strings.ToLower(request.Type)
 			if !deletionBlockerTypes[typeLower] {
 				if !validLedgerEntryTypeNames[typeLower] {
-					return nil, types.RpcErrorInvalidField("type")
+					return nil, types.RPCErrorInvalidField("type")
 				}
 				if !validAccountObjectTypes[typeLower] {
-					return nil, types.RpcErrorInvalidField("type")
+					return nil, types.RPCErrorInvalidField("type")
 				}
 				// Valid type but not a blocker. Drop the filter so the
 				// service still returns ledger info / account-existence,
@@ -163,10 +163,10 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		// isAccountObjectsValidType further rejects amendments, directory, fee, hashes, nunl.
 		typeLower := strings.ToLower(request.Type)
 		if !validLedgerEntryTypeNames[typeLower] {
-			return nil, types.RpcErrorInvalidField("type")
+			return nil, types.RPCErrorInvalidField("type")
 		}
 		if !validAccountObjectTypes[typeLower] {
-			return nil, types.RpcErrorInvalidField("type")
+			return nil, types.RPCErrorInvalidField("type")
 		}
 	}
 
@@ -181,14 +181,14 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RpcErrorActNotFound("Account not found.")
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		// rippled AccountObjects.cpp returns invalid_field_error("marker") for a
 		// malformed marker or one whose dirIndex/entryIndex no longer resolves.
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RpcErrorInvalidField("marker")
+			return nil, types.RPCErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
 
 	// Build account_objects array with deserialized fields. When

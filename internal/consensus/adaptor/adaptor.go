@@ -1766,7 +1766,7 @@ func (a *Adaptor) preferredLCL(ledger consensus.Ledger, mode consensus.Operating
 		// Dump the trie's support state to diagnose why a branch was preferred.
 		// Debug-gated because building it walks and marshals the whole trie.
 		if a.logger.Enabled(context.Background(), slog.LevelDebug) {
-			if trie := h.GetJsonTrie(); trie != nil {
+			if trie := h.GetJSONTrie(); trie != nil {
 				if raw, err := json.Marshal(trie); err == nil {
 					a.logger.Debug("ValidationTrie", "trie", string(raw))
 				}
