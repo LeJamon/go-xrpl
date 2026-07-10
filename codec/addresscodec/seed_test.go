@@ -3,9 +3,9 @@ package addresscodec
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/stretchr/testify/require"
 )
 

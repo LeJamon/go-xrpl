@@ -120,7 +120,7 @@ func TestAggregator_ApplyList_Accepted_SinglePublisher_SingleValidator(t *testin
 		changes++
 	})
 
-	now := fixedClock()
+	now := fixedClock()()
 	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{val1})
 	disp, key, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://")
 	if disp != list.Accepted {
@@ -173,7 +173,7 @@ func TestAggregator_ApplyList_Threshold_TwoOfThree(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	now := fixedClock()
+	now := fixedClock()()
 	exp := now.Add(24 * time.Hour).Unix()
 
 	// Publisher 1 lists {v1, v2}. Threshold not yet met.
@@ -228,7 +228,7 @@ func TestAggregator_ApplyList_Stale(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	now := fixedClock()
+	now := fixedClock()()
 	exp := now.Add(24 * time.Hour).Unix()
 
 	// Apply sequence 5.
@@ -258,7 +258,7 @@ func TestAggregator_ApplyList_UntrustedPublisher(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	now := fixedClock()
+	now := fixedClock()()
 	blob, sig := pubOther.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
 	d, _, _ := agg.ApplyList(pubOther.manifestB64, blob, sig, 1, "test://")
 	if d != list.Untrusted {
@@ -283,7 +283,7 @@ func TestAggregator_ApplyList_BadSignature(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	now := fixedClock()
+	now := fixedClock()()
 	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
 	// Corrupt the signature.
 	sig[5] ^= 0xff
@@ -307,7 +307,7 @@ func TestAggregator_ApplyList_Expired(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	now := fixedClock()
+	now := fixedClock()()
 	// Expiration in the past relative to fixedClock.
 	exp := now.Add(-1 * time.Hour).Unix()
 	blob, sig := pub.signList(t, 1, 0, exp, [][33]byte{v1})
@@ -368,7 +368,7 @@ func TestAggregator_ApplyList_MissingRequiredField(t *testing.T) {
 		Clock:         fixedClock(),
 	})
 	// Blob with only `sequence` and `expiration`, no `validators` array.
-	now := fixedClock()
+	now := fixedClock()()
 	body := map[string]any{
 		"sequence":   uint32(1),
 		"expiration": uint32(now.Add(24*time.Hour).Unix() - protocol.RippleEpochUnix),
@@ -393,7 +393,7 @@ func TestAggregator_ApplyCollection_AcceptedAndStale(t *testing.T) {
 		Clock:         fixedClock(),
 	})
 
-	now := fixedClock()
+	now := fixedClock()()
 	blob1, sig1 := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
 	blob5, sig5 := pub.signList(t, 5, 0, now.Add(48*time.Hour).Unix(), [][33]byte{v1})
 	coll := &message.ValidatorListCollection{
@@ -502,7 +502,7 @@ func TestAggregator_ApplyList_PendingThenKnownSequence(t *testing.T) {
 	pub := newPublisher(t, 0x01, 0x02)
 	v1 := derivedValidatorKey(0x10)
 
-	now := fixedClock()
+	now := fixedClock()()
 	mutableNow := now
 	clk := func() time.Time { return mutableNow }
 
@@ -560,7 +560,7 @@ func TestAggregator_ApplyList_EffectiveSet_Sentinel(t *testing.T) {
 		Manifests:     manifest.NewCache(),
 		Clock:         fixedClock(),
 	})
-	now := fixedClock()
+	now := fixedClock()()
 	// signList passes validFromUnix=0 which means we OMIT `effective`.
 	blob, sig := pub.signList(t, 1, 0, now.Add(24*time.Hour).Unix(), [][33]byte{v1})
 	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Accepted {
@@ -589,7 +589,7 @@ func TestAggregator_ApplyList_Expired_ClearsValidators(t *testing.T) {
 		Manifests:     manifest.NewCache(),
 		Clock:         fixedClock(),
 	})
-	now := fixedClock()
+	now := fixedClock()()
 	exp := now.Add(-1 * time.Hour).Unix() // expired
 	blob, sig := pub.signList(t, 1, 0, exp, [][33]byte{v1})
 	if d, _, _ := agg.ApplyList(pub.manifestB64, blob, sig, 1, "test://"); d != list.Expired {
@@ -636,7 +636,7 @@ func TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests(t *testing.T) {
 		Effective  uint32  `json:"effective,omitempty"`
 		Validators []entry `json:"validators"`
 	}
-	now := fixedClock()
+	now := fixedClock()()
 	exp := now.Add(-1 * time.Hour).Unix() // expired
 	b := body{
 		Sequence:   1,
