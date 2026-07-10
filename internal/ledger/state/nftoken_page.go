@@ -3,7 +3,100 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
+
+// SerializeNFTokenPage serializes an NFToken page ledger entry.
+func SerializeNFTokenPage(page *NFTokenPageData) ([]byte, error) {
+	jsonObj := map[string]any{
+		"LedgerEntryType": "NFTokenPage",
+		"Flags":           uint32(0),
+	}
+
+	var emptyHash [32]byte
+	if page.PreviousPageMin != emptyHash {
+		jsonObj["PreviousPageMin"] = strings.ToUpper(hex.EncodeToString(page.PreviousPageMin[:]))
+	}
+
+	if page.NextPageMin != emptyHash {
+		jsonObj["NextPageMin"] = strings.ToUpper(hex.EncodeToString(page.NextPageMin[:]))
+	}
+
+	// Emit only once threaded (fresh pages are stamped by the apply layer) so a no-op
+	// modify round-trips byte-identically and the unchanged-entry guard prunes it
+	// (ApplyStateTable.cpp:154-157).
+	if page.PreviousTxnID != emptyHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(page.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = page.PreviousTxnLgrSeq
+	}
+
+	if len(page.NFTokens) > 0 {
+		nfTokens := make([]map[string]any, len(page.NFTokens))
+		for i, token := range page.NFTokens {
+			nfToken := map[string]any{
+				"NFToken": map[string]any{
+					"NFTokenID": strings.ToUpper(hex.EncodeToString(token.NFTokenID[:])),
+				},
+			}
+			if token.URI != "" {
+				nfToken["NFToken"].(map[string]any)["URI"] = token.URI
+			}
+			nfTokens[i] = nfToken
+		}
+		jsonObj["NFTokens"] = nfTokens
+	}
+
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode NFTokenPage: %w", err)
+	}
+
+	return hex.DecodeString(hexStr)
+}
+
+// SerializeNFTokenOffer serializes an NFTokenOffer ledger entry from its
+// primitive fields. amount is a string of XRP drops or an IOU map. rippled's
+// NFTokenOffer object uses sfOwner (not sfAccount) and stores only lsfSellNFToken
+// in sfFlags; emitting anything else forks account_hash.
+func SerializeNFTokenOffer(
+	ownerID [20]byte, tokenID [32]byte,
+	amount any, flags uint32,
+	ownerNode, offerNode uint64,
+	destination string, expiration *uint32,
+) ([]byte, error) {
+	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+	}
+
+	jsonObj := map[string]any{
+		"LedgerEntryType":  "NFTokenOffer",
+		"Owner":            ownerAddress,
+		"Amount":           amount,
+		"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
+		"OwnerNode":        fmt.Sprintf("%x", ownerNode),
+		"NFTokenOfferNode": fmt.Sprintf("%x", offerNode),
+		"Flags":            flags,
+	}
+
+	if expiration != nil {
+		jsonObj["Expiration"] = *expiration
+	}
+
+	if destination != "" {
+		jsonObj["Destination"] = destination
+	}
+
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode NFTokenOffer: %w", err)
+	}
+
+	return hex.DecodeString(hexStr)
+}
 
 // NFTokenPageData represents an NFToken page ledger entry
 type NFTokenPageData struct {

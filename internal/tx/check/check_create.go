@@ -193,21 +193,17 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	checkKey := keylet.Check(accountID, sequence)
 
-	// Serialize check
-	checkData, err := serializeCheck(c, accountID, destID, sequence, c.SendMax)
+	// Build the check SLE and insert its initial (pre-directory) form; the
+	// directory page fields are filled in and the entry re-serialized below.
+	checkSLE := newCheckData(c, accountID, destID, sequence, c.SendMax)
+	checkData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeCheckFromData", err)
 	}
 
 	// Insert check
 	if err := ctx.View.Insert(checkKey, checkData); err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Parse the check SLE to update with directory page numbers
-	checkSLE, err := state.ParseCheck(checkData)
-	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("insert check", err)
 	}
 
 	// Insert check into destination's owner directory (not self-send).
@@ -240,10 +236,10 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Re-serialize check with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeCheckFromData", err)
 	}
 	if err := ctx.View.Update(checkKey, updatedData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("update check", err)
 	}
 
 	// Increase owner count
@@ -259,8 +255,8 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 	if accountID == issuerID {
 		return false
 	}
-	tl, ok := readRippleState(view, accountID, issuerID, currency)
-	if !ok {
+	tl, err := tx.ReadRippleState(view, accountID, issuerID, currency)
+	if err != nil || tl == nil {
 		return false
 	}
 	freezeFlag := state.LsfLowFreeze
@@ -268,21 +264,4 @@ func isTrustLineFrozenBySelf(view tx.LedgerView, accountID, issuerID [20]byte, c
 		freezeFlag = state.LsfHighFreeze
 	}
 	return tl.Flags&freezeFlag != 0
-}
-
-func readRippleState(view tx.LedgerView, accountID, issuerID [20]byte, currency string) (*state.RippleState, bool) {
-	key := keylet.Line(accountID, issuerID, currency)
-	exists, _ := view.Exists(key)
-	if !exists {
-		return nil, false
-	}
-	data, err := view.Read(key)
-	if err != nil {
-		return nil, false
-	}
-	tl, err := state.ParseRippleState(data)
-	if err != nil {
-		return nil, false
-	}
-	return tl, true
 }

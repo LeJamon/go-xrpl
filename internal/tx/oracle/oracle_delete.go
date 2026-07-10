@@ -84,7 +84,7 @@ func (o *OracleDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 // This is a shared helper used by both OracleDelete.Apply() and AccountDelete cascade.
 // If ownerCount is nil, the OwnerCount adjustment is skipped (account deletion case).
 // Reference: rippled DeleteOracle.cpp deleteOracle()
-func DeleteOracleFromView(view state.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) ter.Result {
+func DeleteOracleFromView(view tx.LedgerView, oracleKey keylet.Keylet, oracle *state.OracleData, accountID [20]byte, ownerCount *uint32) ter.Result {
 	// DirRemove from owner directory
 	ownerDirKey := keylet.OwnerDir(accountID)
 	_, err := state.DirRemove(view, ownerDirKey, oracle.OwnerNode, oracleKey.Key, true)

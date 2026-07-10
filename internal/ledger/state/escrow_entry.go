@@ -3,7 +3,98 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
+
+// SerializeEscrow serializes an Escrow ledger entry from its creation inputs.
+// For XRP escrows Amount is a drops string, for IOU escrows the full IOU object
+// (value/currency/issuer), for MPT escrows {value, mpt_issuance_id}. transferRate
+// is stored only when non-zero and not the parity rate (1_000_000_000). Optional
+// fields are carried as pointers so nil (absent) is distinct from a present zero,
+// matching the transaction's own field presence. sequence is emitted only when
+// non-nil (fixIncludeKeyletFields).
+func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint32,
+	ownerNode, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool,
+	finishAfter, cancelAfter *uint32, condition string,
+	sourceTag, destinationTag *uint32, sequence *uint32) ([]byte, error) {
+	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+	}
+
+	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(destID[:])
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode destination address: %w", err)
+	}
+
+	var amountVal any
+	if amount.IsNative() {
+		amountVal = fmt.Sprintf("%d", amount.Drops())
+	} else if amount.IsMPT() {
+		// MPT amounts are whole numbers — use MPTRaw() to avoid IOU
+		// normalization which loses precision for large values (>16 digits).
+		mptValue := amount.Value()
+		if raw, ok := amount.MPTRaw(); ok {
+			mptValue = fmt.Sprintf("%d", raw)
+		}
+		amountVal = map[string]any{
+			"value":           mptValue,
+			"mpt_issuance_id": amount.MPTIssuanceID(),
+		}
+	} else {
+		amountVal = map[string]any{
+			"value":    amount.Value(),
+			"currency": amount.Currency,
+			"issuer":   amount.Issuer,
+		}
+	}
+
+	jsonObj := map[string]any{
+		"LedgerEntryType": "Escrow",
+		"Account":         ownerAddress,
+		"Destination":     destAddress,
+		"Amount":          amountVal,
+		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
+		"Flags":           uint32(0),
+	}
+
+	if hasDestNode {
+		jsonObj["DestinationNode"] = fmt.Sprintf("%x", destNode)
+	}
+	if hasIssuerNode {
+		jsonObj["IssuerNode"] = fmt.Sprintf("%x", issuerNode)
+	}
+	if finishAfter != nil {
+		jsonObj["FinishAfter"] = *finishAfter
+	}
+	if cancelAfter != nil {
+		jsonObj["CancelAfter"] = *cancelAfter
+	}
+	if condition != "" {
+		jsonObj["Condition"] = condition
+	}
+	if sourceTag != nil {
+		jsonObj["SourceTag"] = *sourceTag
+	}
+	if destinationTag != nil {
+		jsonObj["DestinationTag"] = *destinationTag
+	}
+	if transferRate > 0 && transferRate != 1_000_000_000 {
+		jsonObj["TransferRate"] = transferRate
+	}
+	if sequence != nil {
+		jsonObj["Sequence"] = *sequence
+	}
+
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode Escrow: %w", err)
+	}
+
+	return hex.DecodeString(hexStr)
+}
 
 // EscrowData represents an Escrow ledger entry
 type EscrowData struct {

@@ -96,23 +96,11 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 	return 1, ter.TesSUCCESS
 }
 
-// mptFrozen reports whether the MPT asset is globally locked or locked for the
-// given account.
-func mptFrozen(view tx.LedgerView, mptID [24]byte, accountID [20]byte) bool {
-	if iss, _ := readMPTIssuance(view, mptID); iss != nil && iss.Flags&entry.LsfMPTLocked != 0 {
-		return true
-	}
-	if token, _ := readMPToken(view, keylet.MPTokenByID(mptID, accountID)); token != nil && token.Flags&entry.LsfMPTLocked != 0 {
-		return true
-	}
-	return false
-}
-
 // assetFrozen reports whether asset is frozen/locked for accountID, returning the
 // matching TER (tecFROZEN for IOU, tecLOCKED for MPT) or tesSUCCESS.
 func assetFrozen(view tx.LedgerView, accountID [20]byte, asset tx.Asset) ter.Result {
 	if asset.IsMPT() {
-		if id, ok := assetMPTID(asset); ok && mptFrozen(view, id, accountID) {
+		if id, ok := assetMPTID(asset); ok && tx.IsMPTLocked(view, id, accountID) {
 			return ter.TecLOCKED
 		}
 		return ter.TesSUCCESS

@@ -328,11 +328,11 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Serialize the offer with directory page numbers
 	offerData, err := serializeNFTokenOffer(n, accountID, tokenID, sequence, ownerNode, offerNode)
 	if err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("serializeNFTokenOffer", err)
 	}
 
 	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return ter.TefINTERNAL
+		return ctx.Internal("insert NFTokenOffer", err)
 	}
 
 	ctx.Account.OwnerCount++

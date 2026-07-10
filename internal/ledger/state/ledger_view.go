@@ -5,7 +5,11 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// LedgerView provides read/write access to ledger state
+// LedgerView is the minimal read/write view the state package's directory
+// helpers (DirInsert/DirRemove/DirForEach) operate on. It is the state-layer
+// view abstraction and cannot import the richer tx.LedgerView (state is a leaf
+// package); tx.LedgerView is a superset and satisfies this interface, so tx-tree
+// callers pass their view directly.
 type LedgerView interface {
 	// Read reads a ledger entry
 	Read(k keylet.Keylet) ([]byte, error)

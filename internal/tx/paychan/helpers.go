@@ -2,13 +2,11 @@ package paychan
 
 import (
 	"encoding/hex"
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
@@ -57,52 +55,32 @@ func isZeroChannel(channelHex string) bool {
 	return [32]byte(b) == [32]byte{}
 }
 
-// serializePayChannel serializes a PayChannel ledger entry from a PaymentChannelCreate transaction.
-// This is called during Create and produces the initial SLE bytes.
-func serializePayChannel(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, amount uint64) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
+// newPayChannelData builds the state.PayChannelData for a PayChannel ledger
+// entry from a PaymentChannelCreate transaction. Directory pages
+// (OwnerNode/DestinationNode) and the keylet sequence are filled in by the
+// caller. The single serializer for a PayChannel entry — creation and
+// modification alike — is state.SerializePayChannelFromData.
+func newPayChannelData(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, amount uint64) *state.PayChannelData {
+	cd := &state.PayChannelData{
+		Account:       ownerID,
+		DestinationID: destID,
+		Amount:        amount,
+		Balance:       0,
+		SettleDelay:   pcTx.SettleDelay,
+		PublicKey:     pcTx.PublicKey,
 	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(destID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode destination address: %w", err)
-	}
-
-	jsonObj := map[string]any{
-		"LedgerEntryType": "PayChannel",
-		"Account":         ownerAddress,
-		"Destination":     destAddress,
-		"Amount":          fmt.Sprintf("%d", amount),
-		"Balance":         "0",
-		"SettleDelay":     pcTx.SettleDelay,
-		"OwnerNode":       "0",
-		"Flags":           uint32(0),
-	}
-
 	if pcTx.CancelAfter != nil {
-		jsonObj["CancelAfter"] = *pcTx.CancelAfter
+		cd.CancelAfter = *pcTx.CancelAfter
 	}
-
-	if pcTx.PublicKey != "" {
-		jsonObj["PublicKey"] = pcTx.PublicKey
-	}
-
 	if pcTx.SourceTag != nil {
-		jsonObj["SourceTag"] = *pcTx.SourceTag
+		cd.SourceTag = *pcTx.SourceTag
+		cd.HasSourceTag = true
 	}
-
 	if pcTx.DestinationTag != nil {
-		jsonObj["DestinationTag"] = *pcTx.DestinationTag
+		cd.DestinationTag = *pcTx.DestinationTag
+		cd.HasDestTag = true
 	}
-
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode PayChannel: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return cd
 }
 
 // closeChannel closes a payment channel: removes from directories, returns remaining funds

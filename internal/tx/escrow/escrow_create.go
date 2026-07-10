@@ -2,12 +2,7 @@
 package escrow
 
 import (
-	"encoding/hex"
-	"fmt"
-
 	"github.com/LeJamon/go-xrpl/amendment"
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -351,7 +346,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		} else {
 			// IOU: get rate from issuer account
 			issuerID, _ := state.DecodeAccountID(e.Amount.Issuer)
-			capturedTransferRate = getTransferRateForIssuer(ctx.View, issuerID)
+			capturedTransferRate = tx.GetTransferRateByID(ctx.View, issuerID)
 		}
 	}
 
@@ -415,18 +410,26 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	escrowData, err := serializeEscrow(e, accountID, destID, capturedTransferRate,
+	var condition string
+	if e.Condition != nil {
+		condition = *e.Condition
+	}
+	var seqPtr *uint32
+	if rules.Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		sq := e.GetCommon().SeqProxy()
+		seqPtr = &sq
+	}
+	escrowData, err := state.SerializeEscrow(accountID, destID, e.Amount, capturedTransferRate,
 		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode,
-		rules.Enabled(amendment.FeatureFixIncludeKeyletFields))
+		e.FinishAfter, e.CancelAfter, condition,
+		e.GetCommon().SourceTag, e.DestinationTag, seqPtr)
 	if err != nil {
-		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("SerializeEscrow", err)
 	}
 
 	// Insert escrow - creation tracked automatically by ApplyStateTable
 	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
-		ctx.Log.Error("escrow create: failed to insert escrow", "error", err)
-		return ter.TefINTERNAL
+		return ctx.Internal("insert escrow", err)
 	}
 
 	// Deduct the escrow amount from the sender.
@@ -459,107 +462,6 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Account.OwnerCount++
 
 	return ter.TesSUCCESS
-}
-
-// serializeEscrow serializes an Escrow ledger entry.
-// For XRP escrows, Amount is a drops string. For IOU escrows, Amount is the
-// full IOU object (value/currency/issuer). For MPT escrows, Amount is
-// {value, mpt_issuance_id}. transferRate is stored when non-zero and not
-// equal to the parity rate (1_000_000_000).
-func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, transferRate uint32,
-	ownerNode uint64, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool,
-	includeSequence bool) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
-	}
-
-	destAddress, err := addresscodec.EncodeAccountIDToClassicAddress(destID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode destination address: %w", err)
-	}
-
-	// Amount: XRP uses a drops string, IOU uses {value, currency, issuer},
-	// MPT uses {value, mpt_issuance_id}.
-	var amountVal any
-	if txn.Amount.IsNative() {
-		amountVal = fmt.Sprintf("%d", txn.Amount.Drops())
-	} else if txn.Amount.IsMPT() {
-		// MPT amounts are whole numbers — use MPTRaw() to avoid IOU
-		// normalization which loses precision for large values (>16 digits).
-		mptValue := txn.Amount.Value()
-		if raw, ok := txn.Amount.MPTRaw(); ok {
-			mptValue = fmt.Sprintf("%d", raw)
-		}
-		amountVal = map[string]any{
-			"value":           mptValue,
-			"mpt_issuance_id": txn.Amount.MPTIssuanceID(),
-		}
-	} else {
-		amountVal = map[string]any{
-			"value":    txn.Amount.Value(),
-			"currency": txn.Amount.Currency,
-			"issuer":   txn.Amount.Issuer,
-		}
-	}
-
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Escrow",
-		"Account":         ownerAddress,
-		"Destination":     destAddress,
-		"Amount":          amountVal,
-		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
-		"Flags":           uint32(0),
-	}
-
-	// sfDestinationNode: the page in the destination's owner directory holding
-	// this escrow (cross-account only). sfIssuerNode: the page in the issuer's
-	// owner directory (IOU escrows with a third-party issuer). Both are UInt64
-	// fields serialized as hex, mirroring rippled Escrow.cpp:569,583.
-	if hasDestNode {
-		jsonObj["DestinationNode"] = fmt.Sprintf("%x", destNode)
-	}
-	if hasIssuerNode {
-		jsonObj["IssuerNode"] = fmt.Sprintf("%x", issuerNode)
-	}
-
-	if txn.FinishAfter != nil {
-		jsonObj["FinishAfter"] = *txn.FinishAfter
-	}
-
-	if txn.CancelAfter != nil {
-		jsonObj["CancelAfter"] = *txn.CancelAfter
-	}
-
-	if txn.Condition != nil && *txn.Condition != "" {
-		jsonObj["Condition"] = *txn.Condition
-	}
-
-	// SourceTag from Common fields
-	if txn.GetCommon().SourceTag != nil {
-		jsonObj["SourceTag"] = *txn.GetCommon().SourceTag
-	}
-
-	if txn.DestinationTag != nil {
-		jsonObj["DestinationTag"] = *txn.DestinationTag
-	}
-
-	if transferRate > 0 && transferRate != 1_000_000_000 {
-		jsonObj["TransferRate"] = transferRate
-	}
-
-	// fixIncludeKeyletFields: store the creating sequence (tx or ticket) used
-	// to derive the escrow keylet.
-	if includeSequence {
-		jsonObj["Sequence"] = txn.GetCommon().SeqProxy()
-	}
-
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode Escrow: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
 }
 
 // escrowLockIOU locks an IOU amount by transferring it from sender to issuer
