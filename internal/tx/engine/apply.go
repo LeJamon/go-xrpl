@@ -390,6 +390,32 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		return r, 0
 	}
 
+	// tecEXPIRED from preclaim: run the transactor's tec hook so its work-on-tec
+	// side effects (the expired-credential deletion) still persist, exactly as the
+	// doApply tec path does. rippled routes every tecEXPIRED — preclaim- or
+	// doApply-originated — through the same reset + removeExpiredCredentials step
+	// (Transactor.cpp operator()), so this keeps the two engine tec paths
+	// symmetric. There is no doApply sandbox here, so the offer/NFToken removals
+	// that path collects are naturally empty; only the re-derived ApplyOnTec hook
+	// is applicable.
+	if origResult == ter.TecEXPIRED {
+		if tecApplier, ok := st.tx.(txcore.TecApplier); ok {
+			tecCtx := &txcore.ApplyContext{
+				View:             tecTable,
+				Account:          recoveredAccount,
+				AccountID:        st.accountID,
+				SourceFeeCharged: st.sourceFeeCharged(),
+				Config:           e.config,
+				TxHash:           st.txHash,
+				Metadata:         st.metadata,
+				InnerInvariants:  e,
+				Log:              e.logger,
+				Ctx:              st.ctx,
+			}
+			tecApplier.ApplyOnTec(tecCtx)
+		}
+	}
+
 	// Invariant check on the fee-only delta before committing. rippled runs
 	// checkInvariants for every applied result, including a tec that claims a
 	// fee straight out of preclaim without ever entering doApply (Transactor.cpp
