@@ -118,11 +118,10 @@ type LedgerRepository interface {
 	GetHashByIndex(ctx context.Context, seq LedgerIndex) (*Hash, error)
 	GetHashesByIndex(ctx context.Context, seq LedgerIndex) (*LedgerHashPair, error)
 	GetHashesByRange(ctx context.Context, minSeq, maxSeq LedgerIndex) (map[LedgerIndex]LedgerHashPair, error)
-	SaveValidatedLedger(ctx context.Context, ledger *LedgerInfo, current bool) error
+	SaveValidatedLedger(ctx context.Context, ledger *LedgerInfo) error
 	DeleteLedgersBySeq(ctx context.Context, maxSeq LedgerIndex) error
 	GetLedgerCountMinMax(ctx context.Context) (*CountMinMax, error)
 	GetKBUsedLedger(ctx context.Context) (uint32, error)
-	HasLedgerSpace(ctx context.Context) (bool, error)
 }
 
 // TransactionRepository handles transaction-related database operations
@@ -135,7 +134,6 @@ type TransactionRepository interface {
 	DeleteTransactionsByLedgerSeq(ctx context.Context, ledgerSeq LedgerIndex) error
 	DeleteTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq LedgerIndex) error
 	GetKBUsedTransaction(ctx context.Context) (uint32, error)
-	HasTransactionSpace(ctx context.Context) (bool, error)
 }
 
 // AccountTransactionRepository handles account transaction-related database operations
@@ -155,8 +153,6 @@ type SystemRepository interface {
 	GetKBUsedAll(ctx context.Context) (uint32, error)
 	Ping(ctx context.Context) error
 	Begin(ctx context.Context) (TransactionContext, error)
-	CloseLedgerDB(ctx context.Context) error
-	CloseTransactionDB(ctx context.Context) error
 }
 
 // TransactionContext represents a database transaction context with repository access.
@@ -203,12 +199,7 @@ func (h Hash) String() string {
 
 // IsZero reports whether the hash is all zero bytes.
 func (h Hash) IsZero() bool {
-	for _, b := range h {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
+	return h == Hash{}
 }
 
 // Helper methods for AccountID type
@@ -218,10 +209,5 @@ func (a AccountID) String() string {
 
 // IsZero reports whether the account ID is all zero bytes.
 func (a AccountID) IsZero() bool {
-	for _, b := range a {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
+	return a == AccountID{}
 }

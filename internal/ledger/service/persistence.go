@@ -227,7 +227,7 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 	seq := relationaldb.LedgerIndex(l.Sequence())
 
 	return s.relationalDB.WithTransaction(ctx, func(txCtx relationaldb.TransactionContext) error {
-		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo, true); err != nil {
+		if err := txCtx.Ledger().SaveValidatedLedger(ctx, ledgerInfo); err != nil {
 			return err
 		}
 

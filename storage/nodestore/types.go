@@ -149,7 +149,9 @@ type Database interface {
 	// Store persists a node to the store.
 	Store(ctx context.Context, node *Node) error
 
-	// Fetch retrieves a node by its hash synchronously.
+	// Fetch retrieves a node by its hash synchronously. A node that is not
+	// present is reported in-band as (nil, nil): a nil node with a nil error.
+	// A non-nil error signals an actual I/O or decode failure, not absence.
 	Fetch(ctx context.Context, hash Hash256) (*Node, error)
 
 	// StoreBatch stores multiple nodes efficiently in a single operation.
