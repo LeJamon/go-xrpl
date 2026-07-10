@@ -193,20 +193,16 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	checkKey := keylet.Check(accountID, sequence)
 
-	// Serialize check
-	checkData, err := serializeCheck(c, accountID, destID, sequence, c.SendMax)
+	// Build the check SLE and insert its initial (pre-directory) form; the
+	// directory page fields are filled in and the entry re-serialized below.
+	checkSLE := newCheckData(c, accountID, destID, sequence, c.SendMax)
+	checkData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
 
 	// Insert check
 	if err := ctx.View.Insert(checkKey, checkData); err != nil {
-		return ter.TefINTERNAL
-	}
-
-	// Parse the check SLE to update with directory page numbers
-	checkSLE, err := state.ParseCheck(checkData)
-	if err != nil {
 		return ter.TefINTERNAL
 	}
 
