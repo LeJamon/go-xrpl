@@ -794,7 +794,7 @@ func (e *TestEnv) retryHeldReplacementsIntoQueue() {
 		var accountID [20]byte
 		copy(accountID[:], acctBytes)
 
-		queued := e.txQueue.GetAccountTxs(accountID)
+		queued := e.txQueue.AccountTxs(accountID)
 		if len(queued) == 0 {
 			return
 		}

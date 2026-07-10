@@ -43,7 +43,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 
 	// Steering: the partial contributes trie branchSupport and is the
 	// preferred tip.
-	if got := vt.GetTrustedSupport(abc.ID()); got != 1 {
+	if got := vt.TrustedSupport(abc.ID()); got != 1 {
 		t.Errorf("partial should steer trie branchSupport(abc): got %d, want 1", got)
 	}
 	if id, _, ok := vt.GetPreferred(0); !ok || id != abc.ID() {
@@ -52,7 +52,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 
 	// Quorum: the partial is excluded from the full-validation count and
 	// must not fire finality.
-	if got := vt.GetTrustedValidationCount(abc.ID()); got != 0 {
+	if got := vt.TrustedValidationCount(abc.ID()); got != 0 {
 		t.Errorf("partial must be excluded from full quorum count: got %d, want 0", got)
 	}
 	if fired != 0 {
@@ -64,7 +64,7 @@ func TestValidationTracker_TrustedPartialSteersButNotQuorum(t *testing.T) {
 	if !vt.Add(full) {
 		t.Fatal("full validation should be accepted")
 	}
-	if got := vt.GetTrustedValidationCount(abcd.ID()); got != 1 {
+	if got := vt.TrustedValidationCount(abcd.ID()); got != 1 {
 		t.Errorf("full validation should count toward quorum: got %d, want 1", got)
 	}
 	if fired != 1 {
@@ -228,7 +228,7 @@ func TestEngine_OnValidation_ConflictingDoubleSign(t *testing.T) {
 
 	// The conflict must NOT have been stored — the tracked tip stays at
 	// ledger A, so it cannot count toward quorum or steer the trie.
-	if tip := engine.validationTracker.GetLatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
+	if tip := engine.validationTracker.LatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
 		t.Errorf("tracked tip should remain ledger A; got %+v", tip)
 	}
 
@@ -285,7 +285,7 @@ func TestEngine_OnValidation_SupersededSeqDoubleSign(t *testing.T) {
 	}
 
 	// The tip must stay at the seq-101 ledger.
-	if tip := engine.validationTracker.GetLatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
+	if tip := engine.validationTracker.LatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xC}) {
 		t.Errorf("tracked tip should remain the seq-101 ledger; got %+v", tip)
 	}
 

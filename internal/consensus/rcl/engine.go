@@ -1304,7 +1304,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 
 		if disputeCount > 0 {
 			dsj := make(map[string]any, disputeCount)
-			for _, d := range e.disputeTracker.GetAll() {
+			for _, d := range e.disputeTracker.All() {
 				dsj[fmt.Sprintf("%X", d.TxID[:])] = disputeJSON(d)
 			}
 			ret["disputes"] = dsj
@@ -2624,7 +2624,7 @@ func (e *Engine) countLaggardsAndOfflineLocked(prevSeq uint32, trusted []consens
 		if k == self {
 			continue
 		}
-		v := e.validationTracker.GetLatestValidation(k)
+		v := e.validationTracker.LatestValidation(k)
 		if v == nil {
 			offline++
 			continue
@@ -3067,7 +3067,7 @@ func (e *Engine) updatePosition() {
 		keep[id] = true
 	}
 	for _, txID := range changed {
-		dispute := e.disputeTracker.GetDispute(txID)
+		dispute := e.disputeTracker.Dispute(txID)
 		if dispute == nil {
 			continue
 		}
@@ -3093,7 +3093,7 @@ func (e *Engine) updatePosition() {
 		if !keep[txID] {
 			continue
 		}
-		dispute := e.disputeTracker.GetDispute(txID)
+		dispute := e.disputeTracker.Dispute(txID)
 		if dispute == nil || dispute.Tx == nil {
 			continue
 		}
@@ -3396,7 +3396,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// rippled feeds getCurrentNodeIDs() into updateTrusted, but its quorum
 		// ignores the set — surface it for partial-outage visibility, not quorum.
 		slog.Debug("live validator participation",
-			"current", len(e.validationTracker.GetCurrentNodeIDs()),
+			"current", len(e.validationTracker.CurrentNodeIDs()),
 			"quorum", e.adaptor.GetQuorum(),
 			"ledger_seq", newLedger.Seq())
 	}

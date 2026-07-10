@@ -104,7 +104,7 @@ func (l *LoanPay) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) u
 	}
 	// Post-fixCleanup3_1_3: cap the estimate at the maximum number of payments the
 	// handler will process, so a large Amount does not inflate the fee unboundedly.
-	if config.GetRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
+	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
 		threshold := regular.Mul(lmath.FromInt(int64(protocol.LoanMaximumPaymentsPerTransaction)))
 		if amountToLendNum(l.Amount).Cmp(threshold) >= 0 {
 			maxFeeIncrements := protocol.LoanMaximumPaymentsPerTransaction / protocol.LoanPaymentsPerFeeIncrement
@@ -146,7 +146,7 @@ func (l *LoanPay) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 		return ter.TecNO_PERMISSION
 	}
 	if l.GetFlags()&TfLoanOverpayment != 0 && loan.Flags&LsfLoanOverpayment == 0 {
-		if config.GetRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
+		if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_1_3) {
 			return ter.TecNO_PERMISSION
 		}
 		return ter.TemINVALID_FLAG

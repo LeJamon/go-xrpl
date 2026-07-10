@@ -126,8 +126,8 @@ func CategorizeMessage(msgType uint16) TrafficCategory {
 	}
 }
 
-// GetStats returns statistics for a category.
-func (tc *TrafficCounter) GetStats(cat TrafficCategory) *TrafficStats {
+// Stats returns statistics for a category.
+func (tc *TrafficCounter) Stats(cat TrafficCategory) *TrafficStats {
 	if cat < 0 || int(cat) >= numTrafficCategories {
 		return nil
 	}
@@ -141,9 +141,9 @@ func (tc *TrafficCounter) GetStats(cat TrafficCategory) *TrafficStats {
 	}
 }
 
-// GetTotalStats returns the total traffic statistics.
-func (tc *TrafficCounter) GetTotalStats() *TrafficStats {
-	return tc.GetStats(CategoryTotal)
+// TotalStats returns the total traffic statistics.
+func (tc *TrafficCounter) TotalStats() *TrafficStats {
+	return tc.Stats(CategoryTotal)
 }
 
 // Reset resets all counters.

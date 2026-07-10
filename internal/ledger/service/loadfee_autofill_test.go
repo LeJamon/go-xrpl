@@ -56,7 +56,7 @@ func TestGetAutofillFee_LoadedLocal(t *testing.T) {
 	// Two raises clear the latch and apply one increment: local = 320.
 	ft.RaiseLocalFee()
 	ft.RaiseLocalFee()
-	if got := ft.GetLocalFee(); got != 320 {
+	if got := ft.LocalFee(); got != 320 {
 		t.Fatalf("post-raise local fee = %d; want 320", got)
 	}
 
@@ -126,8 +126,8 @@ func TestGetAutofillFee_Unlimited_HitsCeiling(t *testing.T) {
 	for range 40 {
 		ft.RaiseLocalFee()
 	}
-	if got := ft.GetLocalFee(); got < 4*ft.GetRemoteFee() {
-		t.Fatalf("setup: local %d not >= 4*remote %d", got, ft.GetRemoteFee())
+	if got := ft.LocalFee(); got < 4*ft.RemoteFee() {
+		t.Fatalf("setup: local %d not >= 4*remote %d", got, ft.RemoteFee())
 	}
 
 	parsed, err := tx.ParseJSON([]byte(`{"TransactionType":"Payment","Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","Destination":"rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH","Amount":"1000000"}`))

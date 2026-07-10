@@ -296,7 +296,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// so wire the server_info hook before the !standalone branch.
 	ledgerSvcRef := ledgerService
 	services.TxQMetrics = func() types.TxQServerMetrics {
-		m := ledgerSvcRef.GetTxQMetrics()
+		m := ledgerSvcRef.TxQMetrics()
 		return types.TxQServerMetrics{
 			ReferenceFeeLevel:     m.ReferenceFeeLevel,
 			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
@@ -304,7 +304,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 	services.TxQFeeMetrics = func() types.TxQFeeMetrics {
-		m := ledgerSvcRef.GetTxQMetrics()
+		m := ledgerSvcRef.TxQMetrics()
 		return types.TxQFeeMetrics{
 			TxCount:               m.TxCount,
 			TxQMaxSize:            m.TxQMaxSize,
@@ -317,17 +317,17 @@ func runServer(cmd *cobra.Command, args []string) error {
 		}
 	}
 	services.QueueAccountTxs = func(account [20]byte) []types.QueuedTxInfo {
-		return queuedTxInfos(ledgerSvcRef.GetQueueAccountTxs(account))
+		return queuedTxInfos(ledgerSvcRef.QueueAccountTxs(account))
 	}
 	services.QueueAllTxs = func() []types.QueuedTxInfo {
-		return queuedTxInfos(ledgerSvcRef.GetQueueAllTxs())
+		return queuedTxInfos(ledgerSvcRef.QueueAllTxs())
 	}
 
 	// get_counts surfaces node-store I/O counters and locally-held
 	// transactions. Available in both standalone and consensus modes since it
 	// only needs the ledger service.
 	services.GetCounts = func() types.CountsResult {
-		c := ledgerSvcRef.GetCounts()
+		c := ledgerSvcRef.Counts()
 		res := types.CountsResult{
 			Standalone: c.Standalone,
 			LocalTxs:   c.LocalTxs,
@@ -357,9 +357,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 			return types.LoadFactorFees{Local: base, Net: base, Cluster: base}
 		}
 		return types.LoadFactorFees{
-			Local:   ft.GetLocalFee(),
-			Net:     ft.GetRemoteFee(),
-			Cluster: ft.GetClusterFee(),
+			Local:   ft.LocalFee(),
+			Net:     ft.RemoteFee(),
+			Cluster: ft.ClusterFee(),
 		}
 	}
 
@@ -494,7 +494,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		//   - NetworkOPs.cpp:1126-1132 self-entry sources getLocalFee()
 		if ft := ledgerSvcRef.FeeTrack(); ft != nil {
 			overlay.SetClusterFeeSink(ft.SetClusterFee)
-			overlay.SetLocalLoadFeeProvider(ft.GetLocalFee)
+			overlay.SetLocalLoadFeeProvider(ft.LocalFee)
 		}
 
 		// Expose node identity and consensus stats to RPC handlers.
@@ -754,7 +754,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Create a ledger info provider adapter for WebSocket subscribe responses
 	wsServer.SetLedgerInfoProvider(&ledgerInfoAdapter{ledgerService: ledgerService})
 
-	publisher := rpc.NewPublisher(wsServer.GetSubscriptionManager())
+	publisher := rpc.NewPublisher(wsServer.SubscriptionManager())
 
 	// Wire the WebSocket event sources that previously had a publisher
 	// helper but no upstream subscriber. Each call mirrors a rippled
@@ -904,7 +904,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		bookView := newAcceptedLedgerView(event)
 		payload := handlers.ComputeBookChanges(bookView)
 		if data, err := json.Marshal(payload); err == nil {
-			wsServer.GetSubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
+			wsServer.SubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
 		}
 
 		// pubServer → server stream (NetworkOPs.cpp:2308-2373 +

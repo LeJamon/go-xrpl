@@ -1564,7 +1564,7 @@ func (p *Peer) Info() PeerInfo {
 		pubKeyBytes = p.remotePubKey.Bytes()
 	}
 
-	stats := p.traffic.GetTotalStats()
+	stats := p.traffic.TotalStats()
 
 	var closedLedger string
 	if p.hasClosedLedger {

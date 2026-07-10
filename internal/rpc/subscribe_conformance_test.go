@@ -389,7 +389,7 @@ func TestSubscribeConformanceEmptyUnsubscribeRequest(t *testing.T) {
 func TestSubscribeConformanceLedgerResponseFields(t *testing.T) {
 	sm := newTestSubscriptionManager()
 
-	response := sm.GetSubscribeResponse(
+	response := sm.SubscribeResponse(
 		2, // ledgerIndex
 		"ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456ABC123DEF456AB", // ledgerHash (64 hex)
 		735000000, // ledgerTime

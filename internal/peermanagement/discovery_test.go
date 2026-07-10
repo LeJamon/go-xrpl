@@ -222,7 +222,7 @@ func TestBootCache(t *testing.T) {
 	bc.Insert("192.168.1.1", 51235)
 	bc.Insert("192.168.1.2", 51235)
 
-	endpoints := bc.GetEndpoints(10)
+	endpoints := bc.Endpoints(10)
 	if len(endpoints) != 2 {
 		t.Errorf("Expected 2 endpoints, got %d", len(endpoints))
 	}
@@ -271,7 +271,7 @@ func TestBootCacheGetEndpointsSorted(t *testing.T) {
 		bc.MarkSuccess("192.168.1.3")
 	}
 
-	endpoints := bc.GetEndpoints(10)
+	endpoints := bc.Endpoints(10)
 
 	// Should be sorted by valence descending
 	if len(endpoints) < 2 {
@@ -342,7 +342,7 @@ func TestBackoffPeerPrioritization(t *testing.T) {
 	bc.MarkSuccess("192.168.1.2")
 	bc.MarkSuccess("192.168.1.2")
 
-	endpoints := bc.GetEndpoints(10)
+	endpoints := bc.Endpoints(10)
 
 	// Peer 2 should be prioritized (higher valence)
 	// Peer 1 should be last (lowest valence)
@@ -562,7 +562,7 @@ func TestSimulatedBackoffBehavior(t *testing.T) {
 	// Simulate connection attempts over 100 iterations
 	primaryAttempts := 0
 	for range 100 {
-		endpoints := bc.GetEndpoints(1)
+		endpoints := bc.Endpoints(1)
 		if len(endpoints) > 0 && endpoints[0].Address == "primary.peer" {
 			primaryAttempts++
 			bc.MarkFailed("primary.peer")

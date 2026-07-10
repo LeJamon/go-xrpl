@@ -96,9 +96,9 @@ func (n *BasicNetwork) IsConnected(from, to PeerID) bool {
 	return n.links[from][to] != nil
 }
 
-// GetDelay returns the delay for messages from one peer to another.
+// Delay returns the delay for messages from one peer to another.
 // Returns 0 and false if not connected.
-func (n *BasicNetwork) GetDelay(from, to PeerID) (SimDuration, bool) {
+func (n *BasicNetwork) Delay(from, to PeerID) (SimDuration, bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
@@ -141,7 +141,7 @@ func (n *BasicNetwork) Peers(id PeerID) []PeerID {
 // The handler is called when the message "arrives" at the destination.
 // Returns false if the peers are not connected.
 func (n *BasicNetwork) Send(from, to PeerID, handler func()) bool {
-	delay, ok := n.GetDelay(from, to)
+	delay, ok := n.Delay(from, to)
 	if !ok {
 		return false
 	}

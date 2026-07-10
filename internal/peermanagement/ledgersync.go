@@ -518,8 +518,8 @@ func (h *LedgerSyncHandler) CreateRequest(ledgerHash []byte, ledgerSeq uint32, d
 	return req
 }
 
-// GetPendingRequests returns all pending requests for a peer.
-func (h *LedgerSyncHandler) GetPendingRequests(peerID PeerID) []*LedgerRequest {
+// PendingRequests returns all pending requests for a peer.
+func (h *LedgerSyncHandler) PendingRequests(peerID PeerID) []*LedgerRequest {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

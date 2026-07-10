@@ -384,7 +384,7 @@ func (e *TestEnv) EscalatedFee() uint64 {
 	if e.txQueue == nil {
 		return e.baseFee
 	}
-	feeLevel := e.txQueue.GetRequiredFeeLevel(e.txInLedger)
+	feeLevel := e.txQueue.RequiredFeeLevel(e.txInLedger)
 	if uint64(feeLevel) <= txq.BaseLevel {
 		return e.baseFee
 	}
@@ -404,7 +404,7 @@ func (e *TestEnv) OpenLedgerFee(customBaseFee uint64) uint64 {
 	if e.txQueue == nil {
 		return customBaseFee
 	}
-	feeLevel := e.txQueue.GetRequiredFeeLevel(e.txInLedger)
+	feeLevel := e.txQueue.RequiredFeeLevel(e.txInLedger)
 	if uint64(feeLevel) <= txq.BaseLevel {
 		return customBaseFee
 	}
@@ -496,5 +496,5 @@ func (e *TestEnv) TxQMetrics() txq.Metrics {
 	if e.txQueue == nil {
 		e.t.Fatal("TxQMetrics: TxQ not configured")
 	}
-	return e.txQueue.GetMetrics(e.txInLedger)
+	return e.txQueue.Metrics(e.txInLedger)
 }

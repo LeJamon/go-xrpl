@@ -30,7 +30,7 @@ func (q *TxQ) ProcessClosedLedger(ctx ClosedLedgerContext, timeLeap bool) uint32
 
 	// Reference: rippled sets maxSize_ = max(txnsExpected * ledgersInQueue, queueSizeMin)
 	if !timeLeap {
-		snapshot := q.feeMetrics.GetSnapshot()
+		snapshot := q.feeMetrics.Snapshot()
 		newMaxSize := max(snapshot.TxnsExpected*q.config.LedgersInQueue, q.config.QueueSizeMin)
 		q.maxSize = &newMaxSize
 	}
@@ -115,12 +115,12 @@ type FeeAndSeq struct {
 	AvailableSeq uint32
 }
 
-// GetTxRequiredFeeAndSeq returns fee and sequence information for constructing transactions.
-func (q *TxQ) GetTxRequiredFeeAndSeq(account [20]byte, acctSeq uint32, baseFee uint64, txInLedger uint32) FeeAndSeq {
+// TxRequiredFeeAndSeq returns fee and sequence information for constructing transactions.
+func (q *TxQ) TxRequiredFeeAndSeq(account [20]byte, acctSeq uint32, baseFee uint64, txInLedger uint32) FeeAndSeq {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	snapshot := q.feeMetrics.GetSnapshot()
+	snapshot := q.feeMetrics.Snapshot()
 	feeLevel := ScaleFeeLevel(snapshot, txInLedger)
 	requiredFee := feeLevel.ToDrops(baseFee)
 

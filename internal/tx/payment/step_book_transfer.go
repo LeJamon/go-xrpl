@@ -46,7 +46,7 @@ func (s *BookStep) transferFunds(sb *PaymentSandbox, from, to [20]byte, amount E
 		return nil
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
+	txHash, ledgerSeq := sb.TransactionContext()
 
 	if issue.IsXRP() {
 		return s.transferXRP(sb, from, to, amount.XRP, txHash, ledgerSeq)
@@ -67,7 +67,7 @@ func (s *BookStep) transferFundsWithFee(sb *PaymentSandbox, from, to [20]byte, g
 		return nil
 	}
 
-	txHash, ledgerSeq := sb.GetTransactionContext()
+	txHash, ledgerSeq := sb.TransactionContext()
 
 	// For XRP, there's no transfer fee - just use regular transfer
 	if issue.IsXRP() {

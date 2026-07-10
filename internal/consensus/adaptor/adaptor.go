@@ -771,7 +771,7 @@ func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 // history only — never the mutable open ledger — so the catch-up walk can't
 // adopt an unclosed ledger as prevLedger.
 func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
-	l, err := a.ledgerService.GetAdoptedLedgerBySequence(seq)
+	l, err := a.ledgerService.AdoptedLedgerBySequence(seq)
 	if err != nil || l == nil {
 		return nil, ErrLedgerNotFound
 	}
@@ -1284,11 +1284,11 @@ func (a *Adaptor) GetLoadFee() uint32 {
 	if ft == nil {
 		return 0
 	}
-	fee := ft.GetLocalFee()
-	if c := ft.GetClusterFee(); c > fee {
+	fee := ft.LocalFee()
+	if c := ft.ClusterFee(); c > fee {
 		fee = c
 	}
-	if fee <= ft.GetLoadBase() {
+	if fee <= ft.LoadBase() {
 		return 0
 	}
 	return fee
@@ -1666,7 +1666,7 @@ func (a *Adaptor) runConsensusPhaseDispatcher() {
 	for {
 		select {
 		case p := <-a.consensusPhaseCh:
-			if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+			if hooks := a.ledgerService.EventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
 				hooks.OnConsensusPhase(p)
 			}
 		case <-a.consensusPhaseQuit:
@@ -1884,7 +1884,7 @@ func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 	if len(vals) == 0 {
 		return
 	}
-	base := ft.GetLoadBase()
+	base := ft.LoadBase()
 	fees := make([]uint32, 0, len(vals))
 	for _, v := range vals {
 		if v == nil {

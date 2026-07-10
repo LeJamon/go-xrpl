@@ -165,8 +165,8 @@ func (bc *BootCache) MarkSuccess(address string) {
 	}
 }
 
-// GetEndpoints returns endpoints sorted by valence.
-func (bc *BootCache) GetEndpoints(limit int) []*CachedEndpoint {
+// Endpoints returns endpoints sorted by valence.
+func (bc *BootCache) Endpoints(limit int) []*CachedEndpoint {
 	bc.mu.RLock()
 	defer bc.mu.RUnlock()
 
@@ -659,7 +659,7 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 	}
 
 	if d.bootCache != nil {
-		for _, entry := range d.bootCache.GetEndpoints(50) {
+		for _, entry := range d.bootCache.Endpoints(50) {
 			if _, exists := d.peers[entry.Address]; !exists {
 				candidates = append(candidates, entry.Address)
 			}

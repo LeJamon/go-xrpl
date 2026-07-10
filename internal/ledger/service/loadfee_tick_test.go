@@ -22,7 +22,7 @@ func TestTickLoadFee_NoOverload_LowersToLoadBase(t *testing.T) {
 	ft := svc.feeTrack
 	ft.RaiseLocalFee()
 	ft.RaiseLocalFee()
-	if got := ft.GetLocalFee(); got <= feetrack.LoadBase {
+	if got := ft.LocalFee(); got <= feetrack.LoadBase {
 		t.Fatalf("setup: pre-tick local fee = %d; want > LoadBase", got)
 	}
 
@@ -35,7 +35,7 @@ func TestTickLoadFee_NoOverload_LowersToLoadBase(t *testing.T) {
 	}
 	svc.mu.Unlock()
 
-	if got := ft.GetLocalFee(); got != feetrack.LoadBase {
+	if got := ft.LocalFee(); got != feetrack.LoadBase {
 		t.Fatalf("post-tick local fee = %d; want LoadBase=%d", got, feetrack.LoadBase)
 	}
 }

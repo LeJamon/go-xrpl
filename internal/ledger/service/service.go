@@ -572,7 +572,7 @@ func (s *Service) tickLoadFeeLocked() {
 	if s.feeTrack == nil || s.txQueue == nil || s.openLedger == nil {
 		return
 	}
-	metrics := s.txQueue.GetMetrics(s.openLedger.TxCount())
+	metrics := s.txQueue.Metrics(s.openLedger.TxCount())
 	if metrics.OpenLedgerFeeLevel > metrics.ReferenceFeeLevel {
 		s.feeTrack.RaiseLocalFee()
 	} else {
@@ -893,10 +893,10 @@ func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return nil, ErrLedgerNotFound
 }
 
-// GetAdoptedLedgerBySequence returns a closed ledger from adopted history only,
+// AdoptedLedgerBySequence returns a closed ledger from adopted history only,
 // never the mutable open ledger — the consensus catch-up walk needs immutable,
 // parent-hash-chained ledgers.
-func (s *Service) GetAdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
+func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if l, ok := s.ledgerHistory[seq]; ok {
@@ -1059,9 +1059,9 @@ func (s *Service) GetGenesisAccount() (string, error) {
 	return address, err
 }
 
-// GetTxQMetrics returns the current TxQ metrics, or the zero value when
+// TxQMetrics returns the current TxQ metrics, or the zero value when
 // the queue isn't initialised.
-func (s *Service) GetTxQMetrics() txq.Metrics {
+func (s *Service) TxQMetrics() txq.Metrics {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.txQueue == nil {
@@ -1071,29 +1071,29 @@ func (s *Service) GetTxQMetrics() txq.Metrics {
 	if s.openLedger != nil {
 		txInLedger = s.openLedger.TxCount()
 	}
-	return s.txQueue.GetMetrics(txInLedger)
+	return s.txQueue.Metrics(txInLedger)
 }
 
-// GetQueueAccountTxs returns the TxQ candidates queued for one account, sorted by
+// QueueAccountTxs returns the TxQ candidates queued for one account, sorted by
 // SeqProxy. Backs account_info's queue_data. Empty when no TxQ is wired.
-func (s *Service) GetQueueAccountTxs(account [20]byte) []*txq.CandidateDetails {
+func (s *Service) QueueAccountTxs(account [20]byte) []*txq.CandidateDetails {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.txQueue == nil {
 		return nil
 	}
-	return s.txQueue.GetAccountTxs(account)
+	return s.txQueue.AccountTxs(account)
 }
 
-// GetQueueAllTxs returns every TxQ candidate, ordered by fee level. Backs the
+// QueueAllTxs returns every TxQ candidate, ordered by fee level. Backs the
 // ledger method's queue_data dump. Empty when no TxQ is wired.
-func (s *Service) GetQueueAllTxs() []*txq.CandidateDetails {
+func (s *Service) QueueAllTxs() []*txq.CandidateDetails {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.txQueue == nil {
 		return nil
 	}
-	return s.txQueue.GetAllTxs()
+	return s.txQueue.AllTxs()
 }
 
 // GetServerInfo returns basic server information
@@ -1171,8 +1171,8 @@ func rippleEpochSeconds(t time.Time) int64 {
 	return s
 }
 
-// GetLedgerInfo returns information about a specific ledger
-func (s *Service) GetLedgerInfo(seq uint32) (*LedgerInfo, error) {
+// LedgerInfo returns information about a specific ledger
+func (s *Service) LedgerInfo(seq uint32) (*LedgerInfo, error) {
 	l, err := s.GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, err
@@ -1201,8 +1201,8 @@ type LedgerInfo struct {
 	Header     header.LedgerHeader
 }
 
-// GetPendingTxBlobs returns the raw transaction blobs for all pending transactions.
-func (s *Service) GetPendingTxBlobs() [][]byte {
+// PendingTxBlobs returns the raw transaction blobs for all pending transactions.
+func (s *Service) PendingTxBlobs() [][]byte {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

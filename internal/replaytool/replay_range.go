@@ -436,7 +436,7 @@ type BlockResult struct {
 
 func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
 	// Get snapshot
-	snapshot, err := client.GetSnapshot(ctx, ledgerIndex)
+	snapshot, err := client.Snapshot(ctx, ledgerIndex)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}
@@ -497,7 +497,7 @@ func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir 
 		return nil, nil, drops.Fees{}, fmt.Errorf("checkpoint %s holds ledger %d, expected %d", path, ckptSeq, seq)
 	}
 
-	snapshot, err := client.GetSnapshot(ctx, seq)
+	snapshot, err := client.Snapshot(ctx, seq)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}
@@ -619,7 +619,7 @@ func (r *replayRangeRunner) processBlock(
 	}
 
 	// Get expected values for this ledger
-	postSnapshot, err := client.GetSnapshot(ctx, targetLedger)
+	postSnapshot, err := client.Snapshot(ctx, targetLedger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting target snapshot: %w", err)
 	}
@@ -630,7 +630,7 @@ func (r *replayRangeRunner) processBlock(
 	result.ExpectedTotalCoins = postSnapshot.TotalCoins
 
 	// Get transactions for this ledger
-	txs, err := client.GetTransactions(ctx, targetLedger)
+	txs, err := client.Transactions(ctx, targetLedger)
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting transactions: %w", err)
 	}

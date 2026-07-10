@@ -14,7 +14,7 @@ func TestTrafficCounterBasic(t *testing.T) {
 	// Add some outbound traffic
 	tc.AddCount(CategoryTransaction, false, 150)
 
-	stats := tc.GetStats(CategoryTransaction)
+	stats := tc.Stats(CategoryTransaction)
 	if stats == nil {
 		t.Fatal("Stats should not be nil")
 	}
@@ -65,7 +65,7 @@ func TestTrafficCounterReset(t *testing.T) {
 	tc.AddCount(CategoryTransaction, true, 100)
 	tc.Reset()
 
-	stats := tc.GetStats(CategoryTransaction)
+	stats := tc.Stats(CategoryTransaction)
 	if stats.BytesIn != 0 {
 		t.Errorf("Expected BytesIn 0 after reset, got %d", stats.BytesIn)
 	}
@@ -99,7 +99,7 @@ func TestTrafficCounterTotalStats(t *testing.T) {
 	tc.AddCount(CategoryTransaction, false, 75)
 
 	// Total should aggregate all categories
-	total := tc.GetTotalStats()
+	total := tc.TotalStats()
 	if total == nil {
 		t.Fatal("Total stats should not be nil")
 	}

@@ -672,13 +672,13 @@ func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) 
 	return result
 }
 
-// GetTrustedValidationCount returns the count of trusted validations
+// TrustedValidationCount returns the count of trusted validations
 // for a ledger, EXCLUDING validators currently on the negative UNL.
 // Matches rippled's LedgerMaster.cpp:886,952,1120 where every trusted
 // count flows through negativeUNLFilter before comparison — so any
 // consumer of this method (quorum gate, server_info, future LedgerTrie
 // port) sees consistent, filtered numbers.
-func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.LedgerID) int {
+func (vt *ValidationTracker) TrustedValidationCount(ledgerID consensus.LedgerID) int {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 
@@ -709,7 +709,7 @@ func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 	return count
 }
 
-// GetTrustedSupport returns the count of trusted-and-not-negUNL
+// TrustedSupport returns the count of trusted-and-not-negUNL
 // validators committing to this ledger or any descendant — the
 // negUNL-excluded analogue of the trie's branchSupport. The trie itself
 // includes negUNL validators (for GetPreferred steering), so the
@@ -717,7 +717,7 @@ func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 // rather than at trie membership. Polls checkAcquired before reading,
 // rippled's withTrie cadence. Falls back to the flat trusted count when
 // the trie or ancestry is unavailable.
-func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
+func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
 	// Snapshot pointers, drop the lock for ancestry resolution, then
 	// re-acquire for the cheap trie query.
 	vt.mu.RLock()
@@ -726,12 +726,12 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 	vt.mu.RUnlock()
 
 	if trie == nil || ancestry == nil {
-		return vt.GetTrustedValidationCount(ledgerID)
+		return vt.TrustedValidationCount(ledgerID)
 	}
 
 	lgr, ok := ancestry.LedgerByID(ledgerID)
 	if !ok {
-		return vt.GetTrustedValidationCount(ledgerID)
+		return vt.TrustedValidationCount(ledgerID)
 	}
 
 	vt.mu.Lock()
@@ -974,14 +974,14 @@ func lexLessLgrID(a, b consensus.LedgerID) bool {
 	return false
 }
 
-// GetLatestValidation returns the latest validation from a node.
-func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *consensus.Validation {
+// LatestValidation returns the latest validation from a node.
+func (vt *ValidationTracker) LatestValidation(nodeID consensus.NodeID) *consensus.Validation {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	return vt.byNode[nodeID]
 }
 
-// GetCurrentNodeIDs returns the node IDs of every validator whose latest
+// CurrentNodeIDs returns the node IDs of every validator whose latest
 // tracked validation still passes the IsCurrent freshness gate — the set
 // observed actively validating right now, partial or full, trusted or not.
 // The gate matches Add()'s admission check, so a node appears iff its most
@@ -990,7 +990,7 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 // eviction that rippled folds into its current() sweep. Mirrors rippled's
 // Validations::getCurrentNodeIDs — the live-participation set gathered when
 // the engine refreshes the trusted set and quorum each round.
-func (vt *ValidationTracker) GetCurrentNodeIDs() []consensus.NodeID {
+func (vt *ValidationTracker) CurrentNodeIDs() []consensus.NodeID {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 

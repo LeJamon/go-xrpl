@@ -96,7 +96,7 @@ func (ctx *ApplyContext) CheckReserveIncrease(priorBalance uint64, currentOwnerC
 // EngineConfig.GetRules so there is a single Rules fallback policy (no silent
 // fallback — a nil Rules panics; see EngineConfig.GetRules).
 func (ctx *ApplyContext) Rules() *amendment.Rules {
-	return ctx.Config.GetRules()
+	return ctx.Config.RequireRules()
 }
 
 // LookupAccount loads and parses an AccountRoot by account address string.

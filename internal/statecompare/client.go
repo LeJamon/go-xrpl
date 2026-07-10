@@ -182,8 +182,8 @@ func (c *Client) fetchBlob(ctx context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
-// GetSnapshot retrieves a ledger header from the manifest by sequence number.
-func (c *Client) GetSnapshot(ctx context.Context, seq uint32) (*LedgerSnapshot, error) {
+// Snapshot retrieves a ledger header from the manifest by sequence number.
+func (c *Client) Snapshot(ctx context.Context, seq uint32) (*LedgerSnapshot, error) {
 	const query = `
 		SELECT seq, ledger_hash, parent_hash, account_hash, transaction_hash,
 		       total_coins, close_time, close_time_resolution, close_flags
@@ -232,10 +232,10 @@ func (c *Client) GetSnapshot(ctx context.Context, seq uint32) (*LedgerSnapshot, 
 	return &snapshot, nil
 }
 
-// GetStateEntries retrieves every SLE of a checkpoint ledger by decoding its
+// StateEntries retrieves every SLE of a checkpoint ledger by decoding its
 // STATE pack. seq must be a checkpoint ledger; full state is captured only at
 // checkpoints, so a non-checkpoint seq returns ErrNotFound.
-func (c *Client) GetStateEntries(ctx context.Context, seq uint32) ([]StateEntry, error) {
+func (c *Client) StateEntries(ctx context.Context, seq uint32) ([]StateEntry, error) {
 	var blobKey string
 	err := c.db.QueryRowContext(ctx,
 		`SELECT blob_key FROM checkpoints WHERE seq = $1`, seq,
@@ -296,9 +296,9 @@ func (c *Client) StreamStateEntries(ctx context.Context, seq uint32, fn func(Sta
 	return nil
 }
 
-// GetTransactions retrieves the transactions of a ledger by seeking into its
+// Transactions retrieves the transactions of a ledger by seeking into its
 // batch pack at the manifest-recorded offset.
-func (c *Client) GetTransactions(ctx context.Context, seq uint32) ([]Transaction, error) {
+func (c *Client) Transactions(ctx context.Context, seq uint32) ([]Transaction, error) {
 	var blobKey sql.NullString
 	var blobOffset sql.NullInt64
 	err := c.db.QueryRowContext(ctx,

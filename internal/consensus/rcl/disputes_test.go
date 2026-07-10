@@ -86,7 +86,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		dt := NewDisputeTracker()
 		txID := makeTxID(1)
 		dt.CreateDispute(txID, nil, true)
-		d := dt.GetDispute(txID)
+		d := dt.Dispute(txID)
 		d.AvalancheState = consensus.AvalancheMid
 		d.AvalancheCounter = parms.MinRounds + 5
 		d.CurrentVoteCounter = parms.StalledRounds + 5
@@ -102,7 +102,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		dt := NewDisputeTracker()
 		txID := makeTxID(2)
 		dt.CreateDispute(txID, nil, true)
-		d := dt.GetDispute(txID)
+		d := dt.Dispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
 		d.CurrentVoteCounter = parms.MinRounds + 1
@@ -117,7 +117,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		dt := NewDisputeTracker()
 		txID := makeTxID(3)
 		dt.CreateDispute(txID, nil, true)
-		d := dt.GetDispute(txID)
+		d := dt.Dispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
 		d.CurrentVoteCounter = parms.StalledRounds + 1
@@ -142,7 +142,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		dt := NewDisputeTracker()
 		txID := makeTxID(4)
 		dt.CreateDispute(txID, nil, false)
-		d := dt.GetDispute(txID)
+		d := dt.Dispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
 		// CurrentVoteCounter is irrelevant when not proposing.
@@ -163,7 +163,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		dt := NewDisputeTracker()
 		stalledID := makeTxID(5)
 		dt.CreateDispute(stalledID, nil, true)
-		ds := dt.GetDispute(stalledID)
+		ds := dt.Dispute(stalledID)
 		ds.AvalancheState = consensus.AvalancheStuck
 		ds.AvalancheCounter = parms.MinRounds + 1
 		ds.CurrentVoteCounter = parms.StalledRounds + 1
@@ -172,7 +172,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 
 		notStalledID := makeTxID(6)
 		dt.CreateDispute(notStalledID, nil, true)
-		dns := dt.GetDispute(notStalledID)
+		dns := dt.Dispute(notStalledID)
 		dns.AvalancheState = consensus.AvalancheMid // not terminal
 		dns.AvalancheCounter = parms.MinRounds + 5
 		dns.CurrentVoteCounter = parms.StalledRounds + 5
@@ -271,8 +271,8 @@ func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 	}
 
 	engine.mu.RLock()
-	dC := engine.disputeTracker.GetDispute(txC)
-	dD := engine.disputeTracker.GetDispute(txD)
+	dC := engine.disputeTracker.Dispute(txC)
+	dD := engine.disputeTracker.Dispute(txD)
 	engine.mu.RUnlock()
 	if dC == nil {
 		t.Fatal("expected dispute for tx C after feeding peer proposals")
@@ -299,8 +299,8 @@ func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {
 	engine.mu.Unlock()
 
 	engine.mu.RLock()
-	dC = engine.disputeTracker.GetDispute(txC)
-	dD = engine.disputeTracker.GetDispute(txD)
+	dC = engine.disputeTracker.Dispute(txC)
+	dD = engine.disputeTracker.Dispute(txD)
 	outSet := engine.ourTxSet
 	engine.mu.RUnlock()
 
@@ -382,8 +382,8 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 	}
 
 	engine.mu.RLock()
-	preC := engine.disputeTracker.GetDispute(txC)
-	preD := engine.disputeTracker.GetDispute(txD)
+	preC := engine.disputeTracker.Dispute(txC)
+	preD := engine.disputeTracker.Dispute(txD)
 	engine.mu.RUnlock()
 	if preC == nil {
 		t.Fatal("expected dispute for tx C after bowingNode's proposal")
@@ -413,8 +413,8 @@ func TestConsensus_BowOut_UnVotesDisputes(t *testing.T) {
 	}
 
 	engine.mu.RLock()
-	postC := engine.disputeTracker.GetDispute(txC)
-	postD := engine.disputeTracker.GetDispute(txD)
+	postC := engine.disputeTracker.Dispute(txC)
+	postD := engine.disputeTracker.Dispute(txD)
 	_, stillInProposals := engine.proposalTracker.proposals[bowingNode]
 	_, isDead := engine.proposalTracker.deadNodes[bowingNode]
 	engine.mu.RUnlock()
@@ -470,7 +470,7 @@ func TestConsensus_AvalancheThresholdRamp(t *testing.T) {
 		dt.SetVote(txID, p, yes)
 	}
 
-	d := dt.GetDispute(txID)
+	d := dt.Dispute(txID)
 	if d.AvalancheState != consensus.AvalancheInit {
 		t.Fatalf("start AvalancheState = %v, want Init", d.AvalancheState)
 	}

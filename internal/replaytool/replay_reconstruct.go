@@ -30,7 +30,7 @@ func reconstructMainnetState(
 	ledgerIndex uint32,
 	expectedAccountHash [32]byte,
 ) (*shamap.SHAMap, bool, error) {
-	txs, err := client.GetTransactions(ctx, ledgerIndex)
+	txs, err := client.Transactions(ctx, ledgerIndex)
 	if err != nil {
 		return nil, false, fmt.Errorf("getting transactions: %w", err)
 	}

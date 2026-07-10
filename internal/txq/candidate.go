@@ -146,9 +146,9 @@ func (aq *AccountQueue) Empty() bool {
 	return len(aq.Transactions) == 0
 }
 
-// GetPrevTx finds the transaction that precedes the given SeqProxy.
+// PrevTx finds the transaction that precedes the given SeqProxy.
 // Returns nil if there is no preceding transaction.
-func (aq *AccountQueue) GetPrevTx(seqProxy SeqProxy) *Candidate {
+func (aq *AccountQueue) PrevTx(seqProxy SeqProxy) *Candidate {
 	var prev *Candidate
 	for sp, c := range aq.Transactions {
 		if sp.Less(seqProxy) {
@@ -160,9 +160,9 @@ func (aq *AccountQueue) GetPrevTx(seqProxy SeqProxy) *Candidate {
 	return prev
 }
 
-// GetFirstSeqTx returns the first sequence-based transaction (lowest sequence).
+// FirstSeqTx returns the first sequence-based transaction (lowest sequence).
 // Returns nil if there are no sequence-based transactions.
-func (aq *AccountQueue) GetFirstSeqTx() *Candidate {
+func (aq *AccountQueue) FirstSeqTx() *Candidate {
 	var first *Candidate
 	for _, c := range aq.Transactions {
 		if !c.SeqProxy.IsTicket {
@@ -209,7 +209,7 @@ func (aq *AccountQueue) FirstRelevant(acctSeqProx SeqProxy) *Candidate {
 // slipped into the ledger are excluded, mirroring rippled's lower_bound(
 // acctSeqProx) range (TxQ.cpp:818).
 func (aq *AccountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*Candidate {
-	sorted := aq.GetSortedCandidates()
+	sorted := aq.SortedCandidates()
 	relevant := make([]*Candidate, 0, len(sorted))
 	for _, c := range sorted {
 		if !c.SeqProxy.Less(acctSeqProx) {
@@ -219,8 +219,8 @@ func (aq *AccountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*Candid
 	return relevant
 }
 
-// GetSortedCandidates returns all candidates sorted by SeqProxy.
-func (aq *AccountQueue) GetSortedCandidates() []*Candidate {
+// SortedCandidates returns all candidates sorted by SeqProxy.
+func (aq *AccountQueue) SortedCandidates() []*Candidate {
 	result := make([]*Candidate, 0, len(aq.Transactions))
 	for _, c := range aq.Transactions {
 		result = append(result, c)

@@ -85,7 +85,7 @@ func TestTxQ_GetMetrics(t *testing.T) {
 	cfg.Standalone = true
 	q := New(cfg)
 
-	metrics := q.GetMetrics(0)
+	metrics := q.Metrics(0)
 
 	if metrics.TxCount != 0 {
 		t.Errorf("TxCount = %d, want 0", metrics.TxCount)
@@ -178,7 +178,7 @@ func TestTxQ_GetRequiredFeeLevel(t *testing.T) {
 	q := New(cfg)
 
 	// Under threshold - should return base level
-	level := q.GetRequiredFeeLevel(3)
+	level := q.RequiredFeeLevel(3)
 	if level != FeeLevel(BaseLevel) {
 		t.Errorf("GetRequiredFeeLevel(3) = %d, want %d", level, BaseLevel)
 	}

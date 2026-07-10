@@ -180,8 +180,8 @@ func (v *Validations) NumTrustedForLedger(ledgerID consensus.LedgerID) int {
 	return v.trustedValidations[ledgerID]
 }
 
-// GetNodesAfter returns count of nodes that have validated a ledger after the given one.
-func (v *Validations) GetNodesAfter(prevLedger *Ledger, prevLedgerID consensus.LedgerID) int {
+// NodesAfter returns count of nodes that have validated a ledger after the given one.
+func (v *Validations) NodesAfter(prevLedger *Ledger, prevLedgerID consensus.LedgerID) int {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 
@@ -499,7 +499,7 @@ func (p *Peer) AcquireLedger(ledgerID consensus.LedgerID) *Ledger {
 	// Send request to all peers
 	minDelay := 10 * time.Second
 	for _, peerID := range peers {
-		if delay, ok := p.net.GetDelay(p.ID, peerID); ok {
+		if delay, ok := p.net.Delay(p.ID, peerID); ok {
 			if delay < minDelay {
 				minDelay = delay
 			}
@@ -541,7 +541,7 @@ func (p *Peer) AcquireTxSet(setID consensus.TxSetID) *TxSet {
 	// Send request to all peers
 	minDelay := 10 * time.Second
 	for _, peerID := range peers {
-		if delay, ok := p.net.GetDelay(p.ID, peerID); ok {
+		if delay, ok := p.net.Delay(p.ID, peerID); ok {
 			if delay < minDelay {
 				minDelay = delay
 			}
@@ -566,7 +566,7 @@ func (p *Peer) ProposersValidated(prevLedger consensus.LedgerID) int {
 
 // ProposersFinished returns count of proposers that have finished with the given ledger.
 func (p *Peer) ProposersFinished(prevLedger *Ledger, prevLedgerID consensus.LedgerID) int {
-	return p.validations.GetNodesAfter(prevLedger, prevLedgerID)
+	return p.validations.NodesAfter(prevLedger, prevLedgerID)
 }
 
 // OnClose is called when consensus closes the ledger.
@@ -602,8 +602,8 @@ func (p *Peer) EarliestAllowedSeq() uint32 {
 	return p.fullyValidatedLedger.Seq()
 }
 
-// GetPrevLedger determines the previous ledger to build on.
-func (p *Peer) GetPrevLedger(ledgerID consensus.LedgerID, ledger *Ledger, mode consensus.Mode) consensus.LedgerID {
+// PrevLedger determines the previous ledger to build on.
+func (p *Peer) PrevLedger(ledgerID consensus.LedgerID, ledger *Ledger, mode consensus.Mode) consensus.LedgerID {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -639,7 +639,7 @@ func (p *Peer) share(msg any) {
 		if peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				// Copy message for closure based on type
 				switch m := msg.(type) {
 				case Tx:
@@ -807,7 +807,7 @@ func (p *Peer) broadcastProposal(prop *Proposal) {
 		if peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				propCopy := *prop
 				p.scheduler.In(delay, func() {
 					targetPeer.handleProposalFromPeer(&propCopy, seq, origin)
@@ -1036,7 +1036,7 @@ func (p *Peer) broadcastValidation(val *Validation) {
 		if peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				valCopy := *val
 				p.scheduler.In(delay, func() {
 					targetPeer.handleValidationFromPeer(&valCopy, seq, origin)
@@ -1100,7 +1100,7 @@ func (p *Peer) relayTx(tx Tx, from PeerID) {
 		if peerID != from && peerID != origin {
 			targetPeer := p.findPeer(peerID)
 			if targetPeer != nil {
-				delay, _ := p.net.GetDelay(p.ID, peerID)
+				delay, _ := p.net.Delay(p.ID, peerID)
 				txCopy := tx
 				seqCopy := seq
 				originCopy := origin
@@ -1238,13 +1238,13 @@ func (p *Peer) HaveValidated() bool {
 	return p.fullyValidatedLedger.Seq() > 0
 }
 
-// GetValidLedgerIndex returns the earliest allowed sequence.
-func (p *Peer) GetValidLedgerIndex() uint32 {
+// ValidLedgerIndex returns the earliest allowed sequence.
+func (p *Peer) ValidLedgerIndex() uint32 {
 	return p.EarliestAllowedSeq()
 }
 
-// GetQuorumKeys returns the quorum and trusted keys.
-func (p *Peer) GetQuorumKeys() (int, []PeerID) {
+// QuorumKeys returns the quorum and trusted keys.
+func (p *Peer) QuorumKeys() (int, []PeerID) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.quorum, p.trustGraph.TrustedPeers(p.ID)

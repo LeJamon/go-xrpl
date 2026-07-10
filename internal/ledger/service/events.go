@@ -164,8 +164,8 @@ func (s *Service) SetEventHooks(hooks *EventHooks) {
 	s.hooks = hooks
 }
 
-// GetEventHooks returns the current event hooks (may be nil)
-func (s *Service) GetEventHooks() *EventHooks {
+// EventHooks returns the current event hooks (may be nil)
+func (s *Service) EventHooks() *EventHooks {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.hooks

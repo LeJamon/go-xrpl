@@ -39,7 +39,7 @@ func TestValidatorSlotUpdate(t *testing.T) {
 	slot.Update(validator, PeerID(1))
 
 	// Verify peer was added
-	peers := slot.GetSelected()
+	peers := slot.Selected()
 	// Initially no peers selected (still in counting state)
 	if len(peers) != 0 {
 		t.Errorf("Expected 0 selected peers initially, got %d", len(peers))
@@ -208,7 +208,7 @@ func TestRelayRemovePeer(t *testing.T) {
 	relay.RemovePeer(PeerID(1))
 
 	// Peer should be removed from slot
-	selected := relay.GetSelectedPeers(validator)
+	selected := relay.SelectedPeers(validator)
 	for _, p := range selected {
 		if p == PeerID(1) {
 			t.Error("Peer 1 should have been removed")
@@ -294,7 +294,7 @@ func TestValidatorSlotGetSelected(t *testing.T) {
 	slot := NewValidatorSlot(3, mock.callback)
 
 	// Initially no peers selected
-	selected := slot.GetSelected()
+	selected := slot.Selected()
 	if len(selected) != 0 {
 		t.Errorf("Expected 0 selected peers initially, got %d", len(selected))
 	}
@@ -306,7 +306,7 @@ func TestValidatorSlotGetSelected(t *testing.T) {
 	slot.peers[PeerID(3)] = &RelayPeerInfo{State: RelayPeerSelected}
 	slot.mu.Unlock()
 
-	selected = slot.GetSelected()
+	selected = slot.Selected()
 	if len(selected) != 2 {
 		t.Errorf("Expected 2 selected peers, got %d", len(selected))
 	}

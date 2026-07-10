@@ -1095,7 +1095,7 @@ func TestSubscriptionManagerAddRemoveConnection(t *testing.T) {
 	assert.Equal(t, 1, sm.ConnectionCount())
 
 	// Verify connection exists
-	retrievedConn := sm.GetConnection("test-conn-1")
+	retrievedConn := sm.Connection("test-conn-1")
 	assert.NotNil(t, retrievedConn)
 	assert.Equal(t, "test-conn-1", retrievedConn.ID)
 
@@ -1104,7 +1104,7 @@ func TestSubscriptionManagerAddRemoveConnection(t *testing.T) {
 	assert.Equal(t, 0, sm.ConnectionCount())
 
 	// Verify connection no longer exists
-	retrievedConn = sm.GetConnection("test-conn-1")
+	retrievedConn = sm.Connection("test-conn-1")
 	assert.Nil(t, retrievedConn)
 }
 
@@ -1176,14 +1176,14 @@ func TestGetConnectionSubscriptions(t *testing.T) {
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}, true)
 
-	subs := sm.GetConnectionSubscriptions("test-conn-1")
+	subs := sm.ConnectionSubscriptions("test-conn-1")
 	require.NotNil(t, subs)
 	assert.Contains(t, subs, types.SubLedger)
 	assert.Contains(t, subs, types.SubTransactions)
 	assert.Contains(t, subs, types.SubAccounts)
 
 	// Non-existent connection
-	subs = sm.GetConnectionSubscriptions("non-existent")
+	subs = sm.ConnectionSubscriptions("non-existent")
 	assert.Nil(t, subs)
 
 	sm.RemoveConnection(conn.ID)
@@ -1289,7 +1289,7 @@ func TestIsValidXRPLAddress(t *testing.T) {
 func TestGetSubscribeResponse(t *testing.T) {
 	sm := newTestSubscriptionManager()
 
-	response := sm.GetSubscribeResponse(
+	response := sm.SubscribeResponse(
 		100, // ledgerIndex
 		"4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", // ledgerHash
 		735000000, // ledgerTime

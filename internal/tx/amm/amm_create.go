@@ -166,7 +166,7 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	// collision returns terADDRESS_COLLISION (retried, no fee) rather than the
 	// clawback tecNO_PERMISSION (claimed, fee consumed).
 	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
-	if config.GetRules().Enabled(amendment.FeatureSingleAssetVault) {
+	if config.RequireRules().Enabled(amendment.FeatureSingleAssetVault) {
 		if pseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
 			return ter.TerADDRESS_COLLISION
 		}
@@ -174,7 +174,7 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 
 	// Check clawback - if featureAMMClawback is not enabled, reject clawback-enabled issuers.
 	// Reference: rippled AMMCreate.cpp preclaim lines 194-214
-	if !config.GetRules().Enabled(amendment.FeatureAMMClawback) {
+	if !config.RequireRules().Enabled(amendment.FeatureAMMClawback) {
 		if result := clawbackDisabled(view, asset1); result != ter.TesSUCCESS {
 			return result
 		}

@@ -38,15 +38,15 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 	if changed := tr.RaiseLocalFee(); changed {
 		t.Fatal("first raise must not change fee yet (raiseCount latch)")
 	}
-	if tr.GetLocalFee() != LoadBase {
-		t.Fatalf("local fee after first raise = %d; want %d", tr.GetLocalFee(), LoadBase)
+	if tr.LocalFee() != LoadBase {
+		t.Fatalf("local fee after first raise = %d; want %d", tr.LocalFee(), LoadBase)
 	}
 	if changed := tr.RaiseLocalFee(); !changed {
 		t.Fatal("second raise must lift local fee above LoadBase")
 	}
 	want := LoadBase + LoadBase/FeeIncFraction
-	if tr.GetLocalFee() != want {
-		t.Fatalf("local fee after second raise = %d; want %d", tr.GetLocalFee(), want)
+	if tr.LocalFee() != want {
+		t.Fatalf("local fee after second raise = %d; want %d", tr.LocalFee(), want)
 	}
 	if !tr.IsLoadedLocal() {
 		t.Fatal("IsLoadedLocal must be true once localFee != LoadBase")
@@ -58,8 +58,8 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 	for range 10 {
 		tr.LowerLocalFee()
 	}
-	if tr.GetLocalFee() != LoadBase {
-		t.Fatalf("local fee after lower cycles = %d; want %d", tr.GetLocalFee(), LoadBase)
+	if tr.LocalFee() != LoadBase {
+		t.Fatalf("local fee after lower cycles = %d; want %d", tr.LocalFee(), LoadBase)
 	}
 	if tr.IsLoadedLocal() {
 		t.Fatal("IsLoadedLocal must be false once fee returns to LoadBase")
@@ -103,8 +103,8 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 	for range 8 {
 		tr.RaiseLocalFee()
 	}
-	if tr.GetLocalFee() < 4*tr.GetRemoteFee() {
-		t.Fatalf("setup failed: local %d not >= 4*remote %d", tr.GetLocalFee(), tr.GetRemoteFee())
+	if tr.LocalFee() < 4*tr.RemoteFee() {
+		t.Fatalf("setup failed: local %d not >= 4*remote %d", tr.LocalFee(), tr.RemoteFee())
 	}
 	got, err = ScaleFeeLoad(1000, tr, true)
 	if err != nil {
@@ -138,13 +138,13 @@ func TestLoadFactorAggregates(t *testing.T) {
 	tr.RaiseLocalFee()
 	tr.RaiseLocalFee() // local = max(local, remote=400) * 5/4 = 500
 
-	if tr.GetLocalFee() != 500 {
-		t.Fatalf("local after raise with remote=400: got %d, want 500", tr.GetLocalFee())
+	if tr.LocalFee() != 500 {
+		t.Fatalf("local after raise with remote=400: got %d, want 500", tr.LocalFee())
 	}
-	if lf := tr.GetLoadFactor(); lf != 500 {
+	if lf := tr.LoadFactor(); lf != 500 {
 		t.Fatalf("load factor = %d; want max(cluster=300, local=500, remote=400) = 500", lf)
 	}
-	feeFactor, remFee := tr.GetScalingFactors()
+	feeFactor, remFee := tr.ScalingFactors()
 	if feeFactor != 500 || remFee != 400 {
 		t.Fatalf("scaling factors = (%d,%d); want (500,400)", feeFactor, remFee)
 	}

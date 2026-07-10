@@ -852,8 +852,8 @@ func (sm *Manager) ConnectionCount() int {
 	return len(sm.Connections)
 }
 
-// GetConnection returns a connection by ID
-func (sm *Manager) GetConnection(connID string) *types.Connection {
+// Connection returns a connection by ID
+func (sm *Manager) Connection(connID string) *types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.Connections[connID]
@@ -871,10 +871,10 @@ func (sm *Manager) IsSubscribed(connID string, streamType types.SubscriptionType
 	return ok
 }
 
-// GetConnectionSubscriptions returns a copy of the subscriptions for a
+// ConnectionSubscriptions returns a copy of the subscriptions for a
 // connection. A copy (not the live map) so the caller can iterate without
 // holding sm.mu while HandleSubscribe / HandleUnsubscribe mutate the original.
-func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
+func (sm *Manager) ConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	conn := sm.Connections[connID]
@@ -884,8 +884,8 @@ func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.Subscript
 	return maps.Clone(conn.Subscriptions)
 }
 
-// GetSubscribeResponse creates a subscribe confirmation response
-func (sm *Manager) GetSubscribeResponse(ledgerIndex uint32, ledgerHash string, ledgerTime uint32, feeBase uint64, reserveBase uint64, reserveInc uint64) types.SubscribeResponse {
+// SubscribeResponse creates a subscribe confirmation response
+func (sm *Manager) SubscribeResponse(ledgerIndex uint32, ledgerHash string, ledgerTime uint32, feeBase uint64, reserveBase uint64, reserveInc uint64) types.SubscribeResponse {
 	return types.SubscribeResponse{
 		Status:      "success",
 		LedgerIndex: ledgerIndex,

@@ -1039,8 +1039,8 @@ func (ws *WebSocketServer) RegisterAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
 }
 
-// GetSubscriptionManager returns the subscription manager for event publishing
-func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
+// SubscriptionManager returns the subscription manager for event publishing
+func (ws *WebSocketServer) SubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 

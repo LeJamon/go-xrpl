@@ -155,7 +155,7 @@ func (e *EscrowCreate) PreflightRules(rules *amendment.Rules) error {
 // Reference: rippled Escrow.cpp EscrowCreate::preclaim() lines 362-395 and
 // doApply() lines 457-489.
 func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
-	rules := config.GetRules()
+	rules := config.RequireRules()
 	closeTime := config.ParentCloseTime
 
 	// The flag mask (GetFlagsMask), the non-XRP amount validity checks, and the

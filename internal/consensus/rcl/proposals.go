@@ -302,8 +302,8 @@ func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, pro
 	return weight > parms.MinConsensusPct || weight < (100-parms.MinConsensusPct)
 }
 
-// GetDispute returns a disputed transaction.
-func (dt *DisputeTracker) GetDispute(txID consensus.TxID) *consensus.DisputedTx {
+// Dispute returns a disputed transaction.
+func (dt *DisputeTracker) Dispute(txID consensus.TxID) *consensus.DisputedTx {
 	dt.mu.RLock()
 	defer dt.mu.RUnlock()
 	return dt.disputes[txID]
@@ -332,8 +332,8 @@ func (dt *DisputeTracker) DisputedNoTxs() [][]byte {
 	return txs
 }
 
-// GetAll returns all disputed transactions.
-func (dt *DisputeTracker) GetAll() []*consensus.DisputedTx {
+// All returns all disputed transactions.
+func (dt *DisputeTracker) All() []*consensus.DisputedTx {
 	dt.mu.RLock()
 	defer dt.mu.RUnlock()
 
