@@ -141,28 +141,54 @@ func (p *PermissionedDomainSet) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled PermissionedDomainSet.cpp preclaim() + doApply()
+// Preclaim runs the ledger-aware checks in rippled PermissionedDomainSet::preclaim
+// order: every AcceptedCredentials issuer must exist (tecNO_ISSUER); when a
+// DomainID is given, the domain must exist (tecNO_ENTRY) and be owned by the
+// sender (tecNO_PERMISSION). The mutation stays in Apply (rippled doApply).
+func (p *PermissionedDomainSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(p.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+
+	for _, cred := range p.AcceptedCredentials {
+		issuerID, derr := state.DecodeAccountID(cred.Credential.Issuer)
+		if derr != nil {
+			return ter.TemINVALID
+		}
+		if exists, _ := view.Exists(keylet.Account(issuerID)); !exists {
+			return ter.TecNO_ISSUER
+		}
+	}
+
+	if p.DomainID != "" {
+		domainBytes, derr := hex.DecodeString(p.DomainID)
+		if derr != nil || len(domainBytes) != 32 {
+			return ter.TemINVALID
+		}
+		var domainID [32]byte
+		copy(domainID[:], domainBytes)
+		data, rerr := view.Read(keylet.PermissionedDomainByID(domainID))
+		if rerr != nil || data == nil {
+			return ter.TecNO_ENTRY
+		}
+		existing, perr := state.ParsePermissionedDomain(data)
+		if perr != nil {
+			return ter.TefINTERNAL
+		}
+		if existing.Owner != accountID {
+			return ter.TecNO_PERMISSION
+		}
+	}
+	return ter.TesSUCCESS
+}
+
 func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("permissioned domain set apply",
 		"account", p.Account,
 		"domainID", p.DomainID,
 		"credentialCount", len(p.AcceptedCredentials),
 	)
-
-	// Preclaim: verify each issuer account exists
-	// Reference: rippled PermissionedDomainSet.cpp preclaim() lines 70-85
-	for _, cred := range p.AcceptedCredentials {
-		issuerID, err := state.DecodeAccountID(cred.Credential.Issuer)
-		if err != nil {
-			return ter.TemINVALID
-		}
-		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
-		if err != nil || issuerData == nil {
-			ctx.Log.Warn("permissioned domain set: issuer does not exist",
-				"issuer", cred.Credential.Issuer,
-			)
-			return ter.TecNO_ISSUER
-		}
-	}
 
 	// Sort credentials by (Issuer bytes, CredentialType bytes) ascending
 	// Reference: rippled PermissionedDomainSet.cpp makeSorted()
