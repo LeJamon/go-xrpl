@@ -351,6 +351,7 @@ type Discovery struct {
 
 	events   chan<- Event
 	cancel   context.CancelFunc
+	stopped  bool
 	wg       sync.WaitGroup
 	stopOnce sync.Once
 }
@@ -394,9 +395,18 @@ func (d *Discovery) Start(ctx context.Context) error {
 		d.AddPeer(addr, 0, 0)
 	}
 
+	// Start can run concurrently with Stop (async Overlay.Run vs fast
+	// shutdown): cancel is handed over under mu, and a Stop that already
+	// ran wins — the maintenance loop must not start after it.
+	d.mu.Lock()
+	if d.stopped {
+		d.mu.Unlock()
+		return nil
+	}
 	ctx, d.cancel = context.WithCancel(ctx) //nolint:gosec // G118: cancel stored in struct field, called on Stop
-
 	d.wg.Add(1)
+	d.mu.Unlock()
+
 	go d.maintenanceLoop(ctx)
 
 	return nil
@@ -406,8 +416,13 @@ func (d *Discovery) Start(ctx context.Context) error {
 // guarded by sync.Once so a defensive double-shutdown is a no-op.
 func (d *Discovery) Stop() {
 	d.stopOnce.Do(func() {
-		if d.cancel != nil {
-			d.cancel()
+		d.mu.Lock()
+		d.stopped = true
+		cancel := d.cancel
+		d.mu.Unlock()
+
+		if cancel != nil {
+			cancel()
 		}
 		d.wg.Wait()
 

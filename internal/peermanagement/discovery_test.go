@@ -762,3 +762,45 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 		t.Error("fixed peer must never be evicted")
 	}
 }
+
+// Start (async in Overlay.Run) can race a fast shutdown's Stop; cancel
+// hand-off must be synchronized and a Stop that already ran must win so
+// the maintenance loop never outlives it.
+func TestDiscoveryStartStopConcurrent(t *testing.T) {
+	for range 200 {
+		cfg := &Config{MaxPeers: 50, MaxInbound: 25, MaxOutbound: 25}
+		d := NewDiscovery(cfg, make(chan Event, 10))
+
+		started := make(chan struct{})
+		go func() {
+			_ = d.Start(t.Context())
+			close(started)
+		}()
+		d.Stop()
+		<-started
+
+		d.mu.Lock()
+		cancel := d.cancel
+		d.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		d.wg.Wait()
+	}
+}
+
+func TestDiscoveryStartAfterStopIsNoop(t *testing.T) {
+	cfg := &Config{MaxPeers: 50, MaxInbound: 25, MaxOutbound: 25}
+	d := NewDiscovery(cfg, make(chan Event, 10))
+
+	d.Stop()
+	if err := d.Start(t.Context()); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.cancel != nil {
+		t.Fatal("Start after Stop must not arm the maintenance loop")
+	}
+}
