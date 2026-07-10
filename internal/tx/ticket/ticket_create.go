@@ -59,6 +59,38 @@ func (t *TicketCreate) Flatten() (map[string]any, error) {
 }
 
 // Reference: rippled CreateTicket.cpp preclaim() + doApply()
+// Preclaim runs TicketCreate's ledger-aware check: creating the requested tickets
+// must not push the account over the 250-ticket threshold (tecDIR_FULL).
+// Extracting it from Apply makes it visible to the preclaim-only paths (TxQ
+// admission, simulate), matching rippled where it lives in CreateTicket::preclaim.
+// Preclaim runs before the engine consumes this tx's own ticket, so the account's
+// stored TicketCount is rippled's pre-consumption curTicketCount and the check
+// uses rippled's exact formula curTicketCount + addedTickets - consumedTickets.
+// Reference: rippled CreateTicket.cpp preclaim().
+func (t *TicketCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(t.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	account, readErr := tx.ReadAccountRoot(view, accountID)
+	if readErr != nil {
+		return ter.TefINTERNAL
+	}
+	if account == nil {
+		return ter.TerNO_ACCOUNT
+	}
+	common := t.GetCommon()
+	consumed := int64(0)
+	if common.TicketSequence != nil && (common.Sequence == nil || *common.Sequence == 0) {
+		consumed = 1
+	}
+	if int64(account.TicketCount)+int64(t.TicketCount)-consumed > 250 {
+		return ter.TecDIR_FULL
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled CreateTicket.cpp doApply()
 func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("ticket create apply",
 		"account", t.Account,
@@ -66,33 +98,6 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	)
 
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-
-	// --- Preclaim checks (done inside Apply since Go has no separate Preclaim) ---
-
-	// Check 250 ticket threshold
-	// Reference: rippled CreateTicket.cpp preclaim() lines 63-79
-	//
-	// In rippled, preclaim() reads sfTicketCount BEFORE ticket consumption.
-	// In go-xrpl, the engine consumes the ticket BEFORE calling Apply(),
-	// so ctx.Account.TicketCount has already been decremented.
-	// We use ctx.Account.TicketCount (post-consumption) and simply check
-	// whether adding the new tickets would exceed the threshold, which is
-	// equivalent to rippled's pre-consumption check:
-	//   curTicketCount + addedTickets - consumed > 250
-	//   = (postConsumptionCount + consumed) + addedTickets - consumed > 250
-	//   = postConsumptionCount + addedTickets > 250
-	currentTicketCount := ctx.Account.TicketCount
-
-	// maxTicketThreshold = 250
-	if currentTicketCount+t.TicketCount > 250 {
-		ctx.Log.Warn("ticket create: would exceed 250 ticket limit",
-			"currentCount", currentTicketCount,
-			"requestedCount", t.TicketCount,
-		)
-		return ter.TecDIR_FULL
-	}
-
-	// --- doApply checks ---
 
 	// Reserve check: compare the reserve against the prior balance (before the
 	// actual fee was deducted), allowing the account to dip into the reserve to

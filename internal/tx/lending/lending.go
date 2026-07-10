@@ -6,6 +6,7 @@
 package lending
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -34,11 +35,14 @@ func NewLoanBrokerSet(account, vaultID string) *LoanBrokerSet {
 
 func (l *LoanBrokerSet) TxType() tx.Type { return tx.TypeLoanBrokerSet }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LoanBrokerSet defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (l *LoanBrokerSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (l *LoanBrokerSet) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := checkUniversalFlags(l); err != nil {
 		return err
 	}
 	if l.VaultID == "" {
@@ -98,11 +102,14 @@ func NewLoanBrokerDelete(account, loanBrokerID string) *LoanBrokerDelete {
 
 func (l *LoanBrokerDelete) TxType() tx.Type { return tx.TypeLoanBrokerDelete }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LoanBrokerDelete defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (l *LoanBrokerDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (l *LoanBrokerDelete) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := checkUniversalFlags(l); err != nil {
 		return err
 	}
 	if l.LoanBrokerID == "" {
@@ -136,11 +143,14 @@ func NewLoanBrokerCoverDeposit(account, loanBrokerID string, amount tx.Amount) *
 
 func (l *LoanBrokerCoverDeposit) TxType() tx.Type { return tx.TypeLoanBrokerCoverDeposit }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LoanBrokerCoverDeposit defines
+// no type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (l *LoanBrokerCoverDeposit) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (l *LoanBrokerCoverDeposit) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := checkUniversalFlags(l); err != nil {
 		return err
 	}
 	if l.LoanBrokerID == "" {
@@ -179,11 +189,14 @@ func NewLoanBrokerCoverWithdraw(account, loanBrokerID string, amount tx.Amount) 
 
 func (l *LoanBrokerCoverWithdraw) TxType() tx.Type { return tx.TypeLoanBrokerCoverWithdraw }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LoanBrokerCoverWithdraw defines
+// no type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (l *LoanBrokerCoverWithdraw) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (l *LoanBrokerCoverWithdraw) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := checkUniversalFlags(l); err != nil {
 		return err
 	}
 	if l.LoanBrokerID == "" {
@@ -221,11 +234,14 @@ func NewLoanBrokerCoverClawback(account string) *LoanBrokerCoverClawback {
 
 func (l *LoanBrokerCoverClawback) TxType() tx.Type { return tx.TypeLoanBrokerCoverClawback }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LoanBrokerCoverClawback defines
+// no type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (l *LoanBrokerCoverClawback) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (l *LoanBrokerCoverClawback) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := checkUniversalFlags(l); err != nil {
 		return err
 	}
 	if l.LoanBrokerID == nil && l.Amount == nil {
@@ -291,11 +307,14 @@ func NewLoanSet(account, loanBrokerID, principalRequested string) *LoanSet {
 
 func (l *LoanSet) TxType() tx.Type { return tx.TypeLoanSet }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the LoanSet invalid-flags
+// mask (rippled LoanSet::getFlagsMask = tfLoanSetMask), checked at preflight0.
+func (l *LoanSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return TfLoanSetMask
+}
+
 func (l *LoanSet) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := tx.CheckFlags(l.GetFlags(), TfLoanSetMask); err != nil {
 		return err
 	}
 	if l.LoanBrokerID == "" {
@@ -375,11 +394,14 @@ func NewLoanDelete(account, loanID string) *LoanDelete {
 
 func (l *LoanDelete) TxType() tx.Type { return tx.TypeLoanDelete }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. LoanDelete defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (l *LoanDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (l *LoanDelete) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := checkUniversalFlags(l); err != nil {
 		return err
 	}
 	if l.LoanID == "" {
@@ -411,11 +433,15 @@ func NewLoanManage(account, loanID string) *LoanManage {
 
 func (l *LoanManage) TxType() tx.Type { return tx.TypeLoanManage }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the LoanManage invalid-flags
+// mask (rippled LoanManage::getFlagsMask = tfLoanManageMask), checked at preflight0.
+// The at-most-one-flag exclusivity check stays in Validate.
+func (l *LoanManage) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return TfLoanManageMask
+}
+
 func (l *LoanManage) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := tx.CheckFlags(l.GetFlags(), TfLoanManageMask); err != nil {
 		return err
 	}
 	if l.LoanID == "" {
@@ -452,11 +478,15 @@ func NewLoanPay(account, loanID string, amount tx.Amount) *LoanPay {
 
 func (l *LoanPay) TxType() tx.Type { return tx.TypeLoanPay }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the LoanPay invalid-flags
+// mask (rippled LoanPay::getFlagsMask = tfLoanPayMask), checked at preflight0. The
+// mutually-exclusive flag check stays in Validate.
+func (l *LoanPay) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return TfLoanPayMask
+}
+
 func (l *LoanPay) Validate() error {
 	if err := l.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := tx.CheckFlags(l.GetFlags(), TfLoanPayMask); err != nil {
 		return err
 	}
 	if l.LoanID == "" {

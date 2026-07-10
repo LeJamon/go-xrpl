@@ -36,13 +36,15 @@ func (a *AMMVote) TxType() tx.Type {
 }
 
 // Reference: rippled AMMVote.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. AMMVote defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (a *AMMVote) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMVoteMask
+}
+
 func (a *AMMVote) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMVoteMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMVote")
 	}
 
 	// Reference: rippled AMMVote.cpp preflight lines 39-44

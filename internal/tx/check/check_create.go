@@ -41,14 +41,14 @@ func (c *CheckCreate) TxType() tx.Type {
 }
 
 // Validate implements preflight validation matching rippled's CreateCheck::preflight().
+// GetFlagsMask adopts the engine FlagsMasker seam. CreateCheck defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *CheckCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (c *CheckCreate) Validate() error {
 	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// No flags allowed except universal flags
-	// Reference: CreateCheck.cpp L41-46
-	if err := tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

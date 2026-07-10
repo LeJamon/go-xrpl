@@ -52,13 +52,16 @@ func (a *AMMClawback) GetAMMAsset2() tx.Asset {
 }
 
 // Reference: rippled AMMClawback.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam with the AMMClawback-specific
+// invalid-flags mask (rippled AMMClawback::getFlagsMask = tfAMMClawbackMask),
+// checked at preflight0.
+func (a *AMMClawback) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMClawbackMask
+}
+
 func (a *AMMClawback) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMClawbackMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMClawback")
 	}
 
 	// Reference: rippled AMMClawback.cpp preflight lines 52-57

@@ -56,14 +56,18 @@ func (a *AMMWithdraw) GetAMMAsset2() tx.Asset {
 	return a.Asset2
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the AMMWithdraw-specific
+// invalid-flags mask (rippled AMMWithdraw::getFlagsMask = tfAMMWithdrawMask),
+// checked at preflight0. The withdraw-mode flag combination check stays in
+// Validate, as in rippled's preflight body.
+func (a *AMMWithdraw) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMWithdrawMask
+}
+
 // Reference: rippled AMMWithdraw.cpp preflight
 func (a *AMMWithdraw) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMWithdrawMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMWithdraw")
 	}
 
 	flags := a.GetFlags()

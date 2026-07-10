@@ -42,13 +42,14 @@ func (v *VaultWithdraw) TxType() tx.Type {
 }
 
 // Reference: rippled VaultWithdraw.cpp preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. VaultWithdraw defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (v *VaultWithdraw) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (v *VaultWithdraw) Validate() error {
 	if err := v.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Check for invalid flags (universal mask)
-	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,9 +18,13 @@ func newTestMPTAmount(value int64, issuer string) state.Amount {
 }
 
 // preflightClawback runs Clawback's preflight body in engine order: the
-// rules-free Validate() (flags mask) followed by PreflightRules() (the
-// amount/holder body). The engine invokes them in exactly this sequence.
+// preflight0 flags mask (GetFlagsMask), the rules-free Validate(), then
+// PreflightRules() (the amount/holder body). The engine invokes them in exactly
+// this sequence.
 func preflightClawback(c *Clawback, rules *amendment.Rules) error {
+	if c.GetFlags()&c.GetFlagsMask(rules) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags")
+	}
 	if err := c.Validate(); err != nil {
 		return err
 	}

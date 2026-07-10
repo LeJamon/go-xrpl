@@ -62,6 +62,14 @@ func (a *AMMDeposit) GetAMMAsset2() tx.Asset {
 	return a.Asset2
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the AMMDeposit-specific
+// invalid-flags mask (rippled AMMDeposit::getFlagsMask = tfAMMDepositMask),
+// checked at preflight0. The deposit-mode flag combination check stays in
+// Validate, as in rippled's preflight body.
+func (a *AMMDeposit) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMDepositMask
+}
+
 // Reference: rippled AMMDeposit.cpp preflight lines 32-162
 func (a *AMMDeposit) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
@@ -69,11 +77,6 @@ func (a *AMMDeposit) Validate() error {
 	}
 
 	flags := a.GetFlags()
-
-	// Reference: rippled AMMDeposit.cpp line 42-46
-	if flags&tfAMMDepositMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMDeposit")
-	}
 
 	// Exactly one deposit mode flag must be set.
 	// Reference: rippled AMMDeposit.cpp line 60-64 - std::popcount(flags & tfDepositSubTx) != 1

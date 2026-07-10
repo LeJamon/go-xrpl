@@ -5,13 +5,28 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
+// preflightMPTFlags runs an MPT type's preflight body in engine order: the
+// preflight0 flags mask (GetFlagsMask, enforced by the engine ahead of the fee
+// and per-type field checks) then the rules-free Validate().
+func preflightMPTFlags(m interface {
+	GetFlags() uint32
+	GetFlagsMask(*amendment.Rules) uint32
+	Validate() error
+}, rules *amendment.Rules) error {
+	if m.GetFlags()&m.GetFlagsMask(rules) != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags")
+	}
+	return m.Validate()
+}
+
 // preflightMPTSet runs MPTokenIssuanceSet's preflight body in engine order: the
-// rules-free Validate() (flags mask + IssuanceID) then PreflightRules() (the
-// DomainID/Holder, lock/unlock, no-op and mutation checks).
+// preflight0 flags mask, the rules-free Validate() (IssuanceID) then
+// PreflightRules() (the DomainID/Holder, lock/unlock, no-op and mutation checks).
 func preflightMPTSet(m *MPTokenIssuanceSet, rules *amendment.Rules) error {
-	if err := m.Validate(); err != nil {
+	if err := preflightMPTFlags(m, rules); err != nil {
 		return err
 	}
 	return m.PreflightRules(rules)
@@ -110,7 +125,7 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenIssuanceCreate",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 		{
 			name: "TransferFee exceeds max - temBAD_TRANSFER_FEE",
@@ -161,7 +176,7 @@ func TestMPTokenIssuanceCreateValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			err := preflightMPTFlags(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
@@ -231,13 +246,13 @@ func TestMPTokenIssuanceDestroyValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenIssuanceDestroy",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			err := preflightMPTFlags(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
@@ -326,7 +341,7 @@ func TestMPTokenIssuanceSetValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenIssuanceSet",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 		{
 			name: "holder same as account - temMALFORMED",
@@ -395,7 +410,7 @@ func TestMPTokenIssuanceSetPreflightOrder(t *testing.T) {
 		m.DomainID = &dom
 		m.hasDomainID = true
 		m.Holder = "rBob"
-		if err := preflightMPTSet(m, allRules()); err == nil || err.Error() != "temINVALID_FLAG: invalid flags for MPTokenIssuanceSet" {
+		if err := preflightMPTSet(m, allRules()); err == nil || err.Error() != "temINVALID_FLAG: invalid flags" {
 			t.Fatalf("got %v, want temINVALID_FLAG", err)
 		}
 	})
@@ -496,7 +511,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 				return tx
 			}(),
 			expectError: true,
-			errorMsg:    "temINVALID_FLAG: invalid flags for MPTokenAuthorize",
+			errorMsg:    "temINVALID_FLAG: invalid flags",
 		},
 		{
 			name: "holder same as account - temMALFORMED",
@@ -512,7 +527,7 @@ func TestMPTokenAuthorizeValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := tt.tx.Validate()
+			err := preflightMPTFlags(tt.tx, allRules())
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error containing %q, got nil", tt.errorMsg)

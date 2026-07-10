@@ -42,13 +42,15 @@ func (a *AMMBid) TxType() tx.Type {
 }
 
 // Reference: rippled AMMBid.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. AMMBid defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (a *AMMBid) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMBidMask
+}
+
 func (a *AMMBid) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMBidMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMBid")
 	}
 
 	// Reference: rippled AMMBid.cpp preflight lines 48-53

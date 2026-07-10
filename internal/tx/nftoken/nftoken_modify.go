@@ -37,13 +37,14 @@ func (n *NFTokenModify) TxType() tx.Type {
 }
 
 // Reference: rippled NFTokenModify.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. NFTokenModify defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (n *NFTokenModify) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (n *NFTokenModify) Validate() error {
 	if err := n.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Reference: rippled NFTokenModify.cpp:38 - if (ctx.tx.getFlags() & tfUniversalMask)
-	if err := tx.CheckFlags(n.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

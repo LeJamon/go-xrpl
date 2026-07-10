@@ -154,7 +154,29 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureFixNFTokenPageLinks}
 }
 
-// Reference: rippled LedgerStateFix.cpp preclaim() + doApply()
+// Preclaim runs LedgerStateFix's ledger-aware check for the nfTokenPageLink fix:
+// the owner account must exist (tecOBJECT_NOT_FOUND). Extracting it from Apply
+// makes it visible to the preclaim-only paths (TxQ admission, simulate), matching
+// rippled where it lives in LedgerStateFix::preclaim. The bookExchangeRate arm
+// keeps its checks in Apply, where they deliberately share the single directory
+// Read with the mutation so it sees exactly the bytes the checks validated.
+// Reference: rippled LedgerStateFix.cpp preclaim().
+func (l *LedgerStateFix) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	if l.LedgerFixType != LedgerFixTypeNFTokenPageLink {
+		return ter.TesSUCCESS
+	}
+	ownerID, err := state.DecodeAccountID(l.Owner)
+	if err != nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	exists, existsErr := view.Exists(keylet.Account(ownerID))
+	if existsErr != nil || !exists {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled LedgerStateFix.cpp doApply()
 func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("ledger state fix apply",
 		"account", l.Account,
@@ -164,21 +186,8 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	switch l.LedgerFixType {
 	case LedgerFixTypeNFTokenPageLink:
-		// Preclaim: verify owner account exists
-		// Reference: rippled LedgerStateFix.cpp preclaim() lines 65-80
 		ownerID, err := state.DecodeAccountID(l.Owner)
 		if err != nil {
-			ctx.Log.Warn("ledger state fix: owner account decode failed",
-				"owner", l.Owner,
-			)
-			return ter.TecOBJECT_NOT_FOUND
-		}
-		ownerAccountKey := keylet.Account(ownerID)
-		exists, existsErr := ctx.View.Exists(ownerAccountKey)
-		if existsErr != nil || !exists {
-			ctx.Log.Warn("ledger state fix: owner account does not exist",
-				"owner", l.Owner,
-			)
 			return ter.TecOBJECT_NOT_FOUND
 		}
 

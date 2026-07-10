@@ -83,15 +83,18 @@ func (m *MPTokenIssuanceSet) TxType() tx.Type {
 // the DynamicMPT mutation checks — is amendment-dependent and lives in
 // PreflightRules, so the whole body keeps rippled's order (notably the isMutate
 // temDISABLED gate leading it, ahead of the DomainID/Holder temMALFORMED check).
+// GetFlagsMask adopts the engine FlagsMasker seam with the MPTokenIssuanceSet
+// invalid-flags mask (rippled MPTokenIssuanceSet::getFlagsMask =
+// tfMPTokenIssuanceSetMask), checked at preflight0. The mask covers only sfFlags;
+// the tfMPTLock/tfMPTUnlock exclusivity and sfMutableFlags checks stay in Validate.
+func (m *MPTokenIssuanceSet) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return ^tfMPTokenIssuanceSetValidMask
+}
+
 // Reference: rippled MPTokenIssuanceSet.cpp getFlagsMask + preflight().
 func (m *MPTokenIssuanceSet) Validate() error {
 	if err := m.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	// Reference: rippled MPTokenIssuanceSet.cpp getFlagsMask (tfMPTokenIssuanceSetMask).
-	if m.GetFlags()&^tfMPTokenIssuanceSetValidMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceSet")
 	}
 
 	// MPTokenIssuanceID is a required UINT192 (rippled enforces its presence and

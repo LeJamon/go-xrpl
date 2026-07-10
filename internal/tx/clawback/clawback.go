@@ -57,17 +57,20 @@ func (c *Clawback) TxType() tx.Type {
 	return tx.TypeClawback
 }
 
-// Validate holds Clawback's rules-independent preflight: the base fields and the
-// flags mask (rippled tfClawbackMask = ~tfUniversal). The amount/holder body is
-// amendment-dependent (the MPT arm gates on featureMPTokensV1) and lives in
-// PreflightRules so its per-arm order matches rippled.
+// GetFlagsMask adopts the engine FlagsMasker seam. Clawback defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (c *Clawback) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
+// Validate holds Clawback's rules-independent preflight: the base fields only.
+// The flags mask is enforced by the engine at preflight0 (GetFlagsMask). The
+// amount/holder body is amendment-dependent (the MPT arm gates on
+// featureMPTokensV1) and lives in PreflightRules so its per-arm order matches
+// rippled.
 // Reference: rippled Clawback.cpp getFlagsMask + preflight().
 func (c *Clawback) Validate() error {
-	if err := c.BaseTx.Validate(); err != nil {
-		return err
-	}
-	// Reference: rippled Clawback.cpp getFlagsMask (tfClawbackMask).
-	return tx.CheckFlags(c.GetFlags(), tx.TfUniversalMask)
+	return c.BaseTx.Validate()
 }
 
 // PreflightRules is Clawback's preflight body, which rippled dispatches by the
