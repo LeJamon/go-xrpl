@@ -5,8 +5,8 @@ import (
 	"crypto/rand"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 )
 
 // TestVerify_DispatchesByKeyType pins the key-type-aware dispatch in

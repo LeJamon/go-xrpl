@@ -7,9 +7,9 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/rfc1751"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 

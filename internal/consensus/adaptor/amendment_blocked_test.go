@@ -18,9 +18,9 @@ import (
 func TestSetOperatingMode_AmendmentBlockedCapsAtConnected(t *testing.T) {
 	tbl := amendment.NewTable()
 	svc, err := service.New(service.Config{
-		Standalone:     true,
-		GenesisConfig:  genesis.DefaultConfig(),
-		Table: tbl,
+		Standalone:    true,
+		GenesisConfig: genesis.DefaultConfig(),
+		Table:         tbl,
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())

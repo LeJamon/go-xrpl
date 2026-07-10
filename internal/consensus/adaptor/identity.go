@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/protocol"
