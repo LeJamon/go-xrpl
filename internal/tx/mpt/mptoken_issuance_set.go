@@ -213,7 +213,86 @@ func (m *MPTokenIssuanceSet) RequiredAmendments() [][32]byte {
 	return amendments
 }
 
-// Reference: rippled MPTokenIssuanceSet.cpp preclaim() + doApply()
+// Preclaim runs MPTokenIssuanceSet's ledger-aware checks in rippled
+// MPTokenIssuanceSet::preclaim order: issuance exists (tecOBJECT_NOT_FOUND); the
+// CanLock gate (tecNO_PERMISSION); issuer match (tecNO_PERMISSION); for a Holder
+// target the holder account (tecNO_DST) and its MPToken (tecOBJECT_NOT_FOUND)
+// must exist; otherwise the DomainID gate (RequireAuth tecNO_PERMISSION + domain
+// existence tecOBJECT_NOT_FOUND) and the CanMutate permission checks. The
+// lock/unlock, flag, fee, metadata, and DomainID mutations stay in Apply.
+func (m *MPTokenIssuanceSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	rules := view.Rules()
+	txFlags := m.GetFlags()
+
+	var mptID [24]byte
+	b, err := hex.DecodeString(m.MPTokenIssuanceID)
+	if err != nil || len(b) != 24 {
+		return ter.TemINVALID
+	}
+	copy(mptID[:], b)
+	issuanceKey := keylet.MPTIssuance(mptID)
+	raw, rerr := view.Read(issuanceKey)
+	if rerr != nil || raw == nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	issuance, perr := state.ParseMPTokenIssuance(raw)
+	if perr != nil {
+		return ter.TefINTERNAL
+	}
+
+	if issuance.Flags&entry.LsfMPTCanLock == 0 {
+		if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureDynamicMPT)) {
+			return ter.TecNO_PERMISSION
+		}
+		if txFlags&MPTokenIssuanceSetFlagLock != 0 || txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
+			return ter.TecNO_PERMISSION
+		}
+	}
+
+	accountID, aerr := state.DecodeAccountID(m.Account)
+	if aerr != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	if issuance.Issuer != accountID {
+		return ter.TecNO_PERMISSION
+	}
+
+	if m.Holder != "" {
+		holderID, herr := state.DecodeAccountID(m.Holder)
+		if herr != nil {
+			return ter.TemINVALID
+		}
+		if exists, _ := view.Exists(keylet.Account(holderID)); !exists {
+			return ter.TecNO_DST
+		}
+		if exists, _ := view.Exists(keylet.MPToken(issuanceKey.Key, holderID)); !exists {
+			return ter.TecOBJECT_NOT_FOUND
+		}
+		return ter.TesSUCCESS
+	}
+
+	if m.hasDomainID {
+		if issuance.Flags&entry.LsfMPTRequireAuth == 0 {
+			return ter.TecNO_PERMISSION
+		}
+		if m.DomainID != nil && *m.DomainID != zeroHash256 {
+			db, derr := hex.DecodeString(*m.DomainID)
+			if derr != nil || len(db) != 32 {
+				return ter.TefINTERNAL
+			}
+			var dk [32]byte
+			copy(dk[:], db)
+			if exists, _ := view.Exists(keylet.PermissionedDomainByID(dk)); !exists {
+				return ter.TecOBJECT_NOT_FOUND
+			}
+		}
+	}
+
+	return m.checkMutablePermissions(issuance)
+}
+
+// Reference: rippled MPTokenIssuanceSet.cpp doApply(); the ledger-aware gates
+// live in Preclaim.
 func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("mptoken issuance set apply",
 		"account", m.Account,
@@ -221,7 +300,6 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		"flags", m.GetFlags(),
 	)
 
-	rules := ctx.Rules()
 	txFlags := m.GetFlags()
 
 	// Parse MPTokenIssuanceID
@@ -248,51 +326,9 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// CanLock check. Before SingleAssetVault / DynamicMPT, any Set on an
-	// issuance without lsfMPTCanLock fails. With either amendment, only
-	// lock/unlock operations require lsfMPTCanLock.
-	// Reference: rippled MPTokenIssuanceSet.cpp:189-197
-	if issuance.Flags&entry.LsfMPTCanLock == 0 {
-		if !rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureDynamicMPT) {
-			ctx.Log.Warn("mptoken issuance set: issuance does not have CanLock capability")
-			return ter.TecNO_PERMISSION
-		} else if txFlags&MPTokenIssuanceSetFlagLock != 0 || txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
-			ctx.Log.Warn("mptoken issuance set: issuance does not have CanLock capability")
-			return ter.TecNO_PERMISSION
-		}
-	}
-
-	// Caller must be the issuer
-	if issuance.Issuer != ctx.AccountID {
-		ctx.Log.Warn("mptoken issuance set: caller is not issuer")
-		return ter.TecNO_PERMISSION
-	}
-
 	if m.Holder != "" {
 		// Targeting a specific holder's MPToken
 		return m.setHolderToken(ctx, issuanceKey, issuance, txFlags)
-	}
-
-	// DomainID preclaim checks (only when targeting the issuance, not a holder)
-	// Reference: rippled MPTokenIssuanceSet.cpp:141-153
-	if m.hasDomainID {
-		if issuance.Flags&entry.LsfMPTRequireAuth == 0 {
-			return ter.TecNO_PERMISSION
-		}
-		if m.DomainID != nil && *m.DomainID != zeroHash256 {
-			// Non-zero domain: verify it exists
-			domainIDBytes, err := hex.DecodeString(*m.DomainID)
-			if err != nil || len(domainIDBytes) != 32 {
-				return ter.TefINTERNAL
-			}
-			var domainKey [32]byte
-			copy(domainKey[:], domainIDBytes)
-			domainKL := keylet.PermissionedDomainByID(domainKey)
-			exists, _ := ctx.View.Exists(domainKL)
-			if !exists {
-				return ter.TecOBJECT_NOT_FOUND
-			}
-		}
 	}
 
 	// Targeting the issuance itself
@@ -309,18 +345,8 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 		return ter.TemINVALID
 	}
 
-	// Holder account must exist
-	// Reference: rippled MPTokenIssuanceSet.cpp:132 — ctx.view.exists(keylet::account(...))
-	holderAcctKey := keylet.Account(holderID)
-	holderExists, err := ctx.View.Exists(holderAcctKey)
-	if err != nil || !holderExists {
-		ctx.Log.Warn("mptoken issuance set: holder account does not exist",
-			"holder", m.Holder,
-		)
-		return ter.TecNO_DST
-	}
-
-	// MPToken must exist
+	// Holder account and MPToken existence are gated in Preclaim. The token is
+	// read here because the lock/unlock mutation needs it.
 	tokenKey := keylet.MPToken(issuanceKey.Key, holderID)
 	tokenRaw, err := ctx.View.Read(tokenKey)
 	if err != nil || tokenRaw == nil {
@@ -360,11 +386,8 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 // setIssuance modifies the issuance itself (lock/unlock, mutation fields, and
 // DomainID). Reference: rippled MPTokenIssuanceSet.cpp preclaim() + doApply()
 func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) ter.Result {
-	// Preclaim: every mutation must be permitted by a CanMutate bit set at
-	// issuance. Reference: rippled MPTokenIssuanceSet.cpp:229-265.
-	if result := m.checkMutablePermissions(issuance); result != ter.TesSUCCESS {
-		return result
-	}
+	// The CanMutate permission checks and DomainID existence gate live in
+	// Preclaim (rippled MPTokenIssuanceSet::preclaim).
 
 	// Toggle lock/unlock on the issuance
 	if txFlags&MPTokenIssuanceSetFlagLock != 0 {
