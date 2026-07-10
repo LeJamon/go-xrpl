@@ -55,8 +55,45 @@ func (e *EscrowCancel) GetFlagsMask(rules *amendment.Rules) uint32 {
 	return tx.TfUniversalMask
 }
 
+// Preclaim runs EscrowCancel's token-escrow ledger checks, gated (like rippled)
+// on featureTokenEscrow: the escrow must exist (tecNO_TARGET) and, for a token
+// escrow, the issuer's auth/freeze state must permit the return. Extracting these
+// from Apply makes them visible to the preclaim-only paths (TxQ admission,
+// simulate). The CancelAfter time checks stay in Apply, mirroring rippled which
+// keeps them in EscrowCancel::doApply, not preclaim.
+// Reference: rippled EscrowCancel.cpp preclaim().
+func (e *EscrowCancel) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	rules := view.Rules()
+	if rules == nil || !rules.Enabled(amendment.FeatureTokenEscrow) {
+		return ter.TesSUCCESS
+	}
+	ownerID, err := state.DecodeAccountID(e.Owner)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	escrowData, readErr := view.Read(keylet.Escrow(ownerID, e.OfferSequence))
+	if readErr != nil || escrowData == nil {
+		return ter.TecNO_TARGET
+	}
+	escrowEntry, parseErr := state.ParseEscrow(escrowData)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	if escrowEntry.IsXRP {
+		return ter.TesSUCCESS
+	}
+	escrowAmount := reconstructAmountFromEscrow(escrowEntry)
+	if escrowAmount.IsMPT() {
+		return escrowCancelPreclaimMPT(view, escrowEntry.Account, escrowAmount)
+	}
+	if escrowAmount.Issuer != "" {
+		return escrowCancelPreclaimIOU(view, escrowEntry.Account, escrowAmount)
+	}
+	return ter.TesSUCCESS
+}
+
 // Apply applies an EscrowCancel transaction
-// Reference: rippled Escrow.cpp EscrowCancel::preclaim() + doApply()
+// Reference: rippled Escrow.cpp EscrowCancel::doApply()
 func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow cancel apply",
 		"account", e.Account,
@@ -90,21 +127,6 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	isXRP := escrowEntry.IsXRP
-
-	// Token preclaim validation (IOU/MPT)
-	// Reference: rippled Escrow.cpp EscrowCancel::preclaim() lines 1269-1295
-	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
-		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
-		if escrowAmount.IsMPT() {
-			if result := escrowCancelPreclaimMPT(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		} else if escrowAmount.Issuer != "" {
-			if result := escrowCancelPreclaimIOU(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		}
-	}
 
 	closeTime := ctx.Config.ParentCloseTime
 

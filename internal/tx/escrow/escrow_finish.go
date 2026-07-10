@@ -145,27 +145,63 @@ func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
 
 // Apply applies an EscrowFinish transaction
 // Reference: rippled Escrow.cpp EscrowFinish::preclaim() + doApply()
+// Preclaim runs EscrowFinish's ledger-aware checks in rippled's preclaim order:
+// first the CredentialIDs validity check (tecBAD_CREDENTIALS, gated on
+// featureCredentials), then — gated (like rippled) on featureTokenEscrow — the
+// escrow existence (tecNO_TARGET) and, for a token escrow, the destination's
+// auth/freeze state. Extracting these from Apply makes them visible to the
+// preclaim-only paths (TxQ admission, simulate). The FinishAfter/CancelAfter time
+// checks, the crypto-condition/fulfillment check, and the tecEXPIRED
+// expired-credential deletion (ApplyOnTec) stay in Apply, mirroring rippled which
+// keeps them in EscrowFinish::doApply. ValidCredentials never returns tecEXPIRED
+// (expiry is handled separately in Apply), so no tecEXPIRED escapes preclaim here.
+// Reference: rippled EscrowFinish.cpp preclaim().
+func (e *EscrowFinish) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	rules := view.Rules()
+	if rules != nil && rules.Enabled(amendment.FeatureCredentials) && len(e.CredentialIDs) > 0 {
+		accountID, acctErr := state.DecodeAccountID(e.Account)
+		if acctErr != nil {
+			return ter.TemBAD_SRC_ACCOUNT
+		}
+		if result := credential.ValidCredentials(view, accountID, e.CredentialIDs); result != ter.TesSUCCESS {
+			return result
+		}
+	}
+	if rules == nil || !rules.Enabled(amendment.FeatureTokenEscrow) {
+		return ter.TesSUCCESS
+	}
+	ownerID, err := state.DecodeAccountID(e.Owner)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	escrowData, readErr := view.Read(keylet.Escrow(ownerID, e.OfferSequence))
+	if readErr != nil || escrowData == nil {
+		return ter.TecNO_TARGET
+	}
+	escrowEntry, parseErr := state.ParseEscrow(escrowData)
+	if parseErr != nil {
+		return ter.TefINTERNAL
+	}
+	if escrowEntry.IsXRP {
+		return ter.TesSUCCESS
+	}
+	escrowAmount := reconstructAmountFromEscrow(escrowEntry)
+	if escrowEntry.MPTIssuanceID != "" {
+		return escrowFinishPreclaimMPT(view, escrowEntry.DestinationID, escrowAmount)
+	}
+	if escrowAmount.Issuer != "" {
+		return escrowFinishPreclaimIOU(view, escrowEntry.DestinationID, escrowAmount)
+	}
+	return ter.TesSUCCESS
+}
+
+// Reference: rippled EscrowFinish.cpp doApply()
 func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow finish apply",
 		"account", e.Account,
 		"owner", e.Owner,
 		"offerSequence", e.OfferSequence,
 	)
-
-	rules := ctx.Rules()
-
-	// The CredentialIDs amendment gate (temDISABLED, keyed on field presence) runs
-	// in CheckExtraFeatures, and the shape check in PreflightSigValidated.
-
-	// --- Preclaim: credential validation (before time checks) ---
-	// Reference: rippled EscrowFinish::preclaim() calls credentials::valid()
-	// This must run before doApply's time checks because rippled's preclaim
-	// runs before doApply.
-	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := credential.ValidateCredentialIDs(ctx, e.CredentialIDs); result != ter.TesSUCCESS {
-			return result
-		}
-	}
 
 	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
@@ -190,22 +226,8 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
+	rules := ctx.Rules()
 	isXRP := escrowEntry.IsXRP
-
-	// Token escrow preclaim
-	// Reference: rippled EscrowFinish::preclaim() lines 760-793
-	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
-		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
-		if escrowEntry.MPTIssuanceID != "" {
-			if result := escrowFinishPreclaimMPT(ctx.View, escrowEntry.DestinationID, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		} else if escrowAmount.Issuer != "" {
-			if result := escrowFinishPreclaimIOU(ctx.View, escrowEntry.DestinationID, escrowAmount); result != ter.TesSUCCESS {
-				return result
-			}
-		}
-	}
 
 	closeTime := ctx.Config.ParentCloseTime
 
