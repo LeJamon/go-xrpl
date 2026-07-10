@@ -47,9 +47,29 @@ func (o *OracleDelete) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePriceOracle}
 }
 
+// Preclaim runs OracleDelete's ledger-aware check: the oracle must exist
+// (tecNO_ENTRY). Extracting it from Apply makes it visible to the preclaim-only
+// paths (TxQ admission, simulate), matching rippled where it lives in
+// DeleteOracle::preclaim. Ownership is implicit in the oracle keylet (owner ==
+// Account), so no separate owner check is needed.
+// Reference: rippled DeleteOracle.cpp preclaim().
+func (o *OracleDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	accountID, err := state.DecodeAccountID(o.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	exists, existsErr := view.Exists(keylet.Oracle(accountID, o.OracleDocumentID))
+	if existsErr != nil {
+		return ter.TefINTERNAL
+	}
+	if !exists {
+		return ter.TecNO_ENTRY
+	}
+	return ter.TesSUCCESS
+}
+
 // Apply applies an OracleDelete transaction to the ledger state.
-// Combines rippled's DeleteOracle::preclaim() and DeleteOracle::doApply().
-// Reference: rippled DeleteOracle.cpp
+// Reference: rippled DeleteOracle.cpp doApply().
 func (o *OracleDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("oracle delete apply",
 		"account", o.Account,
