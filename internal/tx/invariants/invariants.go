@@ -113,10 +113,22 @@ const (
 // Amount is the type used by invariant checks for XRPL amounts.
 type Amount = state.Amount
 
-// Asset represents an XRPL asset (currency + optional issuer).
+// Asset represents an XRPL asset: XRP, an issued currency (currency + issuer),
+// or a multi-purpose token (MPTIssuanceID). Field-identical to tx.Asset so the
+// engine adapter can convert without losing information (notably MPTIssuanceID,
+// which an MPT-asset AMM invariant needs to locate the pool holding).
 type Asset struct {
-	Currency string `json:"currency"`
-	Issuer   string `json:"issuer,omitempty"`
+	Currency      string `json:"currency"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+}
+
+// IsMPT reports whether the asset is a multi-purpose token.
+func (a Asset) IsMPT() bool { return a.MPTIssuanceID != "" }
+
+// IsNative reports whether the asset is native XRP.
+func (a Asset) IsNative() bool {
+	return !a.IsMPT() && a.Issuer == "" && (a.Currency == "" || a.Currency == "XRP")
 }
 
 // validLedgerEntryTypes is the set of valid ledger entry type names that may be
