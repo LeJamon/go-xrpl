@@ -44,10 +44,7 @@ func TestLoanTransactionsDisabled(t *testing.T) {
 
 	for name, txn := range loanTxBuilders(alice.Address) {
 		t.Run(name, func(t *testing.T) {
-			result := env.Submit(txn)
-			if result.Code != jtx.TemDISABLED {
-				t.Errorf("%s: expected temDISABLED while LendingProtocol off, got %s", name, result.Code)
-			}
+			jtx.RequireTxFail(t, env.Submit(txn), jtx.TemDISABLED)
 		})
 	}
 }

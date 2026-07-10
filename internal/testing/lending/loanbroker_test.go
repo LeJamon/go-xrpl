@@ -44,14 +44,10 @@ func setupXRPVault(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, deposit u
 	seq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Common.Fee = reserveIncrement
-	if res := env.Submit(create); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultCreate: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(create))
 	id := vaultID(owner, seq)
 	dep := vault.NewVaultDeposit(owner.Address, id, tx.NewXRPAmount(int64(deposit)))
-	if res := env.Submit(dep); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDeposit: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(dep))
 	return id
 }
 
@@ -68,9 +64,7 @@ func TestLoanBroker_Lifecycle(t *testing.T) {
 	set := lending.NewLoanBrokerSet(owner.Address, vid)
 	rate := uint16(1000) // 1% management fee
 	set.ManagementFeeRate = &rate
-	if res := env.Submit(set); res.Code != "tesSUCCESS" {
-		t.Fatalf("LoanBrokerSet: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(set))
 	bid := brokerID(owner, brokerSeq)
 	bidBytes, _ := hex.DecodeString(bid)
 	var bk [32]byte
@@ -81,23 +75,17 @@ func TestLoanBroker_Lifecycle(t *testing.T) {
 
 	// Deposit first-loss cover.
 	dep := lending.NewLoanBrokerCoverDeposit(owner.Address, bid, tx.NewXRPAmount(500_000_000))
-	if res := env.Submit(dep); res.Code != "tesSUCCESS" {
-		t.Fatalf("CoverDeposit: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(dep))
 
 	// Withdraw part of the cover back to the owner. An XRP pseudo-account keeps
 	// its base reserve, so only balance-minus-reserve is spendable via withdraw;
 	// the remainder is returned on delete.
 	wd := lending.NewLoanBrokerCoverWithdraw(owner.Address, bid, tx.NewXRPAmount(200_000_000))
-	if res := env.Submit(wd); res.Code != "tesSUCCESS" {
-		t.Fatalf("CoverWithdraw: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(wd))
 
 	// Delete the broker; the remaining cover returns to the owner.
 	del := lending.NewLoanBrokerDelete(owner.Address, bid)
-	if res := env.Submit(del); res.Code != "tesSUCCESS" {
-		t.Fatalf("LoanBrokerDelete: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(del))
 	if env.LedgerEntryExists(keylet.LoanBrokerByID(bk)) {
 		t.Fatalf("LoanBroker entry still exists after delete")
 	}
@@ -114,9 +102,7 @@ func TestLoanBroker_AmendmentDisabled(t *testing.T) {
 	env.FundAmount(owner, 10_000_000_000)
 
 	set := lending.NewLoanBrokerSet(owner.Address, strings.Repeat("A", 64))
-	if res := env.Submit(set); res.Code != "temDISABLED" {
-		t.Fatalf("LoanBrokerSet (disabled): got %s, want temDISABLED", res.Code)
-	}
+	jtx.RequireTxFail(t, env.Submit(set), jtx.TemDISABLED)
 }
 
 // TestLoanBroker_SetNoVault asserts a broker on a missing vault is rejected.
@@ -126,9 +112,7 @@ func TestLoanBroker_SetNoVault(t *testing.T) {
 	env.FundAmount(owner, 10_000_000_000)
 
 	set := lending.NewLoanBrokerSet(owner.Address, strings.Repeat("A", 64))
-	if res := env.Submit(set); res.Code != "tecNO_ENTRY" {
-		t.Fatalf("LoanBrokerSet (no vault): got %s, want tecNO_ENTRY", res.Code)
-	}
+	jtx.RequireTxClaimed(t, env.Submit(set), jtx.TecNO_ENTRY)
 }
 
 // TestLoanBroker_SetWrongOwner asserts only the vault owner may open a broker.
@@ -141,9 +125,7 @@ func TestLoanBroker_SetWrongOwner(t *testing.T) {
 	vid := setupXRPVault(t, env, owner, 1_000_000_000)
 
 	set := lending.NewLoanBrokerSet(other.Address, vid)
-	if res := env.Submit(set); res.Code != "tecNO_PERMISSION" {
-		t.Fatalf("LoanBrokerSet (wrong owner): got %s, want tecNO_PERMISSION", res.Code)
-	}
+	jtx.RequireTxClaimed(t, env.Submit(set), jtx.TecNO_PERMISSION)
 }
 
 // TestLoanBroker_CoverDepositInsufficientFunds asserts the funds check.
@@ -155,14 +137,10 @@ func TestLoanBroker_CoverDepositInsufficientFunds(t *testing.T) {
 
 	brokerSeq := env.Seq(owner)
 	set := lending.NewLoanBrokerSet(owner.Address, vid)
-	if res := env.Submit(set); res.Code != "tesSUCCESS" {
-		t.Fatalf("LoanBrokerSet: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(set))
 	bid := brokerID(owner, brokerSeq)
 
 	// Deposit more than the owner can spend.
 	dep := lending.NewLoanBrokerCoverDeposit(owner.Address, bid, tx.NewXRPAmount(1_000_000_000_000))
-	if res := env.Submit(dep); res.Code != "tecINSUFFICIENT_FUNDS" {
-		t.Fatalf("CoverDeposit (insufficient): got %s, want tecINSUFFICIENT_FUNDS", res.Code)
-	}
+	jtx.RequireTxClaimed(t, env.Submit(dep), jtx.TecINSUFFICIENT_FUNDS)
 }

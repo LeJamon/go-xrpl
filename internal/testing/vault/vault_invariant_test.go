@@ -28,28 +28,20 @@ func TestVault_IOULifecycleInvariants(t *testing.T) {
 	createSeq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: issuer.Address})
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultCreate IOU: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(create))
 	id := vaultID(owner, createSeq)
 
 	// Deposit 100 USD, trading assets for freshly minted shares.
 	dep := vault.NewVaultDeposit(depositor.Address, id, tx.NewIssuedAmountFromFloat64(100, "USD", issuer.Address))
-	if res := env.Submit(dep); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDeposit IOU: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(dep))
 
 	// Withdraw the deposited assets back, redeeming shares.
 	wd := vault.NewVaultWithdraw(depositor.Address, id, tx.NewIssuedAmountFromFloat64(100, "USD", issuer.Address))
-	if res := env.Submit(wd); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultWithdraw IOU: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(wd))
 
 	// The now-empty vault can be deleted.
 	del := vault.NewVaultDelete(owner.Address, id)
-	if res := env.Submit(del); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDelete IOU: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(del))
 	if env.VaultExists(id) {
 		t.Fatalf("IOU vault still exists after delete")
 	}

@@ -111,9 +111,7 @@ func TestCredentialsDisabled(t *testing.T) {
 
 	tx1 := pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).Build()
 	result := env.Submit(tx1)
-	if result.Code != "temDISABLED" {
-		t.Errorf("Expected temDISABLED when Credentials disabled, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	env.Close()
 
 	if env.OwnerCount(alice) != 0 {
@@ -135,18 +133,14 @@ func TestDisabled(t *testing.T) {
 	// DomainSet should return temDISABLED
 	tx1 := pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).Build()
 	result := env.Submit(tx1)
-	if result.Code != "temDISABLED" {
-		t.Errorf("Expected temDISABLED for DomainSet, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	env.Close()
 
 	// DomainDelete should return temDISABLED
 	fakeDomainID := fmt.Sprintf("%062x01", 0)
 	tx2 := pd.DomainDelete(alice, fakeDomainID).Build()
 	result = env.Submit(tx2)
-	if result.Code != "temDISABLED" {
-		t.Errorf("Expected temDISABLED for DomainDelete, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	env.Close()
 }
 
@@ -164,9 +158,7 @@ func TestBadData(t *testing.T) {
 	// Empty credentials array → temARRAY_EMPTY
 	t.Run("empty credentials", func(t *testing.T) {
 		result := env.Submit(pd.DomainSet(alice).Build())
-		if result.Code != "temARRAY_EMPTY" {
-			t.Errorf("Expected temARRAY_EMPTY, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, "temARRAY_EMPTY")
 		env.Close()
 	})
 
@@ -177,9 +169,7 @@ func TestBadData(t *testing.T) {
 			b.Credential(issuer, credTypeHex(i+1))
 		}
 		result := env.Submit(b.Build())
-		if result.Code != "temARRAY_TOO_LARGE" {
-			t.Errorf("Expected temARRAY_TOO_LARGE for 11 credentials, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, "temARRAY_TOO_LARGE")
 		env.Close()
 	})
 
@@ -187,9 +177,7 @@ func TestBadData(t *testing.T) {
 	t.Run("non-existent issuer", func(t *testing.T) {
 		ghost := jtx.NewAccount("ghost") // not funded
 		result := env.Submit(pd.DomainSet(alice).Credential(ghost, credTypeHex(10)).Build())
-		if result.Code != "tecNO_ISSUER" {
-			t.Errorf("Expected tecNO_ISSUER for non-existent issuer, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ISSUER)
 		env.Close()
 	})
 
@@ -197,27 +185,21 @@ func TestBadData(t *testing.T) {
 	// Reference: rippled testBadData fee(1, true) → temBAD_FEE
 	t.Run("bad fee", func(t *testing.T) {
 		result := env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).BadFee().Build())
-		if result.Code != "temBAD_FEE" {
-			t.Errorf("Expected temBAD_FEE for negative fee, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemBAD_FEE)
 		env.Close()
 	})
 
 	// Empty CredentialType → temMALFORMED
 	t.Run("empty CredentialType", func(t *testing.T) {
 		result := env.Submit(pd.DomainSet(alice).Credential(issuer, "").Build())
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED for empty CredentialType, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 		env.Close()
 	})
 
 	// CredentialType too long (>64 bytes) → temMALFORMED
 	t.Run("CredentialType too long", func(t *testing.T) {
 		result := env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(65)).Build())
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED for CredentialType too long, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 		env.Close()
 	})
 
@@ -231,9 +213,7 @@ func TestBadData(t *testing.T) {
 		b.Credential(issuer, credTypeHex(1)) // duplicate
 		b.Credential(issuer2, credTypeHex(4))
 		result := env.Submit(b.Build())
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED for duplicate credentials, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 		env.Close()
 	})
 }
@@ -260,9 +240,7 @@ func TestBadDataUpdate(t *testing.T) {
 
 	t.Run("empty credentials on update", func(t *testing.T) {
 		result := env.Submit(pd.DomainSet(alice).DomainID(domainID).Build())
-		if result.Code != "temARRAY_EMPTY" {
-			t.Errorf("Expected temARRAY_EMPTY, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, "temARRAY_EMPTY")
 		env.Close()
 	})
 
@@ -272,18 +250,14 @@ func TestBadDataUpdate(t *testing.T) {
 			b.Credential(issuer, credTypeHex(i+1))
 		}
 		result := env.Submit(b.Build())
-		if result.Code != "temARRAY_TOO_LARGE" {
-			t.Errorf("Expected temARRAY_TOO_LARGE, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, "temARRAY_TOO_LARGE")
 		env.Close()
 	})
 
 	t.Run("non-existent issuer on update", func(t *testing.T) {
 		ghost := jtx.NewAccount("ghost")
 		result := env.Submit(pd.DomainSet(alice).DomainID(domainID).Credential(ghost, credTypeHex(10)).Build())
-		if result.Code != "tecNO_ISSUER" {
-			t.Errorf("Expected tecNO_ISSUER, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ISSUER)
 		env.Close()
 	})
 
@@ -293,9 +267,7 @@ func TestBadDataUpdate(t *testing.T) {
 		b.Credential(issuer, credTypeHex(2))
 		b.Credential(issuer, credTypeHex(1)) // duplicate
 		result := env.Submit(b.Build())
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED for duplicate on update, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 		env.Close()
 	})
 
@@ -465,9 +437,7 @@ func TestSet(t *testing.T) {
 
 		result := env.Submit(pd.DomainSet(bob).DomainID(domainID).Credential(issuer2, credTypeHex(5)).Build())
 		env.Close()
-		if result.Code != "tecNO_PERMISSION" {
-			t.Errorf("Expected tecNO_PERMISSION, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 		env.Submit(pd.DomainDelete(alice, domainID).Build())
 		env.Close()
 	})
@@ -477,9 +447,7 @@ func TestSet(t *testing.T) {
 		zeroDomain := hex.EncodeToString(make([]byte, 32))
 		result := env.Submit(pd.DomainSet(alice).DomainID(zeroDomain).Credential(issuer1, credTypeHex(5)).Build())
 		env.Close()
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED for zero DomainID, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Prevent updating non-existent domain → tecNO_ENTRY
@@ -487,18 +455,14 @@ func TestSet(t *testing.T) {
 		fakeDomain := fmt.Sprintf("%062x01", 0)
 		result := env.Submit(pd.DomainSet(alice).DomainID(fakeDomain).Credential(issuer1, credTypeHex(5)).Build())
 		env.Close()
-		if result.Code != "tecNO_ENTRY" {
-			t.Errorf("Expected tecNO_ENTRY, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 	})
 
 	// Invalid flags → temINVALID_FLAG
 	t.Run("invalid flags returns temINVALID_FLAG", func(t *testing.T) {
 		result := env.Submit(pd.DomainSet(alice).Credential(issuer1, credTypeHex(5)).Flags(0x00010000).Build())
 		env.Close()
-		if result.Code != "temINVALID_FLAG" {
-			t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
 
 	// Credentials are sorted in the stored entry
@@ -583,9 +547,7 @@ func TestSet(t *testing.T) {
 		delTx := acctx.NewAccountDelete(carol.Address, alice.Address)
 		delTx.Fee = delFee
 		result := env.Submit(delTx)
-		if result.Code != "tecHAS_OBLIGATIONS" {
-			t.Errorf("Expected tecHAS_OBLIGATIONS, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecHAS_OBLIGATIONS)
 		env.Close()
 
 		// Delete the domain
@@ -658,18 +620,14 @@ func TestDelete(t *testing.T) {
 		fakeDomain := fmt.Sprintf("%062x01", 0)
 		result := env.Submit(pd.DomainDelete(alice, fakeDomain).BadFee().Build())
 		env.Close()
-		if result.Code != "temBAD_FEE" {
-			t.Errorf("Expected temBAD_FEE for negative fee, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemBAD_FEE)
 	})
 
 	// Prevent deletion by non-owner → tecNO_PERMISSION
 	t.Run("non-owner delete returns tecNO_PERMISSION", func(t *testing.T) {
 		result := env.Submit(pd.DomainDelete(bob, domainID2).Build())
 		env.Close()
-		if result.Code != "tecNO_PERMISSION" {
-			t.Errorf("Expected tecNO_PERMISSION, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_PERMISSION)
 	})
 
 	// Prevent deletion of non-existent domain → tecNO_ENTRY
@@ -677,18 +635,14 @@ func TestDelete(t *testing.T) {
 		fakeDomain := fmt.Sprintf("%062x01", 0)
 		result := env.Submit(pd.DomainDelete(alice, fakeDomain).Build())
 		env.Close()
-		if result.Code != "tecNO_ENTRY" {
-			t.Errorf("Expected tecNO_ENTRY, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 	})
 
 	// Invalid flags → temINVALID_FLAG
 	t.Run("invalid flags returns temINVALID_FLAG", func(t *testing.T) {
 		result := env.Submit(pd.DomainDelete(alice, domainID2).Flags(0x00010000).Build())
 		env.Close()
-		if result.Code != "temINVALID_FLAG" {
-			t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	})
 
 	// Delete zero domain → temMALFORMED
@@ -696,9 +650,7 @@ func TestDelete(t *testing.T) {
 		zeroDomain := hex.EncodeToString(make([]byte, 32))
 		result := env.Submit(pd.DomainDelete(alice, zeroDomain).Build())
 		env.Close()
-		if result.Code != "temMALFORMED" {
-			t.Errorf("Expected temMALFORMED for zero DomainID, got %s", result.Code)
-		}
+		jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	})
 
 	// Verify OwnerCount decrements on delete
@@ -737,9 +689,7 @@ func TestAccountReserve(t *testing.T) {
 
 	// alice does not have enough for the domain reserve
 	result := env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).Build())
-	if result.Code != "tecINSUFFICIENT_RESERVE" {
-		t.Errorf("Expected tecINSUFFICIENT_RESERVE, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected OwnerCount 0, got %d", env.OwnerCount(alice))
@@ -750,9 +700,7 @@ func TestAccountReserve(t *testing.T) {
 	env.Close()
 
 	result = env.Submit(pd.DomainSet(alice).Credential(issuer, credTypeHex(10)).Build())
-	if result.Code != "tecINSUFFICIENT_RESERVE" {
-		t.Errorf("Expected tecINSUFFICIENT_RESERVE after partial fund, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 
 	// Pay alice the remaining amount

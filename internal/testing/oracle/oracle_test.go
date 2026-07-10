@@ -35,9 +35,6 @@ func defaultLUT(env *jtx.TestEnv) uint32 {
 	return oracletest.DefaultLastUpdateTime(env)
 }
 
-// baseFee returns the base fee used in the test env.
-const baseFee = uint64(10)
-
 // oracleQuoteAssets reads the oracle SLE and returns the QuoteAsset of each
 // PriceData entry in on-ledger array order.
 func oracleQuoteAssets(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) []string {
@@ -93,7 +90,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Sequence(1).
 			Build())
 		jtx.RequireTxFail(t, result, "terNO_ACCOUNT")
@@ -114,7 +111,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecINSUFFICIENT_RESERVE", result.Code)
 	})
@@ -125,8 +122,8 @@ func TestInvalidSet(t *testing.T) {
 	t.Run("InsufficientReserveOnUpdate", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		owner := jtx.NewAccount("owner")
-		// Fund with accountReserve(1) + 2*baseFee: enough for 1 oracle (≤5 pairs)
-		env.FundAmount(owner, env.ReserveBase()+env.ReserveIncrement()+2*baseFee)
+		// Fund with accountReserve(1) + 2*base fee: enough for 1 oracle (≤5 pairs)
+		env.FundAmount(owner, env.ReserveBase()+env.ReserveIncrement()+2*env.BaseFee())
 		env.Close()
 
 		// Create oracle with 1 pair — should succeed
@@ -135,7 +132,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -148,7 +145,7 @@ func TestInvalidSet(t *testing.T) {
 			AddPrice("XRP", "CNY", 740, 1).
 			AddPrice("XRP", "CAD", 740, 1).
 			AddPrice("XRP", "AUD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecINSUFFICIENT_RESERVE", result.Code)
 	})
@@ -168,7 +165,7 @@ func TestInvalidSet(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
 			Flags(0x00000001). // tfSellNFToken
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
@@ -188,7 +185,7 @@ func TestInvalidSet(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
 			AddPrice("XRP", "USD", 750, 1). // duplicate
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -208,7 +205,7 @@ func TestInvalidSet(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
 			AddDelete("XRP", "EUR"). // delete on create = invalid
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -228,7 +225,7 @@ func TestInvalidSet(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
 			AddDelete("XRP", "USD"). // same pair: update + delete
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -248,7 +245,7 @@ func TestInvalidSet(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "EUR", 740, 1).
 			AddDelete("XRP", "EUR"). // same pair: add + delete
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -267,7 +264,7 @@ func TestInvalidSet(t *testing.T) {
 		builder := oracletest.OracleSet(owner, 1, lut).
 			ProviderHex(32).
 			AssetClassHex(8).
-			Fee(baseFee)
+			Fee(env.BaseFee())
 		for _, curr := range currencies {
 			builder = builder.AddPrice("XRP", curr, 740, 1)
 		}
@@ -288,7 +285,7 @@ func TestInvalidSet(t *testing.T) {
 		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
 			ProviderHex(32).
 			AssetClassHex(8).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temARRAY_EMPTY")
 	})
@@ -308,14 +305,14 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
 		// Try to add 10 more pairs → total 11 → tecARRAY_TOO_LARGE
 		lut2 := lut + 1
 		builder := oracletest.OracleSet(owner, 1, lut2).
-			Fee(baseFee)
+			Fee(env.BaseFee())
 		currencies := []string{"US1", "US2", "US3", "US4", "US5", "US6", "US7", "US8", "US9", "U10"}
 		for _, curr := range currencies {
 			builder = builder.AddPrice("XRP", curr, 740+1, 1)
@@ -338,7 +335,7 @@ func TestInvalidSet(t *testing.T) {
 			Provider("70726F7669646572"). // provider present
 			// AssetClass NOT set
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -358,7 +355,7 @@ func TestInvalidSet(t *testing.T) {
 			URI("555249").                  // URI present
 			// Provider NOT set
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -378,7 +375,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -388,7 +385,7 @@ func TestInvalidSet(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			Provider("70726F766964657231"). // "provider1" — different from original
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -408,7 +405,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -417,7 +414,7 @@ func TestInvalidSet(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AssetClass("63757272656E637931"). // "currency1" — different
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -437,7 +434,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(17). // 17 bytes > 16
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -454,7 +451,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(257). // 257 bytes > 256
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -472,7 +469,7 @@ func TestInvalidSet(t *testing.T) {
 			URIHex(257). // 257 bytes > 256
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -491,7 +488,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClass(""). // explicitly empty
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -507,7 +504,7 @@ func TestInvalidSet(t *testing.T) {
 			Provider(""). // explicitly empty
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -524,7 +521,7 @@ func TestInvalidSet(t *testing.T) {
 			URI(""). // explicitly empty
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -547,7 +544,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -558,7 +555,7 @@ func TestInvalidSet(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(some, 1, lut2).
 			// No Provider, no AssetClass — required for create
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -579,7 +576,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -594,7 +591,7 @@ func TestInvalidSet(t *testing.T) {
 		tooOld := (closeTimeXRPL - 301) + uint32(protocol.RippleEpochUnix)
 		result = env.Submit(oracletest.OracleSet(owner, 1, tooOld).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecINVALID_UPDATE_TIME", result.Code)
 	})
@@ -612,7 +609,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -624,7 +621,7 @@ func TestInvalidSet(t *testing.T) {
 		tooNew := (closeTimeXRPL + 311) + uint32(protocol.RippleEpochUnix)
 		result = env.Submit(oracletest.OracleSet(owner, 1, tooNew).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecINVALID_UPDATE_TIME", result.Code)
 	})
@@ -642,7 +639,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -654,7 +651,7 @@ func TestInvalidSet(t *testing.T) {
 		lut2 := defaultLUT(env)
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -662,7 +659,7 @@ func TestInvalidSet(t *testing.T) {
 		// The previous lastUpdateTime was lut2, so use lut2-1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2-1).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecINVALID_UPDATE_TIME", result.Code)
 	})
@@ -680,14 +677,14 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
 		// Update with time < epoch_offset (946684800)
 		result = env.Submit(oracletest.OracleSet(owner, 1, uint32(protocol.RippleEpochUnix)-1).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecINVALID_UPDATE_TIME", result.Code)
 	})
@@ -707,7 +704,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -715,7 +712,7 @@ func TestInvalidSet(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddDelete("XRP", "EUR"). // not in oracle
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecTOKEN_PAIR_NOT_FOUND", result.Code)
 	})
@@ -735,7 +732,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -743,7 +740,7 @@ func TestInvalidSet(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddDelete("XRP", "USD").
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecARRAY_EMPTY", result.Code)
 	})
@@ -762,7 +759,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("USD", "USD", 740, 1). // same
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -781,7 +778,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("USD", "BTC", 740, 21). // scale 21 > max 20
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -800,7 +797,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("USD", "BTC", 740, 20).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 	})
@@ -820,7 +817,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -829,7 +826,7 @@ func TestInvalidSet(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddDelete("XRP", "EUR").
 			AddPrice("XRP", "EUR", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -849,7 +846,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -857,7 +854,7 @@ func TestInvalidSet(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddDelete("XRP", "EUR").
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecTOKEN_PAIR_NOT_FOUND", result.Code)
 	})
@@ -877,7 +874,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -886,7 +883,7 @@ func TestInvalidSet(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 10, lut2).
 			AddDelete("XRP", "EUR").
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
@@ -916,7 +913,7 @@ func TestInvalidSet(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -951,7 +948,7 @@ func TestCreate(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -978,7 +975,7 @@ func TestCreate(t *testing.T) {
 			AddPrice("CAN", "USD", 740, 1).
 			AddPrice("YAN", "USD", 740, 1).
 			AddPrice("GBP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -1002,7 +999,7 @@ func TestCreate(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -1012,7 +1009,7 @@ func TestCreate(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("EUR", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, some, 1))
@@ -1035,7 +1032,7 @@ func TestInvalidDelete(t *testing.T) {
 		ProviderHex(32).
 		AssetClassHex(8).
 		AddPrice("XRP", "USD", 740, 1).
-		Fee(baseFee).
+		Fee(env.BaseFee()).
 		Build())
 	jtx.RequireTxSuccess(t, result)
 	require.True(t, oracleExists(t, env, owner, 1))
@@ -1047,7 +1044,7 @@ func TestInvalidDelete(t *testing.T) {
 		bad := jtx.NewAccount("bad")
 		// bad is not funded
 		result := env.Submit(oracletest.OracleDelete(bad, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Sequence(1).
 			Build())
 		jtx.RequireTxFail(t, result, "terNO_ACCOUNT")
@@ -1058,7 +1055,7 @@ func TestInvalidDelete(t *testing.T) {
 	// -------------------------------------------------------------------------
 	t.Run("InvalidDocumentID", func(t *testing.T) {
 		result := env.Submit(oracletest.OracleDelete(owner, 2). // docID=2 doesn't exist
-									Fee(baseFee).
+									Fee(env.BaseFee()).
 									Build())
 		require.Equal(t, "tecNO_ENTRY", result.Code)
 	})
@@ -1073,7 +1070,7 @@ func TestInvalidDelete(t *testing.T) {
 
 		// "invalid" tries to delete owner's oracle
 		result := env.Submit(oracletest.OracleDelete(invalid, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		require.Equal(t, "tecNO_ENTRY", result.Code)
 	})
@@ -1084,7 +1081,7 @@ func TestInvalidDelete(t *testing.T) {
 	t.Run("InvalidFlags", func(t *testing.T) {
 		result := env.Submit(oracletest.OracleDelete(owner, 1).
 			Flags(0x00000001). // tfSellNFToken
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 	})
@@ -1119,7 +1116,7 @@ func TestDelete(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1127,7 +1124,7 @@ func TestDelete(t *testing.T) {
 		require.True(t, oracleExists(t, env, owner, 1))
 
 		result = env.Submit(oracletest.OracleDelete(owner, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.False(t, oracleExists(t, env, owner, 1))
@@ -1153,7 +1150,7 @@ func TestDelete(t *testing.T) {
 			AddPrice("CAN", "USD", 740, 1).
 			AddPrice("YAN", "USD", 740, 1).
 			AddPrice("GBP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1161,7 +1158,7 @@ func TestDelete(t *testing.T) {
 		require.True(t, oracleExists(t, env, owner, 1))
 
 		result = env.Submit(oracletest.OracleDelete(owner, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.False(t, oracleExists(t, env, owner, 1))
@@ -1185,7 +1182,7 @@ func TestDelete(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1193,7 +1190,7 @@ func TestDelete(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "EUR", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1238,7 +1235,7 @@ func TestUpdate(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -1247,7 +1244,7 @@ func TestUpdate(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 740, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1273,7 +1270,7 @@ func TestUpdate(t *testing.T) {
 			Provider("70726F7669646572").   // "provider"
 			AssetClass("63757272656E6379"). // "currency"
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -1286,7 +1283,7 @@ func TestUpdate(t *testing.T) {
 			Provider("70726F7669646572").
 			AssetClass("63757272656E6379").
 			AddPrice("XRP", "USD", 741, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 	})
@@ -1312,14 +1309,14 @@ func TestUpdate(t *testing.T) {
 			Provider("70726F7669646572").
 			AssetClass("63757272656E6379").
 			AddPrice(hexCurrency, "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice(hexCurrency, "USD", 741, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1349,7 +1346,7 @@ func TestUpdate(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1359,7 +1356,7 @@ func TestUpdate(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "EUR", 700, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1383,7 +1380,7 @@ func TestUpdate(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
 			AddPrice("XRP", "EUR", 700, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1394,7 +1391,7 @@ func TestUpdate(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 741, 2).
 			AddPrice("XRP", "EUR", 710, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1418,7 +1415,7 @@ func TestUpdate(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 741, 2).
 			AddPrice("XRP", "EUR", 710, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1431,7 +1428,7 @@ func TestUpdate(t *testing.T) {
 			AddPrice("ETH", "EUR", 710, 2).
 			AddPrice("YAN", "EUR", 710, 2).
 			AddPrice("CAN", "EUR", 710, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1459,7 +1456,7 @@ func TestUpdate(t *testing.T) {
 			AddPrice("ETH", "EUR", 710, 2).
 			AddPrice("YAN", "EUR", 710, 2).
 			AddPrice("CAN", "EUR", 710, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1469,7 +1466,7 @@ func TestUpdate(t *testing.T) {
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddDelete("BTC", "USD").
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1481,7 +1478,7 @@ func TestUpdate(t *testing.T) {
 			AddDelete("ETH", "EUR").
 			AddDelete("YAN", "EUR").
 			AddDelete("CAN", "EUR").
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1495,8 +1492,8 @@ func TestUpdate(t *testing.T) {
 	t.Run("MinReserveToCreateAndUpdate", func(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		owner := jtx.NewAccount("owner")
-		// Fund with accountReserve(1) + 2*baseFee (minimum for 1 oracle)
-		env.FundAmount(owner, env.ReserveBase()+env.ReserveIncrement()+2*baseFee)
+		// Fund with accountReserve(1) + 2*base fee (minimum for 1 oracle)
+		env.FundAmount(owner, env.ReserveBase()+env.ReserveIncrement()+2*env.BaseFee())
 		env.Close()
 
 		lut := defaultLUT(env)
@@ -1504,14 +1501,14 @@ func TestUpdate(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 	})
@@ -1533,7 +1530,7 @@ func TestUpdate(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 742, 2).
 			AddPrice("XRP", "EUR", 711, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -1548,7 +1545,7 @@ func TestUpdate(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
 			AddPrice("XRP", "EUR", 711, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1572,7 +1569,7 @@ func TestUpdate(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 742, 2).
 			AddPrice("XRP", "EUR", 711, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
@@ -1586,7 +1583,7 @@ func TestUpdate(t *testing.T) {
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
 			AddPrice("XRP", "EUR", 711, 2).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1611,14 +1608,14 @@ func TestUpdate(t *testing.T) {
 			AddPrice("USD", "GBP", 1, 0).
 			AddPrice("XRP", "USD", 1, 0).
 			AddPrice("XRP", "EUR", 1, 0).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 2, 0).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1641,7 +1638,7 @@ func TestUpdate(t *testing.T) {
 			AssetClassHex(8).
 			AddPrice("USD", "EUR", 1, 0).
 			AddPrice("XRP", "USD", 1, 0).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
@@ -1671,7 +1668,7 @@ func TestAmendment(t *testing.T) {
 			ProviderHex(32).
 			AssetClassHex(8).
 			AddPrice("XRP", "USD", 740, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temDISABLED")
 	})
@@ -1689,7 +1686,7 @@ func TestAmendment(t *testing.T) {
 		env.Close()
 
 		result := env.Submit(oracletest.OracleDelete(owner, 1).
-			Fee(baseFee).
+			Fee(env.BaseFee()).
 			Build())
 		jtx.RequireTxFail(t, result, "temDISABLED")
 	})

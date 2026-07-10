@@ -18,15 +18,6 @@ import (
 	paymenttx "github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
-// expectIOUBalance checks an IOU balance with tolerance for float64 precision.
-func expectIOUBalance(t *testing.T, env *amm.AMMTestEnv, account *jtx.Account, currency string, issuer *jtx.Account, expected float64) {
-	t.Helper()
-	actual := env.TestEnv.BalanceIOU(account, currency, issuer)
-	if math.Abs(actual-expected) > 0.0001 {
-		t.Errorf("%s %s: got %f, want %f", account.Name, currency, actual, expected)
-	}
-}
-
 // ===================================================================
 // AMM_test.cpp BookStep-dependent tests
 // ===================================================================
@@ -62,7 +53,7 @@ func TestAMMBookStep_BasicPaymentEngine(t *testing.T) {
 				uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
 
 			// Carol: initial 30000 + 100 = 30100
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30100)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30100)
 
 			// Bob: initial 30000 XRP - 100 - fee(10 drops)
 			bobXRP := env.TestEnv.Balance(env.Bob)
@@ -96,7 +87,7 @@ func TestAMMBookStep_BasicPaymentEngine(t *testing.T) {
 			env.ExpectAMMBalances(t, ammAcc,
 				uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
 
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30100)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30100)
 		})
 	})
 
@@ -123,7 +114,7 @@ func TestAMMBookStep_BasicPaymentEngine(t *testing.T) {
 			env.ExpectAMMBalances(t, ammAcc,
 				uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
 
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30100)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30100)
 		})
 	})
 }
@@ -220,9 +211,9 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			env.Close()
 
 			// Alice contributed 1010 EUR and 1000 USD to pool
-			expectIOUBalance(t, env, env.Alice, "EUR", env.GW, 28990)
-			expectIOUBalance(t, env, env.Alice, "USD", env.GW, 29000)
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "EUR", 28990)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 29000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30000)
 
 			// Carol pays Alice EUR(10) with no fee, path(~EUR), sendmax(USD(10))
 			payTx := payment.PayIssued(env.Carol, env.Alice,
@@ -236,9 +227,9 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			env.Close()
 
 			// Alice has 10 EUR more
-			expectIOUBalance(t, env, env.Alice, "EUR", env.GW, 29000)
-			expectIOUBalance(t, env, env.Alice, "USD", env.GW, 29000)
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 29990)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "EUR", 29000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 29000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29990)
 
 			// Set fee to 1% (1000 basis points)
 			usdAsset := tx.Asset{Currency: "USD", Issuer: env.GW.Address}
@@ -257,7 +248,7 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			env.Close()
 
 			// Carol got 10 USD back
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30000)
 			// Bob sent ~10.1 EUR — check EUR balance is ~989.899
 			bobEUR := env.TestEnv.BalanceIOU(env.Bob, "EUR", env.GW)
 			// rippled: STAmount{EUR, 989'8989898989899, -13} = 989.8989898989899
@@ -285,8 +276,8 @@ func TestAMMBookStep_TradingFee(t *testing.T) {
 			jtx.RequireTxSuccess(t, env.Submit(offerTx))
 			env.Close()
 
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 29990)
-			expectIOUBalance(t, env, env.Carol, "EUR", env.GW, 30010)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29990)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 30010)
 
 			// Reverse the pool change
 			offerTx2 := offerbuild.OfferCreate(env.Carol,
@@ -800,7 +791,7 @@ func TestAMMBookStep_Selection(t *testing.T) {
 			env.Close()
 
 			// Bob should receive USD(100) more
-			expectIOUBalance(t, env, env.Bob, "USD", env.GW, 2100)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 2100)
 
 			// AMM should NOT be selected — balances unchanged
 			ammUSDAfter := env.TestEnv.BalanceIOU(ammAccAddr, "USD", env.GW)
@@ -1655,7 +1646,7 @@ func TestAMMBookStep_FillModes(t *testing.T) {
 			// AMM unchanged
 			env.ExpectAMMBalances(t, ammAcc,
 				uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30000)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30000)
 			offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 
 			// Order that can be filled: carol buys XRP(100) sells USD(100)
@@ -1668,7 +1659,7 @@ func TestAMMBookStep_FillModes(t *testing.T) {
 			// AMM: XRP(10000), USD(10100)
 			env.ExpectAMMBalances(t, ammAcc,
 				uint64(jtx.XRP(10000)), env.GW, "USD", 10100)
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 29900)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29900)
 			offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 		})
 	})
@@ -1687,7 +1678,7 @@ func TestAMMBookStep_FillModes(t *testing.T) {
 			// AMM: XRP(10000), USD(10100) — only 100 XRP / 100 USD crossed
 			env.ExpectAMMBalances(t, ammAcc,
 				uint64(jtx.XRP(10000)), env.GW, "USD", 10100)
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 29900)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29900)
 			offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 		})
 	})
@@ -1818,7 +1809,7 @@ func TestAMMBookStep_CurrencyConversionEntire(t *testing.T) {
 		uint64(jtx.XRP(1000)), env.GW, "USD", 300)
 
 	// Alice should have USD(0) — spent all 100
-	expectIOUBalance(t, env, env.Alice, "USD", env.GW, 0)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 0)
 
 	// Alice XRP: initial 10000 + 500 - fee*2 (AMMCreate didn't charge her, so just 2 txns: trust + payment)
 	// Actually: alice funded 10000 XRP. She paid 2 fees (trust USD, pay self).
@@ -1870,7 +1861,7 @@ func TestAMMBookStep_CurrencyConversionInParts(t *testing.T) {
 		}
 
 		// Alice USD: initial 30000 - 10000(AMM) - 100(pay) = 19900
-		expectIOUBalance(t, env, env.Alice, "USD", env.GW, 19900)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 19900)
 	})
 }
 
@@ -1901,7 +1892,7 @@ func TestAMMBookStep_CrossCurrencyStartXRP(t *testing.T) {
 			uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
 
 		// Bob should have 100 USD
-		expectIOUBalance(t, env, env.Bob, "USD", env.GW, 100)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 100)
 	})
 }
 
@@ -2179,7 +2170,7 @@ func TestAMMBookStep_SellFlagBasic(t *testing.T) {
 		offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 
 		// Carol USD: started with 30000, got 101 → 30101
-		expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30101)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30101)
 
 		// Carol XRP: 30000 - 100 XRP - 10 drops trust fee - 10 drops offer fee = 29899999980
 		carolXRP := env.TestEnv.Balance(env.Carol)
@@ -2257,7 +2248,7 @@ func TestAMMBookStep_SellFlagExceedLimit(t *testing.T) {
 		uint64(jtx.XRP(1100)), env.GW, "USD", 2000)
 
 	// Alice USD: 0 + 200 = 200
-	expectIOUBalance(t, env, env.Alice, "USD", env.GW, 200)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 200)
 
 	// Alice XRP: should be exactly 250,000,000 drops (= reserve for 1 item)
 	// 350,000,020 - 10(trust) - 10(offer) - 100,000,000(sold) = 249,999,990... hmm
@@ -2406,8 +2397,8 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		}
 
 		// Carol: USD(15100), EUR(14900)
-		expectIOUBalance(t, env, env.Carol, "USD", env.GW, 15100)
-		expectIOUBalance(t, env, env.Carol, "EUR", env.GW, 14900)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 15100)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 14900)
 		offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 	})
 
@@ -2464,8 +2455,8 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 		env.ExpectAMMBalances(t, ammAlice,
 			uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
 
-		expectIOUBalance(t, env, env.Carol, "USD", env.GW, 15100)
-		expectIOUBalance(t, env, env.Carol, "EUR", env.GW, 14900)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 15100)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 14900)
 		offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 		offerbuild.RequireOfferCount(t, env.TestEnv, env.Bob, 0)
 	})
@@ -2529,8 +2520,8 @@ func TestAMMBookStep_BridgedCross(t *testing.T) {
 			t.Errorf("AMM Bob EUR: got %f, want 10100", ammBobEUR)
 		}
 
-		expectIOUBalance(t, env, env.Carol, "USD", env.GW, 15100)
-		expectIOUBalance(t, env, env.Carol, "EUR", env.GW, 14900)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 15100)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "EUR", 14900)
 		offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 		offerbuild.RequireOfferCount(t, env.TestEnv, env.Alice, 0)
 	})
@@ -2699,7 +2690,7 @@ func TestAMMBookStep_TransferRateOffer(t *testing.T) {
 			// AMM doesn't pay transfer fee
 			env.ExpectAMMBalances(t, ammAcc,
 				uint64(jtx.XRP(10100)), env.GW, "USD", 10000)
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 30100)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 30100)
 			offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 		})
 	})
@@ -2726,7 +2717,7 @@ func TestAMMBookStep_TransferRateOffer(t *testing.T) {
 				uint64(jtx.XRP(10000)), env.GW, "USD", 10100)
 			// Carol pays 25% transfer fee on 100 USD: gets 100 XRP, pays 125 USD
 			// Carol: 30000 - 125 = 29875
-			expectIOUBalance(t, env, env.Carol, "USD", env.GW, 29875)
+			jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 29875)
 			offerbuild.RequireOfferCount(t, env.TestEnv, env.Carol, 0)
 		})
 	})
@@ -2903,8 +2894,8 @@ func TestAMMBookStep_DirectToDirectPath(t *testing.T) {
 	env.Close()
 
 	// cam: A_BUX(35), B_BUX(35), 1 offer
-	expectIOUBalance(t, env, cam, "BUX", ann, 35)
-	expectIOUBalance(t, env, cam, "BUX", bob, 35)
+	jtx.RequireIOUBalance(t, env.TestEnv, cam, ann, "BUX", 35)
+	jtx.RequireIOUBalance(t, env.TestEnv, cam, bob, "BUX", 35)
 	offerbuild.RequireOfferCount(t, env.TestEnv, cam, 1)
 
 	// cam's offer: buy B_BUX(30), sell A_BUX(30) — this used to cause assert
@@ -2990,7 +2981,7 @@ func TestAMMBookStep_RequireAuth(t *testing.T) {
 	offerbuild.RequireOfferCount(t, env.TestEnv, env.Bob, 0)
 
 	// Bob: USD(0)
-	expectIOUBalance(t, env, env.Bob, "USD", env.GW, 0)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Bob, env.GW, "USD", 0)
 }
 
 // TestAMMBookStep_Offers tests offer scenarios with AMM.
@@ -3128,9 +3119,9 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(payTx))
 
 		// Alice: BTC(100-50=50)
-		expectIOUBalance(t, env, env.Alice, "BTC", env.GW, 50)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "BTC", 50)
 		// Carol: USD(150+50=200)
-		expectIOUBalance(t, env, env.Carol, "USD", env.GW, 200)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 200)
 		// AMM: BTC(100+50=150), USD(150-50=100)
 		btcPool := env.AMMPoolIOU(ammAcc, env.GW, "BTC")
 		usdPool := env.AMMPoolIOU(ammAcc, env.GW, "USD")
@@ -3180,7 +3171,7 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(payTx))
 
 		// Carol: USD(150+50=200)
-		expectIOUBalance(t, env, env.Carol, "USD", env.GW, 200)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 200)
 		// AMM: XRP(150), USD(100)
 		env.ExpectAMMBalances(t, ammAcc,
 			uint64(jtx.XRP(150)), env.GW, "USD", 100)
@@ -3224,7 +3215,7 @@ func TestAMMBookStep_BookStep(t *testing.T) {
 		jtx.RequireTxSuccess(t, env.Submit(payTx))
 
 		// Alice: USD(100-50=50)
-		expectIOUBalance(t, env, env.Alice, "USD", env.GW, 50)
+		jtx.RequireIOUBalance(t, env.TestEnv, env.Alice, env.GW, "USD", 50)
 		// Carol: XRP(10000+50 - 10 fee for trust line) = 10049999990
 		carolXRP := env.TestEnv.Balance(env.Carol)
 		expectedCarolXRP := uint64(jtx.XRP(10000)) + uint64(jtx.XRP(50)) - 10
@@ -3355,7 +3346,7 @@ func TestAMMBookStep_LimitQuality(t *testing.T) {
 		uint64(jtx.XRP(1050)), env.GW, "USD", 1000)
 
 	// Carol: 2000 + 50 = 2050
-	expectIOUBalance(t, env, env.Carol, "USD", env.GW, 2050)
+	jtx.RequireIOUBalance(t, env.TestEnv, env.Carol, env.GW, "USD", 2050)
 
 	// Bob's offer should still exist (quality too bad for limit)
 	offerbuild.RequireOfferCount(t, env.TestEnv, env.Bob, 1)

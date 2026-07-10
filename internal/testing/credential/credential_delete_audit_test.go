@@ -96,7 +96,7 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 	}
 
 	r = env.Submit(credential.CredentialAccept(subject, issuer, credType).Build())
-	require.Equal(t, "tecEXPIRED", r.Code, "accepting an expired credential must return tecEXPIRED")
+	jtx.RequireTxClaimed(t, r, jtx.TecEXPIRED)
 	env.Close()
 
 	// After: credential erased and removed from BOTH directories; issuer count back to 0.

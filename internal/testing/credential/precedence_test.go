@@ -28,7 +28,7 @@ func TestPrecedence_CredentialCreateFlagBeforeField(t *testing.T) {
 	create := credentialtest.CredentialCreate(issuer, subject, "").
 		Flags(0x00000001).
 		Build()
-	jtx.RequireTxFail(t, env.Submit(create), "temINVALID_FLAG")
+	jtx.RequireTxFail(t, env.Submit(create), jtx.TemINVALID_FLAG)
 }
 
 func TestPrecedence_CredentialAcceptFlagBeforeField(t *testing.T) {
@@ -42,7 +42,7 @@ func TestPrecedence_CredentialAcceptFlagBeforeField(t *testing.T) {
 	accept := credentialtest.CredentialAccept(subject, issuer, "").
 		Flags(0x00000001).
 		Build()
-	jtx.RequireTxFail(t, env.Submit(accept), "temINVALID_FLAG")
+	jtx.RequireTxFail(t, env.Submit(accept), jtx.TemINVALID_FLAG)
 }
 
 func TestPrecedence_CredentialDeleteFlagBeforeField(t *testing.T) {
@@ -56,5 +56,5 @@ func TestPrecedence_CredentialDeleteFlagBeforeField(t *testing.T) {
 	del := credentialtest.CredentialDelete(sender, nil, nil, "credType").
 		Flags(0x00000001).
 		Build()
-	jtx.RequireTxFail(t, env.Submit(del), "temINVALID_FLAG")
+	jtx.RequireTxFail(t, env.Submit(del), jtx.TemINVALID_FLAG)
 }

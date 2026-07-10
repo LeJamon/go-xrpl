@@ -140,9 +140,7 @@ func testEnabled(t *testing.T, fixEmptyDID bool) {
 	// DIDSet should return temDISABLED
 	tx1 := did.DIDSet(alice).URI("uri").Document("doc").Data("data").Build()
 	result := env.Submit(tx1)
-	if result.Code != "temDISABLED" {
-		t.Errorf("Expected temDISABLED for DIDSet, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	env.Close()
 
 	if env.OwnerCount(alice) != 0 {
@@ -152,9 +150,7 @@ func testEnabled(t *testing.T, fixEmptyDID bool) {
 	// DIDDelete should return temDISABLED
 	tx2 := did.DIDDelete(alice).Build()
 	result = env.Submit(tx2)
-	if result.Code != "temDISABLED" {
-		t.Errorf("Expected temDISABLED for DIDDelete, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 	env.Close()
 }
 
@@ -189,9 +185,7 @@ func testAccountReserve(t *testing.T, fixEmptyDID bool) {
 	// alice does not have enough XRP to cover the reserve for a DID
 	tx1 := did.DIDSet(alice).URI("uri").Document("doc").Data("data").Build()
 	result := env.Submit(tx1)
-	if result.Code != "tecINSUFFICIENT_RESERVE" {
-		t.Errorf("Expected tecINSUFFICIENT_RESERVE, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -206,9 +200,7 @@ func testAccountReserve(t *testing.T, fixEmptyDID bool) {
 	// alice still does not have enough XRP for the reserve of a DID.
 	tx2 := did.DIDSet(alice).URI("uri").Document("doc").Data("data").Build()
 	result = env.Submit(tx2)
-	if result.Code != "tecINSUFFICIENT_RESERVE" {
-		t.Errorf("Expected tecINSUFFICIENT_RESERVE, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecINSUFFICIENT_RESERVE)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -263,9 +255,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	}
 	tx1 := did.DIDSet(alice).URI("uri").Flags(0x00010000).Build()
 	result := env.Submit(tx1)
-	if result.Code != "temINVALID_FLAG" {
-		t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -274,9 +264,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	// no fields
 	tx2 := did.DIDSet(alice).Build()
 	result = env.Submit(tx2)
-	if result.Code != "temEMPTY_DID" {
-		t.Errorf("Expected temEMPTY_DID, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, "temEMPTY_DID")
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -285,9 +273,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	// all empty fields
 	tx3 := did.DIDSet(alice).URI("").Document("").Data("").Build()
 	result = env.Submit(tx3)
-	if result.Code != "temEMPTY_DID" {
-		t.Errorf("Expected temEMPTY_DID, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, "temEMPTY_DID")
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -297,9 +283,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	longString := strings.Repeat("a", 257)
 	tx4 := did.DIDSet(alice).URI(longString).Build()
 	result = env.Submit(tx4)
-	if result.Code != "temMALFORMED" {
-		t.Errorf("Expected temMALFORMED for long URI, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -308,9 +292,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	// document is too long
 	tx5 := did.DIDSet(alice).Document(longString).Build()
 	result = env.Submit(tx5)
-	if result.Code != "temMALFORMED" {
-		t.Errorf("Expected temMALFORMED for long document, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -319,9 +301,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	// attestation (data) is too long
 	tx6 := did.DIDSet(alice).Document("data").Data(longString).Build()
 	result = env.Submit(tx6)
-	if result.Code != "temMALFORMED" {
-		t.Errorf("Expected temMALFORMED for long data, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemMALFORMED)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -333,9 +313,7 @@ func testSetInvalid(t *testing.T, fixEmptyDID bool) {
 	tx7 := did.DIDSet(alice).URI("").Build()
 	result = env.Submit(tx7)
 	if fixEmptyDID {
-		if result.Code != "tecEMPTY_DID" {
-			t.Errorf("Expected tecEMPTY_DID (fixEmptyDID enabled), got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, "tecEMPTY_DID")
 	} else {
 		if !result.Success {
 			t.Errorf("Expected tesSUCCESS (fixEmptyDID disabled), got %s", result.Code)
@@ -373,9 +351,7 @@ func testDeleteInvalid(t *testing.T, fixEmptyDID bool) {
 	}
 	tx1 := did.DIDDelete(alice).Flags(0x00010000).Build()
 	result := env.Submit(tx1)
-	if result.Code != "temINVALID_FLAG" {
-		t.Errorf("Expected temINVALID_FLAG, got %s", result.Code)
-	}
+	jtx.RequireTxFail(t, result, jtx.TemINVALID_FLAG)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -386,9 +362,7 @@ func testDeleteInvalid(t *testing.T, fixEmptyDID bool) {
 	// DID doesn't exist
 	tx2 := did.DIDDelete(alice).Build()
 	result = env.Submit(tx2)
-	if result.Code != "tecNO_ENTRY" {
-		t.Errorf("Expected tecNO_ENTRY, got %s", result.Code)
-	}
+	jtx.RequireTxClaimed(t, result, jtx.TecNO_ENTRY)
 	env.Close()
 	if env.OwnerCount(alice) != 0 {
 		t.Errorf("Expected owner count 0, got %d", env.OwnerCount(alice))
@@ -559,9 +533,7 @@ func testSetModify(t *testing.T, fixEmptyDID bool) {
 	{
 		tx1 := did.DIDSet(alice).URI("").Build()
 		result := env.Submit(tx1)
-		if result.Code != "tecEMPTY_DID" {
-			t.Errorf("Delete URI: expected tecEMPTY_DID, got %s", result.Code)
-		}
+		jtx.RequireTxClaimed(t, result, "tecEMPTY_DID")
 		if env.OwnerCount(alice) != 1 {
 			t.Errorf("Delete URI: expected owner count 1, got %d", env.OwnerCount(alice))
 		}

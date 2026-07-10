@@ -42,32 +42,24 @@ func TestVault_XRPLifecycle(t *testing.T) {
 	createSeq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultCreate: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(create))
 	id := vaultID(owner, createSeq)
 
 	// Deposit 100 XRP.
 	dep := vault.NewVaultDeposit(depositor.Address, id, tx.NewXRPAmount(100_000_000))
 	depBefore := env.Balance(depositor)
-	if res := env.Submit(dep); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDeposit: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(dep))
 	if got := env.Balance(depositor); got >= depBefore-100_000_000 {
 		t.Fatalf("depositor balance not debited: before=%d after=%d", depBefore, got)
 	}
 
 	// Withdraw the deposited assets back to the depositor.
 	wd := vault.NewVaultWithdraw(depositor.Address, id, tx.NewXRPAmount(100_000_000))
-	if res := env.Submit(wd); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultWithdraw: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(wd))
 
 	// Delete the now-empty vault.
 	del := vault.NewVaultDelete(owner.Address, id)
-	if res := env.Submit(del); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDelete: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(del))
 	if env.VaultExists(id) {
 		t.Fatalf("vault still exists after delete")
 	}
@@ -116,9 +108,7 @@ func TestVault_IOULifecycle(t *testing.T) {
 
 	// The issuer must permit clawback before it owns any objects.
 	env.Fund(issuer)
-	if res := env.Submit(accountset.AccountSet(issuer).AllowClawback().Build()); res.Code != "tesSUCCESS" {
-		t.Fatalf("AccountSet AllowClawback: got %s", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(issuer).AllowClawback().Build()))
 	env.Fund(owner, depositor)
 
 	const cur = "USD"
@@ -132,9 +122,7 @@ func TestVault_IOULifecycle(t *testing.T) {
 	createSeq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: cur, Issuer: issuer.Address})
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultCreate(IOU): got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(create))
 	id := vaultID(owner, createSeq)
 
 	rawID, _ := hex.DecodeString(id)
@@ -155,9 +143,7 @@ func TestVault_IOULifecycle(t *testing.T) {
 
 	// Deposit 100 USD.
 	dep := vault.NewVaultDeposit(depositor.Address, id, tx.NewIssuedAmountFromFloat64(100, cur, issuer.Address))
-	if res := env.Submit(dep); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDeposit: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(dep))
 
 	if env.LedgerEntryExists(keylet.Line(depID, pseudoID, cur)) {
 		t.Fatalf("direct depositor<->pseudo trust line created on deposit (fork bug)")
@@ -174,9 +160,7 @@ func TestVault_IOULifecycle(t *testing.T) {
 
 	// Withdraw 40 USD back to the depositor.
 	wd := vault.NewVaultWithdraw(depositor.Address, id, tx.NewIssuedAmountFromFloat64(40, cur, issuer.Address))
-	if res := env.Submit(wd); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultWithdraw: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(wd))
 	if env.LedgerEntryExists(keylet.Line(depID, pseudoID, cur)) {
 		t.Fatalf("direct depositor<->pseudo trust line created on withdraw (fork bug)")
 	}
@@ -190,9 +174,7 @@ func TestVault_IOULifecycle(t *testing.T) {
 	// Issuer claws back the depositor's remaining shares: the 60 USD still held
 	// by the vault is redeemed off the pseudo<->issuer line.
 	claw := vault.NewVaultClawback(issuer.Address, id, depositor.Address)
-	if res := env.Submit(claw); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultClawback: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(claw))
 	if bal, ok := iouLineBalance(t, env, pseudoID, issuerID, cur); !ok || !approxEq(bal, 0) {
 		t.Fatalf("pseudo<->issuer balance after clawback = %v (exists=%v), want 0", bal, ok)
 	}
@@ -205,9 +187,7 @@ func TestVault_IOULifecycle(t *testing.T) {
 
 	// Delete the now-empty vault; the pseudo's issuer trust line is removed.
 	del := vault.NewVaultDelete(owner.Address, id)
-	if res := env.Submit(del); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultDelete: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(del))
 	if env.VaultExists(id) {
 		t.Fatalf("vault still exists after delete")
 	}
@@ -226,9 +206,7 @@ func TestVault_CreateAmendmentDisabled(t *testing.T) {
 
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "temDISABLED" {
-		t.Fatalf("VaultCreate (disabled): got %s, want temDISABLED", res.Code)
-	}
+	jtx.RequireTxFail(t, env.Submit(create), jtx.TemDISABLED)
 }
 
 // TestVault_CreateScaleForbiddenForXRP asserts Scale is IOU-only.
@@ -241,9 +219,7 @@ func TestVault_CreateScaleForbiddenForXRP(t *testing.T) {
 	scale := uint8(6)
 	create.Scale = &scale
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "temMALFORMED" {
-		t.Fatalf("VaultCreate (XRP + Scale): got %s, want temMALFORMED", res.Code)
-	}
+	jtx.RequireTxFail(t, env.Submit(create), jtx.TemMALFORMED)
 }
 
 // TestVault_DepositNoEntry asserts a deposit to a missing vault is rejected.
@@ -254,9 +230,7 @@ func TestVault_DepositNoEntry(t *testing.T) {
 
 	missing := strings.Repeat("A", 64)
 	dep := vault.NewVaultDeposit(depositor.Address, missing, tx.NewXRPAmount(1_000_000))
-	if res := env.Submit(dep); res.Code != "tecNO_ENTRY" {
-		t.Fatalf("VaultDeposit (missing vault): got %s, want tecNO_ENTRY", res.Code)
-	}
+	jtx.RequireTxClaimed(t, env.Submit(dep), jtx.TecNO_ENTRY)
 }
 
 // TestVault_SetWrongOwner asserts only the owner may modify a vault.
@@ -269,17 +243,13 @@ func TestVault_SetWrongOwner(t *testing.T) {
 	createSeq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultCreate: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(create))
 	id := vaultID(owner, createSeq)
 
 	set := vault.NewVaultSet(other.Address, id)
 	data := "AABBCC"
 	set.Data = data
-	if res := env.Submit(set); res.Code != "tecNO_PERMISSION" {
-		t.Fatalf("VaultSet (wrong owner): got %s, want tecNO_PERMISSION", res.Code)
-	}
+	jtx.RequireTxClaimed(t, env.Submit(set), jtx.TecNO_PERMISSION)
 }
 
 // TestVault_DeleteWrongOwner asserts only the owner may delete a vault.
@@ -292,15 +262,11 @@ func TestVault_DeleteWrongOwner(t *testing.T) {
 	createSeq := env.Seq(owner)
 	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 	create.Common.Fee = createFee
-	if res := env.Submit(create); res.Code != "tesSUCCESS" {
-		t.Fatalf("VaultCreate: got %s, want tesSUCCESS", res.Code)
-	}
+	jtx.RequireTxSuccess(t, env.Submit(create))
 	id := vaultID(owner, createSeq)
 
 	del := vault.NewVaultDelete(other.Address, id)
-	if res := env.Submit(del); res.Code != "tecNO_PERMISSION" {
-		t.Fatalf("VaultDelete (wrong owner): got %s, want tecNO_PERMISSION", res.Code)
-	}
+	jtx.RequireTxClaimed(t, env.Submit(del), jtx.TecNO_PERMISSION)
 }
 
 // readShareReference returns the share issuance's ReferenceHolding for the vault
@@ -339,9 +305,7 @@ func TestVaultCreate_ReferenceHolding(t *testing.T) {
 		seq := env.Seq(owner)
 		create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: cur, Issuer: issuer.Address})
 		create.Common.Fee = createFee
-		if res := env.Submit(create); res.Code != "tesSUCCESS" {
-			t.Fatalf("VaultCreate(IOU): got %s", res.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(create))
 		id := vaultID(owner, seq)
 
 		rawID, _ := hex.DecodeString(id)
@@ -368,9 +332,7 @@ func TestVaultCreate_ReferenceHolding(t *testing.T) {
 		seq := env.Seq(owner)
 		create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
 		create.Common.Fee = createFee
-		if res := env.Submit(create); res.Code != "tesSUCCESS" {
-			t.Fatalf("VaultCreate(XRP): got %s", res.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(create))
 		if got := readShareReference(t, env, vaultID(owner, seq)); got != nil {
 			t.Fatalf("ReferenceHolding set for XRP vault: %s", *got)
 		}
@@ -388,9 +350,7 @@ func TestVaultCreate_ReferenceHolding(t *testing.T) {
 		seq := env.Seq(owner)
 		create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "USD", Issuer: issuer.Address})
 		create.Common.Fee = createFee
-		if res := env.Submit(create); res.Code != "tesSUCCESS" {
-			t.Fatalf("VaultCreate(IOU, pre-amendment): got %s", res.Code)
-		}
+		jtx.RequireTxSuccess(t, env.Submit(create))
 		if got := readShareReference(t, env, vaultID(owner, seq)); got != nil {
 			t.Fatalf("ReferenceHolding set pre-amendment: %s", *got)
 		}

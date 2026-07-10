@@ -19,15 +19,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// requireResult asserts the transaction result matches the expected code.
-// Handles both tem (malformed/rejected) and tec (claimed) result codes.
-func requireResult(t *testing.T, result jtx.TxResult, code string) {
-	t.Helper()
-	if result.Code != code {
-		t.Errorf("Expected result code %s, got %s: %s", code, result.Code, result.Message)
-	}
-}
-
 // usdPath returns a path through the USD order book (equivalent to rippled's path(~USD)).
 func usdPath(gw *jtx.Account) [][]payment.PathStep {
 	return [][]payment.PathStep{{{Currency: "USD", Issuer: gw.Address}}}
@@ -67,7 +58,7 @@ func TestPermissionedDEX_ZeroDomainID(t *testing.T) {
 			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(zeroDomain).Build(),
 		)
-		requireResult(t, result, "temMALFORMED")
+		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
 
 	// With the fix disabled the zero-DomainID preflight check is absent, so the
@@ -96,7 +87,7 @@ func TestPermissionedDEX_ZeroDomainID(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(zeroHex).Build(),
 		)
-		requireResult(t, result, "temMALFORMED")
+		jtx.RequireTxFail(t, result, "temMALFORMED")
 	})
 
 	t.Run("Payment_fixDisabled_passesPreflight", func(t *testing.T) {
@@ -148,7 +139,7 @@ func TestPermissionedDEX_CancelRegularOfferWithDomainCreate(t *testing.T) {
 			offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, regularSeq)
 			offerBuilder.RequireOfferInLedger(t, env, dex.Bob, domainSeq)
 		} else {
-			requireResult(t, res, "tecINVARIANT_FAILED")
+			jtx.RequireTxClaimed(t, res, "tecINVARIANT_FAILED")
 			offerBuilder.RequireOfferInLedger(t, env, dex.Bob, regularSeq)
 			offerBuilder.RequireNoOfferInLedger(t, env, dex.Bob, domainSeq)
 		}
@@ -171,7 +162,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(dex.DomainID).Build(),
 		)
-		requireResult(t, result, "temDISABLED")
+		jtx.RequireTxFail(t, result, "temDISABLED")
 		env.Close()
 
 		// Re-enable and it should work
@@ -206,7 +197,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(devin, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(dex.DomainID).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
 		// domainOwner issues credential for devin
@@ -219,7 +210,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(devin, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(dex.DomainID).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
 		// devin accepts credential
@@ -279,7 +270,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(devin, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(dex.DomainID).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 	})
 
@@ -295,7 +286,7 @@ func TestPermissionedDEX_OfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(badDomainID).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 	})
 
@@ -425,7 +416,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "temDISABLED")
+		jtx.RequireTxFail(t, result, "temDISABLED")
 		env.Close()
 
 		// Re-enable
@@ -462,7 +453,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(badDomain).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 	})
 
@@ -493,7 +484,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
 		// Issue credential for devin
@@ -508,7 +499,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
 		// devin accepts credential
@@ -554,7 +545,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
 		// Issue credential for devin
@@ -569,7 +560,7 @@ func TestPermissionedDEX_Payment(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecNO_PERMISSION")
+		jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
 		env.Close()
 
 		result = env.Submit(cred.CredentialAccept(devin, dex.DomainOwner, dex.CredType).Build())
@@ -654,7 +645,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 
 		// Create a domain offer
@@ -714,7 +705,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 				Paths(xrpUsdEurPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 
 		// bob creates regular USD/EUR offer - domain payment can't use it
@@ -732,7 +723,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 				Paths(xrpUsdEurPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 
 		// bob creates domain USD/EUR offer
@@ -829,7 +820,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 
 		// bob creates offer in the correct domain
@@ -915,7 +906,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 		// Offer still exists (just unfunded, not removed)
 		offerBuilder.RequireOfferInLedger(t, env, devin, devinSeq)
@@ -960,7 +951,7 @@ func TestPermissionedDEX_BookStep(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 		offerBuilder.RequireOfferInLedger(t, env, dex.Bob, bobSeq)
 	})
@@ -1055,7 +1046,7 @@ func TestPermissionedDEX_Rippling(t *testing.T) {
 			Paths([][]payment.PathStep{{{Account: dex.Bob.Address}}}).
 			DomainID(dex.DomainIDHex).Build(),
 	)
-	requireResult(t, result, "tecPATH_DRY")
+	jtx.RequireTxClaimed(t, result, "tecPATH_DRY")
 	env.Close()
 }
 
@@ -1186,7 +1177,7 @@ func TestPermissionedDEX_AmmNotUsed(t *testing.T) {
 			Paths(usdPath(dex.GW)).
 			DomainID(dex.DomainIDHex).Build(),
 	)
-	requireResult(t, result, "tecPATH_PARTIAL")
+	jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 	env.Close()
 
 	// a non domain payment can use AMM
@@ -1265,7 +1256,7 @@ func TestPermissionedDEX_HybridOfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				DomainID(dex.DomainID).Hybrid().Build(),
 		)
-		requireResult(t, result, "temDISABLED")
+		jtx.RequireTxFail(t, result, "temDISABLED")
 		env.Close()
 
 		// tfHybrid without domain → temINVALID_FLAG (even without amendment)
@@ -1273,7 +1264,7 @@ func TestPermissionedDEX_HybridOfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				Hybrid().Build(),
 		)
-		requireResult(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 		env.Close()
 
 		// Enable PermissionedDEX
@@ -1285,7 +1276,7 @@ func TestPermissionedDEX_HybridOfferCreate(t *testing.T) {
 			offerBuilder.OfferCreate(dex.Bob, jtx.XRPTxAmount(10_000_000), dex.USD(10)).
 				Hybrid().Build(),
 		)
-		requireResult(t, result, "temINVALID_FLAG")
+		jtx.RequireTxFail(t, result, "temINVALID_FLAG")
 		env.Close()
 
 		// tfHybrid with domain succeeds
@@ -1498,7 +1489,7 @@ func TestPermissionedDEX_HybridBookStep(t *testing.T) {
 				Paths(usdPath(dex.GW)).
 				DomainID(badDomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_DRY")
+		jtx.RequireTxClaimed(t, result, "tecPATH_DRY")
 		env.Close()
 		offerBuilder.RequireOfferInLedger(t, env, dex.Bob, hybridSeq)
 
@@ -1556,7 +1547,7 @@ func TestPermissionedDEX_HybridBookStep(t *testing.T) {
 				Paths(xrpUsdEurPath(dex.GW)).
 				DomainID(dex.DomainIDHex).Build(),
 		)
-		requireResult(t, result, "tecPATH_PARTIAL")
+		jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 		env.Close()
 
 		// bob creates hybrid USD/EUR offer
@@ -1658,7 +1649,7 @@ func TestPermissionedDEX_HybridInvalidOffer(t *testing.T) {
 			Paths(usdPath(dex.GW)).
 			DomainID(dex.DomainIDHex).Build(),
 	)
-	requireResult(t, result, "tecPATH_PARTIAL")
+	jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 	env.Close()
 	offerBuilder.RequireOfferInLedger(t, env, dex.Bob, hybridSeq)
 
@@ -1669,7 +1660,7 @@ func TestPermissionedDEX_HybridInvalidOffer(t *testing.T) {
 			SendMax(jtx.XRPTxAmount(5_000_000)).
 			Paths(usdPath(dex.GW)).Build(),
 	)
-	requireResult(t, result, "tecPATH_PARTIAL")
+	jtx.RequireTxClaimed(t, result, "tecPATH_PARTIAL")
 	env.Close()
 	offerBuilder.RequireOfferInLedger(t, env, dex.Bob, hybridSeq)
 

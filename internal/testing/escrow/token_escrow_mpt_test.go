@@ -54,7 +54,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TemBAD_AMOUNT)
 		env.Close()
@@ -64,7 +64,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 			escrow.EscrowFinish(bob, alice, seq1).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_TARGET)
 		env.Close()
@@ -77,7 +77,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 				Condition(escrow.TestCondition2).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TemBAD_AMOUNT)
 		env.Close()
@@ -119,7 +119,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -128,7 +128,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 			escrow.EscrowFinish(bob, alice, seq1).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -141,7 +141,7 @@ func TestMPTEscrow_Enablement(t *testing.T) {
 				Condition(escrow.TestCondition2).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -185,7 +185,7 @@ func TestMPTEscrow_CreatePreflight(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TemDISABLED)
 		env.Close()
@@ -221,7 +221,7 @@ func TestMPTEscrow_CreatePreflight(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TemBAD_AMOUNT)
 		env.Close()
@@ -263,7 +263,7 @@ func TestMPTEscrow_CanEscrowFlag(t *testing.T) {
 			MPTAmount(amt).
 			Condition(escrow.TestCondition1).
 			FinishTime(env.Now().Add(1 * time.Second)).
-			Fee(baseFee * 150).
+			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxFail(t, result, jtx.TecNO_PERMISSION)
 	env.Close()
@@ -302,7 +302,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
@@ -331,7 +331,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecOBJECT_NOT_FOUND)
 		env.Close()
@@ -364,7 +364,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecOBJECT_NOT_FOUND)
 		env.Close()
@@ -407,7 +407,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
@@ -452,7 +452,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
@@ -491,7 +491,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecLOCKED)
 		env.Close()
@@ -530,7 +530,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecLOCKED)
 		env.Close()
@@ -567,7 +567,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
@@ -603,7 +603,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecINSUFFICIENT_FUNDS)
 		env.Close()
@@ -640,7 +640,7 @@ func TestMPTEscrow_CreatePreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecINSUFFICIENT_FUNDS)
 		env.Close()
@@ -684,7 +684,7 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -693,7 +693,7 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 			escrow.EscrowFinish(bob, alice, seq1).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -732,7 +732,7 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -742,7 +742,7 @@ func TestMPTEscrow_FinishDoApply(t *testing.T) {
 			escrow.EscrowFinish(carol, alice, seq1).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_PERMISSION)
 		env.Close()
@@ -784,7 +784,7 @@ func TestMPTEscrow_FinishBasic(t *testing.T) {
 			MPTAmount(amt).
 			Condition(escrow.TestCondition1).
 			FinishTime(env.Now().Add(1 * time.Second)).
-			Fee(baseFee * 150).
+			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -794,7 +794,7 @@ func TestMPTEscrow_FinishBasic(t *testing.T) {
 		escrow.EscrowFinish(bob, alice, seq1).
 			Condition(escrow.TestCondition1).
 			Fulfillment(escrow.TestFulfillment1).
-			Fee(baseFee * 150).
+			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -840,7 +840,7 @@ func TestMPTEscrow_CancelBasic(t *testing.T) {
 			Condition(escrow.TestCondition2).
 			FinishTime(env.Now().Add(1 * time.Second)).
 			CancelTime(env.Now().Add(2 * time.Second)).
-			Fee(baseFee * 150).
+			Fee(env.BaseFee() * 150).
 			Build())
 	jtx.RequireTxSuccess(t, result)
 	env.Close()
@@ -889,7 +889,7 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -898,7 +898,7 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 			escrow.EscrowFinish(alice, alice, seq).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -933,7 +933,7 @@ func TestMPTEscrow_SelfEscrow(t *testing.T) {
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -984,7 +984,7 @@ func TestMPTEscrow_FinishPreclaim(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1000,7 +1000,7 @@ func TestMPTEscrow_FinishPreclaim(t *testing.T) {
 			escrow.EscrowFinish(bob, alice, seq1).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxFail(t, result, jtx.TecNO_AUTH)
 		env.Close()
@@ -1046,7 +1046,7 @@ func TestMPTEscrow_CancelPreclaim(t *testing.T) {
 				MPTAmount(amt).
 				CancelTime(env.Now().Add(2 * time.Second)).
 				Condition(escrow.TestCondition1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1119,7 +1119,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 						MPTAmount(amt).
 						Condition(escrow.TestCondition1).
 						FinishTime(env.Now().Add(1 * time.Second)).
-						Fee(baseFee * 150).
+						Fee(env.BaseFee() * 150).
 						Build())
 				jtx.RequireTxSuccess(t, result)
 				env.Close()
@@ -1134,7 +1134,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 					escrow.EscrowFinish(bob, alice, seq1).
 						Condition(escrow.TestCondition1).
 						Fulfillment(escrow.TestFulfillment1).
-						Fee(baseFee * 150).
+						Fee(env.BaseFee() * 150).
 						Build())
 				jtx.RequireTxSuccess(t, result)
 				env.Close()
@@ -1176,7 +1176,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
 				CancelTime(env.Now().Add(2 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1211,7 +1211,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 				MPTAmount(amt).
 				Condition(escrow.TestCondition1).
 				FinishTime(env.Now().Add(1 * time.Second)).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
@@ -1224,7 +1224,7 @@ func TestMPTEscrow_LockedRate(t *testing.T) {
 			escrow.EscrowFinish(gw, alice, seq1).
 				Condition(escrow.TestCondition1).
 				Fulfillment(escrow.TestFulfillment1).
-				Fee(baseFee * 150).
+				Fee(env.BaseFee() * 150).
 				Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
