@@ -30,20 +30,17 @@ func (a *AMMDelete) TxType() tx.Type {
 	return tx.TypeAMMDelete
 }
 
-// Reference: rippled AMMDelete.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. AMMDelete defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (a *AMMDelete) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMDeleteMask
+}
+
+// Reference: rippled AMMDelete.cpp preflight. rippled validates nothing else
+// here; a missing/invalid asset pair surfaces as terNO_AMM when the AMM lookup
+// fails in preclaim.
 func (a *AMMDelete) Validate() error {
-	if err := a.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Reference: rippled AMMDelete.cpp preflight lines 39-43. rippled validates
-	// nothing else here; a missing/invalid asset pair surfaces as terNO_AMM when
-	// the AMM lookup fails in preclaim.
-	if a.GetFlags()&tfAMMDeleteMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMDelete")
-	}
-
-	return nil
+	return a.BaseTx.Validate()
 }
 
 func (a *AMMDelete) Flatten() (map[string]any, error) {

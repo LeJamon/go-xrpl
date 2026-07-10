@@ -35,15 +35,17 @@ func (m *MPTokenIssuanceDestroy) TxType() tx.Type {
 	return tx.TypeMPTokenIssuanceDestroy
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam. MPTokenIssuanceDestroy
+// defines no type-specific flags, so it uses the base universal mask, checked at
+// preflight0.
+func (m *MPTokenIssuanceDestroy) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return ^tfMPTokenIssuanceDestroyValidMask
+}
+
 // Reference: rippled MPTokenIssuanceDestroy.cpp preflight
 func (m *MPTokenIssuanceDestroy) Validate() error {
 	if err := m.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	flags := m.GetFlags()
-	if flags&^tfMPTokenIssuanceDestroyValidMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceDestroy")
 	}
 
 	// MPTokenIssuanceID is required and must be valid hex

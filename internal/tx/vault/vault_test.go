@@ -205,17 +205,6 @@ func TestVaultCreateValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "MPTokenMetadata exceeds",
 		},
-		{
-			name: "invalid - invalid flags",
-			tx: func() *VaultCreate {
-				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				flags := uint32(0xFFFF0000) // Invalid flags
-				v.Common.Flags = &flags
-				return v
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
-		},
 	}
 
 	for _, tt := range tests {
@@ -323,18 +312,6 @@ func TestVaultSetValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "nothing to update",
 		},
-		{
-			name: "invalid - universal flags set",
-			tx: func() *VaultSet {
-				v := NewVaultSet("rOwner", makeValidVaultID())
-				v.Data = hexBytes(4)
-				flags := tx.TfUniversalMask
-				v.Common.Flags = &flags
-				return v
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
-		},
 	}
 
 	for _, tt := range tests {
@@ -391,17 +368,6 @@ func TestVaultDeleteValidation(t *testing.T) {
 			tx:      NewVaultDelete("rOwner", "ABCD"),
 			wantErr: true,
 			errMsg:  "hash",
-		},
-		{
-			name: "invalid - universal flags set",
-			tx: func() *VaultDelete {
-				v := NewVaultDelete("rOwner", makeValidVaultID())
-				flags := tx.TfUniversalMask
-				v.Common.Flags = &flags
-				return v
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
 		},
 	}
 
@@ -479,17 +445,6 @@ func TestVaultDepositValidation(t *testing.T) {
 			tx:      NewVaultDeposit("rOwner", makeValidVaultID(), tx.NewXRPAmount(-100)),
 			wantErr: true,
 			errMsg:  "Amount must be positive",
-		},
-		{
-			name: "invalid - universal flags set",
-			tx: func() *VaultDeposit {
-				v := NewVaultDeposit("rOwner", makeValidVaultID(), tx.NewXRPAmount(1000000))
-				flags := tx.TfUniversalMask
-				v.Common.Flags = &flags
-				return v
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
 		},
 	}
 
@@ -598,17 +553,6 @@ func TestVaultWithdrawValidation(t *testing.T) {
 			}(),
 			wantErr: true,
 			errMsg:  "DestinationTag without Destination",
-		},
-		{
-			name: "invalid - universal flags set",
-			tx: func() *VaultWithdraw {
-				v := NewVaultWithdraw("rOwner", makeValidVaultID(), tx.NewXRPAmount(1000000))
-				flags := tx.TfUniversalMask
-				v.Common.Flags = &flags
-				return v
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
 		},
 	}
 
@@ -727,17 +671,6 @@ func TestVaultClawbackValidation(t *testing.T) {
 				return v
 			}(),
 			wantErr: false,
-		},
-		{
-			name: "invalid - universal flags set",
-			tx: func() *VaultClawback {
-				v := NewVaultClawback("rIssuer", makeValidVaultID(), "rHolder")
-				flags := tx.TfUniversalMask
-				v.Common.Flags = &flags
-				return v
-			}(),
-			wantErr: true,
-			errMsg:  "invalid flags",
 		},
 	}
 

@@ -52,13 +52,15 @@ func (v *VaultCreate) TxType() tx.Type {
 }
 
 // Reference: rippled VaultCreate.cpp preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam with the VaultCreate-specific
+// invalid-flags mask (rippled VaultCreate::getFlagsMask = tfVaultCreateMask),
+// checked at preflight0.
+func (v *VaultCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfVaultCreateMask
+}
+
 func (v *VaultCreate) Validate() error {
 	if err := v.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Check for invalid flags
-	if err := tx.CheckFlags(v.GetFlags(), tfVaultCreateMask); err != nil {
 		return err
 	}
 

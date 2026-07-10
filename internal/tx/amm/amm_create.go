@@ -49,13 +49,15 @@ func (a *AMMCreate) GetAmount2Asset() tx.Asset {
 }
 
 // Reference: rippled AMMCreate.cpp preflight
+// GetFlagsMask adopts the engine FlagsMasker seam. AMMCreate defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (a *AMMCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tfAMMCreateMask
+}
+
 func (a *AMMCreate) Validate() error {
 	if err := a.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	if a.GetFlags()&tfAMMCreateMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMCreate")
 	}
 
 	// Reference: rippled AMMCreate.cpp line 52-57

@@ -40,11 +40,14 @@ func (v *VaultClawback) TxType() tx.Type {
 }
 
 // Validate runs the stateless checks. Reference: rippled VaultClawback::preflight.
+// GetFlagsMask adopts the engine FlagsMasker seam. VaultClawback defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (v *VaultClawback) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (v *VaultClawback) Validate() error {
 	if err := v.BaseTx.Validate(); err != nil {
-		return err
-	}
-	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 

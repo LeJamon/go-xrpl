@@ -36,16 +36,17 @@ func (m *MPTokenAuthorize) TxType() tx.Type {
 	return tx.TypeMPTokenAuthorize
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the MPTokenAuthorize
+// invalid-flags mask (rippled MPTokenAuthorize::getFlagsMask =
+// tfMPTokenAuthorizeMask), checked at preflight0.
+func (m *MPTokenAuthorize) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return ^tfMPTokenAuthorizeValidMask
+}
+
 // Reference: rippled MPTokenAuthorize.cpp preflight
 func (m *MPTokenAuthorize) Validate() error {
 	if err := m.BaseTx.Validate(); err != nil {
 		return err
-	}
-
-	flags := m.GetFlags()
-
-	if flags&^tfMPTokenAuthorizeValidMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenAuthorize")
 	}
 
 	// MPTokenIssuanceID is required

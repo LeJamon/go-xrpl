@@ -100,6 +100,14 @@ func (m *MPTokenIssuanceCreate) TxType() tx.Type {
 	return tx.TypeMPTokenIssuanceCreate
 }
 
+// GetFlagsMask adopts the engine FlagsMasker seam with the MPTokenIssuanceCreate
+// invalid-flags mask (rippled MPTokenIssuanceCreate::getFlagsMask =
+// tfMPTokenIssuanceCreateMask), checked at preflight0. The mask covers only
+// sfFlags; the sfMutableFlags shape check stays in Validate.
+func (m *MPTokenIssuanceCreate) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return ^tfMPTokenIssuanceCreateValidMask
+}
+
 // Reference: rippled MPTokenIssuanceCreate.cpp preflight
 func (m *MPTokenIssuanceCreate) Validate() error {
 	if err := m.BaseTx.Validate(); err != nil {
@@ -107,9 +115,6 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 	}
 
 	flags := m.GetFlags()
-	if flags&^tfMPTokenIssuanceCreateValidMask != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceCreate")
-	}
 
 	// If MutableFlags is present it must name at least one valid mutable
 	// capability. Reachable only once DynamicMPT is enabled — RequiredAmendments

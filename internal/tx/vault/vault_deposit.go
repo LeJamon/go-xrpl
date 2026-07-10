@@ -36,13 +36,14 @@ func (v *VaultDeposit) TxType() tx.Type {
 }
 
 // Reference: rippled VaultDeposit.cpp preflight()
+// GetFlagsMask adopts the engine FlagsMasker seam. VaultDeposit defines no
+// type-specific flags, so it uses the base universal mask, checked at preflight0.
+func (v *VaultDeposit) GetFlagsMask(rules *amendment.Rules) uint32 {
+	return tx.TfUniversalMask
+}
+
 func (v *VaultDeposit) Validate() error {
 	if err := v.BaseTx.Validate(); err != nil {
-		return err
-	}
-
-	// Check for invalid flags (universal mask)
-	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
