@@ -120,6 +120,37 @@ func (c *CredentialDelete) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled Credentials.cpp CredentialDelete::doApply()
+// Preclaim verifies the target credential exists (tecNO_ENTRY), matching rippled
+// CredentialDelete::preclaim. Subject and Issuer both default to Account. The
+// subject/issuer/expired permission gate (tecNO_PERMISSION) stays in Apply,
+// mirroring rippled CredentialDelete::doApply.
+func (c *CredentialDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	credTypeBytes, err := hex.DecodeString(c.CredentialType)
+	if err != nil {
+		return ter.TemINVALID
+	}
+	accountID, err := state.DecodeAccountID(c.Account)
+	if err != nil {
+		return ter.TemBAD_SRC_ACCOUNT
+	}
+	subjectID := accountID
+	if c.Subject != "" {
+		if subjectID, err = state.DecodeAccountID(c.Subject); err != nil {
+			return ter.TecNO_TARGET
+		}
+	}
+	issuerID := accountID
+	if c.Issuer != "" {
+		if issuerID, err = state.DecodeAccountID(c.Issuer); err != nil {
+			return ter.TecNO_TARGET
+		}
+	}
+	if exists, _ := view.Exists(keylet.Credential(subjectID, issuerID, credTypeBytes)); !exists {
+		return ter.TecNO_ENTRY
+	}
+	return ter.TesSUCCESS
+}
+
 func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("credential delete apply",
 		"account", c.Account,
