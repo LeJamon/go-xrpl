@@ -27,6 +27,16 @@ func TestRedactDSN(t *testing.T) {
 			want: "postgres://dbhost/xrpl?password=xxxxx&sslmode=require",
 		},
 		{
+			name: "url userinfo with malformed path escape",
+			dsn:  "postgres://xrpl:s3cr3t@dbhost/%ZZ",
+			want: "xxxxx",
+		},
+		{
+			name: "url password query parameter with malformed escape",
+			dsn:  "postgres://dbhost/xrpl?password=s3cr3t%ZZ&sslmode=require",
+			want: "xxxxx",
+		},
+		{
 			name: "key/value password",
 			dsn:  "host=dbhost user=xrpl password=s3cr3t dbname=xrpl",
 			want: "host=dbhost user=xrpl password=xxxxx dbname=xrpl",
@@ -35,6 +45,36 @@ func TestRedactDSN(t *testing.T) {
 			name: "key/value quoted password",
 			dsn:  "host=dbhost password='se cr et' dbname=xrpl",
 			want: "host=dbhost password=xxxxx dbname=xrpl",
+		},
+		{
+			name: "key/value password with ampersand",
+			dsn:  "host=dbhost password=abc&def dbname=xrpl",
+			want: "host=dbhost password=xxxxx dbname=xrpl",
+		},
+		{
+			name: "key/value password with escaped spaces",
+			dsn:  `host=dbhost password=se\ cr\ et dbname=xrpl`,
+			want: "host=dbhost password=xxxxx dbname=xrpl",
+		},
+		{
+			name: "key/value quoted password with escaped quote",
+			dsn:  `host=dbhost password='it\'s secret' dbname=xrpl`,
+			want: "host=dbhost password=xxxxx dbname=xrpl",
+		},
+		{
+			name: "key/value unterminated quoted password",
+			dsn:  "host=dbhost password='se cr et",
+			want: "host=dbhost password=xxxxx",
+		},
+		{
+			name: "key/value unicode whitespace",
+			dsn:  "host=dbhost password\u00a0=\u00a0s3cr3t dbname=xrpl",
+			want: "host=dbhost password\u00a0=\u00a0xxxxx dbname=xrpl",
+		},
+		{
+			name: "password text in another value unchanged",
+			dsn:  "user=password=s3cr3t host=dbhost",
+			want: "user=password=s3cr3t host=dbhost",
 		},
 		{
 			name: "sqlite dsn unchanged",
