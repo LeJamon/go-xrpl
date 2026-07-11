@@ -188,7 +188,6 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 
 	// Check if there are more results
 	if len(transactions) > int(options.Limit) {
-		// Remove the extra transaction and set marker
 		transactions = transactions[:options.Limit]
 		if len(transactions) > 0 {
 			lastTx := transactions[len(transactions)-1]
