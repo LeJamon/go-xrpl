@@ -62,9 +62,6 @@ func TestRefreshRemoteFee_MedianOverTrustedValidations(t *testing.T) {
 	}
 }
 
-// TestRefreshRemoteFee_ExcludesPartialValidations pins the
-// Validations::fees() Full-only filter: trusted PARTIAL validations must
-// not leak into the median even though GetTrustedValidations returns them.
 func TestRefreshRemoteFee_ExcludesPartialValidations(t *testing.T) {
 	a := newTestAdaptor(t)
 	ft := a.ledgerService.FeeTrack()
@@ -105,9 +102,6 @@ func TestRefreshRemoteFee_NoHistorian(t *testing.T) {
 	}
 }
 
-// TestRefreshRemoteFee_EmptyValidations resets the remote fee to LoadBase
-// through the normal validated-ledger promotion path when neither ledger has a
-// fee sample.
 func TestRefreshRemoteFee_EmptyValidations(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService
@@ -139,7 +133,6 @@ func TestRefreshRemoteFee_FoldsParentLedgerValidations(t *testing.T) {
 	svc := a.ledgerService
 	ft := svc.FeeTrack()
 
-	// A real ledger so refreshRemoteFee can resolve its parent hash.
 	l := svc.GetClosedLedger()
 	if l == nil {
 		t.Fatal("closed ledger must exist in the test service")

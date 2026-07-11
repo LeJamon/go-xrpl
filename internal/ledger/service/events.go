@@ -109,7 +109,6 @@ func (s *Service) validatedLedgerSeqLocked() uint32 {
 	return s.validatedLedger.Sequence()
 }
 
-// validatedLedgerNotificationLocked captures an advancement notification.
 // Caller must hold s.mu for writing and invoke notify only after unlocking.
 func (s *Service) validatedLedgerNotificationLocked(previousSeq uint32) validatedLedgerNotification {
 	if s.onValidatedLedger == nil || s.validatedLedger == nil || s.validatedLedger.Sequence() <= previousSeq {

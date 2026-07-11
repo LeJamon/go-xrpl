@@ -1817,7 +1817,6 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 	)
 }
 
-// refreshRemoteFee updates the remote fee for a newly promoted validated tip.
 func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.LedgerID) {
 	if a.ledgerService == nil {
 		return
