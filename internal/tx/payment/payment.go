@@ -132,10 +132,10 @@ func (p *Payment) RequiredAmendments() [][32]byte {
 }
 
 // GetFlagsMask returns the invalid-flags mask enforced by the engine at the
-// preflight0 position, mirroring rippled Payment::getFlagsMask: an MPT-denominated
-// Amount uses tfMPTPaymentMask, everything else tfPaymentMask.
-func (p *Payment) GetFlagsMask(*amendment.Rules) uint32 {
-	if p.isMPTDirect() {
+// preflight0 position. An MPT-denominated Amount uses the restricted MPTokensV1
+// mask until MPTokensV2 enables the regular payment flag surface.
+func (p *Payment) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if p.isMPTDirect() && !rules.MPTokensV2Enabled() {
 		return tfMPTPaymentMask
 	}
 	return tfPaymentMask

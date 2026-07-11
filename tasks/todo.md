@@ -70,3 +70,21 @@ rewind) fixed; 2 refuted-but-real hardenings applied; iter27-trap concern
 resolved by validations-first precedence.
 Remaining known gap: 15k sustained smoothness is paced by build latency on
 single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
+
+# Issue #1280 — FlagsMasker completion audit
+
+- [x] Inventory all 75 registered transaction types
+- [x] Compare all 23 rippled 3.2.0 `getFlagsMask` overrides and the base mask
+- [x] Check for invalid-bit masks left solely in `Validate`
+- [x] Fix the residual MPTokensV2-dependent Payment mask
+- [x] Pin exact masks and bad-fee precedence
+- [x] Run transaction tests, vet, and build
+
+## Review
+
+PR #1298 covered its advertised sweep, but the earlier Payment adoption still
+used the MPTokensV1 mask after MPTokensV2 activation. `Payment.GetFlagsMask` is
+now rule-aware, matching rippled 3.2.0: MPTokensV1 rejects `tfLimitQuality` at
+preflight0, while MPTokensV2 permits it so a malformed fee returns `temBAD_FEE`.
+No second mask or validation-stage gap was found. `just test-tx`, `just vet`,
+and `just build` pass.

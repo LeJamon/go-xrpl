@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -382,6 +383,28 @@ func TestPaymentFlags(t *testing.T) {
 			t.Error("tfPartialPayment flag should be set when using DeliverMin")
 		}
 	})
+}
+
+func TestPaymentGetFlagsMaskMPTokensV2(t *testing.T) {
+	amount := state.NewMPTAmountWithIssuanceID(
+		100,
+		"r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59",
+		"000000000000000000000000000000000000000000000001",
+	)
+	payment := NewPayment("rAlice", "rBob", amount)
+
+	v1Rules := amendment.NewRules([][32]byte{amendment.FeatureMPTokensV1})
+	if got := payment.GetFlagsMask(v1Rules); got != tfMPTPaymentMask {
+		t.Fatalf("MPTokensV1 mask = 0x%08X, want 0x%08X", got, tfMPTPaymentMask)
+	}
+
+	v2Rules := amendment.NewRules([][32]byte{
+		amendment.FeatureMPTokensV1,
+		amendment.FeatureMPTokensV2,
+	})
+	if got := payment.GetFlagsMask(v2Rules); got != tfPaymentMask {
+		t.Fatalf("MPTokensV2 mask = 0x%08X, want 0x%08X", got, tfPaymentMask)
+	}
 }
 
 // TestPaymentSendMax tests SendMax field validation.
