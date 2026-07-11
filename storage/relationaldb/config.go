@@ -3,7 +3,10 @@ package relationaldb
 import (
 	"fmt"
 	"net/url"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Config contains database configuration settings
@@ -230,12 +233,145 @@ func (c *Config) WithConnectionString(connStr string) *Config {
 
 // String returns a string representation of the config (with password redacted)
 func (c *Config) String() string {
-	clone := c.Clone()
-	if clone.Password != "" {
-		clone.Password = "***"
+	connStr, _ := c.BuildConnectionString()
+	return fmt.Sprintf("Config{Driver: %s, Host: %s, Port: %d, Database: %s, Connection: %s}",
+		c.Driver, c.Host, c.Port, c.Database, redactDSN(connStr))
+}
+
+// redactedPassword matches the placeholder net/url's URL.Redacted() uses; it
+// survives URL re-encoding unescaped.
+const redactedPassword = "xxxxx"
+
+func redactDSN(dsn string) string {
+	if strings.Contains(dsn, "://") {
+		return redactURLDSN(dsn)
+	}
+	return redactKeywordDSN(dsn)
+}
+
+func redactURLDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil || !u.IsAbs() {
+		return redactedPassword
 	}
 
-	connStr, _ := clone.BuildConnectionString()
-	return fmt.Sprintf("Config{Driver: %s, Host: %s, Port: %d, Database: %s, Connection: %s}",
-		clone.Driver, clone.Host, clone.Port, clone.Database, connStr)
+	redacted := false
+	if _, ok := u.User.Password(); ok {
+		u.User = url.UserPassword(u.User.Username(), redactedPassword)
+		redacted = true
+	}
+
+	if u.RawQuery != "" {
+		query, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return redactedPassword
+		}
+		queryRedacted := false
+		for key := range query {
+			if strings.EqualFold(key, "password") {
+				query.Set(key, redactedPassword)
+				queryRedacted = true
+			}
+		}
+		if queryRedacted {
+			u.RawQuery = query.Encode()
+			redacted = true
+		}
+	}
+
+	if redacted {
+		return u.String()
+	}
+	return dsn
+}
+
+func redactKeywordDSN(dsn string) string {
+	var result strings.Builder
+	last := 0
+	redacted := false
+	for pos := 0; pos < len(dsn); {
+		pos = skipDSNSpace(dsn, pos)
+		keyStart := pos
+		for pos < len(dsn) {
+			r, size := utf8.DecodeRuneInString(dsn[pos:])
+			if unicode.IsSpace(r) || r == '=' {
+				break
+			}
+			pos += size
+		}
+		keyEnd := pos
+		pos = skipDSNSpace(dsn, pos)
+		if pos >= len(dsn) {
+			break
+		}
+		if dsn[pos] != '=' {
+			continue
+		}
+		pos++
+		pos = skipDSNSpace(dsn, pos)
+		valueStart := pos
+		pos = scanDSNValue(dsn, pos)
+		if strings.EqualFold(dsn[keyStart:keyEnd], "password") {
+			if !redacted {
+				result.Grow(len(dsn))
+			}
+			result.WriteString(dsn[last:valueStart])
+			result.WriteString(redactedPassword)
+			last = pos
+			redacted = true
+		}
+	}
+
+	if !redacted {
+		return dsn
+	}
+	result.WriteString(dsn[last:])
+	return result.String()
+}
+
+func skipDSNSpace(dsn string, pos int) int {
+	for pos < len(dsn) {
+		r, size := utf8.DecodeRuneInString(dsn[pos:])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		pos += size
+	}
+	return pos
+}
+
+func scanDSNValue(dsn string, pos int) int {
+	if pos >= len(dsn) {
+		return pos
+	}
+
+	if dsn[pos] == '\'' {
+		pos++
+		for pos < len(dsn) {
+			r, size := utf8.DecodeRuneInString(dsn[pos:])
+			pos += size
+			if r == '\\' && pos < len(dsn) {
+				_, size = utf8.DecodeRuneInString(dsn[pos:])
+				pos += size
+				continue
+			}
+			if r == '\'' {
+				break
+			}
+		}
+		return pos
+	}
+
+	for pos < len(dsn) {
+		r, size := utf8.DecodeRuneInString(dsn[pos:])
+		if unicode.IsSpace(r) {
+			break
+		}
+		pos += size
+		if r == '\\' && pos < len(dsn) {
+			_, size = utf8.DecodeRuneInString(dsn[pos:])
+			pos += size
+		}
+	}
+	return pos
 }
