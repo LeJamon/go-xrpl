@@ -242,9 +242,6 @@ func (c *Config) String() string {
 // survives URL re-encoding unescaped.
 const redactedPassword = "xxxxx"
 
-// redactDSN masks any password embedded in a connection string: URL userinfo
-// (postgres://user:pass@host), a password query parameter, or key/value form
-// (password=...).
 func redactDSN(dsn string) string {
 	if strings.Contains(dsn, "://") {
 		return redactURLDSN(dsn)
