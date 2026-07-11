@@ -172,29 +172,47 @@ type LedgerNode struct {
 
 // GetLedger requests ledger data.
 type GetLedger struct {
-	InfoType      LedgerInfoType   `json:"itype"`
-	LType         LedgerType       `json:"ltype,omitempty"`
-	LedgerHash    []byte           `json:"ledger_hash,omitempty"`
-	LedgerSeq     uint32           `json:"ledger_seq,omitempty"`
-	NodeIDs       [][]byte         `json:"node_ids,omitempty"`
-	RequestCookie uint64           `json:"request_cookie,omitempty"`
-	QueryType     *LedgerQueryType `json:"query_type,omitempty"`
-	QueryDepth    uint32           `json:"query_depth,omitempty"`
+	InfoType         LedgerInfoType   `json:"itype"`
+	LType            LedgerType       `json:"ltype,omitempty"`
+	LedgerHash       []byte           `json:"ledger_hash,omitempty"`
+	LedgerSeq        uint32           `json:"ledger_seq,omitempty"`
+	LedgerSeqSet     bool             `json:"-"`
+	NodeIDs          [][]byte         `json:"node_ids,omitempty"`
+	RequestCookie    uint64           `json:"request_cookie,omitempty"`
+	RequestCookieSet bool             `json:"-"`
+	QueryType        *LedgerQueryType `json:"query_type,omitempty"`
+	QueryDepth       uint32           `json:"query_depth,omitempty"`
 }
 
 func (g *GetLedger) Type() MessageType { return TypeGetLedger }
 
+// HasLedgerSeq reports protobuf field presence, including an explicit zero.
+func (g *GetLedger) HasLedgerSeq() bool {
+	return g != nil && (g.LedgerSeqSet || g.LedgerSeq != 0)
+}
+
+// HasRequestCookie reports protobuf field presence, including an explicit zero.
+func (g *GetLedger) HasRequestCookie() bool {
+	return g != nil && (g.RequestCookieSet || g.RequestCookie != 0)
+}
+
 // LedgerData contains ledger data response.
 type LedgerData struct {
-	LedgerHash    []byte         `json:"ledger_hash"`
-	LedgerSeq     uint32         `json:"ledger_seq"`
-	InfoType      LedgerInfoType `json:"type"`
-	Nodes         []LedgerNode   `json:"nodes,omitempty"`
-	RequestCookie uint32         `json:"request_cookie,omitempty"`
-	Error         ReplyError     `json:"error,omitempty"`
+	LedgerHash       []byte         `json:"ledger_hash"`
+	LedgerSeq        uint32         `json:"ledger_seq"`
+	InfoType         LedgerInfoType `json:"type"`
+	Nodes            []LedgerNode   `json:"nodes,omitempty"`
+	RequestCookie    uint32         `json:"request_cookie,omitempty"`
+	RequestCookieSet bool           `json:"-"`
+	Error            ReplyError     `json:"error,omitempty"`
 }
 
 func (l *LedgerData) Type() MessageType { return TypeLedgerData }
+
+// HasRequestCookie reports protobuf field presence, including an explicit zero.
+func (l *LedgerData) HasRequestCookie() bool {
+	return l != nil && (l.RequestCookieSet || l.RequestCookie != 0)
+}
 
 // Ping represents a ping/pong message for keepalive and latency measurement.
 type Ping struct {

@@ -77,6 +77,13 @@ func init() {
 	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
 }
 
+func effectivePeerFetchDepth(fetchDepth uint32, onlineDelete int) uint32 {
+	if onlineDelete > 0 && uint64(onlineDelete) < uint64(fetchDepth) {
+		return uint32(onlineDelete)
+	}
+	return fetchDepth
+}
+
 func runServer(cmd *cobra.Command, args []string) error {
 	if _, err := requireConfig(); err != nil {
 		// Fold the guidance into the error so Execute() prints it once. A bare
@@ -217,6 +224,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:     standalone,
+		FetchDepth:     effectivePeerFetchDepth(globalConfig.GetFetchDepthUint32(), globalConfig.NodeDB.OnlineDelete),
 		NetworkID:      uint32(networkID),
 		NodeStore:      db,
 		RelationalDB:   repoManager,

@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -449,5 +450,43 @@ func TestValidationTracker_ProposersFinishedIncludesNegUNL(t *testing.T) {
 	prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
 	if got := vt.ProposersFinished(prev); got != 2 {
 		t.Errorf("ProposersFinished must include negUNL validators: got %d, want 2", got)
+	}
+}
+
+// TestValidationTracker_GetJsonTrie verifies the debug introspection dump:
+// nil while the trie is disabled, and a marshalable support snapshot once an
+// ancestry provider is wired and a trusted validation is inserted.
+func TestValidationTracker_GetJsonTrie(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+
+	if js := vt.GetJsonTrie(); js != nil {
+		t.Fatalf("GetJsonTrie with no ancestry provider must be nil, got %v", js)
+	}
+
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	b := ledgertrie.NewTestLedgerBuilder()
+	abc := b.Build("abc")
+	provider := newMapAncestryProvider()
+	provider.add(abc)
+
+	n1 := consensus.NodeID{1}
+	vt.SetTrusted([]consensus.NodeID{n1})
+	vt.SetLedgerAncestryProvider(provider)
+	if !vt.Add(makeTrustedValidation(n1, abc.ID(), abc.Seq(), now)) {
+		t.Fatal("Add(n1->abc) should succeed")
+	}
+
+	js := vt.GetJsonTrie()
+	if js == nil {
+		t.Fatal("GetJsonTrie with a wired trie must be non-nil")
+	}
+	if _, err := json.Marshal(js); err != nil {
+		t.Fatalf("GetJsonTrie output not JSON-marshalable: %v", err)
+	}
+	seqSupport, ok := js["seq_support"].(map[string]uint32)
+	if !ok || seqSupport["3"] != 1 {
+		t.Errorf("seq_support = %v, want 3:1", js["seq_support"])
 	}
 }

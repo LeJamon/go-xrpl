@@ -18,25 +18,6 @@ func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int
 	return len(ledgerVals.vals)
 }
 
-// GetCurrentValidators returns nodes that have recently validated.
-// Uses the injected clock (vt.now) so tests and production share the
-// same network-adjusted time source that Add() uses for its isCurrent
-// check — keeps "recent" consistent across both reads and writes.
-func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
-
-	cutoff := vt.now().Add(-vt.freshness)
-	var result []consensus.NodeID
-
-	for nodeID, v := range vt.byNode {
-		if v.SignTime.After(cutoff) {
-			result = append(result, nodeID)
-		}
-	}
-	return result
-}
-
 // Clear removes all tracked validations.
 func (vt *ValidationTracker) Clear() {
 	vt.mu.Lock()

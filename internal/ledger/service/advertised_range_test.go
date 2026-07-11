@@ -1,92 +1,127 @@
 package service
 
-import "testing"
+import (
+	"encoding/binary"
+	"testing"
+	"time"
+)
 
-// newSeededService returns a started service whose in-memory history is exactly
-// [lo, hi], with the validated tip pinned to validated.
-func newSeededService(t *testing.T, lo, hi, validated uint32) *Service {
+func rangeTestHash(seq uint32) [32]byte {
+	var hash [32]byte
+	hash[0] = 0xA5
+	binary.BigEndian.PutUint32(hash[28:], seq)
+	return hash
+}
+
+func newRangeTestService(t *testing.T, lo, hi, validated, closed, fetchDepth uint32) *Service {
 	t.Helper()
-	svc, err := New(DefaultConfig())
+	cfg := DefaultConfig()
+	cfg.FetchDepth = fetchDepth
+	svc, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := svc.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
+
+	var parent [32]byte
+	for seq := lo; seq <= hi; seq++ {
+		hash := rangeTestHash(seq)
+		svc.putHistoryLocked(makeStubLedger(t, seq, hash, parent))
+		parent = hash
 	}
-	seedHistory(t, svc, lo, hi)
-	svc.validatedLedger = svc.ledgerHistory[validated]
-	if svc.validatedLedger == nil {
-		t.Fatalf("validated seq %d not in seeded history [%d,%d]", validated, lo, hi)
+	if validated != 0 {
+		svc.validatedLedger = svc.ledgerHistory[validated]
+		if svc.validatedLedger == nil {
+			t.Fatalf("validated seq %d not in history [%d,%d]", validated, lo, hi)
+		}
+	}
+	if closed != 0 {
+		svc.closedLedger = svc.ledgerHistory[closed]
+		if svc.closedLedger == nil {
+			t.Fatalf("closed seq %d not in history [%d,%d]", closed, lo, hi)
+		}
 	}
 	return svc
 }
 
-// TestAdvertisedLedgerRange_NoValidated verifies that with no validated ledger
-// the node advertises an empty range instead of claiming the whole chain.
-func TestAdvertisedLedgerRange_NoValidated(t *testing.T) {
-	svc, err := New(DefaultConfig())
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := svc.Start(); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	seedHistory(t, svc, 10, 100)
-	svc.validatedLedger = nil
-
-	if first, last, ok := svc.AdvertisedLedgerRange(); ok || first != 0 || last != 0 {
-		t.Fatalf("AdvertisedLedgerRange = (%d, %d, %v), want (0, 0, false)", first, last, ok)
+func requireAdvertisableRange(t *testing.T, svc *Service, wantFirst, wantLast uint32, wantOK bool) {
+	t.Helper()
+	first, last, ok := svc.AdvertisableLedgerRange()
+	if first != wantFirst || last != wantLast || ok != wantOK {
+		t.Fatalf("AdvertisableLedgerRange = (%d, %d, %v), want (%d, %d, %v)",
+			first, last, ok, wantFirst, wantLast, wantOK)
 	}
 }
 
-// TestAdvertisedLedgerRange_HistoryToValidatedTip verifies the low end comes
-// from retained history and the high end from the validated tip, not the
-// broader in-memory window.
-func TestAdvertisedLedgerRange_HistoryToValidatedTip(t *testing.T) {
-	// History runs to 100 but only 80 is validated: last must be 80, not 100.
-	svc := newSeededService(t, 10, 100, 80)
-
-	first, last, ok := svc.AdvertisedLedgerRange()
-	if !ok || first != 10 || last != 80 {
-		t.Fatalf("AdvertisedLedgerRange = (%d, %d, %v), want (10, 80, true)", first, last, ok)
-	}
+func TestAdvertisableLedgerRange_NoValidated(t *testing.T) {
+	svc := newRangeTestService(t, 10, 100, 0, 100, 0)
+	requireAdvertisableRange(t, svc, 0, 0, false)
 }
 
-// TestAdvertisedLedgerRange_ClampedToFloor verifies the online-delete floor
-// raises the advertised low end to the earliest durably held ledger.
-func TestAdvertisedLedgerRange_ClampedToFloor(t *testing.T) {
-	svc := newSeededService(t, 10, 100, 100)
-
-	// No floor: full retained range up to the validated tip.
-	if first, last, ok := svc.AdvertisedLedgerRange(); !ok || first != 10 || last != 100 {
-		t.Fatalf("unclamped = (%d, %d, %v), want (10, 100, true)", first, last, ok)
-	}
-
-	// Floor at 50 raises the low end; the tip is unchanged.
-	svc.SetMinimumOnlineFunc(func() uint32 { return 50 })
-	if first, last, ok := svc.AdvertisedLedgerRange(); !ok || first != 50 || last != 100 {
-		t.Fatalf("clamped = (%d, %d, %v), want (50, 100, true)", first, last, ok)
-	}
-
-	// A floor below the window (or zero, no rotation yet) leaves it untouched.
-	svc.SetMinimumOnlineFunc(func() uint32 { return 5 })
-	if first, last, ok := svc.AdvertisedLedgerRange(); !ok || first != 10 || last != 100 {
-		t.Fatalf("floor below window = (%d, %d, %v), want (10, 100, true)", first, last, ok)
-	}
-	svc.SetMinimumOnlineFunc(func() uint32 { return 0 })
-	if first, last, ok := svc.AdvertisedLedgerRange(); !ok || first != 10 || last != 100 {
-		t.Fatalf("zero floor = (%d, %d, %v), want (10, 100, true)", first, last, ok)
-	}
+func TestAdvertisableLedgerRange_EndsAtValidatedTip(t *testing.T) {
+	svc := newRangeTestService(t, 10, 100, 80, 100, 0)
+	requireAdvertisableRange(t, svc, 10, 80, true)
 }
 
-// TestAdvertisedLedgerRange_FloorAboveTip verifies that when the floor exceeds
-// the validated tip nothing durable remains, so the range is empty rather than
-// inverted.
-func TestAdvertisedLedgerRange_FloorAboveTip(t *testing.T) {
-	svc := newSeededService(t, 10, 100, 100)
+func TestAdvertisableLedgerRange_UsesContiguousSuffix(t *testing.T) {
+	t.Run("gap", func(t *testing.T) {
+		svc := newRangeTestService(t, 10, 100, 100, 100, 0)
+		svc.deleteHistoryLocked(60)
+		requireAdvertisableRange(t, svc, 61, 100, true)
+	})
+
+	t.Run("parent mismatch", func(t *testing.T) {
+		svc := newRangeTestService(t, 10, 100, 100, 100, 0)
+		hash := svc.ledgerHistory[80].Hash()
+		svc.putHistoryLocked(makeStubLedger(t, 80, hash, [32]byte{0xFF}))
+		requireAdvertisableRange(t, svc, 80, 100, true)
+	})
+}
+
+func TestAdvertisableLedgerRange_RequiresValidatedTipInHistory(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		svc := newRangeTestService(t, 10, 100, 100, 100, 0)
+		delete(svc.ledgerHistory, 100)
+		requireAdvertisableRange(t, svc, 0, 0, false)
+	})
+
+	t.Run("different hash", func(t *testing.T) {
+		svc := newRangeTestService(t, 10, 100, 100, 100, 0)
+		svc.putHistoryLocked(makeStubLedger(t, 100, [32]byte{0xFF}, rangeTestHash(99)))
+		requireAdvertisableRange(t, svc, 0, 0, false)
+	})
+}
+
+func TestAdvertisableLedgerRange_ClampsToConfiguredAndOnlineFloors(t *testing.T) {
+	svc := newRangeTestService(t, 10, 100, 90, 100, 30)
+	requireAdvertisableRange(t, svc, 70, 90, true)
+
+	svc.SetMinimumOnlineFunc(func() uint32 { return 60 })
+	requireAdvertisableRange(t, svc, 70, 90, true)
+
+	svc.SetMinimumOnlineFunc(func() uint32 { return 80 })
+	requireAdvertisableRange(t, svc, 80, 90, true)
+}
+
+func TestAdvertisableLedgerRange_FloorAboveTip(t *testing.T) {
+	svc := newRangeTestService(t, 10, 100, 100, 100, 0)
 	svc.SetMinimumOnlineFunc(func() uint32 { return 200 })
+	requireAdvertisableRange(t, svc, 0, 0, false)
+}
 
-	if first, last, ok := svc.AdvertisedLedgerRange(); ok || first != 0 || last != 0 {
-		t.Fatalf("AdvertisedLedgerRange = (%d, %d, %v), want (0, 0, false)", first, last, ok)
-	}
+func TestAdvertisableLedgerRange_MinimumOnlineCallbackRunsUnlocked(t *testing.T) {
+	svc := newRangeTestService(t, 10, 100, 100, 100, 0)
+	svc.SetMinimumOnlineFunc(func() uint32 {
+		done := make(chan struct{})
+		go func() {
+			svc.SetMinimumOnlineFunc(nil)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("minimum-online callback ran while Service.mu was held")
+		}
+		return 0
+	})
+	requireAdvertisableRange(t, svc, 10, 100, true)
 }

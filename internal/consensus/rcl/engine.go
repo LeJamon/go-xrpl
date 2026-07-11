@@ -60,6 +60,11 @@ type Engine struct {
 	ourTxSet  consensus.TxSet
 	converged bool
 
+	// censorship tracks txs we propose but that never get included, warning
+	// on persistent exclusion. Observational only; touched solely from the
+	// consensus goroutine under e.mu.
+	censorship censorshipDetector
+
 	// proposalTracker owns the round-scoped peer-signal maps. Accessed only
 	// under e.mu (see ProposalTracker).
 	proposalTracker *ProposalTracker
@@ -562,6 +567,12 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	// Before the mode switch so it runs in every mode (preStartRound parity).
 	e.driveNegativeUNLNewValidatorsLocked()
 
+	// A recovery restart means we just jumped to a different LCL — tell peers
+	// via SWITCHED_LEDGER so their tallies drop our abandoned ledger.
+	if recovering && e.prevLedger != nil {
+		e.adaptor.OnLedgerSwitched(e.prevLedger)
+	}
+
 	// Carry our own observed close time across rounds. The first round seeds
 	// from the seed ledger; afterwards we take the self close time of the round
 	// that just ended, read from e.state before it is replaced below (this runs
@@ -754,6 +765,23 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	// A proposal carrying our own validator identity — a duplicate-key
+	// misconfiguration (two nodes sharing our key) or our own proposal routed
+	// back to us — must not be absorbed as a foreign position; that double-counts
+	// our vote. Checked before the trust gate because we don't list our own key
+	// in our trusted set, so an unrecognised self-keyed proposal would otherwise
+	// be dropped just below as "untrusted", losing the misconfiguration signal.
+	if e.adaptor.IsValidator() {
+		if ourKey, err := e.adaptor.GetValidatorKey(); err == nil && proposal.NodeID == ourKey {
+			slog.Error("dropping proposal signed with our own validator key",
+				"t", "consensus",
+				"event", "self-key-proposal",
+				"peer", originPeer,
+				"node", fmt.Sprintf("%x", proposal.NodeID[:6]))
+			return nil
+		}
+	}
 
 	// Drop untrusted proposals: buffering them would let throwaway keypairs
 	// grow the tracker unboundedly and feed phantom proposers into
@@ -1957,6 +1985,13 @@ func (e *Engine) setMode(newMode consensus.Mode) {
 	})
 
 	e.adaptor.OnModeChange(oldMode, newMode)
+
+	// Leaving proposing/observing resets censorship tracking: entries recorded
+	// under the old mode no longer reflect a set we keep proposing, so warning
+	// on them would be bogus (setMode already guarantees oldMode != newMode).
+	if oldMode == consensus.ModeProposing || oldMode == consensus.ModeObserving {
+		e.censorship.reset()
+	}
 }
 
 func (e *Engine) setPhase(newPhase consensus.Phase) {
@@ -2218,6 +2253,12 @@ func (e *Engine) closeLedger() {
 	// Our own tx set is immediately "acquired" so dispute wiring recognizes
 	// proposals referencing our position.
 	e.acquiredTxSets[txSet.ID()] = txSet
+
+	// Record the set we're proposing this round for censorship detection,
+	// unless we're acquiring the correct ledger.
+	if e.prevLedger != nil && e.mode != consensus.ModeWrongLedger {
+		e.censorship.propose(txSet.TxIDs(), e.prevLedger.Seq()+1)
+	}
 
 	// Raw now; rounding happens later via effCloseTime at acceptance.
 	closeTime := e.adaptor.Now()
@@ -3208,6 +3249,32 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"mode", e.mode.String(),
 	)
 
+	// Censorship detection: reconcile the txs we've been proposing against the
+	// accepted set now that the LCL is built. Only meaningful with the correct
+	// LCL and full consensus (a timed-out round proves nothing about exclusion).
+	if e.state.HaveCorrectLCL && result == consensus.ResultSuccess {
+		accepted := txSet.TxIDs()
+		curr := newLedger.Seq()
+		e.censorship.check(accepted, func(id consensus.TxID, seq uint32) bool {
+			// Reached only for txs we proposed that stayed out of the accepted
+			// set. Keep tracking them (never drop) so the wait accumulates as
+			// they get re-proposed from the pending pool each round; txs we
+			// genuinely stop proposing fall out via propose(), not here. Warn
+			// each time persistent exclusion crosses the interval.
+			if curr > seq && (curr-seq)%censorshipWarnInterval == 0 {
+				slog.Warn("potential censorship: eligible tx not yet included",
+					"t", "consensus",
+					"event", "censorship-warn",
+					"tx", fmt.Sprintf("%x", id[:8]),
+					"tracked_since_seq", seq,
+					"current_seq", curr,
+					"waited", curr-seq,
+				)
+			}
+			return false
+		})
+	}
+
 	e.eventBus.Publish(&consensus.ConsensusReachedEvent{
 		Round:     e.state.Round,
 		TxSet:     txSet.ID(),
@@ -3303,6 +3370,12 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 			// just-accepted ledger still count.
 			e.validationTracker.SetMinSeq(newLedger.Seq() - 128)
 		}
+		// rippled feeds getCurrentNodeIDs() into updateTrusted, but its quorum
+		// ignores the set — surface it for partial-outage visibility, not quorum.
+		slog.Debug("live validator participation",
+			"current", len(e.validationTracker.GetCurrentNodeIDs()),
+			"quorum", e.adaptor.GetQuorum(),
+			"ledger_seq", newLedger.Seq())
 	}
 
 	// Track round time for convergePercent calculation

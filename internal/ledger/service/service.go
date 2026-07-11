@@ -46,6 +46,9 @@ var (
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
+	// FetchDepth limits historical ledger serving relative to the closed ledger.
+	// Zero leaves serving unrestricted.
+	FetchDepth uint32
 
 	// NetworkID is the network identifier for this node.
 	// Legacy networks (ID <= 1024) reject transactions that include NetworkID.
@@ -954,30 +957,71 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 	return s.ledgerHistoryRangeLocked()
 }
 
-// AdvertisedLedgerRange returns the [first, last] ledger span this node tells
-// peers it holds and is willing to serve. last is the validated tip; first is
-// the low end of retained history raised to the online-delete floor — the
-// earliest ledger still durably held. ok is false, and first/last are zero,
-// when no validated ledger exists yet, so the node advertises an empty range
-// instead of claiming to serve the whole chain from genesis. Peers use this to
-// avoid selecting the node for ledger-data requests it cannot satisfy.
-func (s *Service) AdvertisedLedgerRange() (first, last uint32, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {
 	if s.validatedLedger == nil {
 		return 0, 0, false
 	}
+
 	last = s.validatedLedger.Sequence()
+	tip, found := s.ledgerHistory[last]
+	if !found || tip.Hash() != s.validatedLedger.Hash() {
+		return 0, 0, false
+	}
 
 	first = last
-	if minSeq, _, has := s.ledgerHistoryRangeLocked(); has && minSeq < first {
-		first = minSeq
-	}
-	if s.minimumOnlineFunc != nil {
-		if floor := s.minimumOnlineFunc(); floor > first {
-			first = floor
+	current := tip
+	for first > 0 {
+		previous, found := s.ledgerHistory[first-1]
+		if !found || current.ParentHash() != previous.Hash() {
+			break
 		}
+		first--
+		current = previous
+	}
+	return first, last, true
+}
+
+func earliestFetch(closed, depth uint32) uint32 {
+	if depth == 0 || closed <= depth {
+		return 0
+	}
+	return closed - depth
+}
+
+// EarliestFetch returns the configured lower sequence bound for peer serving.
+func (s *Service) EarliestFetch() uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closedLedger == nil {
+		return 0
+	}
+	return earliestFetch(s.closedLedger.Sequence(), s.config.FetchDepth)
+}
+
+// AdvertisableLedgerRange returns the parent-consistent retained range ending
+// at the validated ledger, clamped to the configured and online-delete floors.
+func (s *Service) AdvertisableLedgerRange() (first, last uint32, ok bool) {
+	s.mu.RLock()
+	first, last, ok = s.contiguousValidatedRangeLocked()
+	var closed uint32
+	if s.closedLedger != nil {
+		closed = s.closedLedger.Sequence()
+	}
+	depth := s.config.FetchDepth
+	minimumOnlineFunc := s.minimumOnlineFunc
+	s.mu.RUnlock()
+	if !ok {
+		return 0, 0, false
+	}
+
+	floor := earliestFetch(closed, depth)
+	if minimumOnlineFunc != nil {
+		if minimumOnline := minimumOnlineFunc(); minimumOnline > floor {
+			floor = minimumOnline
+		}
+	}
+	if floor > first {
+		first = floor
 	}
 	if first > last {
 		return 0, 0, false
@@ -1074,16 +1118,9 @@ func (s *Service) GetQueueAllTxs() []*txq.CandidateDetails {
 // GetServerInfo returns basic server information
 func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	serverState := "full"
-	if s.serverStateFunc != nil {
-		serverState = s.serverStateFunc()
-	}
-
 	info := ServerInfo{
 		Standalone:      s.config.Standalone,
-		ServerState:     serverState,
+		ServerState:     "full",
 		CompleteLedgers: "",
 		NetworkID:       s.config.NetworkID,
 	}
@@ -1105,21 +1142,26 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
 	}
 
-	if minSeq, maxSeq, ok := s.ledgerHistoryRangeLocked(); ok {
-		// Clamp the lower bound up to the online-delete floor: the in-memory
-		// window can outlast the node store after a rotation. complete_ledgers
-		// must report durable availability.
-		if s.minimumOnlineFunc != nil {
-			if floor := s.minimumOnlineFunc(); floor > minSeq {
-				minSeq = floor
-			}
+	minSeq, maxSeq, haveRange := s.ledgerHistoryRangeLocked()
+	serverStateFunc := s.serverStateFunc
+	minimumOnlineFunc := s.minimumOnlineFunc
+	s.mu.RUnlock()
+
+	if serverStateFunc != nil {
+		info.ServerState = serverStateFunc()
+	}
+	if minimumOnlineFunc != nil {
+		if floor := minimumOnlineFunc(); floor > minSeq {
+			minSeq = floor
 		}
-		switch {
-		case minSeq > maxSeq:
-			// The whole window sits below the floor — nothing durable to advertise.
-		case minSeq == maxSeq:
+	}
+	if minSeq > maxSeq {
+		haveRange = false
+	}
+	if haveRange {
+		if minSeq == maxSeq {
 			info.CompleteLedgers = strconv.FormatUint(uint64(minSeq), 10)
-		default:
+		} else {
 			info.CompleteLedgers = formatRange(minSeq, maxSeq)
 		}
 	}

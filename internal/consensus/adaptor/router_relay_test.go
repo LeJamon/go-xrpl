@@ -207,6 +207,27 @@ func TestRouter_GetLedger_NoRelayWhenCookieSet(t *testing.T) {
 	assert.Empty(t, rs.sentFrames(), "a cookied request must not be relayed again")
 }
 
+func TestRouter_GetLedger_NoRelayWhenZeroCookiePresent(t *testing.T) {
+	r, rs := makeRouterWithRelayRecorder(t)
+	rs.txsetPeer, rs.txsetOK = 7, true
+
+	hash := bytes.Repeat([]byte{0xCD}, 32)
+	qt := message.QueryTypeIndirect
+	req := &message.GetLedger{
+		InfoType:         message.LedgerInfoTsCandidate,
+		LedgerHash:       hash,
+		QueryType:        &qt,
+		RequestCookieSet: true,
+	}
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  21,
+		Type:    uint16(message.TypeGetLedger),
+		Payload: encodePayload(t, req),
+	})
+
+	assert.Empty(t, rs.sentFrames(), "a present zero cookie must prevent relay loops")
+}
+
 // TestRouter_GetLedger_NoRelayWhenQueryTypeAbsent pins that a direct request
 // (no query_type) is never relayed — rippled relays only indirect requests.
 func TestRouter_GetLedger_NoRelayWhenQueryTypeAbsent(t *testing.T) {

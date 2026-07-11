@@ -182,6 +182,15 @@ type ValidationTracker struct {
 	// Caller (the engine) advances minSeq as ledgers accept.
 	minSeq uint32
 
+	// keepLow, keepHigh pin the sequence range [keepLow, keepHigh) against
+	// ExpireOld: validations in it survive even below the retention floor and
+	// past their access age. The negative-UNL vote sets it via SetSeqToKeep so
+	// a fast-advancing tip (whose floor is anchored at the validated tip, not
+	// the flag ledger) can't prune the flag-ledger scan window mid-vote.
+	// keepLow == keepHigh disables the pin. Mirrors rippled's toKeep_.
+	keepLow  uint32
+	keepHigh uint32
+
 	// callbacks
 	onFullyValidated func(ledgerID consensus.LedgerID, ledgerSeq uint32)
 
@@ -270,6 +279,24 @@ func (vt *ValidationTracker) SetQuorum(quorum int) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 	vt.quorum = quorum
+}
+
+// SetSeqToKeep pins validations in [low, high) so ExpireOld will not drop
+// them, even once the retention floor advances past them. The negative-UNL
+// vote calls this before scanning the flag-ledger window so a fast-advancing
+// tip can't prune its low end mid-scan. Unlike the seq floor — which is
+// anchored at the validated tip — the pin is anchored at the flag ledger, so
+// it holds regardless of how far the tip has raced ahead or how small the
+// configured retention is. Mirrors rippled's setSeqToKeep; a range with
+// high <= low clears the pin.
+func (vt *ValidationTracker) SetSeqToKeep(low, high uint32) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	if high <= low {
+		vt.keepLow, vt.keepHigh = 0, 0
+		return
+	}
+	vt.keepLow, vt.keepHigh = low, high
 }
 
 // SetNegativeUNL replaces the current negative-UNL set. Validators on
@@ -954,6 +981,29 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 	return vt.byNode[nodeID]
 }
 
+// GetCurrentNodeIDs returns the node IDs of every validator whose latest
+// tracked validation still passes the IsCurrent freshness gate — the set
+// observed actively validating right now, partial or full, trusted or not.
+// The gate matches Add()'s admission check, so a node appears iff its most
+// recent validation is neither stale nor clock-skewed against the
+// network-adjusted clock. Enumeration only; FlushStale does the paired
+// eviction that rippled folds into its current() sweep. Mirrors rippled's
+// Validations::getCurrentNodeIDs — the live-participation set gathered when
+// the engine refreshes the trusted set and quorum each round.
+func (vt *ValidationTracker) GetCurrentNodeIDs() []consensus.NodeID {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	now := vt.now()
+	ids := make([]consensus.NodeID, 0, len(vt.byNode))
+	for nodeID, v := range vt.byNode {
+		if IsCurrent(now, v.SignTime, v.SeenTime) {
+			ids = append(ids, nodeID)
+		}
+	}
+	return ids
+}
+
 // FlushStale drops non-current validations from the steering indexes (byNode
 // + trie tips), mirroring rippled's current() sweep inside withTrie
 // (Validations.h:509-533): a silent validator must stop steering
@@ -1002,8 +1052,9 @@ func (vt *ValidationTracker) FlushStale() {
 // queryable for RPC and late peers. Memory stays bounded: Add rejects
 // below the engine's minSeq gate, so a below-floor set cannot reheat
 // from the network, and it drops on the first ExpireOld after going
-// cold. The seq floor itself plays rippled's setSeqToKeep role of
-// protecting the recent (negative-UNL voting) window from expiry.
+// cold. The seq floor coarsely protects the recent (negative-UNL voting)
+// window, but is anchored at the validated tip; SetSeqToKeep pins the exact
+// flag-ledger window so a fast-advancing tip can't outrun the vote's read.
 func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	vt.mu.Lock()
 
@@ -1019,6 +1070,10 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 			break
 		}
 		if sample == nil || sample.LedgerSeq >= minSeq {
+			continue
+		}
+		if vt.keepLow < vt.keepHigh &&
+			sample.LedgerSeq >= vt.keepLow && sample.LedgerSeq < vt.keepHigh {
 			continue
 		}
 		if ledgerVals.lastAccess.Load() > cutoff {

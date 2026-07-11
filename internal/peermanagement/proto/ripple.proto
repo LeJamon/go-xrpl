@@ -245,9 +245,9 @@ message TMGetLedger {
     optional TMLedgerInfoType itype = 1;
     optional TMLedgerType ltype = 2;
     bytes ledger_hash = 3;
-    uint32 ledger_seq = 4;
+    optional uint32 ledger_seq = 4;
     repeated bytes node_ids = 5;
-    uint64 request_cookie = 6;
+    optional uint64 request_cookie = 6;
     optional TMQueryType query_type = 7;
     uint32 query_depth = 8;
 }
@@ -265,7 +265,7 @@ message TMLedgerData {
     optional uint32 ledger_seq = 2;
     optional TMLedgerInfoType type = 3;
     repeated TMLedgerNode nodes = 4;
-    uint32 request_cookie = 5;
+    optional uint32 request_cookie = 5;
     TMReplyError error = 6;
 }
 

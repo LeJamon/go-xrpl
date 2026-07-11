@@ -620,6 +620,70 @@ func TestValidationTracker_ExpireOld_RetainsRecentlyAccessed(t *testing.T) {
 	}
 }
 
+// SetSeqToKeep pins a sequence range so ExpireOld retains it even when a set
+// is BOTH below the floor and past its access age — the negative-UNL vote
+// relies on this to keep its flag-ledger scan window alive against a
+// fast-advancing tip. The pin is selective (sequences below its low still
+// evict) and clearing it restores normal expiry.
+func TestValidationTracker_ExpireOld_HonorsSeqToKeep(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	ledgerKeep := consensus.LedgerID{0x10}
+	ledgerDrop := consensus.LedgerID{0x20}
+	vt.Add(&consensus.Validation{LedgerID: ledgerKeep, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+	vt.Add(&consensus.Validation{LedgerID: ledgerDrop, LedgerSeq: 50, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true})
+
+	// Both are below the floor and cold; only the pinned range must survive.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.SetSeqToKeep(100, 400)
+	vt.ExpireOld(200)
+
+	if got := vt.GetValidationCount(ledgerKeep); got != 1 {
+		t.Fatalf("pinned set evicted: count=%d, want 1", got)
+	}
+	if got := vt.GetValidationCount(ledgerDrop); got != 0 {
+		t.Fatalf("set below the pin survived: count=%d, want 0", got)
+	}
+
+	// Clearing the pin lets the floor evict the once-pinned set. Advance the
+	// clock again so the GetValidationCount touches above go cold.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.SetSeqToKeep(0, 0)
+	vt.ExpireOld(200)
+	if got := vt.GetValidationCount(ledgerKeep); got != 0 {
+		t.Fatalf("unpinned set survived: count=%d, want 0", got)
+	}
+}
+
+// The keep-range high bound is exclusive: a set whose seq equals keepHigh is
+// not pinned and still evicts once below the floor and cold, while a set at
+// keepLow (inclusive) survives. Mirrors rippled setSeqToKeep(C-1, C) dropping
+// the set at C (Validations_test.cpp).
+func TestValidationTracker_ExpireOld_SeqToKeepHighExclusive(t *testing.T) {
+	vt := NewValidationTracker(1, 5*time.Minute)
+	now := time.Now()
+	vt.SetNow(func() time.Time { return now })
+
+	atLow := consensus.LedgerID{0x10}  // seq 100 == keepLow  → kept (inclusive)
+	atHigh := consensus.LedgerID{0x20} // seq 150 == keepHigh → dropped (exclusive)
+	vt.Add(&consensus.Validation{LedgerID: atLow, LedgerSeq: 100, NodeID: consensus.NodeID{0xA}, SignTime: now, Full: true})
+	vt.Add(&consensus.Validation{LedgerID: atHigh, LedgerSeq: 150, NodeID: consensus.NodeID{0xB}, SignTime: now, Full: true})
+
+	// Both below the floor and cold; the pin's boundaries decide who survives.
+	now = now.Add(validationSetExpires + time.Second)
+	vt.SetSeqToKeep(100, 150)
+	vt.ExpireOld(200)
+
+	if got := vt.GetValidationCount(atLow); got != 1 {
+		t.Fatalf("keepLow boundary evicted (should be inclusive): count=%d, want 1", got)
+	}
+	if got := vt.GetValidationCount(atHigh); got != 0 {
+		t.Fatalf("keepHigh boundary survived (should be exclusive): count=%d, want 0", got)
+	}
+}
+
 // Reading a ledger's validations refreshes its access age — rippled's
 // byLedger touch — so an actively-queried set keeps surviving ExpireOld
 // while an unqueried sibling at the same seq expires.
@@ -737,5 +801,62 @@ func TestValidationTracker_Flush(t *testing.T) {
 	vt.Add(makeTrustedValidation(n2, abc.ID(), abc.Seq(), now))
 	if _, _, ok := vt.GetPreferred(0); !ok {
 		t.Error("post-flush: GetPreferred should resolve again after re-adding")
+	}
+}
+
+// TestValidationTracker_GetCurrentNodeIDs pins issue #1193: the live
+// participation set enumerates every byNode entry still passing IsCurrent —
+// trusted or not, partial or full — excludes entries whose latest validation
+// has aged out, and does not mutate the tracker (FlushStale owns eviction).
+func TestValidationTracker_GetCurrentNodeIDs(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	t0 := time.Now()
+	vt.SetNow(func() time.Time { return t0 })
+
+	ledger := consensus.LedgerID{9}
+	const seq = uint32(100)
+	n1 := consensus.NodeID{1} // trusted, full, stays fresh
+	n2 := consensus.NodeID{2} // trusted, full, ages out before the read
+	n3 := consensus.NodeID{3} // untrusted, fresh — still enumerated
+	n4 := consensus.NodeID{4} // trusted, partial, fresh — still enumerated
+
+	vt.SetTrusted([]consensus.NodeID{n1, n2, n4})
+
+	// n2 signs at t0; it falls outside the isCurrent window once time moves.
+	if !vt.Add(makeTrustedValidation(n2, ledger, seq, t0)) {
+		t.Fatal("n2 validation should be accepted while current")
+	}
+
+	// Advance past the early bound so n2's t0 signature is now stale, then
+	// add the remaining validators against the new clock.
+	t1 := t0.Add(validationCurrentEarly + time.Minute)
+	vt.SetNow(func() time.Time { return t1 })
+
+	if !vt.Add(makeTrustedValidation(n1, ledger, seq, t1)) {
+		t.Fatal("n1 validation should be accepted at t1")
+	}
+	if !vt.Add(makeTrustedValidation(n3, ledger, seq, t1)) {
+		t.Fatal("n3 (untrusted) validation should still be tracked")
+	}
+	partial := makeTrustedValidation(n4, ledger, seq, t1)
+	partial.Full = false
+	if !vt.Add(partial) {
+		t.Fatal("n4 partial validation should be accepted at t1")
+	}
+
+	got := vt.GetCurrentNodeIDs()
+	want := map[consensus.NodeID]bool{n1: true, n3: true, n4: true}
+	if len(got) != len(want) {
+		t.Fatalf("GetCurrentNodeIDs: want %d live nodes, got %d (%v)", len(want), len(got), got)
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Errorf("GetCurrentNodeIDs returned %v; n2 is stale and must be excluded", id)
+		}
+	}
+
+	// Enumeration must not evict the stale entry — that is FlushStale's job.
+	if vt.GetLatestValidation(n2) == nil {
+		t.Error("GetCurrentNodeIDs must not mutate byNode (n2 was evicted)")
 	}
 }
