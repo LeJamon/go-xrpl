@@ -83,11 +83,11 @@ func TestBookStepMPTTransferRateFinalIssuerDelivery(t *testing.T) {
 	issue := NewMPTIssue(id)
 
 	step := NewBookStep(Issue{Currency: "XRP"}, issue, owner, destination, nil, true)
-	require.Equal(t, uint32(QualityOne+25_000_000), step.assetTransferRate(sb, issue))
+	require.Equal(t, QualityOne+25_000_000, step.assetTransferRate(sb, issue))
 
 	step.strandDst = issuer
 	step.strandDeliver = issue
-	require.Equal(t, uint32(QualityOne), step.assetTransferRate(sb, issue))
+	require.Equal(t, QualityOne, step.assetTransferRate(sb, issue))
 }
 
 func TestBookStepMPTDEXTransferPermission(t *testing.T) {

@@ -78,7 +78,7 @@ func (s *MPTEndpointStep) qualities(sb *PaymentSandbox, dir DebtDirection, stran
 		if s.prevStep == nil {
 			return QualityOne, QualityOne
 		}
-		return max(s.prevStep.LineQualityIn(sb), uint32(QualityOne)), QualityOne
+		return max(s.prevStep.LineQualityIn(sb), QualityOne), QualityOne
 	}
 
 	prevDir := DebtDirectionIssues
@@ -227,10 +227,10 @@ func (s *MPTEndpointStep) DebtDirection(_ *PaymentSandbox, dir StrandDirection) 
 
 func (s *MPTEndpointStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection) {
 	dir := s.DebtDirection(v, StrandDirectionForward)
-	srcQOut := uint32(QualityOne)
+	srcQOut := QualityOne
 	if Redeems(dir) {
 		if s.prevStep != nil {
-			srcQOut = max(s.prevStep.LineQualityIn(v), uint32(QualityOne))
+			srcQOut = max(s.prevStep.LineQualityIn(v), QualityOne)
 		}
 	} else if Redeems(prevStepDir) {
 		srcQOut = mptutil.TransferRate(v, s.issue.MPTID)

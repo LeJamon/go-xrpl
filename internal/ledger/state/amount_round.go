@@ -10,6 +10,8 @@ var (
 	bigTenTo17 = new(big.Int).SetUint64(100_000_000_000_000_000) // 10^17
 )
 
+const maxInt64Value uint64 = 1<<63 - 1
+
 // PrepareMulDivOperand returns the absolute mantissa and exponent of a,
 // normalizing native (XRP) amounts up into the IOU mantissa range
 // [10^15, 10^16). This is the per-operand preamble every mul/div round variant
@@ -94,7 +96,7 @@ func finalizeMPTRound(amount uint64, offset int, resultNegative, roundUp, addSlo
 		panic("MPT amount out of range")
 	}
 	for offset > 0 {
-		if amount > uint64(^uint64(0)>>1)/10 {
+		if amount > maxInt64Value/10 {
 			panic("MPT amount out of range")
 		}
 		amount *= 10
@@ -104,7 +106,7 @@ func finalizeMPTRound(amount uint64, offset int, resultNegative, roundUp, addSlo
 		amount /= 10
 		offset++
 	}
-	if amount > uint64(^uint64(0)>>1) {
+	if amount > maxInt64Value {
 		panic("MPT amount out of range")
 	}
 	if amount == 0 && roundUp && !resultNegative {
@@ -144,7 +146,7 @@ func canonicalizeIntegralRound(amount uint64, offset int, roundUp, strict bool) 
 
 func canonicalizeMPTNoRound(amount uint64, offset int, strict bool) uint64 {
 	if !strict && GetNumberSwitchover() {
-		if amount > uint64(^uint64(0)>>1) {
+		if amount > maxInt64Value {
 			panic("MPT amount out of range")
 		}
 		value := newXRPLNumberRaw(int64(amount), offset).ToInt64WithMode(RoundToNearest)
@@ -154,7 +156,7 @@ func canonicalizeMPTNoRound(amount uint64, offset int, strict bool) uint64 {
 		return uint64(value)
 	}
 	for offset > 0 {
-		if amount > uint64(^uint64(0)>>1)/10 {
+		if amount > maxInt64Value/10 {
 			panic("MPT amount out of range")
 		}
 		amount *= 10
