@@ -120,8 +120,6 @@ func TestStatusChange_AdoptLedgerFromHeaderAnnouncesSwitch(t *testing.T) {
 	assert.Equal(t, h.ParentHash[:], sc.LedgerHashPrevious)
 }
 
-// A phase-driven status change omits new_status and caps the advertised range
-// at the validated ledger even when the local closed ledger has advanced.
 func TestStatusChange_OmitsNewStatusAdvertisesValidatedRange(t *testing.T) {
 	sender := &scRecordingSender{}
 	svc := adg_newNonStandaloneService(t)
