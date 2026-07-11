@@ -164,7 +164,7 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
 
 	// Fetch one extra to determine if there are more results
-	args = append(args, options.Limit+1)
+	args = append(args, int64(options.Limit)+1)
 	query += fmt.Sprintf(" LIMIT $%d", len(args))
 
 	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
@@ -187,13 +187,14 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	}
 
 	// Check if there are more results
-	if len(transactions) > int(options.Limit) {
-		// Remove the extra transaction and set marker
-		transactions = transactions[:options.Limit]
-		lastTx := transactions[len(transactions)-1]
-		result.Marker = &relationaldb.AccountTxMarker{
-			LedgerSeq: lastTx.LedgerSeq,
-			TxnSeq:    lastTx.TxnSeq,
+	if uint64(len(transactions)) > uint64(options.Limit) {
+		transactions = transactions[:len(transactions)-1]
+		if len(transactions) > 0 {
+			lastTx := transactions[len(transactions)-1]
+			result.Marker = &relationaldb.AccountTxMarker{
+				LedgerSeq: lastTx.LedgerSeq,
+				TxnSeq:    lastTx.TxnSeq,
+			}
 		}
 	}
 

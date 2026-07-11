@@ -145,7 +145,7 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
 
 	// Fetch one extra to check for more results
-	limit := options.Limit + 1
+	limit := int64(options.Limit) + 1
 	query += " LIMIT ?"
 	args = append(args, limit)
 
@@ -180,12 +180,14 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 		Limit: options.Limit,
 	}
 
-	if len(transactions) > int(options.Limit) {
-		transactions = transactions[:options.Limit]
-		lastTx := transactions[len(transactions)-1]
-		result.Marker = &relationaldb.AccountTxMarker{
-			LedgerSeq: lastTx.LedgerSeq,
-			TxnSeq:    lastTx.TxnSeq,
+	if uint64(len(transactions)) > uint64(options.Limit) {
+		transactions = transactions[:len(transactions)-1]
+		if len(transactions) > 0 {
+			lastTx := transactions[len(transactions)-1]
+			result.Marker = &relationaldb.AccountTxMarker{
+				LedgerSeq: lastTx.LedgerSeq,
+				TxnSeq:    lastTx.TxnSeq,
+			}
 		}
 	}
 
