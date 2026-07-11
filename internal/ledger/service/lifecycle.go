@@ -792,7 +792,8 @@ func (s *Service) NeedsInitialSync() bool {
 // have changed state).
 func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	if !s.needsInitialSync {
 		return errors.New("not in initial sync mode")
@@ -819,10 +820,12 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 
 	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
 
-	// Adopted becomes closedLedger and joins history but is NOT marked validated
-	// (no quorum yet); validatedLedger advances later via SetValidatedLedger.
 	// Source closedLedger from the install helper so validated-precedence holds.
-	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	s.closedLedger = canonical
+	if canonical == adopted {
+		s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
+	}
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
@@ -848,7 +851,8 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 // AdoptLedgerHeader but after needsInitialSync is cleared.
 func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	if s.genesisLedger == nil {
 		return errors.New("no genesis ledger available")
@@ -880,9 +884,11 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 
 	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
 
-	// Advance closedLedger to the peer's tip but NOT validatedLedger: "closed"
-	// is not "validated"; the quorum gate in SetValidatedLedger owns that.
-	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	s.closedLedger = canonical
+	if canonical == adopted {
+		s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
+	}
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {

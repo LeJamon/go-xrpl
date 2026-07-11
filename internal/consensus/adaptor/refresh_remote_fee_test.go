@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/stretchr/testify/require"
 )
 
@@ -230,6 +231,103 @@ func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
 	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
 
 	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
+	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+}
+
+func TestRefreshRemoteFee_ValidationBeforeHeaderAdoption(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: svc,
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+	})
+	ft := svc.FeeTrack()
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	candidate, err := ledger.NewOpen(parent, closeTime)
+	require.NoError(t, err)
+	require.NoError(t, candidate.Close(closeTime, 0))
+	header := candidate.Header()
+	targetID := consensus.LedgerID(header.Hash)
+	parentID := consensus.LedgerID(header.ParentHash)
+	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
+		byLedger: map[consensus.LedgerID][]*consensus.Validation{
+			targetID: {{LoadFee: 320, Full: true}},
+			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+		},
+	}}
+	a.SetValidationHistorian(historian)
+
+	ft.SetRemoteFee(777)
+	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
+	require.Equal(t, uint32(777), ft.GetRemoteFee())
+	require.Empty(t, historian.lookupCalls())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- a.AdoptLedgerFromHeader(ledgerheader.AddRaw(header, true))
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("header adoption blocked while notifying the validated-ledger callback")
+	}
+
+	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
+	require.Equal(t, uint32(500), ft.GetRemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+}
+
+func TestRefreshRemoteFee_ValidationBeforeHeaderReAdoption(t *testing.T) {
+	svc := adg_newNonStandaloneService(t)
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	a := New(Config{
+		LedgerService: svc,
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+	})
+
+	_, first, _, _ := buildSuccessorAgainstParent(t, svc.GetClosedLedger())
+	firstHeader := first.Header()
+	require.NoError(t, svc.AdoptLedgerHeader(&firstHeader))
+
+	_, second, _, _ := buildSuccessorAgainstParent(t, svc.GetClosedLedger())
+	secondHeader := second.Header()
+	targetID := consensus.LedgerID(secondHeader.Hash)
+	parentID := consensus.LedgerID(secondHeader.ParentHash)
+	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
+		byLedger: map[consensus.LedgerID][]*consensus.Validation{
+			targetID: {{LoadFee: 320, Full: true}},
+			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+		},
+	}}
+	a.SetValidationHistorian(historian)
+
+	ft := svc.FeeTrack()
+	ft.SetRemoteFee(777)
+	a.OnLedgerFullyValidated(targetID, secondHeader.LedgerIndex)
+	require.Equal(t, uint32(777), ft.GetRemoteFee())
+	require.Empty(t, historian.lookupCalls())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.ReAdoptLedgerHeader(&secondHeader)
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("header re-adoption blocked while notifying the validated-ledger callback")
+	}
+
+	require.Equal(t, secondHeader.LedgerIndex, svc.GetValidatedLedgerIndex())
+	require.Equal(t, uint32(500), ft.GetRemoteFee())
 	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
 }
 

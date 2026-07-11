@@ -9,6 +9,24 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
 
+func TestNewFromHeaderHonorsValidatedFlag(t *testing.T) {
+	closed := NewFromHeader(header.LedgerHeader{}, nil, nil, drops.Fees{})
+	if closed.State() != StateClosed || closed.IsValidated() {
+		t.Fatalf("unvalidated header created state %s", closed.State())
+	}
+	if err := closed.SetValidated(); err != nil {
+		t.Fatalf("promote closed ledger: %v", err)
+	}
+	if !closed.IsValidated() || !closed.Header().Validated {
+		t.Fatal("SetValidated did not promote the ledger and header together")
+	}
+
+	validated := NewFromHeader(header.LedgerHeader{Validated: true}, nil, nil, drops.Fees{})
+	if validated.State() != StateValidated || !validated.IsValidated() {
+		t.Fatalf("validated header created state %s", validated.State())
+	}
+}
+
 // newParentAt builds a closed parent ledger with the requested
 // (seq, resolution, closeAgree) — synthesized from genesis and a
 // chain of no-op Close()s so we get valid hashes/maps for free.
