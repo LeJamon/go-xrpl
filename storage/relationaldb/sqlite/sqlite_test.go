@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -526,6 +527,20 @@ func TestAccountTransactionPagination(t *testing.T) {
 	}
 	if page3.Marker != nil {
 		t.Fatal("expected no marker on last page")
+	}
+
+	maxLimitPage, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: accountID,
+		Limit:   math.MaxUint32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(maxLimitPage.Transactions) != 5 {
+		t.Fatalf("expected 5 txs with maximum limit, got %d", len(maxLimitPage.Transactions))
+	}
+	if maxLimitPage.Marker != nil {
+		t.Fatal("expected no marker with maximum limit")
 	}
 }
 
