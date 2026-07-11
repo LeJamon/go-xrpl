@@ -78,6 +78,12 @@ type SHAMap struct {
 	full      bool
 	backed    bool
 	family    Family // nil for unbacked maps
+	// fullBelow prunes completed subtrees from missing-node walks. Never
+	// nil: every constructor installs one and snapshot shares the source's
+	// so structurally-shared trees agree on which subtrees are proven
+	// complete. Shared across an acquisition's state and tx maps when the
+	// caller injects one via WithFullBelowCache.
+	fullBelow *FullBelowCache
 	// cachedSize memoises Size(); -1 = uncached. Only written once the
 	// map is immutable, so concurrent first-readers race benignly on a
 	// frozen tree.
@@ -87,11 +93,12 @@ type SHAMap struct {
 // New creates a new empty SHAMap with the specified type
 func New(mapType Type) *SHAMap {
 	sm := &SHAMap{
-		root:    newInnerNode(),
-		mapType: mapType,
-		state:   StateModifying,
-		full:    true,
-		backed:  false,
+		root:      newInnerNode(),
+		mapType:   mapType,
+		state:     StateModifying,
+		full:      true,
+		backed:    false,
+		fullBelow: NewFullBelowCache(),
 	}
 	sm.cachedSize.Store(-1)
 	return sm
@@ -104,12 +111,13 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 		return nil, ErrNilFamily
 	}
 	sm := &SHAMap{
-		root:    newInnerNode(),
-		mapType: mapType,
-		state:   StateModifying,
-		full:    true,
-		backed:  true,
-		family:  family,
+		root:      newInnerNode(),
+		mapType:   mapType,
+		state:     StateModifying,
+		full:      true,
+		backed:    true,
+		family:    family,
+		fullBelow: NewFullBelowCache(),
 	}
 	sm.cachedSize.Store(-1)
 	return sm, nil
@@ -153,12 +161,13 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 	}
 
 	sm := &SHAMap{
-		root:    root,
-		mapType: mapType,
-		state:   StateModifying,
-		full:    true,
-		backed:  true,
-		family:  family,
+		root:      root,
+		mapType:   mapType,
+		state:     StateModifying,
+		full:      true,
+		backed:    true,
+		family:    family,
+		fullBelow: NewFullBelowCache(),
 	}
 	sm.cachedSize.Store(-1)
 	return sm, nil
@@ -716,6 +725,7 @@ func (sm *SHAMap) snapshot(mutable bool) (*SHAMap, error) {
 		full:      sm.full,
 		backed:    sm.backed,
 		family:    sm.family,
+		fullBelow: sm.fullBelow,
 	}
 	out.cachedSize.Store(-1)
 	// Immutable→immutable snapshot observes the same leaf set; carry the
@@ -790,4 +800,11 @@ func (sm *SHAMap) createTypedLeaf(nodeType NodeType, item *Item) (LeafNode, erro
 // IsBacked returns true if this SHAMap is backed by a NodeStore.
 func (sm *SHAMap) IsBacked() bool {
 	return sm.backed
+}
+
+// FullBelowCache returns the map's full-below cache. Snapshots share the
+// source's cache, so a snapshot and its source agree on which subtrees are
+// proven complete.
+func (sm *SHAMap) FullBelowCache() *FullBelowCache {
+	return sm.fullBelow
 }

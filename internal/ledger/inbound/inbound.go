@@ -557,19 +557,18 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		l.markProgressLocked()
 	}
 
-	complete := l.stateMap.IsComplete()
+	// FinishSync is the authoritative completeness check (it takes the write
+	// lock, so it can't race a concurrent insert the way a bare IsComplete
+	// read can); a failure just means "still missing nodes", not fatal. It
+	// is also the only completeness walk here — the former IsComplete call
+	// for a log attribute was a second full-tree walk per reply.
+	finished := l.stateMap.FinishSync() == nil
 	l.logger.Info("inbound ledger: added state nodes",
 		"added", added,
 		"total_received", len(nodes),
-		"complete", complete,
+		"complete", finished,
 	)
-
-	// Always attempt FinishSync — it is the only authoritative check
-	// (IsComplete reads under RLock and can race a concurrent insert
-	// before the FinishSync write lock). A failure here is treated as
-	// "still missing nodes", not fatal.
-	if err := l.stateMap.FinishSync(); err != nil {
-		l.logger.Debug("inbound ledger: state still incomplete", "error", err)
+	if !finished {
 		return nil
 	}
 	l.haveState = true

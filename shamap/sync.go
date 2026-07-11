@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Sync-related errors
@@ -139,22 +140,33 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		branch   int
 	}
 
+	gen, cache := fullBelowContext(sm)
+	backed := sm != nil && sm.backed && cache != nil
+
 	sm.mu.RLock()
 	if sm.root == nil || sm.state == StateInvalid {
 		sm.mu.RUnlock()
 		return nil
 	}
+	root := sm.root
 	rootID := NewRootNodeID()
-	rootHash := sm.root.Hash()
+	rootHash := root.Hash()
+
+	// The whole tree was already proven complete — prune it.
+	if root.isFullBelow(gen) {
+		sm.mu.RUnlock()
+		return nil
+	}
 
 	// Capture every non-empty root branch under the source-map lock.
 	// Hash-only branches at depth 1 are reported synchronously here
 	// because they have no subtree to walk.
 	var (
-		mu       sync.Mutex
-		missing  []MissingNode
-		stopped  bool
-		subtrees = make([]subtreeStart, 0, BranchFactor)
+		mu           sync.Mutex
+		missing      []MissingNode
+		stopped      bool
+		rootComplete = true // every depth-1 branch resident and full-below
+		subtrees     = make([]subtreeStart, 0, BranchFactor)
 	)
 
 	reportLocked := func(m MissingNode) bool {
@@ -172,7 +184,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	}
 
 	for branch := range BranchFactor {
-		child, childHash, isSet := sm.root.LoadChild(branch)
+		child, childHash, isSet := root.LoadChild(branch)
 		if !isSet {
 			continue
 		}
@@ -180,14 +192,20 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		if err != nil {
 			continue
 		}
+		// Backed short-circuit: a released depth-1 child proven full-below
+		// needs no fetch or descent.
+		if child == nil && backed && cache.Has(childHash) {
+			continue
+		}
 		if child == nil {
 			// Lenient request path: a transient fetch failure reports the
 			// branch missing (self-corrects via the wire).
-			if loaded, _ := loadFromStore(sm, sm.root, branch); loaded != nil {
+			if loaded, _ := loadFromStore(sm, root, branch); loaded != nil {
 				child = loaded
 			}
 		}
 		if child == nil {
+			rootComplete = false
 			if filter.ShouldFetch(childHash) {
 				if reportLocked(MissingNode{
 					Hash:       childHash,
@@ -215,29 +233,62 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	sm.mu.RUnlock()
 
 	if len(subtrees) == 0 {
+		// No inner subtrees to fan out. Mark the root complete when every
+		// depth-1 branch was resident-and-full-below and nothing stopped.
+		mu.Lock()
+		markRoot := rootComplete && !stopped
+		mu.Unlock()
+		if markRoot {
+			markRootFullBelow(root, rootHash, gen, backed, cache)
+		}
 		return missing
 	}
 
+	subFull := make([]bool, len(subtrees))
+	var anyStopped atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(subtrees))
-	for _, s := range subtrees {
+	for i, s := range subtrees {
 		go func() {
 			defer wg.Done()
-			_, _ = walkSubtreeForMissing(
-				sm,
-				s.node,
-				s.nodeID,
-				s.nodeHash,
-				1,
-				filter,
-				false,
-				reportLocked,
+			full, stop, _ := walkFullBelow(
+				sm, s.node, s.nodeID, s.nodeHash, 1, gen, filter, false, cache, reportLocked,
 			)
+			subFull[i] = full
+			if stop {
+				anyStopped.Store(true)
+			}
 		}()
 	}
 	wg.Wait()
 
+	// Mark the root full-below only when every branch — those handled
+	// inline and every fanned-out subtree — came back complete and no
+	// worker was cut short by the missing cap.
+	allSub := true
+	for _, f := range subFull {
+		if !f {
+			allSub = false
+			break
+		}
+	}
+	mu.Lock()
+	markRoot := rootComplete && allSub && !stopped && !anyStopped.Load()
+	mu.Unlock()
+	if markRoot {
+		markRootFullBelow(root, rootHash, gen, backed, cache)
+	}
+
 	return missing
+}
+
+// markRootFullBelow records the root as full-below at gen and, for backed
+// maps, in the family cache. Shared by both WalkMapParallel return paths.
+func markRootFullBelow(root *innerNode, rootHash [32]byte, gen uint32, backed bool, cache *FullBelowCache) {
+	root.setFullBelowGen(gen)
+	if backed {
+		cache.Insert(rootHash)
+	}
 }
 
 // GetMissingNodes returns the nodes referenced by the tree but not
