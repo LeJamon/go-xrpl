@@ -1,10 +1,12 @@
 package payment
 
 import (
+	"reflect"
 	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -813,6 +815,52 @@ func TestPaymentFlatten(t *testing.T) {
 			}
 			tt.checkMap(t, m)
 		})
+	}
+}
+
+func TestPaymentFlattenMemosAreCanonicalSTObjects(t *testing.T) {
+	payment := NewPayment(
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"rN7n7otQDd6FczFgLdSqtcsAUxDkw6fzRH",
+		tx.NewXRPAmount(1_000_000),
+	)
+	payment.Fee = "10"
+	payment.SetSequence(1)
+	payment.AddMemo("74657874", "68656C6C6F", "746578742F706C61696E")
+	payment.AddMemo("", "00", "")
+
+	wantMemos := []map[string]any{
+		{
+			"Memo": map[string]any{
+				"MemoType":   "74657874",
+				"MemoData":   "68656C6C6F",
+				"MemoFormat": "746578742F706C61696E",
+			},
+		},
+		{
+			"Memo": map[string]any{
+				"MemoData": "00",
+			},
+		},
+	}
+
+	commonMap := payment.Common.ToMap()
+	if got := commonMap["Memos"]; !reflect.DeepEqual(got, wantMemos) {
+		t.Fatalf("Common.ToMap Memos = %#v, want %#v", got, wantMemos)
+	}
+
+	flat, err := payment.Flatten()
+	if err != nil {
+		t.Fatalf("Flatten: %v", err)
+	}
+	if got := flat["Memos"]; !reflect.DeepEqual(got, wantMemos) {
+		t.Fatalf("Flatten Memos = %#v, want %#v", got, wantMemos)
+	}
+	if _, err := binarycodec.Encode(flat); err != nil {
+		t.Fatalf("encode memo-bearing typed transaction: %v", err)
+	}
+	if _, err := binarycodec.EncodeForSigning(flat); err != nil {
+		t.Fatalf("encode memo-bearing typed transaction for signing: %v", err)
 	}
 }
 

@@ -2,7 +2,6 @@ package tx
 
 import (
 	"encoding/hex"
-	"reflect"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -82,7 +81,7 @@ func memoHexFieldOkay(value string, urlRestricted bool) bool {
 // overhead by encoding an empty array with the same field so the header and end
 // marker cancel out, leaving only the array contents.
 func serializedMemosLength(memos []MemoWrapper) (int, error) {
-	arr := flattenStructSlice(reflect.ValueOf(memos))
+	arr := flattenMemos(memos)
 	full, err := binarycodec.EncodeBytes(map[string]any{"Memos": arr})
 	if err != nil {
 		return 0, err
