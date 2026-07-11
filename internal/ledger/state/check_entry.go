@@ -72,11 +72,19 @@ func ParseCheck(data []byte) (*CheckData, error) {
 
 		case stAmount:
 			if f.FieldCode == 9 { // SendMax
-				if len(f.Value) == 8 {
+				switch len(f.Value) {
+				case 8:
 					check.SendMax = xrpDrops(f.Value)
 					check.IsNativeSendMax = true
 					check.SendMaxAmount = NewXRPAmountFromInt(int64(check.SendMax))
-				} else if len(f.Value) == 48 {
+				case 33:
+					mptAmount, err := ParseMPTAmountBinary(f.Value)
+					if err != nil {
+						return fmt.Errorf("Check MPT SendMax parse failed: %w", err)
+					}
+					check.SendMaxAmount = mptAmount
+					check.IsNativeSendMax = false
+				case 48:
 					iouAmount, err := ParseIOUAmountBinary(f.Value)
 					if err != nil {
 						return err
@@ -129,6 +137,11 @@ func SerializeCheckFromData(check *CheckData) ([]byte, error) {
 	// Serialize SendMax
 	if check.IsNativeSendMax {
 		jsonObj["SendMax"] = fmt.Sprintf("%d", check.SendMax)
+	} else if check.SendMaxAmount.IsMPT() {
+		jsonObj["SendMax"] = map[string]any{
+			"value":           check.SendMaxAmount.Value(),
+			"mpt_issuance_id": check.SendMaxAmount.MPTIssuanceID(),
+		}
 	} else {
 		jsonObj["SendMax"] = map[string]any{
 			"value":    check.SendMaxAmount.Value(),

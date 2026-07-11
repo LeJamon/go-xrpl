@@ -2,10 +2,13 @@ package check
 
 import (
 	"encoding/hex"
+	"math"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -68,6 +71,9 @@ func (c *CheckCash) Validate() error {
 		if c.Amount.Signum() <= 0 {
 			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 		}
+		if badMPTAsset(*c.Amount) {
+			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid MPT issuance")
+		}
 		if !c.Amount.IsNative() && c.Amount.Currency == "XRP" {
 			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
 		}
@@ -76,6 +82,9 @@ func (c *CheckCash) Validate() error {
 	if hasDeliverMin {
 		if c.DeliverMin.Signum() <= 0 {
 			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin must be positive")
+		}
+		if badMPTAsset(*c.DeliverMin) {
+			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid MPT issuance")
 		}
 		if !c.DeliverMin.IsNative() && c.DeliverMin.Currency == "XRP" {
 			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
@@ -209,6 +218,9 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	if value == nil {
 		value = c.DeliverMin
 	}
+	if ctx.Rules().FixCleanup3_2_0Enabled() && !legalStoredMPTAmount(check.SendMaxAmount) {
+		return ter.TefBAD_LEDGER
+	}
 	if result := matchesCheckSendMax(*value, check.SendMaxAmount); result != ter.TesSUCCESS {
 		return result
 	}
@@ -220,12 +232,27 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	return c.applyCashWithDeliverMin(ctx, check, checkKey)
 }
 
+func legalStoredMPTAmount(amount state.Amount) bool {
+	if !amount.IsMPT() {
+		return true
+	}
+	value, ok := amount.MPTRaw()
+	return ok && value >= 0
+}
+
 // matchesCheckSendMax reports whether the requested cash amount's currency and
 // issuer match the check's SendMax. A mismatch returns temMALFORMED, matching
 // rippled's preclaim where the currency is compared before the issuer.
 // XRP and an issued currency never match (their currencies differ).
 // Reference: CashCheck.cpp L144-155.
 func matchesCheckSendMax(value, sendMax state.Amount) ter.Result {
+	if value.IsMPT() || sendMax.IsMPT() {
+		if !value.IsMPT() || !sendMax.IsMPT() ||
+			!strings.EqualFold(value.MPTIssuanceID(), sendMax.MPTIssuanceID()) {
+			return ter.TemMALFORMED
+		}
+		return ter.TesSUCCESS
+	}
 	if value.IsNative() != sendMax.IsNative() {
 		return ter.TemMALFORMED
 	}
@@ -249,6 +276,9 @@ func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *state.Check
 	if amount.IsNative() {
 		return c.applyCashXRP(ctx, check, checkKey, uint64(amount.Drops()), false)
 	}
+	if amount.IsMPT() {
+		return c.applyCashMPTAmount(ctx, check, checkKey, *amount, false)
+	}
 
 	// IOU Amount
 	return c.applyCashIOUAmount(ctx, check, checkKey, *amount, false)
@@ -261,6 +291,9 @@ func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.C
 	// For XRP checks
 	if deliverMin.IsNative() {
 		return c.applyCashXRP(ctx, check, checkKey, uint64(deliverMin.Drops()), true)
+	}
+	if deliverMin.IsMPT() {
+		return c.applyCashMPTAmount(ctx, check, checkKey, *deliverMin, true)
 	}
 
 	// IOU DeliverMin
@@ -375,6 +408,142 @@ func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext) uint6
 		return creator.Balance - reserve
 	}
 	return 0
+}
+
+func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedAmount tx.Amount, isDeliverMin bool) ter.Result {
+	mptID, err := mptutil.DecodeID(requestedAmount.MPTIssuanceID())
+	if err != nil {
+		return ter.TecOBJECT_NOT_FOUND
+	}
+	requested, ok := requestedAmount.MPTRaw()
+	if !ok || requested <= 0 {
+		return ter.TemBAD_AMOUNT
+	}
+	sendMax, ok := check.SendMaxAmount.MPTRaw()
+	if !ok || sendMax < requested {
+		return ter.TecPATH_PARTIAL
+	}
+
+	issuance, _, result := mptutil.ReadIssuance(ctx.View, mptID)
+	if result != ter.TesSUCCESS {
+		if result == ter.TecOBJECT_NOT_FOUND {
+			return ter.TecPATH_PARTIAL
+		}
+		return result
+	}
+	srcID := check.Account
+	dstID := ctx.AccountID
+	issuerID := issuance.Issuer
+
+	if result := mptutil.RequireAuthAt(ctx.View, mptID, srcID, true, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+		return ter.TecPATH_PARTIAL
+	}
+	srcFunds, result := mptutil.Funds(ctx.View, mptID, srcID, true)
+	if result != ter.TesSUCCESS || srcFunds < requested {
+		return ter.TecPATH_PARTIAL
+	}
+
+	if dstID != issuerID {
+		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
+		if err != nil || issuerData == nil {
+			return ter.TecNO_ISSUER
+		}
+		if result := mptutil.RequireAuthAt(ctx.View, mptID, dstID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+			return result
+		}
+		if mptutil.IsFrozen(ctx.View, mptID, dstID) {
+			return ter.TecLOCKED
+		}
+	}
+	if result := mptutil.CanTransfer(ctx.View, mptID, srcID, dstID); result != ter.TesSUCCESS {
+		return result
+	}
+
+	if dstID != issuerID {
+		if exists, err := ctx.View.Exists(keylet.MPTokenByID(mptID, dstID)); err != nil {
+			return ter.TefINTERNAL
+		} else if !exists {
+			if ctx.PriorBalance() < ctx.AccountReserve(ctx.Account.OwnerCount+1) {
+				return ter.TecINSUFFICIENT_RESERVE
+			}
+			if result := mptutil.EnsureHolding(ctx.View, mptID, dstID, 0, true); result != ter.TesSUCCESS {
+				return result
+			}
+			ctx.SyncSenderOwnerCount()
+		}
+	}
+
+	rate := mptutil.RateOne
+	if srcID != issuerID && dstID != issuerID {
+		rate = mptutil.TransferRate(ctx.View, mptID)
+	}
+	delivered := requested
+	if isDeliverMin {
+		maxDebit := min(sendMax, srcFunds)
+		var ok bool
+		delivered, ok = mptutil.DivideRate(maxDebit, rate)
+		if !ok {
+			return ter.TefEXCEPTION
+		}
+		if delivered > math.MaxInt64/2 {
+			delivered = math.MaxInt64 / 2
+		}
+		gross, ok := mptutil.MultiplyRate(delivered, rate)
+		if !ok {
+			return ter.TefEXCEPTION
+		}
+		for delivered > 0 && gross > maxDebit {
+			delivered--
+			gross, ok = mptutil.MultiplyRate(delivered, rate)
+			if !ok {
+				return ter.TefEXCEPTION
+			}
+		}
+		if delivered < requested {
+			return ter.TecPATH_PARTIAL
+		}
+	} else {
+		gross, ok := mptutil.MultiplyRate(delivered, rate)
+		if !ok {
+			return ter.TefEXCEPTION
+		}
+		if gross > sendMax {
+			return ter.TecPATH_PARTIAL
+		}
+	}
+
+	_, result = mptutil.Send(ctx.View, mptID, srcID, dstID, delivered, false, false)
+	if result == ter.TecINSUFFICIENT_FUNDS || result == ter.TecPATH_DRY {
+		return ter.TecPATH_PARTIAL
+	}
+	if result != ter.TesSUCCESS {
+		return result
+	}
+
+	deliveredAmount := state.NewMPTAmountWithIssuanceID(delivered, "", requestedAmount.MPTIssuanceID())
+	ctx.Metadata.DeliveredAmount = &deliveredAmount
+
+	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != ter.TesSUCCESS {
+		return result
+	}
+	creatorData, err := ctx.View.Read(keylet.Account(srcID))
+	if err != nil || creatorData == nil {
+		return ter.TefINTERNAL
+	}
+	creatorAccount, err := state.ParseAccountRoot(creatorData)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if creatorAccount.OwnerCount > 0 {
+		creatorAccount.OwnerCount--
+	}
+	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != ter.TesSUCCESS {
+		return result
+	}
+	if err := ctx.View.Erase(checkKey); err != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
 }
 
 // applyCashIOUAmount handles IOU check cashing for both Amount and DeliverMin.

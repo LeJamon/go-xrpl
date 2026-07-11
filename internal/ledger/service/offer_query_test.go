@@ -122,12 +122,20 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	copy(id[:], idBytes)
 
 	// Build the real book directory key so GetBookOffers can walk it.
+	paySide, err := bookSideFromAmount(takerPays)
+	if err != nil {
+		t.Fatalf("taker pays book side: %v", err)
+	}
+	getsSide, err := bookSideFromAmount(takerGets)
+	if err != nil {
+		t.Fatalf("taker gets book side: %v", err)
+	}
 	payCurr := keylet.CurrencyBytes(takerPays.Currency)
 	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
 	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
-	bookBase := keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
-	quality := state.CalculateQuality(takerPays, takerGets)
+	bookBase := keylet.BookBase(paySide, getsSide, nil).Key
+	quality := state.CalculateQuality(takerGets, takerPays)
 	var bookDir [32]byte
 	copy(bookDir[:], bookBase[:])
 	binary.BigEndian.PutUint64(bookDir[24:], quality)
@@ -153,10 +161,20 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	// reaches it. Mirrors rippled's dirAdd from CreateOffer apply path.
 	dirKeylet := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: bookDir}
 	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, true, func(d *state.DirectoryNode) {
-		d.TakerPaysCurrency = payCurr
-		d.TakerPaysIssuer = payIssuer
-		d.TakerGetsCurrency = getsCurr
-		d.TakerGetsIssuer = getsIssuer
+		if paySide.IsMPT {
+			id := paySide.MPTID
+			d.TakerPaysMPT = &id
+		} else {
+			d.TakerPaysCurrency = payCurr
+			d.TakerPaysIssuer = payIssuer
+		}
+		if getsSide.IsMPT {
+			id := getsSide.MPTID
+			d.TakerGetsMPT = &id
+		} else {
+			d.TakerGetsCurrency = getsCurr
+			d.TakerGetsIssuer = getsIssuer
+		}
 		d.ExchangeRate = quality
 	}); derr != nil {
 		t.Fatalf("dir insert: %v", derr)
@@ -381,7 +399,7 @@ func insertPermissionedOffer(t *testing.T, svc *Service, ownerAddr string, seque
 	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 	bookBase := keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
-	quality := state.CalculateQuality(takerPays, takerGets)
+	quality := state.CalculateQuality(takerGets, takerPays)
 	var bookDir [32]byte
 	copy(bookDir[:], bookBase[:])
 	binary.BigEndian.PutUint64(bookDir[24:], quality)

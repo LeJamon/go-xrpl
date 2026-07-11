@@ -3,6 +3,7 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -31,12 +32,15 @@ func PseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, key [32]byte)
 
 // computeAMMKeylet computes the AMM keylet from the asset pair.
 func computeAMMKeylet(asset1, asset2 tx.Asset) keylet.Keylet {
-	issuer1 := getIssuerBytes(asset1.Issuer)
-	currency1 := keylet.CurrencyBytes(asset1.Currency)
-	issuer2 := getIssuerBytes(asset2.Issuer)
-	currency2 := keylet.CurrencyBytes(asset2.Currency)
+	return keylet.AMMAsset(assetBookSide(asset1), assetBookSide(asset2))
+}
 
-	return keylet.AMM(issuer1, currency1, issuer2, currency2)
+func assetBookSide(asset tx.Asset) keylet.BookSide {
+	if asset.IsMPT() {
+		id, _ := mptutil.DecodeID(asset.MPTIssuanceID)
+		return keylet.MPTSide(id)
+	}
+	return keylet.IssueSide(keylet.CurrencyBytes(asset.Currency), getIssuerBytes(asset.Issuer))
 }
 
 // getIssuerBytes converts an issuer address string to a 20-byte account ID.

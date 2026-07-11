@@ -479,6 +479,9 @@ func (a Amount) IsZero() bool {
 	if a.IsNative() {
 		return a.xrp.IsZero()
 	}
+	if a.mptRaw != nil {
+		return *a.mptRaw == 0
+	}
 	return a.iou.IsZero()
 }
 
@@ -487,6 +490,9 @@ func (a Amount) IsNegative() bool {
 	if a.IsNative() {
 		return a.xrp.IsNegative()
 	}
+	if a.mptRaw != nil {
+		return *a.mptRaw < 0
+	}
 	return a.iou.IsNegative()
 }
 
@@ -494,6 +500,15 @@ func (a Amount) IsNegative() bool {
 func (a Amount) Signum() int {
 	if a.IsNative() {
 		return a.xrp.Signum()
+	}
+	if a.mptRaw != nil {
+		if *a.mptRaw < 0 {
+			return -1
+		}
+		if *a.mptRaw > 0 {
+			return 1
+		}
+		return 0
 	}
 	return a.iou.Signum()
 }
@@ -516,6 +531,9 @@ func (a Amount) Float64() float64 {
 	if a.IsNative() {
 		return float64(a.xrp.drops)
 	}
+	if a.mptRaw != nil {
+		return float64(*a.mptRaw)
+	}
 	return a.iou.Float64()
 }
 
@@ -527,12 +545,24 @@ func (a Amount) Negate() Amount {
 			Native: true,
 		}
 	}
+	if a.mptRaw != nil {
+		if *a.mptRaw == math.MinInt64 {
+			panic("MPT negate overflow")
+		}
+		return newMPTAmountLike(a, -*a.mptRaw)
+	}
 	return Amount{
 		iou:      a.iou.Negate(),
 		Currency: a.Currency,
 		Issuer:   a.Issuer,
 		Native:   false,
 	}
+}
+
+func newMPTAmountLike(prototype Amount, value int64) Amount {
+	result := NewMPTAmountDirect(value, prototype.Currency, prototype.Issuer)
+	result.mptIssuanceID = prototype.mptIssuanceID
+	return result
 }
 
 // MarshalJSON implements custom JSON marshaling

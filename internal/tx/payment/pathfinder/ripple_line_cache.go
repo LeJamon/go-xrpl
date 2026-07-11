@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -64,6 +65,13 @@ type PathFindTrustLine struct {
 	Currency string
 }
 
+// PathFindMPT describes an account's relationship to an MPT issuance.
+type PathFindMPT struct {
+	ID          [24]byte
+	ZeroBalance bool
+	MaxedOut    bool
+}
+
 // accountKey is the cache key for RippleLineCache.
 type accountKey struct {
 	Account   [20]byte
@@ -77,6 +85,7 @@ type RippleLineCache struct {
 	ledger tx.LedgerView
 	mu     sync.RWMutex
 	lines  map[accountKey][]PathFindTrustLine
+	mpts   map[[20]byte][]PathFindMPT
 
 	// builders serializes trust-line builds per account so concurrent
 	// callers for the same account — regardless of direction — coalesce
@@ -91,6 +100,7 @@ func NewRippleLineCache(ledger tx.LedgerView) *RippleLineCache {
 	return &RippleLineCache{
 		ledger: ledger,
 		lines:  make(map[accountKey][]PathFindTrustLine),
+		mpts:   make(map[[20]byte][]PathFindMPT),
 	}
 }
 
@@ -147,6 +157,76 @@ func (c *RippleLineCache) GetRippleLines(account [20]byte, direction LineDirecti
 	}
 	c.mu.Unlock()
 	return lines
+}
+
+// GetMPTs returns the MPT issuances and holdings owned by account.
+func (c *RippleLineCache) GetMPTs(account [20]byte) []PathFindMPT {
+	c.mu.RLock()
+	cached, ok := c.mpts[account]
+	c.mu.RUnlock()
+	if ok {
+		return cached
+	}
+
+	builderAny, _ := c.builders.LoadOrStore(account, &sync.Mutex{})
+	builder := builderAny.(*sync.Mutex)
+	builder.Lock()
+	defer builder.Unlock()
+
+	c.mu.RLock()
+	cached, ok = c.mpts[account]
+	c.mu.RUnlock()
+	if ok {
+		return cached
+	}
+
+	mpts := c.buildMPTs(account)
+	c.mu.Lock()
+	c.mpts[account] = mpts
+	c.mu.Unlock()
+	return mpts
+}
+
+func (c *RippleLineCache) buildMPTs(account [20]byte) []PathFindMPT {
+	var mpts []PathFindMPT
+	_ = state.DirForEach(c.ledger, keylet.OwnerDir(account), func(itemKey [32]byte) error {
+		data, err := c.ledger.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			return nil
+		}
+
+		switch state.EntryType(data) {
+		case "MPTokenIssuance":
+			issuance, err := state.ParseMPTokenIssuance(data)
+			if err != nil || issuance.Issuer != account {
+				return nil
+			}
+			id := keylet.MakeMPTID(issuance.Sequence, account)
+			mpts = append(mpts, PathFindMPT{
+				ID:       id,
+				MaxedOut: issuance.OutstandingAmount == mptutil.MaximumAmount(issuance),
+			})
+			return nil
+		case "MPToken":
+			holding, err := state.ParseMPToken(data)
+			if err != nil || holding.Account != account {
+				return nil
+			}
+			maxedOut := true
+			if issuance, _, result := mptutil.ReadIssuance(c.ledger, holding.MPTokenIssuanceID); result.IsSuccess() {
+				maxedOut = issuance.OutstandingAmount == mptutil.MaximumAmount(issuance)
+			}
+			mpts = append(mpts, PathFindMPT{
+				ID:          holding.MPTokenIssuanceID,
+				ZeroBalance: holding.MPTAmount == 0,
+				MaxedOut:    maxedOut,
+			})
+			return nil
+		default:
+			return nil
+		}
+	})
+	return mpts
 }
 
 // lookup returns a cached slice for the requested (account, direction)

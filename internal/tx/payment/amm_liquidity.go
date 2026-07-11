@@ -10,6 +10,8 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -165,7 +167,7 @@ func (l *AMMLiquidity) generateOffer(view *PaymentSandbox, poolIn, poolOut tx.Am
 	// Single-path with CLOB quality: match spot price to CLOB quality
 	offerIn, offerOut, ok, blocked := ChangeSpotPriceQuality(
 		poolIn, poolOut, *clobQuality, l.tradingFee,
-		l.fixAMMv1_1, l.issueOut.IsXRP(),
+		l.fixAMMv1_1, l.issueOut.IsXRP() || l.issueOut.IsMPT,
 	)
 	if ok {
 		return NewAMMOffer(l, offerIn, offerOut, poolIn, poolOut)
@@ -298,6 +300,13 @@ func ammAccountHoldsFromPayment(view *PaymentSandbox, ammAccountID [20]byte, iss
 			return state.NewXRPAmountFromInt(0)
 		}
 		return state.NewXRPAmountFromInt(int64(acct.Balance))
+	}
+	if issue.IsMPT {
+		funds, result := mptutil.Funds(view, issue.MPTID, ammAccountID, true)
+		if result != ter.TesSUCCESS || funds <= 0 {
+			return newMPTAmount(0, issue.MPTID)
+		}
+		return newMPTAmount(funds, issue.MPTID)
 	}
 
 	zeroIOU := state.NewIssuedAmountFromValue(0, -100, issue.Currency, state.EncodeAccountIDSafe(issue.Issuer))

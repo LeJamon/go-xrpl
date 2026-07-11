@@ -257,19 +257,14 @@ func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := keylet.CurrencyBytes(takerPays.Currency)
-	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
-	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
-
-	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
+	bookBase, err := offerBookBase(takerPays, takerGets, nil)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
 	openBookDirKey := keylet.Quality(bookBase, openRate)
 
 	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
-		dir.TakerPaysCurrency = takerPaysCurrency
-		dir.TakerPaysIssuer = takerPaysIssuer
-		dir.TakerGetsCurrency = takerGetsCurrency
-		dir.TakerGetsIssuer = takerGetsIssuer
+		_ = setBookDirectoryAssets(dir, takerPays, takerGets)
 		dir.ExchangeRate = openRate
 		// No DomainID for open book
 	})

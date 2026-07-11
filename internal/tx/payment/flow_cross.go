@@ -1,8 +1,11 @@
 package payment
 
 import (
+	"math"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -120,11 +123,19 @@ func FlowCross(
 	// 3. Limit to available balance
 	//
 	// sendMax = min(takerGets * transferRate, balance)
-	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
+	inStartBalance := accountFundsForCross(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
 
 	sendMax := ToEitherAmount(takerGets)
 
-	if !takerGets.IsNative() {
+	if takerGets.IsMPT() {
+		if id, ok := decodeMPTID(takerGets.MPTIssuanceID()); ok && takerAccount != mptutil.Issuer(id) {
+			transferRate := mptutil.TransferRate(view, id)
+			if transferRate != QualityOne {
+				rateAmt := rateAsAmount(transferRate)
+				sendMax = NewMPTEitherAmount(state.MulRoundMPT(takerGets, rateAmt, true), id)
+			}
+		}
+	} else if !takerGets.IsNative() {
 		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
@@ -171,10 +182,17 @@ func FlowCross(
 	// Note: In FlowCross, takerPays = the deliver currency (what gets delivered to the taker),
 	// so we check takerPays.IsNative() to determine the deliver type (XRP vs IOU).
 	if params.Sell {
-		if takerPays.IsNative() {
+		switch {
+		case takerPays.IsNative():
 			// Reference: rippled STAmount::cMaxNative = 9000000000000000000
 			deliver = NewXRPEitherAmount(9000000000000000000)
-		} else {
+		case takerPays.IsMPT():
+			id, ok := decodeMPTID(takerPays.MPTIssuanceID())
+			if !ok {
+				return FlowCrossResult{Result: ter.TefINTERNAL, Sandbox: sandbox}
+			}
+			deliver = NewMPTEitherAmount(math.MaxInt64/2, id)
+		default:
 			// Reference: rippled uses cMaxValue/2=4999999999999999, cMaxOffset=80
 			deliver = NewIOUEitherAmount(tx.NewIssuedAmount(
 				4999999999999999, 80,
@@ -206,6 +224,7 @@ func FlowCross(
 		paths,        // explicit paths (XRP bridge for IOU-IOU)
 		true,         // addDefaultPath
 		true,         // offerCrossing - skip trust line checks, create lines on demand
+		params.ParentCloseTime,
 	)
 
 	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
@@ -284,7 +303,15 @@ func FlowCross(
 	takerPaidGross := result.In
 	takerPaidNet := result.In
 
-	if !takerGets.IsNative() {
+	if takerGets.IsMPT() {
+		if id, ok := decodeMPTID(takerGets.MPTIssuanceID()); ok && takerAccount != mptutil.Issuer(id) {
+			transferRate := mptutil.TransferRate(view, id)
+			if transferRate != QualityOne && transferRate > 0 {
+				rateAmt := rateAsAmount(transferRate)
+				takerPaidNet = NewMPTEitherAmount(state.DivRoundMPT(FromEitherAmount(result.In), rateAmt, true), id)
+			}
+		}
+	} else if !takerGets.IsNative() {
 		issuerID, err := state.DecodeAccountID(takerGets.Issuer)
 		if err == nil && takerAccount != issuerID {
 			transferRate := GetTransferRate(view, issuerID)
@@ -374,6 +401,11 @@ func zeroCrossAmount(amt tx.Amount) EitherAmount {
 	if amt.IsNative() {
 		return ZeroXRPEitherAmount()
 	}
+	if amt.IsMPT() {
+		if id, ok := decodeMPTID(amt.MPTIssuanceID()); ok {
+			return ZeroMPTEitherAmount(id)
+		}
+	}
 	return ZeroIOUEitherAmount(amt.Currency, amt.Issuer)
 }
 
@@ -404,6 +436,9 @@ func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
 // Matches rippled's accountFunds(psb, ...) in CreateOffer.cpp line 432.
 // BalanceHook subtracts DeferredCredits so self-crossing round-trips report zero.
 func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+	if amount.IsMPT() {
+		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
+	}
 	rawBalance := tx.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 
 	if amount.IsNative() {
@@ -415,6 +450,21 @@ func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amo
 		return rawBalance
 	}
 	return sb.BalanceHook(accountID, issuerID, rawBalance)
+}
+
+func accountFundsForCross(view tx.LedgerView, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+	if !amount.IsMPT() {
+		return tx.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement)
+	}
+	id, ok := decodeMPTID(amount.MPTIssuanceID())
+	if !ok {
+		return state.NewMPTAmountWithIssuanceID(0, amount.Issuer, amount.MPTIssuanceID())
+	}
+	funds, result := mptutil.Funds(view, id, accountID, zeroIfFrozen)
+	if result != ter.TesSUCCESS {
+		funds = 0
+	}
+	return state.NewMPTAmountWithIssuanceID(funds, amount.Issuer, amount.MPTIssuanceID())
 }
 
 // rateAsAmount converts a uint32 transfer rate to an Amount, matching rippled's

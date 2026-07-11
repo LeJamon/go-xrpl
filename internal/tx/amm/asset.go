@@ -1,8 +1,11 @@
 package amm
 
 import (
+	"strings"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -11,7 +14,7 @@ import (
 // isXRPAsset reports whether an asset names XRP. XRP is encoded as either an
 // empty currency or the ISO code "XRP".
 func isXRPAsset(asset tx.Asset) bool {
-	return asset.Currency == "" || asset.Currency == "XRP"
+	return !asset.IsMPT() && (asset.Currency == "" || asset.Currency == "XRP")
 }
 
 // zeroIOU returns a zero-valued issued amount with no currency or issuer,
@@ -23,6 +26,9 @@ func zeroIOU() tx.Amount {
 // matchesAssetByIssue checks if two Assets represent the same issue.
 // Handles XRP being represented as either "" or "XRP" for currency.
 func matchesAssetByIssue(a, b tx.Asset) bool {
+	if a.IsMPT() || b.IsMPT() {
+		return a.IsMPT() && b.IsMPT() && strings.EqualFold(a.MPTIssuanceID, b.MPTIssuanceID)
+	}
 	if isXRPAsset(a) && isXRPAsset(b) {
 		return true
 	}
@@ -34,6 +40,10 @@ func matchesAssetByIssue(a, b tx.Asset) bool {
 func matchesAsset(amt *tx.Amount, asset tx.Asset) bool {
 	if amt == nil {
 		return false
+	}
+	if amt.IsMPT() || asset.IsMPT() {
+		return amt.IsMPT() && asset.IsMPT() &&
+			strings.EqualFold(amt.MPTIssuanceID(), asset.MPTIssuanceID)
 	}
 	// Check if both are XRP (currency empty or "XRP", no issuer)
 	amtIsXRP := amt.IsNative() || amt.Currency == "" || amt.Currency == "XRP"
@@ -80,7 +90,43 @@ func zeroAmount(asset tx.Asset) tx.Amount {
 	if isXRPAsset(asset) {
 		return state.NewXRPAmountFromInt(0)
 	}
+	if asset.IsMPT() {
+		return mptAmount(asset, 0)
+	}
 	return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
+}
+
+func mptAmount(asset tx.Asset, value int64) tx.Amount {
+	issuer := asset.Issuer
+	if issuer == "" {
+		if id, err := mptutil.DecodeID(asset.MPTIssuanceID); err == nil {
+			issuer, _ = state.EncodeAccountID(mptutil.Issuer(id))
+		}
+	}
+	return state.NewMPTAmountWithIssuanceID(value, issuer, asset.MPTIssuanceID)
+}
+
+func mptValue(amount tx.Amount) (int64, bool) {
+	if !amount.IsMPT() {
+		return 0, false
+	}
+	return amount.MPTRaw()
+}
+
+func compareAmounts(a, b tx.Amount) int {
+	if av, aok := mptValue(a); aok {
+		if bv, bok := mptValue(b); bok {
+			switch {
+			case av < bv:
+				return -1
+			case av > bv:
+				return 1
+			default:
+				return 0
+			}
+		}
+	}
+	return a.Compare(b)
 }
 
 // compareAccountIDs compares two account IDs lexicographically.
@@ -95,7 +141,7 @@ func encodeAccountID(accountID [20]byte) (string, error) {
 
 // minAmountIOU returns the smaller of two amounts compared in IOU space.
 func minAmountIOU(a, b tx.Amount) tx.Amount {
-	if toIOUForCalc(a).Compare(toIOUForCalc(b)) < 0 {
+	if compareAmounts(a, b) < 0 {
 		return a
 	}
 	return b
@@ -104,7 +150,7 @@ func minAmountIOU(a, b tx.Amount) tx.Amount {
 // maxAmount returns the larger of two amounts.
 // Assumes both amounts are of the same type (both XRP or same IOU).
 func maxAmount(a, b tx.Amount) tx.Amount {
-	if a.Compare(b) > 0 {
+	if compareAmounts(a, b) > 0 {
 		return a
 	}
 	return b
@@ -112,17 +158,17 @@ func maxAmount(a, b tx.Amount) tx.Amount {
 
 // isGreater returns true if a > b
 func isGreater(a, b tx.Amount) bool {
-	return a.Compare(b) > 0
+	return compareAmounts(a, b) > 0
 }
 
 // isGreaterOrEqual returns true if a >= b
 func isGreaterOrEqual(a, b tx.Amount) bool {
-	return a.Compare(b) >= 0
+	return compareAmounts(a, b) >= 0
 }
 
 // isLessOrEqual returns true if a <= b
 func isLessOrEqual(a, b tx.Amount) bool {
-	return a.Compare(b) <= 0
+	return compareAmounts(a, b) <= 0
 }
 
 // withinRelativeDistance checks if two amounts are within relative distance dist.
@@ -167,7 +213,7 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 		return false, ter.TecINTERNAL
 	}
 
-	var nLPTokenTrustLines, nIOUTrustLines uint8
+	var nLPTokenTrustLines, nIOUTrustLines, nMPT uint8
 	hasAMM := false
 
 	ownerDirKey := keylet.OwnerDir(ammAccountID)
@@ -197,6 +243,12 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 					return false, ter.TecINTERNAL
 				}
 				hasAMM = true
+				continue
+			}
+			if entry.Type(entryType) == entry.TypeMPToken {
+				if nMPT++; nMPT > 2 {
+					return false, ter.TecINTERNAL
+				}
 				continue
 			}
 			if entry.Type(entryType) != entry.TypeRippleState {
@@ -232,7 +284,8 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 		}
 
 		if currentPage.IndexNext == 0 {
-			if nLPTokenTrustLines != 1 || nIOUTrustLines == 0 || nIOUTrustLines > 2 {
+			if nLPTokenTrustLines != 1 || nIOUTrustLines == 0 && nMPT == 0 ||
+				nIOUTrustLines > 2 || nMPT > 2 || nIOUTrustLines+nMPT > 2 {
 				return false, ter.TecINTERNAL
 			}
 			return true, ter.TesSUCCESS

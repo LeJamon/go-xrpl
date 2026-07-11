@@ -1,11 +1,18 @@
 package pathfinder
 
 import (
+	"math"
+	"time"
+
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Pathfinding search levels mirror rippled's config defaults
@@ -55,6 +62,24 @@ type PathRequest struct {
 	searchLevel      int
 }
 
+// IsValidAsset reports whether an amount carries an asset that path finding
+// may use. Parsed MPT amounts must encode a non-zero issuer in their issuance
+// ID, matching rippled's validAsset check.
+func IsValidAsset(amount tx.Amount) bool {
+	return payment.GetIssue(amount).IsConsistent()
+}
+
+// ParseSourceMPTID parses the uint192 syntax accepted for an MPT entry in
+// source_currencies. In addition to a full-width ID, rippled accepts the
+// literal "0" as the zero uint192 value.
+func ParseSourceMPTID(value string) ([24]byte, bool) {
+	if value == "0" {
+		return [24]byte{}, true
+	}
+	id, err := mptutil.DecodeID(value)
+	return id, err == nil
+}
+
 // NewPathRequest creates a new path request from the given parameters.
 func NewPathRequest(
 	srcAccount, dstAccount [20]byte,
@@ -86,6 +111,14 @@ func (pr *PathRequest) SetSearchLevel(level int) {
 // Reference: rippled PathRequest::doUpdate()
 func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 	cache := NewRippleLineCache(ledger)
+	parentCloseTime := ledgerParentCloseTime(ledger)
+	fixReducedOffersV2 := false
+	if rules := ledger.Rules(); rules != nil {
+		fixReducedOffersV2 = rules.Enabled(amendment.FeatureFixReducedOffersV2)
+	}
+	calculationOptions := []payment.RippleCalculateOption{
+		payment.WithAmendments(parentCloseTime, fixReducedOffersV2),
+	}
 
 	// Determine source currencies
 	srcCurrencies := pr.sourceCurrencies
@@ -102,19 +135,19 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		//   sourceCurrencies.insert({c, c.isZero() ? xrpAccount() : *raSrcAccount});
 		discovered := AccountSourceCurrencies(pr.srcAccount, cache)
 		sameAccount := pr.srcAccount == pr.dstAccount
-		dstCurrency := pr.dstAmount.Currency
-		if pr.dstAmount.IsNative() {
-			dstCurrency = "XRP"
-		}
-		// Track unique currencies (not issues) to avoid duplicates
-		seenCurrencies := make(map[string]bool)
+		dstIssue := payment.GetIssue(pr.dstAmount)
+		seenAssets := make(map[string]bool)
 		for issue := range discovered {
-			if seenCurrencies[issue.Currency] {
+			assetKey := issue.Currency
+			if issue.IsMPT {
+				assetKey = mptutil.EncodeID(issue.MPTID)
+			}
+			if seenAssets[assetKey] {
 				continue
 			}
-			seenCurrencies[issue.Currency] = true
+			seenAssets[assetKey] = true
 			// Skip if same account sending same currency to itself
-			if sameAccount && issue.Currency == dstCurrency {
+			if sameAccount && samePathfindingAsset(issue, dstIssue) {
 				continue
 			}
 			// More than maxAutoSrcCur auto-discovered currencies fails the
@@ -124,7 +157,9 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			}
 			// Build issue with source account as issuer (matching rippled)
 			var srcIssue payment.Issue
-			if issue.Currency == "XRP" || issue.Currency == "" {
+			if issue.IsMPT {
+				srcIssue = issue
+			} else if issue.Currency == "XRP" || issue.Currency == "" {
 				srcIssue = payment.Issue{Currency: "XRP"}
 			} else {
 				srcIssue = payment.Issue{Currency: issue.Currency, Issuer: pr.srcAccount}
@@ -138,7 +173,11 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 	// Compute destination currencies
 	destCurrencies := AccountDestCurrencies(pr.dstAccount, cache)
 	for issue := range destCurrencies {
-		result.DestinationCurrencies = append(result.DestinationCurrencies, issue.Currency)
+		if issue.IsMPT {
+			result.DestinationCurrencies = append(result.DestinationCurrencies, mptutil.EncodeID(issue.MPTID))
+		} else {
+			result.DestinationCurrencies = append(result.DestinationCurrencies, issue.Currency)
+		}
 	}
 
 	// Track previously found paths per source currency (mContext in rippled)
@@ -159,18 +198,25 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			srcAmount = *pr.sendMax
 		} else if srcIssue.IsXRP() {
 			srcAmount = state.NewXRPAmountFromInt(int64(99999999999)) // Max XRP
+		} else if srcIssue.IsMPT {
+			srcAmount = state.NewMPTAmountWithIssuanceID(
+				int64(entry.MaxMPTokenAmount),
+				state.EncodeAccountIDSafe(srcIssue.Issuer),
+				mptutil.EncodeID(srcIssue.MPTID),
+			)
 		} else {
 			// Max IOU amount
 			srcAmount = state.NewIssuedAmountFromFloat64(9999999999999999e80, srcIssue.Currency, state.EncodeAccountIDSafe(srcIssue.Issuer))
 		}
 
 		// Run pathfinding
-		pf := NewPathfinder(
+		pf := NewPathfinderForIssue(
 			ledger, cache,
 			pr.srcAccount, pr.dstAccount,
 			effectiveDstAmount, srcAmount,
-			srcIssue.Currency, srcIssue.Issuer,
+			srcIssue,
 			pr.convertAll,
+			parentCloseTime,
 		)
 
 		if !pf.FindPaths(pr.searchLevel) {
@@ -201,6 +247,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			pr.convertAll,
 			false,
 			[32]byte{}, 0,
+			calculationOptions...,
 		)
 		calcResult := validateRC.Result
 
@@ -218,6 +265,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 				false,
 				false,
 				[32]byte{}, 0,
+				calculationOptions...,
 			).Result
 		}
 
@@ -233,13 +281,14 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 				pr.convertAll,
 				false,
 				[32]byte{}, 0,
+				calculationOptions...,
 			)
 
 			// Set the source amount's issuer the way rippled does
 			// (rc.actualAmountIn.setIssuer(sourceAccount)): the explicit
 			// issue account, or the source account itself for IOUs.
 			sourceAmount := payment.FromEitherAmount(finalRC.ActualIn)
-			if !sourceAmount.IsNative() {
+			if !sourceAmount.IsNative() && !sourceAmount.IsMPT() {
 				if srcIssue.Issuer != ([20]byte{}) {
 					sourceAmount.Issuer = state.EncodeAccountIDSafe(srcIssue.Issuer)
 				} else {
@@ -259,13 +308,32 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 	return result
 }
 
+type parentCloseTimeView interface {
+	ParentCloseTime() time.Time
+}
+
+func ledgerParentCloseTime(view tx.LedgerView) uint32 {
+	provider, ok := view.(parentCloseTimeView)
+	if !ok {
+		return 0
+	}
+	closeTime := provider.ParentCloseTime()
+	if closeTime.IsZero() {
+		return 0
+	}
+	seconds := closeTime.Unix() - protocol.RippleEpochUnix
+	if seconds <= 0 {
+		return 0
+	}
+	if seconds > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(seconds)
+}
+
 // issueFromTxAmount extracts an Issue from a tx.Amount.
 func issueFromTxAmount(amt tx.Amount) payment.Issue {
-	if amt.IsNative() {
-		return payment.Issue{Currency: "XRP"}
-	}
-	issuer, _ := state.DecodeAccountID(amt.Issuer)
-	return payment.Issue{Currency: amt.Currency, Issuer: issuer}
+	return payment.GetIssue(amt)
 }
 
 // AccountExists checks if an account exists in the ledger.

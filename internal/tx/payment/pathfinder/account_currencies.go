@@ -32,6 +32,11 @@ func AccountSourceCurrencies(account [20]byte, cache *RippleLineCache) map[payme
 			}
 		}
 	}
+	for _, mpt := range cache.GetMPTs(account) {
+		if !mpt.ZeroBalance && !mpt.MaxedOut {
+			currencies[payment.NewMPTIssue(mpt.ID)] = true
+		}
+	}
 
 	return currencies
 }
@@ -50,6 +55,11 @@ func AccountDestCurrencies(account [20]byte, cache *RippleLineCache) map[payment
 		// Include if balance < limit (can accept more of this currency)
 		if line.Balance.Compare(line.Limit) < 0 {
 			currencies[payment.Issue{Currency: line.Currency, Issuer: line.AccountIDPeer}] = true
+		}
+	}
+	for _, mpt := range cache.GetMPTs(account) {
+		if mpt.ZeroBalance && !mpt.MaxedOut {
+			currencies[payment.NewMPTIssue(mpt.ID)] = true
 		}
 	}
 

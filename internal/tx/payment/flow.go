@@ -83,15 +83,21 @@ func Flow(
 
 	// Initialize result accumulators
 	var totalIn, totalOut EitherAmount
-	if outReq.IsNative {
+	switch {
+	case outReq.IsNative:
 		totalOut = ZeroXRPEitherAmount()
-	} else {
+	case outReq.IsMPT:
+		totalOut = ZeroMPTEitherAmount(outReq.MPTID)
+	default:
 		totalOut = ZeroIOUEitherAmount(outReq.IOU.Currency, outReq.IOU.Issuer)
 	}
 	if sendMax != nil {
-		if sendMax.IsNative {
+		switch {
+		case sendMax.IsNative:
 			totalIn = ZeroXRPEitherAmount()
-		} else {
+		case sendMax.IsMPT:
+			totalIn = ZeroMPTEitherAmount(sendMax.MPTID)
+		default:
 			totalIn = ZeroIOUEitherAmount(sendMax.IOU.Currency, sendMax.IOU.Issuer)
 		}
 	} else {
@@ -491,6 +497,10 @@ func limitOut(v *PaymentSandbox, strand Strand, remainingOut EitherAmount, limit
 		// which calls Number::operator rep() (round to nearest, even on tie).
 		drops := canonicalizeDropsRound(outAmt.Mantissa(), outAmt.Exponent())
 		out = NewXRPEitherAmount(drops)
+	} else if remainingOut.IsMPT {
+		n := state.NewXRPLNumber(outAmt.Mantissa(), outAmt.Exponent())
+		value := n.ToInt64WithMode(state.RoundToNearest)
+		out = NewMPTEitherAmount(value, remainingOut.MPTID)
 	} else {
 		// Preserve currency/issuer from remainingOut (outAmt has empty currency/issuer
 		// because QualityFunction uses Number arithmetic with no issue info).
@@ -645,7 +655,7 @@ func RippleCalculate(
 	sandbox.SetOpenLedger(rcOpts.openLedger)
 
 	// Convert paths to strands (offerCrossing=false for payments).
-	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false)
+	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false, rcOpts.parentCloseTime)
 	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
 		if strandResult == ter.TesSUCCESS {
 			strandResult = ter.TecPATH_DRY

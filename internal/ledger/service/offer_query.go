@@ -7,12 +7,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -155,13 +158,10 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		}
 	}
 
-	getsIssuer := takerGets.Issuer
-	bGlobalFreeze := tx.IsGlobalFrozen(targetLedger, takerGets.Issuer) ||
-		tx.IsGlobalFrozen(targetLedger, takerPays.Issuer)
-	rate := tx.TransferRateParity
-	if !takerGets.IsNative() {
-		rate = tx.GetTransferRate(targetLedger, getsIssuer)
-	}
+	getsIssuer := amountIssuer(takerGets)
+	bGlobalFreeze := amountGlobalFrozen(targetLedger, takerGets) ||
+		amountGlobalFrozen(targetLedger, takerPays)
+	rate := amountTransferRate(targetLedger, takerGets)
 	_, reserveBase, reserveIncrement := readFeesFromLedger(targetLedger)
 
 	// balances tracks each owner's remaining funds across the iteration.
@@ -388,7 +388,11 @@ func (s *Service) buildBookOffer(
 			if decErr != nil {
 				return BookOffer{}, decErr
 			}
-			ownerFunds = tx.AccountFunds(view, accountID, takerGets, true, reserveBase, reserveIncrement)
+			funds, fundsErr := accountBookFunds(view, accountID, takerGets, reserveBase, reserveIncrement)
+			if fundsErr != nil {
+				return BookOffer{}, fundsErr
+			}
+			ownerFunds = funds
 		}
 	}
 
@@ -458,25 +462,96 @@ func (s *Service) buildBookOffer(
 // hash including its natural low-8 bytes, so we must zero them here so the
 // returned key sorts strictly below every quality tier in the book.
 func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
-	payCurr := keylet.CurrencyBytes(takerPays.Currency)
-	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
-	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
+	pays, err := bookSideFromAmount(takerPays)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	gets, err := bookSideFromAmount(takerGets)
+	if err != nil {
+		return [32]byte{}, err
+	}
 
-	var key [32]byte
-	if domainHex == "" {
-		key = keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
-	} else {
-		var domainID [32]byte
-		if err := decodeHex32Into(domainHex, &domainID); err != nil {
+	var domainID *[32]byte
+	if domainHex != "" {
+		domainID = new([32]byte)
+		if err := decodeHex32Into(domainHex, domainID); err != nil {
 			return [32]byte{}, err
 		}
-		key = keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
 	}
+	key := keylet.BookBase(pays, gets, domainID).Key
 	for i := 24; i < 32; i++ {
 		key[i] = 0
 	}
 	return key, nil
+}
+
+func bookSideFromAmount(amount tx.Amount) (keylet.BookSide, error) {
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+		if err != nil {
+			return keylet.BookSide{}, err
+		}
+		return keylet.MPTSide(id), nil
+	}
+	return keylet.IssueSide(
+		keylet.CurrencyBytes(amount.Currency),
+		state.GetIssuerBytes(amount.Issuer),
+	), nil
+}
+
+func amountMPTID(amount tx.Amount) ([24]byte, bool) {
+	if !amount.IsMPT() {
+		return [24]byte{}, false
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return id, err == nil
+}
+
+func amountIssuer(amount tx.Amount) string {
+	if id, ok := amountMPTID(amount); ok {
+		return state.EncodeAccountIDSafe(mptutil.Issuer(id))
+	}
+	return amount.Issuer
+}
+
+func amountGlobalFrozen(view tx.LedgerView, amount tx.Amount) bool {
+	issuer := amountIssuer(amount)
+	return issuer != "" && tx.IsGlobalFrozen(view, issuer)
+}
+
+func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
+	issuer := amountIssuer(amount)
+	if issuer == "" {
+		return tx.TransferRateParity
+	}
+	return tx.GetTransferRate(view, issuer)
+}
+
+func accountBookFunds(view *ledger.Ledger, account [20]byte, amount tx.Amount, reserveBase, reserveIncrement uint64) (tx.Amount, error) {
+	id, ok := amountMPTID(amount)
+	if !ok {
+		return tx.AccountFunds(view, account, amount, true, reserveBase, reserveIncrement), nil
+	}
+	value, result := mptutil.Funds(view, id, account, true)
+	if result == ter.TefINTERNAL {
+		return tx.Amount{}, fmt.Errorf("book_offers MPT funds: %s", result)
+	}
+	if result != ter.TesSUCCESS {
+		value = 0
+	}
+	var parentCloseTime uint32
+	if closeTime := view.ParentCloseTime(); !closeTime.IsZero() {
+		switch seconds := toRippleTime(closeTime); {
+		case seconds > math.MaxUint32:
+			parentCloseTime = math.MaxUint32
+		case seconds > 0:
+			parentCloseTime = uint32(seconds)
+		}
+	}
+	if mptutil.RequireAuthAt(view, id, account, true, parentCloseTime) != ter.TesSUCCESS {
+		value = 0
+	}
+	return state.NewMPTAmountWithIssuanceID(value, amountIssuer(amount), mptutil.EncodeID(id)), nil
 }
 
 func decodeHex32Into(s string, out *[32]byte) error {
@@ -499,6 +574,12 @@ func amountToJSON(a tx.Amount) any {
 	if a.IsNative() {
 		return a.Value()
 	}
+	if a.IsMPT() {
+		return map[string]string{
+			"mpt_issuance_id": a.MPTIssuanceID(),
+			"value":           a.Value(),
+		}
+	}
 	return map[string]string{
 		"currency": a.Currency,
 		"issuer":   a.Issuer,
@@ -509,6 +590,9 @@ func amountToJSON(a tx.Amount) any {
 func zeroLike(model tx.Amount) tx.Amount {
 	if model.IsNative() {
 		return tx.NewXRPAmount(0)
+	}
+	if model.IsMPT() {
+		return state.NewMPTAmountWithIssuanceID(0, model.Issuer, model.MPTIssuanceID())
 	}
 	return tx.NewIssuedAmount(0, 0, model.Currency, model.Issuer)
 }
@@ -581,9 +665,17 @@ func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
 // rippled's STAmount(asset, mantissa, exp) cast at STAmount.cpp:1404.
 func multiplyByDirRate(getsFunded, saDirRate, takerPays tx.Amount) tx.Amount {
 	product := saDirRate.Mul(getsFunded, false)
+	if takerPays.IsMPT() {
+		m := integralProductValue(product)
+		return state.NewMPTAmountWithIssuanceID(m, amountIssuer(takerPays), takerPays.MPTIssuanceID())
+	}
 	if !takerPays.IsNative() {
 		return product
 	}
+	return tx.NewXRPAmount(integralProductValue(product))
+}
+
+func integralProductValue(product tx.Amount) int64 {
 	m := product.Mantissa()
 	e := product.Exponent()
 	for e > 0 {
@@ -594,5 +686,5 @@ func multiplyByDirRate(getsFunded, saDirRate, takerPays tx.Amount) tx.Amount {
 		m /= 10
 		e++
 	}
-	return tx.NewXRPAmount(m)
+	return m
 }

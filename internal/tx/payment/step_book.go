@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -35,7 +36,8 @@ type BookStep struct {
 	strandSrc [20]byte
 
 	// strandDst is the destination account of the strand
-	strandDst [20]byte
+	strandDst     [20]byte
+	strandDeliver Issue
 
 	// prevStep is the previous step (for transfer fee calculation)
 	prevStep Step
@@ -225,6 +227,7 @@ func NewBookStep(inIssue, outIssue Issue, strandSrc, strandDst [20]byte, prevSte
 		},
 		strandSrc:            strandSrc,
 		strandDst:            strandDst,
+		strandDeliver:        outIssue,
 		prevStep:             prevStep,
 		ownerPaysTransferFee: ownerPaysTransferFee,
 		maxOffersToConsume:   maxOffersToConsume(),
@@ -297,35 +300,63 @@ func (s *BookStep) forEachOffer(
 			return false
 		}
 
-		// Self-cross detection (CLOB only, default path only)
-		if !isAMM && s.defaultPath && s.qualityLimit != nil {
-			offerOwner, ownerErr := state.DecodeAccountID(clobOffer.Account)
-			if ownerErr == nil {
-				if !offerQuality.WorseThan(*s.qualityLimit) &&
-					s.strandSrc == offerOwner && s.strandDst == offerOwner {
-					ofrsToRm[clobKey] = true
-					s.recordPermRm(clobKey)
-					if !offerAttempted {
-						currentQuality = nil
-					}
-					return true
-				}
+		var offerOwner [20]byte
+		if isAMM {
+			offerOwner = ammOffer.Owner()
+		} else {
+			var err error
+			offerOwner, err = state.DecodeAccountID(clobOffer.Account)
+			if err != nil {
+				return true
 			}
 		}
 
-		// Authorization check (CLOB only)
-		if !isAMM && !s.book.In.IsXRP() {
-			offerOwner, ownerErr := state.DecodeAccountID(clobOffer.Account)
-			if ownerErr == nil && offerOwner != s.book.In.Issuer {
-				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
-					ofrsToRm[clobKey] = true
-					s.recordPermRm(clobKey)
-					if !offerAttempted {
-						currentQuality = nil
-					}
-					return true
+		// Self-cross detection (CLOB only, default path only)
+		if !isAMM && s.defaultPath && s.qualityLimit != nil {
+			if !offerQuality.WorseThan(*s.qualityLimit) &&
+				s.strandSrc == offerOwner && s.strandDst == offerOwner {
+				ofrsToRm[clobKey] = true
+				s.recordPermRm(clobKey)
+				if !offerAttempted {
+					currentQuality = nil
 				}
+				return true
 			}
+		}
+
+		if s.book.In.IsMPT {
+			if result := mptutil.EnsureHolding(sb, s.book.In.MPTID, offerOwner, 0, true); result != ter.TesSUCCESS {
+				if !isAMM {
+					s.dropBecameOffer(sb, clobOffer, offerOwner)
+				}
+				return true
+			}
+		}
+
+		authView := afView
+		if rules := sb.Rules(); rules != nil && rules.MPTokensV2Enabled() {
+			authView = sb
+		}
+		authorized := true
+		if offerOwner != s.book.In.Issuer {
+			switch {
+			case s.book.In.IsMPT:
+				authorized = mptutil.RequireAuthAt(authView, s.book.In.MPTID, offerOwner, true, s.parentCloseTime) == ter.TesSUCCESS
+			case !isAMM && !s.book.In.IsXRP():
+				authorized = s.isOfferOwnerAuthorized(
+					authView, offerOwner, s.book.In.Issuer, s.book.In.Currency,
+				)
+			}
+		}
+		if !authorized || !s.checkMPTDEX(sb, offerOwner) {
+			if !isAMM {
+				ofrsToRm[clobKey] = true
+				s.recordPermRm(clobKey)
+			}
+			if !offerAttempted {
+				currentQuality = nil
+			}
+			return true
 		}
 
 		// Quality limit check
@@ -349,14 +380,35 @@ func (s *BookStep) forEachOffer(
 		// Reference: rippled OfferStream reads ownerFunds from view_ (sb),
 		// which is the execution sandbox, so consumed balances are visible.
 		if !isAMM {
-			offerOwner, _ := state.DecodeAccountID(clobOffer.Account)
 			funds := s.getOfferFundedAmount(sb, clobOffer)
-			isFundedByIssuer := offerOwner == s.book.Out.Issuer
+			isFundedByIssuer := !s.book.Out.IsMPT && offerOwner == s.book.Out.Issuer
 			if !isFundedByIssuer && funds.Compare(ownerGives) < 0 {
 				ownerGives = funds
 				stpOut = MulRatio(ownerGives, QualityOne, ofrTrOut, false)
 				ofrIn, ofrOut = offerQuality.CeilOutStrict(ofrIn, ofrOut, stpOut, false)
 				stpIn = MulRatio(ofrIn, ofrTrIn, QualityOne, true)
+			}
+		}
+
+		if s.book.In.IsMPT && s.prevStep == nil && offerOwner != s.book.In.Issuer {
+			available, result := mptutil.IssuerFundsToSelfIssue(sb, s.book.In.MPTID)
+			if result == ter.TesSUCCESS {
+				limit := NewMPTEitherAmount(available, s.book.In.MPTID)
+				if stpIn.Compare(limit) > 0 {
+					stpIn = limit
+					inLimit := MulRatio(stpIn, QualityOne, ofrTrIn, false)
+					if isAMM {
+						ofrIn, ofrOut = ammOffer.LimitIn(
+							ofrIn, ofrOut, inLimit, false, s.fixReducedOffersV2,
+						)
+					} else if s.fixReducedOffersV2 {
+						ofrIn, ofrOut = offerQuality.CeilInStrict(ofrIn, ofrOut, inLimit, false)
+					} else {
+						ofrIn, ofrOut = offerQuality.CeilIn(ofrIn, ofrOut, inLimit)
+					}
+					stpOut = ofrOut
+					ownerGives = MulRatio(ofrOut, ofrTrOut, QualityOne, false)
+				}
 			}
 		}
 
@@ -1041,24 +1093,19 @@ func (s *BookStep) bookDirHasEntries(sb *PaymentSandbox, rootKey [32]byte, rootD
 // starting point for Succ()-based iteration.
 // Reference: rippled BookTip initializes with book base (quality=0).
 func (s *BookStep) bookBaseKey() [32]byte {
-	takerPaysCurrency := keylet.CurrencyBytes(s.book.In.Currency)
-	takerPaysIssuer := s.book.In.Issuer
-	takerGetsCurrency := keylet.CurrencyBytes(s.book.Out.Currency)
-	takerGetsIssuer := s.book.Out.Issuer
+	base := keylet.BookBase(
+		bookSideFromIssue(s.book.In),
+		bookSideFromIssue(s.book.Out),
+		s.domainID,
+	)
+	return keylet.Quality(base, 0).Key
+}
 
-	var key [32]byte
-	if s.domainID != nil {
-		key = keylet.BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer, *s.domainID).Key
-	} else {
-		key = keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer).Key
+func bookSideFromIssue(issue Issue) keylet.BookSide {
+	if issue.IsMPT {
+		return keylet.MPTSide(issue.MPTID)
 	}
-	// Zero out quality bytes (24-31). BookDir returns a full SHA-512Half hash,
-	// but actual book directory entries have bytes 24-31 replaced with the quality
-	// value. Zero them so Succ() finds the first quality entry.
-	for i := 24; i < 32; i++ {
-		key[i] = 0
-	}
-	return key
+	return keylet.IssueSide(keylet.CurrencyBytes(issue.Currency), issue.Issuer)
 }
 
 // Check validates the BookStep before use
@@ -1066,7 +1113,7 @@ func (s *BookStep) bookBaseKey() [32]byte {
 func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 	// Check for same in/out issue - this is invalid
 	// Reference: rippled BookStep.cpp lines 1346-1351
-	if s.book.In.Currency == s.book.Out.Currency && s.book.In.Issuer == s.book.Out.Issuer {
+	if s.book.In.Equal(s.book.Out) {
 		return ter.TemBAD_PATH
 	}
 
@@ -1102,7 +1149,7 @@ func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 		if prevDirect, ok := s.prevStep.(*DirectStepI); ok {
 			prev := prevDirect.src
 			cur := s.book.In.Issuer
-			if !s.book.In.IsXRP() {
+			if !s.book.In.IsXRP() && !s.book.In.IsMPT {
 				sleLineKey := keylet.Line(prev, cur, s.book.In.Currency)
 				sleLineData, err := sb.Read(sleLineKey)
 				if err != nil || sleLineData == nil {
@@ -1127,7 +1174,48 @@ func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 		}
 	}
 
+	for _, issue := range []Issue{s.book.In, s.book.Out} {
+		if issue.IsMPT {
+			if result := mptutil.CanTrade(sb, issue.MPTID); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
+
 	return ter.TesSUCCESS
+}
+
+func (s *BookStep) checkMPTDEX(view *PaymentSandbox, owner [20]byte) bool {
+	for _, issue := range []Issue{s.book.In, s.book.Out} {
+		if issue.IsMPT && mptutil.CanTrade(view, issue.MPTID) != ter.TesSUCCESS {
+			return false
+		}
+	}
+
+	if s.book.In.IsMPT {
+		switch {
+		case s.prevStep == nil, owner == s.book.In.Issuer:
+		case mptutil.IsFrozen(view, s.book.In.MPTID, owner):
+			return false
+		case s.prevStep.BookStepBook() != nil:
+		default:
+			if mptutil.CanTransfer(view, s.book.In.MPTID, owner, owner) != ter.TesSUCCESS {
+				return false
+			}
+		}
+	}
+
+	if s.book.Out.IsMPT {
+		if s.book.Out.Equal(s.strandDeliver) && s.strandDst == s.book.Out.Issuer {
+			return true
+		}
+		if owner == s.book.Out.Issuer {
+			return true
+		}
+		return mptutil.CanTransfer(view, s.book.Out.MPTID, owner, owner) == ter.TesSUCCESS
+	}
+
+	return true
 }
 
 // LedgerReader is an interface for reading ledger entries.
@@ -1210,13 +1298,7 @@ func (s *BookStep) initAMMLiquidity(
 ) {
 	s.fixAMMOverflowOffer = fixAMMOverflowOffer
 
-	// Build keylet::amm(in, out) to look up the AMM SLE
-	inIssuer := issueToCurrencyBytes(s.book.In)
-	inCurrency := keylet.CurrencyBytes(s.book.In.Currency)
-	outIssuer := issueToCurrencyBytes(s.book.Out)
-	outCurrency := keylet.CurrencyBytes(s.book.Out.Currency)
-
-	ammKey := keylet.AMM(inIssuer, inCurrency, outIssuer, outCurrency)
+	ammKey := keylet.AMMAsset(bookSideFromIssue(s.book.In), bookSideFromIssue(s.book.Out))
 	ammData, err := view.Read(ammKey)
 	if err != nil || ammData == nil {
 		return
@@ -1273,9 +1355,4 @@ func getAMMTradingFee(ammEntry *amm.AMMData, account [20]byte, parentCloseTime u
 		}
 	}
 	return ammEntry.TradingFee
-}
-
-// issueToCurrencyBytes returns the issuer as [20]byte for keylet.AMM.
-func issueToCurrencyBytes(issue Issue) [20]byte {
-	return issue.Issuer
 }

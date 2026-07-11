@@ -98,10 +98,10 @@ func adjustAmountsByLPTokens(
 	if lpTokensActual.IsZero() {
 		var amount2Opt *tx.Amount
 		if amount2 != nil {
-			zero := zeroAmount(tx.Asset{Currency: (*amount2).Currency, Issuer: (*amount2).Issuer})
+			zero := zeroAmount(amountAsset(*amount2))
 			amount2Opt = &zero
 		}
-		zero := zeroAmount(tx.Asset{Currency: amount.Currency, Issuer: amount.Issuer})
+		zero := zeroAmount(amountAsset(amount))
 		return zero, amount2Opt, lpTokensActual
 	}
 
@@ -542,7 +542,7 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 // the last LP's trust line balance differs from it due to rounding.
 // Reference: rippled AMMUtils.cpp verifyAndAdjustLPTokenBalance (lines 468-494)
 func verifyAndAdjustLPTokenBalance(view tx.LedgerView, ammKey keylet.Keylet, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
-	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+	lptCurrency := GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2)
 	onlyLP, res := isOnlyLiquidityProvider(view, lptCurrency, amm.Account, lpAccountID)
 	if res != ter.TesSUCCESS {
 		return res

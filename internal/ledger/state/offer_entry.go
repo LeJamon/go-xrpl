@@ -47,6 +47,12 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 		if amt.IsNative() {
 			return amt.Value()
 		}
+		if amt.IsMPT() {
+			return map[string]any{
+				"value":           amt.Value(),
+				"mpt_issuance_id": amt.MPTIssuanceID(),
+			}
+		}
 		return map[string]any{
 			"value":    amt.Value(),
 			"currency": amt.Currency,
@@ -146,6 +152,12 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 				a, err := ParseIOUAmountBinary(f.Value)
 				if err != nil {
 					return fmt.Errorf("Offer IOU amount (field %d) parse failed: %w", f.FieldCode, err)
+				}
+				amt = a
+			case 33: // MPT
+				a, err := ParseMPTAmountBinary(f.Value)
+				if err != nil {
+					return fmt.Errorf("Offer MPT amount (field %d) parse failed: %w", f.FieldCode, err)
 				}
 				amt = a
 			case 8: // XRP

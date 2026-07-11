@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -71,31 +72,37 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	paysInner := unmarshalObjectOrNull(paysRaw)
 	getsInner := unmarshalObjectOrNull(getsRaw)
 
-	paysCurrency, rpcErr := readJSONString(paysInner, "currency", "taker_pays.currency")
+	if rpcErr := validateTakerBookJSON(paysInner, "taker_pays"); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := validateTakerBookJSON(getsInner, "taker_gets"); rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	takerPays, paysIssuerID, rpcErr := parseTakerBookAsset(paysInner, true)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	getsCurrency, rpcErr := readJSONString(getsInner, "currency", "taker_gets.currency")
+	takerGets, getsIssuerID, rpcErr := parseTakerBookAsset(getsInner, false)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	if !keylet.IsValidCurrencyCode(paysCurrency) {
-		return nil, types.RPCErrorSrcCurMalformed(
-			"Invalid field 'taker_pays.currency', bad currency.")
+	if !takerPays.IsMPT() {
+		issuer, issuerID, issuerErr := readAndValidateIssuer(paysInner, takerPays.Currency, true)
+		if issuerErr != nil {
+			return nil, issuerErr
+		}
+		takerPays.Issuer = canonIssuerString(issuer, takerPays.Currency)
+		paysIssuerID = issuerID
 	}
-	if !keylet.IsValidCurrencyCode(getsCurrency) {
-		return nil, types.RPCErrorDstAmtMalformed(
-			"Invalid field 'taker_gets.currency', bad currency.")
-	}
-
-	paysIssuerStr, paysIssuerID, rpcErr := readAndValidateIssuer(paysInner, paysCurrency, true)
-	if rpcErr != nil {
-		return nil, rpcErr
-	}
-	getsIssuerStr, getsIssuerID, rpcErr := readAndValidateIssuer(getsInner, getsCurrency, false)
-	if rpcErr != nil {
-		return nil, rpcErr
+	if !takerGets.IsMPT() {
+		issuer, issuerID, issuerErr := readAndValidateIssuer(getsInner, takerGets.Currency, false)
+		if issuerErr != nil {
+			return nil, issuerErr
+		}
+		takerGets.Issuer = canonIssuerString(issuer, takerGets.Currency)
+		getsIssuerID = issuerID
 	}
 
 	// taker (BookOffers.cpp:164-173).
@@ -140,7 +147,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// bad market (BookOffers.cpp:191-195). Compare canonical forms: XRP
 	// currency normalizes to zero, issuers normalize to their decoded
 	// 20-byte AccountIDs (any valid encoding of the same account collides).
-	if canonCurrency(paysCurrency) == canonCurrency(getsCurrency) && paysIssuerID == getsIssuerID {
+	if sameBookAsset(takerPays, paysIssuerID, takerGets, getsIssuerID) {
 		return nil, types.RPCErrorBadMarket()
 	}
 
@@ -204,9 +211,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, selErr
 	}
 
-	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
-	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
-
 	// marker is a go-xrpl extension. rippled's handler (BookOffers.cpp:201-214)
 	// reads `marker` from params and threads it through to getBookPage, but
 	// NetworkOPsImp::getBookPage doesn't actually use it (NetworkOPs.cpp:4627
@@ -258,6 +262,81 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		response["limit"] = limit
 	}
 	return response, nil
+}
+
+func validateTakerBookJSON(inner map[string]json.RawMessage, name string) *types.RPCError {
+	_, hasCurrency := inner["currency"]
+	_, hasMPT := inner["mpt_issuance_id"]
+	if !hasCurrency && !hasMPT {
+		return types.RPCErrorMissingField(name + ".currency")
+	}
+	if hasMPT {
+		if hasCurrency {
+			return types.RPCErrorInvalidField(name)
+		}
+		if _, hasIssuer := inner["issuer"]; hasIssuer {
+			return types.RPCErrorInvalidField(name)
+		}
+	}
+	if raw, ok := inner["currency"]; ok && !isJSONString(raw) {
+		return types.RPCErrorExpectedField(name+".currency", "string")
+	}
+	if raw, ok := inner["mpt_issuance_id"]; ok && !isJSONString(raw) {
+		return types.RPCErrorExpectedField(name+".currency", "string")
+	}
+	return nil
+}
+
+func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Amount, [20]byte, *types.RPCError) {
+	if raw, ok := inner["currency"]; ok {
+		var currency string
+		_ = json.Unmarshal(raw, &currency)
+		if !keylet.IsValidCurrencyCode(currency) {
+			if isPay {
+				return types.Amount{}, [20]byte{}, types.RPCErrorSrcCurMalformed(
+					"Invalid field 'taker_pays.currency', bad currency.")
+			}
+			return types.Amount{}, [20]byte{}, types.RPCErrorDstAmtMalformed(
+				"Invalid field 'taker_gets.currency', bad currency.")
+		}
+		return types.Amount{Currency: currency}, [20]byte{}, nil
+	}
+
+	var value string
+	_ = json.Unmarshal(inner["mpt_issuance_id"], &value)
+	id, ok := parseBookMPTID(value)
+	if !ok {
+		field := "taker_gets.mpt_issuance_id"
+		makeErr := types.RPCErrorDstAmtMalformed
+		if isPay {
+			field = "taker_pays.mpt_issuance_id"
+			makeErr = types.RPCErrorSrcCurMalformed
+		}
+		return types.Amount{}, [20]byte{}, makeErr(fmt.Sprintf("Invalid field '%s'", field))
+	}
+	var issuer [20]byte
+	copy(issuer[:], id[4:])
+	return types.Amount{MPTIssuanceID: strings.ToUpper(hex.EncodeToString(id[:]))}, issuer, nil
+}
+
+func parseBookMPTID(value string) ([24]byte, bool) {
+	var id [24]byte
+	if value == "0" {
+		return id, true
+	}
+	b, err := hex.DecodeString(value)
+	if err != nil || len(b) != len(id) {
+		return id, false
+	}
+	copy(id[:], b)
+	return id, true
+}
+
+func sameBookAsset(a types.Amount, aIssuer [20]byte, b types.Amount, bIssuer [20]byte) bool {
+	if a.IsMPT() || b.IsMPT() {
+		return a.IsMPT() && b.IsMPT() && strings.EqualFold(a.MPTIssuanceID, b.MPTIssuanceID)
+	}
+	return canonCurrency(a.Currency) == canonCurrency(b.Currency) && aIssuer == bIssuer
 }
 
 // readAndValidateIssuer decodes the issuer field for one side of the book and
@@ -326,23 +405,6 @@ func canonIssuerString(issuer, currency string) string {
 		return ""
 	}
 	return issuer
-}
-
-// readJSONString extracts a required string field from a sub-object, returning
-// rippled-shaped "Missing field" / "Invalid field, not string." errors.
-func readJSONString(inner map[string]json.RawMessage, key, fieldPath string) (string, *types.RPCError) {
-	raw, ok := inner[key]
-	if !ok {
-		return "", types.RPCErrorMissingField(fieldPath)
-	}
-	if !isJSONString(raw) {
-		return "", types.RPCErrorExpectedField(fieldPath, "string")
-	}
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", types.RPCErrorExpectedField(fieldPath, "string")
-	}
-	return s, nil
 }
 
 // preValidateUintField inspects the probed JSON for a numeric field that

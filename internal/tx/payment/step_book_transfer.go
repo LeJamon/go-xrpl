@@ -5,6 +5,8 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -51,6 +53,9 @@ func (s *BookStep) transferFunds(sb *PaymentSandbox, from, to [20]byte, amount E
 	if issue.IsXRP() {
 		return s.transferXRP(sb, from, to, amount.XRP, txHash, ledgerSeq)
 	}
+	if issue.IsMPT {
+		return mptTransferResult(mptutil.Credit(sb, issue.MPTID, from, to, amount.MPT, true))
+	}
 
 	return s.transferIOU(sb, from, to, amount.IOU, issue, txHash, ledgerSeq)
 }
@@ -73,6 +78,20 @@ func (s *BookStep) transferFundsWithFee(sb *PaymentSandbox, from, to [20]byte, g
 	if issue.IsXRP() {
 		return s.transferXRP(sb, from, to, grossAmount.XRP, txHash, ledgerSeq)
 	}
+	if issue.IsMPT {
+		issuer := issue.Issuer
+		switch {
+		case from == issuer:
+			return mptTransferResult(mptutil.Credit(sb, issue.MPTID, from, to, netAmount.MPT, true))
+		case to == issuer:
+			return mptTransferResult(mptutil.Credit(sb, issue.MPTID, from, to, grossAmount.MPT, true))
+		default:
+			if result := mptutil.Credit(sb, issue.MPTID, issuer, to, netAmount.MPT, true); result != ter.TesSUCCESS {
+				return mptTransferResult(result)
+			}
+			return mptTransferResult(mptutil.Credit(sb, issue.MPTID, from, issuer, grossAmount.MPT, true))
+		}
+	}
 
 	// For IOUs: debit sender by gross, credit receiver by net
 	issuer := issue.Issuer
@@ -91,6 +110,13 @@ func (s *BookStep) transferFundsWithFee(sb *PaymentSandbox, from, to [20]byte, g
 		return err
 	}
 	return s.creditTrustline(sb, to, issuer, netAmount.IOU, txHash, ledgerSeq)
+}
+
+func mptTransferResult(result ter.Result) error {
+	if result == ter.TesSUCCESS {
+		return nil
+	}
+	return ter.Errorf(result, "MPT transfer failed")
 }
 
 // transferXRP transfers XRP between accounts.
