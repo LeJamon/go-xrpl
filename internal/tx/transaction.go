@@ -471,7 +471,7 @@ func (c *Common) ToMap() map[string]any {
 		m["LastLedgerSequence"] = *c.LastLedgerSequence
 	}
 	if len(c.Memos) > 0 {
-		m["Memos"] = c.Memos
+		m["Memos"] = flattenMemos(c.Memos)
 	}
 	if c.NetworkID != nil {
 		m["NetworkID"] = *c.NetworkID
