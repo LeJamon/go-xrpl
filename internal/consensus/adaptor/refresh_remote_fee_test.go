@@ -1,11 +1,35 @@
 package adaptor
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/stretchr/testify/require"
 )
+
+type recordingFeeHistorian struct {
+	*stubHistorian
+	mu    sync.Mutex
+	calls []consensus.LedgerID
+}
+
+func (h *recordingFeeHistorian) GetTrustedValidations(id consensus.LedgerID) []*consensus.Validation {
+	h.mu.Lock()
+	h.calls = append(h.calls, id)
+	h.mu.Unlock()
+	return h.stubHistorian.GetTrustedValidations(id)
+}
+
+func (h *recordingFeeHistorian) lookupCalls() []consensus.LedgerID {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]consensus.LedgerID(nil), h.calls...)
+}
 
 // TestRefreshRemoteFee_MedianOverTrustedValidations pins the
 // LedgerMaster.cpp:977-1006 port: collect LoadFee from trusted FULL
@@ -29,7 +53,7 @@ func TestRefreshRemoteFee_MedianOverTrustedValidations(t *testing.T) {
 		},
 	})
 
-	a.refreshRemoteFee(id)
+	a.refreshRemoteFee(1, id, consensus.LedgerID{})
 
 	// Sorted set: {256, 320, 500}; middle = 320.
 	if got := ft.GetRemoteFee(); got != 320 {
@@ -55,7 +79,7 @@ func TestRefreshRemoteFee_ExcludesPartialValidations(t *testing.T) {
 		},
 	})
 
-	a.refreshRemoteFee(id)
+	a.refreshRemoteFee(1, id, consensus.LedgerID{})
 
 	// Full-only set: {320, 400}; median index 1 = 400. Had the partial
 	// leaked, {10, 320, 400} would give median 320 — so 400 proves the
@@ -74,27 +98,34 @@ func TestRefreshRemoteFee_NoHistorian(t *testing.T) {
 		t.Fatal("FeeTrack must be non-nil")
 	}
 	before := ft.GetRemoteFee()
-	a.refreshRemoteFee(consensus.LedgerID{0xBB})
+	a.refreshRemoteFee(1, consensus.LedgerID{0xBB}, consensus.LedgerID{})
 	if got := ft.GetRemoteFee(); got != before {
 		t.Fatalf("RemoteFee changed without historian: before=%d after=%d", before, got)
 	}
 }
 
-// TestRefreshRemoteFee_EmptyValidations leaves the remote fee untouched
-// when the historian has no validations for the ledger — matches the
-// "no signal → no change" pattern (rippled also short-circuits when
-// fees is empty by falling through to base, but the median we'd compute
-// over a single base-only sample is meaningless).
+// TestRefreshRemoteFee_EmptyValidations resets the remote fee to LoadBase
+// through the normal validated-ledger promotion path when neither ledger has a
+// fee sample.
 func TestRefreshRemoteFee_EmptyValidations(t *testing.T) {
 	a := newTestAdaptor(t)
-	ft := a.ledgerService.FeeTrack()
+	svc := a.ledgerService
+	ft := svc.FeeTrack()
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	seq, err := svc.AcceptConsensusResult(context.Background(), parent, nil, nil, time.Unix(1_700_000_000, 0), true)
+	require.NoError(t, err)
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	require.Equal(t, seq, closed.Sequence())
+
 	ft.SetRemoteFee(777)
 	a.SetValidationHistorian(&stubHistorian{
 		byLedger: map[consensus.LedgerID][]*consensus.Validation{},
 	})
-	a.refreshRemoteFee(consensus.LedgerID{0xCC})
-	if got := ft.GetRemoteFee(); got != 777 {
-		t.Fatalf("RemoteFee mutated on empty validations: got %d, want 777", got)
+	a.OnLedgerFullyValidated(consensus.LedgerID(closed.Hash()), seq)
+	if got := ft.GetRemoteFee(); got != ft.GetLoadBase() {
+		t.Fatalf("RemoteFee = %d on empty validations; want LoadBase %d", got, ft.GetLoadBase())
 	}
 }
 
@@ -122,13 +153,131 @@ func TestRefreshRemoteFee_FoldsParentLedgerValidations(t *testing.T) {
 		},
 	})
 
-	a.refreshRemoteFee(id)
+	a.refreshRemoteFee(1, id, parentID)
 
 	// Union {320, 500, 500}; median index 1 = 500. The current ledger
 	// alone would yield 320, so 500 proves the parent was folded in.
 	if got := ft.GetRemoteFee(); got != 500 {
 		t.Fatalf("RemoteFee = %d; want 500 (parent validations folded in)", got)
 	}
+}
+
+func TestCollectValidationFees_DistinguishesExplicitZeroFromAbsent(t *testing.T) {
+	id := consensus.LedgerID{0xDD}
+	explicitZero := &consensus.Validation{Full: true}
+	explicitZero.SetLoadFee(0)
+	historian := &stubHistorian{
+		byLedger: map[consensus.LedgerID][]*consensus.Validation{
+			id: {
+				{Full: true},
+				explicitZero,
+			},
+		},
+	}
+
+	require.Equal(t, []uint32{feetrack.LoadBase, 0}, collectValidationFees(historian, id, feetrack.LoadBase))
+}
+
+func TestRefreshRemoteFee_ValidationBeforePeerAdoption(t *testing.T) {
+	a := newTestAdaptor(t)
+	svc := a.ledgerService
+	ft := svc.FeeTrack()
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+
+	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	candidate, err := ledger.NewOpen(parent, closeTime)
+	require.NoError(t, err)
+	require.NoError(t, candidate.Close(closeTime, 0))
+	header := candidate.Header()
+	stateMap, err := candidate.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := candidate.TxMapSnapshot()
+	require.NoError(t, err)
+
+	targetID := consensus.LedgerID(header.Hash)
+	parentID := consensus.LedgerID(header.ParentHash)
+	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
+		byLedger: map[consensus.LedgerID][]*consensus.Validation{
+			targetID: {{LoadFee: 320, Full: true}},
+			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+		},
+	}}
+	a.SetValidationHistorian(historian)
+	svc.SetOnValidatedLedger(func(seq uint32, hash, parentHash [32]byte) {
+		svc.GetValidatedLedgerIndex()
+		a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
+	})
+
+	ft.SetRemoteFee(777)
+	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
+	require.Equal(t, uint32(777), ft.GetRemoteFee())
+	require.Empty(t, historian.lookupCalls())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.AdoptLedgerWithState(context.Background(), &header, stateMap, txMap)
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("peer adoption blocked while notifying the validated-ledger callback")
+	}
+
+	require.Equal(t, header.LedgerIndex, svc.GetValidatedLedgerIndex())
+	require.Equal(t, uint32(500), ft.GetRemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+
+	a.OnLedgerFullyValidated(targetID, header.LedgerIndex)
+	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
+}
+
+func TestRefreshRemoteFee_ValidationBeforeConsensusClose(t *testing.T) {
+	a := newTestAdaptor(t)
+	svc := a.ledgerService
+	ft := svc.FeeTrack()
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	closeTime := time.Unix(1_700_000_000, 0)
+
+	probe := newTestLedgerService(t)
+	_, err := probe.AcceptConsensusResult(context.Background(), parent, nil, nil, closeTime, true)
+	require.NoError(t, err)
+	expected := probe.GetClosedLedger()
+	require.NotNil(t, expected)
+
+	targetID := consensus.LedgerID(expected.Hash())
+	parentID := consensus.LedgerID(expected.ParentHash())
+	historian := &recordingFeeHistorian{stubHistorian: &stubHistorian{
+		byLedger: map[consensus.LedgerID][]*consensus.Validation{
+			targetID: {{LoadFee: 320, Full: true}},
+			parentID: {{LoadFee: 500, Full: true}, {LoadFee: 500, Full: true}},
+		},
+	}}
+	a.SetValidationHistorian(historian)
+
+	ft.SetRemoteFee(777)
+	a.OnLedgerFullyValidated(targetID, expected.Sequence())
+	require.Equal(t, uint32(777), ft.GetRemoteFee())
+	require.Empty(t, historian.lookupCalls())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.AcceptConsensusResult(context.Background(), parent, nil, nil, closeTime, true)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("consensus close blocked while notifying the validated-ledger callback")
+	}
+
+	require.Equal(t, expected.Hash(), svc.GetClosedLedger().Hash())
+	require.Equal(t, expected.Sequence(), svc.GetValidatedLedgerIndex())
+	require.Equal(t, uint32(500), ft.GetRemoteFee())
+	require.Equal(t, []consensus.LedgerID{targetID, parentID}, historian.lookupCalls())
 }
 
 // TestGetLoadFee_MaxLocalCluster pins RCLConsensus.cpp:872 port: the

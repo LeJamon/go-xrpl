@@ -162,6 +162,9 @@ type Service struct {
 	// beyond closed (arms the inbound-ledger acquisition).
 	onPendingValidationStashed func(seq uint32, hash [32]byte)
 
+	// Invoked after the validated tip advances and after mu is released.
+	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
+
 	// heldAdoptions stashes out-of-order replay-delta adoptions (child seq
 	// before parent), keyed by the awaited parent seq so an adopt at N pops the
 	// child at N+1 and cascade-adopts it. Multi-level chains cascade via bounded
@@ -215,7 +218,7 @@ type Service struct {
 
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
-	//   - SetRemoteFee: from OnLedgerFullyValidated, median of trusted LoadFees.
+	//   - SetRemoteFee: after validated-ledger promotion, median of trusted LoadFees.
 	//   - SetClusterFee: from the Overlay's TMCluster ingress.
 	feeTrack *feetrack.LoadFeeTrack
 

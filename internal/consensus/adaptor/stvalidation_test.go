@@ -51,7 +51,49 @@ func TestParseSTValidation_Roundtrip(t *testing.T) {
 	assert.Equal(t, orig.Signature, parsed.Signature)
 	assert.Equal(t, orig.Cookie, parsed.Cookie)
 	assert.Equal(t, orig.LoadFee, parsed.LoadFee)
+	assert.True(t, parsed.HasLoadFee())
 	assert.WithinDuration(t, orig.SignTime, parsed.SignTime, time.Second)
+}
+
+func TestSTValidation_LoadFeePresenceRoundTrip(t *testing.T) {
+	tests := []struct {
+		name        string
+		configure   func(*consensus.Validation)
+		wantPresent bool
+		wantFee     uint32
+	}{
+		{
+			name: "absent",
+			configure: func(v *consensus.Validation) {
+				v.LoadFee = 0
+			},
+		},
+		{
+			name: "explicit zero",
+			configure: func(v *consensus.Validation) {
+				v.SetLoadFee(0)
+			},
+			wantPresent: true,
+		},
+		{
+			name:        "legacy non-zero literal",
+			configure:   func(*consensus.Validation) {},
+			wantPresent: true,
+			wantFee:     5000,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			validation := buildTestValidation()
+			test.configure(validation)
+
+			parsed, err := parseSTValidation(SerializeSTValidation(validation))
+			require.NoError(t, err)
+			assert.Equal(t, test.wantPresent, parsed.HasLoadFee())
+			assert.Equal(t, test.wantFee, parsed.LoadFee)
+		})
+	}
 }
 
 func TestParseSTValidation_PopulatesRaw(t *testing.T) {

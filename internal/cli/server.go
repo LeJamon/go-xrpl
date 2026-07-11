@@ -1713,8 +1713,9 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if v.Cookie != 0 {
 		ev.Cookie = strconv.FormatUint(v.Cookie, 10)
 	}
-	if v.LoadFee != 0 {
-		ev.LoadFee = v.LoadFee
+	if v.HasLoadFee() {
+		loadFee := v.LoadFee
+		ev.LoadFee = &loadFee
 	}
 	if v.ServerVersion != 0 {
 		ev.ServerVersion = strconv.FormatUint(v.ServerVersion, 10)
