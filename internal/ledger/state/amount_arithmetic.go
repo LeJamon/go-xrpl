@@ -35,6 +35,19 @@ func (a Amount) Add(b Amount) (Amount, error) {
 // AddRounded returns a + b, rounding the IOU result under mode. The AMM math
 // uses this to reproduce rippled's NumberRoundModeGuard around additions.
 func (a Amount) AddRounded(b Amount, mode RoundingMode) (Amount, error) {
+	if a.mptRaw != nil || b.mptRaw != nil {
+		if a.mptRaw == nil || b.mptRaw == nil {
+			return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add MPT and non-MPT amounts")
+		}
+		if a.mptIssuanceID != b.mptIssuanceID {
+			return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add different MPT issuances")
+		}
+		result := new(big.Int).Add(big.NewInt(*a.mptRaw), big.NewInt(*b.mptRaw))
+		if !result.IsInt64() {
+			return Amount{}, fmt.Errorf("temBAD_AMOUNT: MPT addition overflow")
+		}
+		return newMPTAmountLike(a, result.Int64()), nil
+	}
 	if a.IsNative() != b.IsNative() {
 		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add XRP and IOU amounts")
 	}
@@ -58,11 +71,24 @@ func (a Amount) AddRounded(b Amount, mode RoundingMode) (Amount, error) {
 
 // Sub subtracts two amounts (must be same type)
 func (a Amount) Sub(b Amount) (Amount, error) {
-	return a.Add(b.Negate())
+	return a.SubRounded(b, RoundToNearest)
 }
 
 // SubRounded returns a - b, rounding the IOU result under mode.
 func (a Amount) SubRounded(b Amount, mode RoundingMode) (Amount, error) {
+	if a.mptRaw != nil || b.mptRaw != nil {
+		if a.mptRaw == nil || b.mptRaw == nil {
+			return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot subtract MPT and non-MPT amounts")
+		}
+		if a.mptIssuanceID != b.mptIssuanceID {
+			return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot subtract different MPT issuances")
+		}
+		result := new(big.Int).Sub(big.NewInt(*a.mptRaw), big.NewInt(*b.mptRaw))
+		if !result.IsInt64() {
+			return Amount{}, fmt.Errorf("temBAD_AMOUNT: MPT subtraction overflow")
+		}
+		return newMPTAmountLike(a, result.Int64()), nil
+	}
 	return a.AddRounded(b.Negate(), mode)
 }
 
@@ -133,6 +159,15 @@ func (a Amount) Compare(b Amount) int {
 		return 0
 	}
 	if !a.IsNative() && !b.IsNative() {
+		if a.mptRaw != nil && b.mptRaw != nil {
+			if *a.mptRaw < *b.mptRaw {
+				return -1
+			}
+			if *a.mptRaw > *b.mptRaw {
+				return 1
+			}
+			return 0
+		}
 		return compareIOUValues(a.iou, b.iou)
 	}
 	// Mixed types - XRP comes first
@@ -187,6 +222,26 @@ func compareIOUValues(a, b IOUAmountValue) int {
 // Includes roomToGrow precision enhancement matching rippled's IOUAmount mulRatio.
 // Reference: IOUAmount.cpp mulRatio() lines 189-323
 func (a Amount) MulRatio(num, den uint32, roundUp bool) Amount {
+	if a.mptRaw != nil {
+		if den == 0 {
+			panic("division by zero")
+		}
+		product := new(big.Int).Mul(big.NewInt(*a.mptRaw), new(big.Int).SetUint64(uint64(num)))
+		quotient := new(big.Int)
+		remainder := new(big.Int)
+		quotient.QuoRem(product, new(big.Int).SetUint64(uint64(den)), remainder)
+		if remainder.Sign() != 0 {
+			if product.Sign() >= 0 && roundUp {
+				quotient.Add(quotient, big.NewInt(1))
+			} else if product.Sign() < 0 && !roundUp {
+				quotient.Sub(quotient, big.NewInt(1))
+			}
+		}
+		if !quotient.IsInt64() {
+			panic("MPT mulRatio overflow")
+		}
+		return newMPTAmountLike(a, quotient.Int64())
+	}
 	if a.IsNative() {
 		// Use big.Int to avoid int64 overflow for large XRP amounts.
 		// E.g. 150000000000 drops * 1000000000 overflows int64.
@@ -367,7 +422,17 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 		if a.IsNative() {
 			return NewXRPAmountFromInt(0)
 		}
+		if a.mptRaw != nil {
+			return newMPTAmountLike(a, 0)
+		}
 		return NewIssuedAmountFromValue(0, -100, a.Currency, a.Issuer)
+	}
+	if a.mptRaw != nil && other.mptRaw != nil {
+		product := new(big.Int).Mul(big.NewInt(*a.mptRaw), big.NewInt(*other.mptRaw))
+		if !product.IsInt64() {
+			panic("MPT value overflow")
+		}
+		return newMPTAmountLike(a, product.Int64())
 	}
 
 	// Handle XRP * XRP case
@@ -395,6 +460,13 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 		na := NewXRPLNumberRounded(m1, e1, mode)
 		nb := NewXRPLNumberRounded(m2, e2, mode)
 		result := na.MulRounded(nb, mode)
+		if a.mptRaw != nil {
+			value := result.ToInt64WithMode(mode)
+			if negative {
+				value = -value
+			}
+			return newMPTAmountLike(a, value)
+		}
 		iou := result.ToIOUAmountValue()
 		rm := iou.mantissa
 		if negative {
@@ -412,15 +484,15 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 		m2 = -m2
 	}
 
-	// Pre-normalize native (XRP) inputs to IOU range [cMinValue, cMaxValue)
+	// Pre-normalize integral inputs to IOU range [cMinValue, cMaxValue)
 	// Reference: rippled multiply() lines 1382-1398
-	if a.IsNative() {
+	if a.IsNative() || a.IsMPT() {
 		for m1 < MinMantissa {
 			m1 *= 10
 			e1--
 		}
 	}
-	if other.IsNative() {
+	if other.IsNative() || other.IsMPT() {
 		for m2 < MinMantissa {
 			m2 *= 10
 			e2--
@@ -504,7 +576,12 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 		return NewXRPAmountFromInt(resultMant)
 	}
 
-	return NewIssuedAmountFromValue(resultMant, resultExp, a.Currency, a.Issuer)
+	result := NewIssuedAmountFromValue(resultMant, resultExp, a.Currency, a.Issuer)
+	if a.mptRaw != nil {
+		n := NewXRPLNumberRounded(result.IOU().Mantissa(), result.IOU().Exponent(), mode)
+		return newMPTAmountLike(a, n.ToInt64WithMode(mode))
+	}
+	return result
 }
 
 // Div divides this Amount by another Amount.
@@ -524,7 +601,13 @@ func (a Amount) Div(other Amount, roundUp bool) Amount {
 		if a.IsNative() {
 			return NewXRPAmountFromInt(0)
 		}
+		if a.mptRaw != nil {
+			return newMPTAmountLike(a, 0)
+		}
 		return NewIssuedAmountFromValue(0, -100, a.Currency, a.Issuer)
+	}
+	if a.mptRaw != nil {
+		return newMPTAmountLike(a, DivRoundMPT(a, other, roundUp))
 	}
 
 	// Handle XRP / XRP case
@@ -556,15 +639,15 @@ func (a Amount) Div(other Amount, roundUp bool) Amount {
 		m2 = -m2
 	}
 
-	// Pre-normalize native (XRP) inputs to IOU range [cMinValue, cMaxValue)
+	// Pre-normalize integral inputs to IOU range [cMinValue, cMaxValue)
 	// Reference: rippled divide() lines 1307-1324
-	if a.IsNative() {
+	if a.IsNative() || a.IsMPT() {
 		for m1 < MinMantissa {
 			m1 *= 10
 			e1--
 		}
 	}
-	if other.IsNative() {
+	if other.IsNative() || other.IsMPT() {
 		for m2 < MinMantissa {
 			m2 *= 10
 			e2--

@@ -428,11 +428,12 @@ type Currency struct {
 type Path []PathStep
 
 type PathStep struct {
-	Account  string `json:"account,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
-	Type     uint8  `json:"type,omitempty"`
-	TypeHex  string `json:"type_hex,omitempty"`
+	Account       string `json:"account,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+	Type          uint8  `json:"type,omitempty"`
+	TypeHex       string `json:"type_hex,omitempty"`
 }
 
 // Quality specification

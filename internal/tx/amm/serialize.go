@@ -153,7 +153,7 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	if lptBal.Currency == "" {
 		lptBal = state.NewIssuedAmountFromValue(
 			lptBal.Mantissa(), lptBal.Exponent(),
-			GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency),
+			GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2),
 			accountAddr)
 	}
 
@@ -255,6 +255,10 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 // issueMapToAsset converts a binary codec Issue map to a tx.Asset.
 func issueMapToAsset(m map[string]any) tx.Asset {
 	asset := tx.Asset{}
+	if mptID, ok := m["mpt_issuance_id"].(string); ok {
+		asset.MPTIssuanceID = strings.ToUpper(mptID)
+		return asset
+	}
 	if currency, ok := m["currency"].(string); ok {
 		asset.Currency = currency
 	}
@@ -266,6 +270,9 @@ func issueMapToAsset(m map[string]any) tx.Asset {
 
 // assetToIssueMap converts a tx.Asset to a binary codec Issue map.
 func assetToIssueMap(asset tx.Asset) map[string]any {
+	if asset.IsMPT() {
+		return map[string]any{"mpt_issuance_id": strings.ToUpper(asset.MPTIssuanceID)}
+	}
 	isXRP := isXRPAsset(asset)
 	if isXRP {
 		return map[string]any{"currency": "XRP"}

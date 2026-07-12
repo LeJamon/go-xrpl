@@ -910,7 +910,7 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 	// quality must equal the offer's book-directory rate (saDirRate), derived
 	// from the BookDirectory key — not a recomputed TakerPays/TakerGets float
 	// division.
-	wantQuality := qualityFromDirKey(state.CalculateQuality(takerPays, takerGets))
+	wantQuality := qualityFromDirKey(state.CalculateQuality(takerGets, takerPays))
 	if o.Quality != wantQuality {
 		t.Errorf("quality = %q, want %q (from book directory rate)", o.Quality, wantQuality)
 	}

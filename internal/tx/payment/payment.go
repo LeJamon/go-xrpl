@@ -55,11 +55,12 @@ type Payment struct {
 
 // PathStep represents a single step in a payment path
 type PathStep struct {
-	Account  string `json:"account,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
-	Type     int    `json:"type,omitempty"`
-	TypeHex  string `json:"type_hex,omitempty"`
+	Account       string `json:"account,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+	Type          int    `json:"type,omitempty"`
+	TypeHex       string `json:"type_hex,omitempty"`
 }
 
 // Payment flags

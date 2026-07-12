@@ -4,9 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
 	"math/big"
-	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -19,14 +17,16 @@ type BookChangesMethod struct{ BaseHandler }
 
 // bookChange tracks OHLCV data for a single currency pair
 type bookChange struct {
-	CurrencyA string
-	CurrencyB string
-	VolumeA   *big.Float
-	VolumeB   *big.Float
-	High      *big.Float
-	Low       *big.Float
-	Open      *big.Float
-	Close     *big.Float
+	CurrencyA      string
+	CurrencyB      string
+	MPTIssuanceIDA string
+	MPTIssuanceIDB string
+	VolumeA        *big.Float
+	VolumeB        *big.Float
+	High           *big.Float
+	Low            *big.Float
+	Open           *big.Float
+	Close          *big.Float
 }
 
 // LedgerWithTransactions is the minimal ledger surface the
@@ -59,16 +59,25 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 	changes := collectBookChanges(l)
 	changesArr := make([]map[string]any, 0, len(changes))
 	for _, bc := range changes {
-		changesArr = append(changesArr, map[string]any{
-			"currency_a": bc.CurrencyA,
-			"currency_b": bc.CurrencyB,
-			"volume_a":   formatBigFloat(bc.VolumeA),
-			"volume_b":   formatBigFloat(bc.VolumeB),
-			"high":       formatBigFloat(bc.High),
-			"low":        formatBigFloat(bc.Low),
-			"open":       formatBigFloat(bc.Open),
-			"close":      formatBigFloat(bc.Close),
-		})
+		change := map[string]any{
+			"volume_a": formatBigFloat(bc.VolumeA),
+			"volume_b": formatBigFloat(bc.VolumeB),
+			"high":     formatBigFloat(bc.High),
+			"low":      formatBigFloat(bc.Low),
+			"open":     formatBigFloat(bc.Open),
+			"close":    formatBigFloat(bc.Close),
+		}
+		if bc.MPTIssuanceIDA != "" {
+			change["mpt_issuance_id_a"] = bc.MPTIssuanceIDA
+		} else {
+			change["currency_a"] = bc.CurrencyA
+		}
+		if bc.MPTIssuanceIDB != "" {
+			change["mpt_issuance_id_b"] = bc.MPTIssuanceIDB
+		} else {
+			change["currency_b"] = bc.CurrencyB
+		}
+		changesArr = append(changesArr, change)
 	}
 	ledgerHash := l.Hash()
 	return map[string]any{
@@ -236,26 +245,32 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 			absSecond := new(big.Float).Abs(second)
 
 			// Determine currency labels for output
-			var currA, currB string
+			var currA, currB, mptA, mptB string
 			if noswap {
 				currA = g
 				currB = p
+				mptA = finalGets.mptIssuanceID
+				mptB = finalPays.mptIssuanceID
 			} else {
 				currA = p
 				currB = g
+				mptA = finalPays.mptIssuanceID
+				mptB = finalGets.mptIssuanceID
 			}
 
 			bc, exists := changes[pairKey]
 			if !exists {
 				bc = &bookChange{
-					CurrencyA: currA,
-					CurrencyB: currB,
-					VolumeA:   new(big.Float),
-					VolumeB:   new(big.Float),
-					Open:      new(big.Float).Set(rate),
-					High:      new(big.Float).Set(rate),
-					Low:       new(big.Float).Set(rate),
-					Close:     new(big.Float).Set(rate),
+					CurrencyA:      currA,
+					CurrencyB:      currB,
+					MPTIssuanceIDA: mptA,
+					MPTIssuanceIDB: mptB,
+					VolumeA:        new(big.Float),
+					VolumeB:        new(big.Float),
+					Open:           new(big.Float).Set(rate),
+					High:           new(big.Float).Set(rate),
+					Low:            new(big.Float).Set(rate),
+					Close:          new(big.Float).Set(rate),
 				}
 				changes[pairKey] = bc
 			} else {
@@ -281,10 +296,11 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 
 // parsedAmount holds a parsed amount with its currency info
 type parsedAmount struct {
-	value    *big.Float
-	currency string
-	issuer   string
-	isXRP    bool
+	value         *big.Float
+	currency      string
+	issuer        string
+	mptIssuanceID string
+	isXRP         bool
 }
 
 // parseAmount parses an XRPL amount (string for XRP drops, object for IOU)
@@ -319,6 +335,10 @@ func parseAmount(raw any) *parsedAmount {
 		}
 		currency, _ := v["currency"].(string)
 		issuer, _ := v["issuer"].(string)
+		mptIssuanceID, _ := v["mpt_issuance_id"].(string)
+		if mptIssuanceID != "" {
+			return &parsedAmount{value: val, mptIssuanceID: strings.ToUpper(mptIssuanceID)}
+		}
 		return &parsedAmount{value: val, currency: currency, issuer: issuer}
 	}
 
@@ -329,6 +349,9 @@ func parseAmount(raw any) *parsedAmount {
 func formatCurrencyKey(amt *parsedAmount) string {
 	if amt.isXRP {
 		return "XRP_drops"
+	}
+	if amt.mptIssuanceID != "" {
+		return amt.mptIssuanceID
 	}
 	if amt.issuer != "" {
 		return fmt.Sprintf("%s.%s", amt.currency, amt.issuer)
@@ -344,8 +367,8 @@ func formatBigFloat(f *big.Float) string {
 	if f == nil {
 		return "0"
 	}
-	if f64, _ := f.Float64(); f64 == math.Trunc(f64) && !math.IsInf(f64, 0) {
-		return strconv.FormatInt(int64(f64), 10)
+	if integer, accuracy := f.Int(nil); accuracy == big.Exact {
+		return integer.String()
 	}
 	return f.Text('f', 16)
 }

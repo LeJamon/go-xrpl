@@ -1,8 +1,12 @@
 package amm
 
 import (
+	"math"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -23,6 +27,17 @@ func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) 
 			return state.NewXRPAmountFromInt(0)
 		}
 		return state.NewXRPAmountFromInt(int64(account.Balance))
+	}
+	if asset.IsMPT() {
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return zeroAmount(asset)
+		}
+		holding, _, result := mptutil.ReadHolding(view, id, ammAccountID)
+		if result != ter.TesSUCCESS || holding.MPTAmount > math.MaxInt64 {
+			return zeroAmount(asset)
+		}
+		return mptAmount(asset, int64(holding.MPTAmount))
 	}
 
 	// IOU: read from trustline
@@ -67,10 +82,10 @@ func ammPoolHolds(view tx.LedgerView, ammAccountID [20]byte, asset1, asset2 tx.A
 
 	// Check for frozen assets if requested
 	if fhZeroIfFrozen {
-		if tx.IsGlobalFrozen(view, asset1.Issuer) || tx.IsIndividualFrozen(view, ammAccountID, asset1) {
+		if assetFrozen(view, ammAccountID, asset1) {
 			balance1 = zeroAmount(asset1)
 		}
-		if tx.IsGlobalFrozen(view, asset2.Issuer) || tx.IsIndividualFrozen(view, ammAccountID, asset2) {
+		if assetFrozen(view, ammAccountID, asset2) {
 			balance2 = zeroAmount(asset2)
 		}
 	}
@@ -103,7 +118,7 @@ func IsAMMEmpty(amm *AMMData) bool {
 // Reference: rippled AMMUtils.cpp ammLPHolds lines 113-160
 func ammLPHolds(view tx.LedgerView, amm *AMMData, lpAccountID [20]byte) tx.Amount {
 	// LP token currency is derived from the two asset currencies
-	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+	lptCurrency := GenerateAMMLPTCurrencyForAssets(amm.Asset, amm.Asset2)
 	ammAccountID := amm.Account
 
 	// Read the trustline between LP account and AMM account

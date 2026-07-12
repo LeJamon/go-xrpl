@@ -10,6 +10,8 @@ var (
 	bigTenTo17 = new(big.Int).SetUint64(100_000_000_000_000_000) // 10^17
 )
 
+const maxInt64Value uint64 = 1<<63 - 1
+
 // PrepareMulDivOperand returns the absolute mantissa and exponent of a,
 // normalizing native (XRP) amounts up into the IOU mantissa range
 // [10^15, 10^16). This is the per-operand preamble every mul/div round variant
@@ -17,7 +19,7 @@ var (
 func PrepareMulDivOperand(a Amount) (mantissa int64, exponent int) {
 	mantissa = a.Mantissa()
 	exponent = a.Exponent()
-	if a.IsNative() {
+	if a.IsNative() || a.IsMPT() {
 		if mantissa < 0 {
 			mantissa = -mantissa
 		}
@@ -30,6 +32,141 @@ func PrepareMulDivOperand(a Amount) (mantissa int64, exponent int) {
 		mantissa = -mantissa
 	}
 	return mantissa, exponent
+}
+
+func MulRoundMPT(v1, v2 Amount, roundUp bool) int64 {
+	return mulRoundMPT(v1, v2, roundUp, false)
+}
+
+func MulRoundMPTStrict(v1, v2 Amount, roundUp bool) int64 {
+	return mulRoundMPT(v1, v2, roundUp, true)
+}
+
+func mulRoundMPT(v1, v2 Amount, roundUp, strict bool) int64 {
+	if v1.IsZero() || v2.IsZero() {
+		return 0
+	}
+	value1, offset1 := PrepareMulDivOperand(v1)
+	value2, offset2 := PrepareMulDivOperand(v2)
+	resultNegative := v1.IsNegative() != v2.IsNegative()
+	addSlop := resultNegative != roundUp
+	amount := MulMantissas(value1, value2, addSlop)
+	offset := offset1 + offset2 + 14
+	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, strict)
+}
+
+func DivRoundMPT(num, den Amount, roundUp bool) int64 {
+	return divRoundMPT(num, den, roundUp, false)
+}
+
+func DivRoundMPTStrict(num, den Amount, roundUp bool) int64 {
+	return divRoundMPT(num, den, roundUp, true)
+}
+
+func divRoundMPT(num, den Amount, roundUp, strict bool) int64 {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
+		return 0
+	}
+	numVal, numOffset := PrepareMulDivOperand(num)
+	denVal, denOffset := PrepareMulDivOperand(den)
+	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
+	amount := DivMantissas(numVal, denVal, addSlop)
+	offset := numOffset - denOffset - 17
+	return finalizeMPTRound(amount, offset, resultNegative, roundUp, addSlop, strict, false)
+}
+
+func finalizeMPTRound(amount uint64, offset int, resultNegative, roundUp, addSlop, strict, strictCanonicalize bool) int64 {
+	if amount == 0 || offset <= -20 {
+		if roundUp && !resultNegative {
+			return 1
+		}
+		return 0
+	}
+	if addSlop {
+		amount, offset = canonicalizeIntegralRound(amount, offset, roundUp, strictCanonicalize)
+	} else {
+		amount = canonicalizeMPTNoRound(amount, offset, strict)
+		offset = 0
+	}
+	if offset > 18 {
+		panic("MPT amount out of range")
+	}
+	for offset > 0 {
+		if amount > maxInt64Value/10 {
+			panic("MPT amount out of range")
+		}
+		amount *= 10
+		offset--
+	}
+	for offset < 0 {
+		amount /= 10
+		offset++
+	}
+	if amount > maxInt64Value {
+		panic("MPT amount out of range")
+	}
+	if amount == 0 && roundUp && !resultNegative {
+		amount = 1
+	}
+	value := int64(amount)
+	if resultNegative {
+		value = -value
+	}
+	return value
+}
+
+func canonicalizeIntegralRound(amount uint64, offset int, roundUp, strict bool) (uint64, int) {
+	if offset >= 0 {
+		return amount, offset
+	}
+	loops := 0
+	hadRemainder := false
+	for offset < -1 {
+		newAmount := amount / 10
+		hadRemainder = hadRemainder || amount != newAmount*10
+		amount = newAmount
+		offset++
+		loops++
+	}
+	adder := uint64(10)
+	if strict {
+		adder = 9
+		if hadRemainder && roundUp {
+			adder = 10
+		}
+	} else if loops >= 2 {
+		adder = 9
+	}
+	return (amount + adder) / 10, offset + 1
+}
+
+func canonicalizeMPTNoRound(amount uint64, offset int, strict bool) uint64 {
+	if !strict && GetNumberSwitchover() {
+		if amount > maxInt64Value {
+			panic("MPT amount out of range")
+		}
+		value := newXRPLNumberRaw(int64(amount), offset).ToInt64WithMode(RoundToNearest)
+		if value < 0 {
+			panic("MPT amount out of range")
+		}
+		return uint64(value)
+	}
+	for offset > 0 {
+		if amount > maxInt64Value/10 {
+			panic("MPT amount out of range")
+		}
+		amount *= 10
+		offset--
+	}
+	for offset < 0 {
+		amount /= 10
+		offset++
+	}
+	return amount
 }
 
 // muldivRound computes (x*y + slop) / divisor in exact big-integer arithmetic,

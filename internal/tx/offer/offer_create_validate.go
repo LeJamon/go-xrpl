@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -49,10 +50,10 @@ func (o *OfferCreate) Validate() error {
 	saTakerGets := o.TakerGets
 
 	// Check required amounts are present (unset Amount has no type info)
-	if !saTakerPays.IsNative() && saTakerPays.Currency == "" {
+	if !saTakerPays.IsNative() && !saTakerPays.IsMPT() && saTakerPays.Currency == "" {
 		return ter.Errorf(ter.TemBAD_OFFER, "TakerPays is required")
 	}
-	if !saTakerGets.IsNative() && saTakerGets.Currency == "" {
+	if !saTakerGets.IsNative() && !saTakerGets.IsMPT() && saTakerGets.Currency == "" {
 		return ter.Errorf(ter.TemBAD_OFFER, "TakerGets is required")
 	}
 
@@ -73,35 +74,51 @@ func (o *OfferCreate) Validate() error {
 		return ter.Errorf(ter.TemBAD_OFFER, "amounts must be positive")
 	}
 
-	uPaysCurrency := saTakerPays.Currency
-	uPaysIssuerID := saTakerPays.Issuer
-	uGetsCurrency := saTakerGets.Currency
-	uGetsIssuerID := saTakerGets.Issuer
-
 	// Check for redundant offer (same currency and issuer)
 	// Reference: lines 120-124
-	if uPaysCurrency == uGetsCurrency && uPaysIssuerID == uGetsIssuerID {
+	if sameOfferAsset(saTakerPays, saTakerGets) {
 		return ter.Errorf(ter.TemREDUNDANT, "cannot create offer with same currency and issuer on both sides")
+	}
+	if badOfferMPTAsset(saTakerPays) || badOfferMPTAsset(saTakerGets) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "MPT issuance ID has a zero issuer")
 	}
 
 	// Check for bad currency (XRP as non-native currency code)
 	// Reference: lines 126-130
-	if !saTakerPays.IsNative() && uPaysCurrency == badCurrency() {
+	if !saTakerPays.IsNative() && !saTakerPays.IsMPT() && saTakerPays.Currency == badCurrency() {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
-	if !saTakerGets.IsNative() && uGetsCurrency == badCurrency() {
+	if !saTakerGets.IsNative() && !saTakerGets.IsMPT() && saTakerGets.Currency == badCurrency() {
 		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
 	// Reference: lines 132-137
-	if saTakerPays.IsNative() != (uPaysIssuerID == "") {
+	if !saTakerPays.IsMPT() && saTakerPays.IsNative() != (saTakerPays.Issuer == "") {
 		return ter.Errorf(ter.TemBAD_ISSUER, "issuer mismatch for TakerPays")
 	}
-	if saTakerGets.IsNative() != (uGetsIssuerID == "") {
+	if !saTakerGets.IsMPT() && saTakerGets.IsNative() != (saTakerGets.Issuer == "") {
 		return ter.Errorf(ter.TemBAD_ISSUER, "issuer mismatch for TakerGets")
 	}
 
 	return nil
+}
+
+func sameOfferAsset(a, b tx.Amount) bool {
+	if a.IsMPT() || b.IsMPT() {
+		return a.IsMPT() && b.IsMPT() && a.MPTIssuanceID() == b.MPTIssuanceID()
+	}
+	if a.IsNative() || b.IsNative() {
+		return a.IsNative() && b.IsNative()
+	}
+	return a.Currency == b.Currency && a.Issuer == b.Issuer
+}
+
+func badOfferMPTAsset(amount tx.Amount) bool {
+	if !amount.IsMPT() {
+		return false
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return err != nil || mptutil.Issuer(id) == ([20]byte{})
 }
 
 // badCurrency returns the "bad" currency code - using XRP as a non-native currency code
@@ -170,12 +187,28 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	uGetsIssuerID := saTakerGets.Issuer
 
 	// Reference: lines 165-170
-	if uPaysIssuerID != "" {
+	if saTakerPays.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(saTakerPays.MPTIssuanceID())
+		if decodeErr != nil {
+			return ter.TefINTERNAL
+		}
+		if mptutil.IsGlobalFrozen(view, id) {
+			return ter.TecLOCKED
+		}
+	} else if uPaysIssuerID != "" {
 		if tx.IsGlobalFrozen(view, uPaysIssuerID) {
 			return ter.TecFROZEN
 		}
 	}
-	if uGetsIssuerID != "" {
+	if saTakerGets.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(saTakerGets.MPTIssuanceID())
+		if decodeErr != nil {
+			return ter.TefINTERNAL
+		}
+		if mptutil.IsGlobalFrozen(view, id) {
+			return ter.TecLOCKED
+		}
+	} else if uGetsIssuerID != "" {
 		if tx.IsGlobalFrozen(view, uGetsIssuerID) {
 			return ter.TecFROZEN
 		}
@@ -185,9 +218,22 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	// Reference: rippled CreateOffer.cpp preclaim() lines 172-178
 	// rippled checks accountFunds <= 0, NOT funds < takerGets.
 	// Partially-funded offers are allowed; only completely unfunded offers are rejected.
-	funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
-	if funds.Signum() <= 0 {
-		return ter.TecUNFUNDED_OFFER
+	if saTakerGets.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(saTakerGets.MPTIssuanceID())
+		if decodeErr != nil {
+			return ter.TefINTERNAL
+		}
+		if accountID != mptutil.Issuer(id) {
+			funds, _ := mptutil.Funds(view, id, accountID, true)
+			if funds <= 0 {
+				return ter.TecUNFUNDED_OFFER
+			}
+		}
+	} else {
+		funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
+		if funds.Signum() <= 0 {
+			return ter.TecUNFUNDED_OFFER
+		}
 	}
 
 	// Check cancel sequence is valid. rippled compares the *pre-transaction*
@@ -208,11 +254,16 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	// Check we can accept what the taker will pay us (for non-native)
 	// Reference: lines 203-213
 	if !saTakerPays.IsNative() {
-		paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
-		if err != nil {
-			return ter.TecNO_ISSUER
+		var result ter.Result
+		if saTakerPays.IsMPT() {
+			result = checkAcceptMPT(view, accountID, saTakerPays, config.ParentCloseTime)
+		} else {
+			paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
+			if err != nil {
+				return ter.TecNO_ISSUER
+			}
+			result = checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency)
 		}
-		result := checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency)
 		if result != ter.TesSUCCESS {
 			return result
 		}
@@ -226,6 +277,40 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		}
 	}
 
+	for _, amount := range []tx.Amount{saTakerPays, saTakerGets} {
+		if amount.IsMPT() {
+			id, decodeErr := mptutil.DecodeID(amount.MPTIssuanceID())
+			if decodeErr != nil {
+				return ter.TefINTERNAL
+			}
+			if result := mptutil.CanTrade(view, id); result != ter.TesSUCCESS {
+				return result
+			}
+		}
+	}
+
+	return ter.TesSUCCESS
+}
+
+func checkAcceptMPT(view tx.LedgerView, accountID [20]byte, amount tx.Amount, parentCloseTime uint32) ter.Result {
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	issuer := mptutil.Issuer(id)
+	issuerAccount, readErr := tx.ReadAccountRoot(view, issuer)
+	if readErr != nil || issuerAccount == nil {
+		return ter.TecNO_ISSUER
+	}
+	if accountID == issuer {
+		return ter.TesSUCCESS
+	}
+	if result := mptutil.RequireAuthAt(view, id, accountID, false, parentCloseTime); result != ter.TesSUCCESS {
+		return result
+	}
+	if mptutil.IsFrozen(view, id, accountID) {
+		return ter.TecLOCKED
+	}
 	return ter.TesSUCCESS
 }
 

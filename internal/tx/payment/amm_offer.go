@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -186,6 +187,17 @@ func (o *AMMOffer) Send(sb *PaymentSandbox, from, to [20]byte, amount tx.Amount)
 	if amount.IsNative() {
 		return xrpTransferInSandbox(sb, from, to, amount.Drops())
 	}
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+		if err != nil {
+			return err
+		}
+		value, ok := amount.MPTRaw()
+		if !ok {
+			return errors.New("MPT amount has no integral value")
+		}
+		return mptTransferResult(mptutil.Credit(sb, id, from, to, value, true))
+	}
 	return iouTransferInSandbox(sb, from, to, amount)
 }
 
@@ -319,8 +331,5 @@ func adjustTrustLineBalance(sb *PaymentSandbox, account, issuer [20]byte, curren
 
 // eitherToAmount converts an EitherAmount back to a tx.Amount.
 func eitherToAmount(ea EitherAmount) tx.Amount {
-	if ea.IsNative {
-		return state.NewXRPAmountFromInt(ea.XRP)
-	}
-	return ea.IOU
+	return FromEitherAmount(ea)
 }

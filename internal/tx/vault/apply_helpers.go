@@ -259,7 +259,7 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 
 // readVault reads and parses the vault ledger entry at vaultKey, returning
 // (nil, nil) when the entry does not exist.
-func readVault(view tx.LedgerView, vaultKey keylet.Keylet) (*vaultData, error) {
+func readVault(view AssetReadView, vaultKey keylet.Keylet) (*vaultData, error) {
 	data, err := view.Read(vaultKey)
 	if err != nil || len(data) == 0 {
 		return nil, nil

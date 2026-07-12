@@ -86,18 +86,19 @@ func (bi *BookIndex) IsBookToXRP(issue payment.Issue) bool {
 
 // BookExists checks whether a specific book directory exists in the ledger.
 func (bi *BookIndex) BookExists(takerPays, takerGets payment.Issue) bool {
-	paysCurrency := keylet.CurrencyBytes(takerPays.Currency)
-	getsCurrency := keylet.CurrencyBytes(takerGets.Currency)
-	k := keylet.BookDir(paysCurrency, takerPays.Issuer, getsCurrency, takerGets.Issuer)
+	k := keylet.BookBase(bookSide(takerPays), bookSide(takerGets), nil)
 	exists, _ := bi.ledger.Exists(k)
 	return exists
 }
 
+func bookSide(issue payment.Issue) keylet.BookSide {
+	if issue.IsMPT {
+		return keylet.MPTSide(issue.MPTID)
+	}
+	return keylet.IssueSide(keylet.CurrencyBytes(issue.Currency), issue.Issuer)
+}
+
 // issueFromAmount extracts an Issue from a state.Amount.
 func issueFromAmount(amt state.Amount) payment.Issue {
-	if amt.IsNative() {
-		return payment.Issue{Currency: "XRP"}
-	}
-	issuer, _ := state.DecodeAccountID(amt.Issuer)
-	return payment.Issue{Currency: amt.Currency, Issuer: issuer}
+	return payment.GetIssue(amt)
 }

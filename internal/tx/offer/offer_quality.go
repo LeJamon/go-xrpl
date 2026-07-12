@@ -104,19 +104,33 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 	return state.FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
 }
 
+func offerMulRoundLike(v1, v2, resultAsset tx.Amount, roundUp bool) tx.Amount {
+	if !resultAsset.IsMPT() {
+		return offerMulRound(v1, v2, resultAsset.IsNative(), resultAsset.Currency, resultAsset.Issuer, roundUp)
+	}
+	return newMPTAmountLike(resultAsset, state.MulRoundMPT(v1, v2, roundUp))
+}
+
+func offerDivRoundStrictLike(num, den, resultAsset tx.Amount, roundUp bool) tx.Amount {
+	if !resultAsset.IsMPT() {
+		return offerDivRoundStrict(num, den, resultAsset.IsNative(), resultAsset.Currency, resultAsset.Issuer, roundUp)
+	}
+	return newMPTAmountLike(resultAsset, state.DivRoundMPTStrict(num, den, roundUp))
+}
+
 // applyTickSize applies tick size rounding to offer amounts.
 // Reference: rippled CreateOffer.cpp lines 643-685
 func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell bool, rules *amendment.Rules) (tx.Amount, tx.Amount) {
 	tickSize := maxTickSize
 
-	if !takerPays.IsNative() {
+	if !takerPays.IsNative() && !takerPays.IsMPT() {
 		issuerTickSize := getTickSize(view, takerPays.Issuer)
 		if issuerTickSize > 0 && issuerTickSize < tickSize {
 			tickSize = issuerTickSize
 		}
 	}
 
-	if !takerGets.IsNative() {
+	if !takerGets.IsNative() && !takerGets.IsMPT() {
 		issuerTickSize := getTickSize(view, takerGets.Issuer)
 		if issuerTickSize > 0 && issuerTickSize < tickSize {
 			tickSize = issuerTickSize
@@ -135,8 +149,10 @@ func applyTickSize(view tx.LedgerView, takerPays, takerGets tx.Amount, bSell boo
 
 	if bSell {
 		// Round TakerPays
-		takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer)
-	} else {
+		if !takerPays.IsMPT() {
+			takerPays = multiplyByQuality(takerGets, roundedQuality, takerPays.Currency, takerPays.Issuer)
+		}
+	} else if !takerGets.IsMPT() {
 		// Round TakerGets
 		takerGets = divideByQuality(takerPays, roundedQuality, takerGets.Currency, takerGets.Issuer)
 	}

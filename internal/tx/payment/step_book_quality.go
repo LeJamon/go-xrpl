@@ -3,6 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
 
 // fixAMMv1_1Enabled reports whether fixAMMv1_1 governs this execution,
@@ -188,14 +189,6 @@ func (s *BookStep) ammOfferGetQualityFunc(offer *AMMOffer) *QualityFunction {
 //
 // Reference: rippled BookStep.cpp lines 328-359 (payment) and 519-558 (crossing).
 func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevStepDir DebtDirection, waiveOutFee, isAMM bool) Quality {
-	// rate(id): parityRate when XRP or id is the strand destination.
-	rate := func(issuer [20]byte, isXRP bool) uint32 {
-		if isXRP || issuer == s.strandDst {
-			return QualityOne
-		}
-		return s.GetAccountTransferRate(v, issuer)
-	}
-
 	var trIn, trOut uint32
 
 	if s.offerCrossing {
@@ -210,7 +203,7 @@ func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevSt
 		}
 		trIn = QualityOne
 		if Redeems(prevStepDir) {
-			trIn = rate(s.book.In.Issuer, s.book.In.IsXRP())
+			trIn = s.assetTransferRate(v, s.book.In)
 		}
 		trOut = QualityOne
 	} else {
@@ -219,11 +212,11 @@ func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevSt
 		// Reference: rippled BookStep.cpp lines 328-359.
 		trIn = QualityOne
 		if Redeems(prevStepDir) {
-			trIn = rate(s.book.In.Issuer, s.book.In.IsXRP())
+			trIn = s.assetTransferRate(v, s.book.In)
 		}
 		trOut = QualityOne
 		if s.ownerPaysTransferFee && !waiveOutFee {
-			trOut = rate(s.book.Out.Issuer, s.book.Out.IsXRP())
+			trOut = s.assetTransferRate(v, s.book.Out)
 		}
 	}
 
@@ -239,31 +232,37 @@ func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevSt
 // No fee when: XRP, issuer is strandDst, or previous step issues.
 // Reference: rippled BookStep.cpp forEachOffer() rate lambda (lines 728-731) + trIn (line 734-735)
 func (s *BookStep) transferRateIn(sb *PaymentSandbox, prevStepDir DebtDirection) uint32 {
-	if s.book.In.IsXRP() || s.book.In.Issuer == s.strandDst {
-		return QualityOne
-	}
-
 	// Only charge transfer fee when previous step redeems
 	if !Redeems(prevStepDir) {
 		return QualityOne
 	}
-
-	return s.GetAccountTransferRate(sb, s.book.In.Issuer)
+	return s.assetTransferRate(sb, s.book.In)
 }
 
 // transferRateOut returns the transfer rate for outgoing currency.
 // No fee when: XRP, issuer is strandDst, or ownerPaysTransferFee is false.
 // Reference: rippled BookStep.cpp forEachOffer() rate lambda (lines 728-731) + trOut (line 737-738)
 func (s *BookStep) transferRateOut(sb *PaymentSandbox) uint32 {
-	if s.book.Out.IsXRP() || s.book.Out.Issuer == s.strandDst {
-		return QualityOne
-	}
-
 	if !s.ownerPaysTransferFee {
 		return QualityOne
 	}
+	return s.assetTransferRate(sb, s.book.Out)
+}
 
-	return s.GetAccountTransferRate(sb, s.book.Out.Issuer)
+func (s *BookStep) assetTransferRate(sb *PaymentSandbox, issue Issue) uint32 {
+	if issue.IsXRP() {
+		return QualityOne
+	}
+	if issue.IsMPT {
+		if issue.Equal(s.strandDeliver) && issue.Issuer == s.strandDst {
+			return QualityOne
+		}
+		return mptutil.TransferRate(sb, issue.MPTID)
+	}
+	if issue.Issuer == s.strandDst {
+		return QualityOne
+	}
+	return s.GetAccountTransferRate(sb, issue.Issuer)
 }
 
 // getOfrInRate returns the per-offer input transfer rate.
@@ -274,9 +273,8 @@ func (s *BookStep) getOfrInRate(offerOwner [20]byte, trIn uint32) uint32 {
 	if !s.offerCrossing {
 		return trIn // Payment mode — no exemption
 	}
-	// Offer crossing: check if offer owner == previous DirectStep's source
-	if directStep, ok := s.prevStep.(*DirectStepI); ok {
-		if offerOwner == directStep.src {
+	if s.prevStep != nil {
+		if accounts := s.prevStep.DirectStepAccts(); accounts != nil && offerOwner == accounts[0] {
 			return QualityOne // Self-pay exemption
 		}
 	}

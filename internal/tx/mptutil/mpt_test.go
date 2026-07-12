@@ -1,0 +1,371 @@
+package mptutil
+
+import (
+	"encoding/hex"
+	"math"
+	"strings"
+	"testing"
+
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/stretchr/testify/require"
+)
+
+type mptTestView struct {
+	data        map[[32]byte][]byte
+	adjustments [][3]uint32
+	rules       *amendment.Rules
+}
+
+func newMPTTestView() *mptTestView {
+	return &mptTestView{data: make(map[[32]byte][]byte)}
+}
+
+func (v *mptTestView) Read(k keylet.Keylet) ([]byte, error) { return v.data[k.Key], nil }
+func (v *mptTestView) Exists(k keylet.Keylet) (bool, error) {
+	_, exists := v.data[k.Key]
+	return exists, nil
+}
+func (v *mptTestView) Insert(k keylet.Keylet, data []byte) error {
+	v.data[k.Key] = data
+	return nil
+}
+func (v *mptTestView) Update(k keylet.Keylet, data []byte) error {
+	v.data[k.Key] = data
+	return nil
+}
+func (v *mptTestView) Erase(k keylet.Keylet) error {
+	delete(v.data, k.Key)
+	return nil
+}
+func (v *mptTestView) Rules() *amendment.Rules {
+	if v.rules != nil {
+		return v.rules
+	}
+	return amendment.AllSupportedRules()
+}
+func (v *mptTestView) AdjustOwnerCount(_ [20]byte, current, next uint32) {
+	v.adjustments = append(v.adjustments, [3]uint32{current, next})
+}
+
+func TestEnsureAndRemoveHolding(t *testing.T) {
+	view := newMPTTestView()
+	var id [24]byte
+	copy(id[4:], []byte("issuer-account-id-123"))
+	var holder [20]byte
+	copy(holder[:], []byte("holder-account-id-123"))
+
+	account := &state.AccountRoot{
+		Account:    state.EncodeAccountIDSafe(holder),
+		Balance:    100_000_000,
+		OwnerCount: 2,
+		Sequence:   1,
+	}
+	raw, err := state.SerializeAccountRoot(account)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(holder), raw))
+
+	require.Equal(t, ter.TesSUCCESS, EnsureHolding(view, id, holder, 0, true))
+	tokenKey := keylet.MPTokenByID(id, holder)
+	tokenRaw, err := view.Read(tokenKey)
+	require.NoError(t, err)
+	token, err := state.ParseMPToken(tokenRaw)
+	require.NoError(t, err)
+	locked := uint64(1)
+	token.LockedAmount = &locked
+	tokenRaw, err = state.SerializeMPToken(token)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(tokenKey, tokenRaw))
+
+	require.Equal(t, ter.TecHAS_OBLIGATIONS, RemoveHolding(view, id, holder, true))
+	token.LockedAmount = nil
+	tokenRaw, err = state.SerializeMPToken(token)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(tokenKey, tokenRaw))
+	require.Equal(t, ter.TesSUCCESS, RemoveHolding(view, id, holder, true))
+
+	exists, err := view.Exists(tokenKey)
+	require.NoError(t, err)
+	require.False(t, exists)
+	accountRaw, err := view.Read(keylet.Account(holder))
+	require.NoError(t, err)
+	account, err = state.ParseAccountRoot(accountRaw)
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), account.OwnerCount)
+	require.Equal(t, [][3]uint32{{2, 3}, {3, 2}}, view.adjustments)
+}
+
+func TestCreditOverflowStillCapsSingleIssueAtMaximum(t *testing.T) {
+	view := newMPTTestView()
+	var id [24]byte
+	copy(id[4:], []byte("issuer-account-id-123"))
+	issuer := Issuer(id)
+	var holder [20]byte
+	copy(holder[:], []byte("holder-account-id-123"))
+	maximum := uint64(50)
+	issuance := &state.MPTokenIssuanceData{Issuer: issuer, Sequence: 1, MaximumAmount: &maximum}
+	raw, err := state.SerializeMPTokenIssuance(issuance)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
+	token := &state.MPTokenData{Account: holder, MPTokenIssuanceID: id}
+	raw, err = state.SerializeMPToken(token)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.MPTokenByID(id, holder), raw))
+
+	require.Equal(t, ter.TecPATH_DRY, Credit(view, id, issuer, holder, 51, true))
+}
+
+func TestVaultShareReferenceInheritsMPTChecks(t *testing.T) {
+	view := newMPTTestView()
+	var vaultPseudo, underlyingIssuer, from, to [20]byte
+	vaultPseudo[19] = 0x20
+	underlyingIssuer[19] = 0x10
+	from[19] = 0x30
+	to[19] = 0x40
+	shareID := keylet.MakeMPTID(1, vaultPseudo)
+	underlyingID := keylet.MakeMPTID(2, underlyingIssuer)
+
+	referenceKey := keylet.MPTokenByID(underlyingID, vaultPseudo)
+	referenceHex := strings.ToUpper(hex.EncodeToString(referenceKey.Key[:]))
+	putTestIssuance(t, view, shareID, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, &referenceHex)
+	putTestIssuance(t, view, underlyingID, 0, nil)
+	putTestHolding(t, view, underlyingID, vaultPseudo, 0)
+
+	require.Equal(t, ter.TecNO_PERMISSION, CanTrade(view, shareID))
+	require.Equal(t, ter.TecNO_AUTH, CanTransfer(view, shareID, from, to))
+	require.False(t, IsFrozen(view, shareID, to))
+
+	putTestIssuance(t, view, underlyingID,
+		entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer|entry.LsfMPTLocked, nil)
+	require.Equal(t, ter.TesSUCCESS, CanTrade(view, shareID))
+	require.Equal(t, ter.TesSUCCESS, CanTransfer(view, shareID, from, to))
+	require.True(t, IsFrozen(view, shareID, to))
+
+	view.rules = amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureMPTokensV2,
+	})
+	putTestIssuance(t, view, underlyingID, 0, nil)
+	require.Equal(t, ter.TesSUCCESS, CanTrade(view, shareID))
+	require.Equal(t, ter.TesSUCCESS, CanTransfer(view, shareID, from, to))
+}
+
+func TestVaultShareReferenceInheritsIOUChecks(t *testing.T) {
+	view := newMPTTestView()
+	var vaultPseudo, issuer, from, to [20]byte
+	issuer[19] = 0x10
+	vaultPseudo[19] = 0x20
+	from[19] = 0x30
+	to[19] = 0x40
+	shareID := keylet.MakeMPTID(1, vaultPseudo)
+	issuerAddress := state.EncodeAccountIDSafe(issuer)
+	vaultAddress := state.EncodeAccountIDSafe(vaultPseudo)
+
+	lineKey := keylet.Line(vaultPseudo, issuer, "USD")
+	referenceHex := strings.ToUpper(hex.EncodeToString(lineKey.Key[:]))
+	putTestIssuance(t, view, shareID, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, &referenceHex)
+	lineRaw, err := state.SerializeRippleState(&state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", issuerAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", issuerAddress),
+		HighLimit: state.NewIssuedAmountFromValue(0, state.MinExponent, "USD", vaultAddress),
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(lineKey, lineRaw))
+	putTestAccount(t, view, issuer, state.LsfGlobalFreeze, [32]byte{})
+
+	require.Equal(t, ter.TesSUCCESS, CanTrade(view, shareID))
+	require.Equal(t, ter.TerNO_RIPPLE, CanTransfer(view, shareID, from, to))
+	require.True(t, IsFrozen(view, shareID, to))
+}
+
+func TestVaultShareAuthorizationInheritsUnderlyingMPT(t *testing.T) {
+	view := newMPTTestView()
+	var vaultPseudo, underlyingIssuer, holder, owner [20]byte
+	vaultPseudo[19] = 0x20
+	underlyingIssuer[19] = 0x10
+	holder[19] = 0x30
+	owner[19] = 0x40
+	shareID := keylet.MakeMPTID(1, vaultPseudo)
+	underlyingID := keylet.MakeMPTID(2, underlyingIssuer)
+	vaultID := [32]byte{1, 2, 3}
+
+	putTestAccount(t, view, vaultPseudo, 0, vaultID)
+	putTestAccount(t, view, underlyingIssuer, 0, [32]byte{})
+	putTestIssuance(t, view, shareID, 0, nil)
+	putTestIssuance(t, view, underlyingID, entry.LsfMPTRequireAuth, nil)
+	putTestVault(t, view, vaultID, owner, vaultPseudo, shareID, underlyingID)
+
+	require.Equal(t, ter.TecNO_AUTH, RequireAuthAt(view, shareID, holder, false, 10))
+	putTestHolding(t, view, underlyingID, holder, entry.LsfMPTAuthorized)
+	require.Equal(t, ter.TesSUCCESS, RequireAuthAt(view, shareID, holder, false, 10))
+}
+
+func TestRequireAuthAtRejectsExpiredDomainCredential(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, holder, credentialIssuer [20]byte
+	issuer[19] = 0x10
+	holder[19] = 0x20
+	credentialIssuer[19] = 0x30
+	id := keylet.MakeMPTID(1, issuer)
+	domainID := [32]byte{4, 5, 6}
+	domainHex := strings.ToUpper(hex.EncodeToString(domainID[:]))
+	credentialType := []byte("KYC")
+
+	putTestAccount(t, view, issuer, 0, [32]byte{})
+	putTestIssuance(t, view, id, entry.LsfMPTRequireAuth, nil)
+	issuanceRaw := view.data[keylet.MPTIssuance(id).Key]
+	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
+	require.NoError(t, err)
+	issuance.DomainID = &domainHex
+	issuanceRaw, err = state.SerializeMPTokenIssuance(issuance)
+	require.NoError(t, err)
+	view.data[keylet.MPTIssuance(id).Key] = issuanceRaw
+
+	domainRaw, err := state.SerializePermissionedDomain(&state.PermissionedDomainData{
+		Owner:    issuer,
+		Sequence: 1,
+		AcceptedCredentials: []state.PermissionedDomainCredential{{
+			Issuer: credentialIssuer, CredentialType: credentialType,
+		}},
+	}, state.EncodeAccountIDSafe(issuer))
+	require.NoError(t, err)
+	view.data[keylet.PermissionedDomainByID(domainID).Key] = domainRaw
+
+	credentialHex, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType": "Credential",
+		"Subject":         state.EncodeAccountIDSafe(holder),
+		"Issuer":          state.EncodeAccountIDSafe(credentialIssuer),
+		"CredentialType":  hex.EncodeToString(credentialType),
+		"Expiration":      uint32(100),
+		"Flags":           entry.LsfAccepted,
+		"IssuerNode":      "0",
+		"SubjectNode":     "0",
+	})
+	require.NoError(t, err)
+	credentialRaw, err := hex.DecodeString(credentialHex)
+	require.NoError(t, err)
+	view.data[keylet.Credential(holder, credentialIssuer, credentialType).Key] = credentialRaw
+
+	require.Equal(t, ter.TesSUCCESS, RequireAuthAt(view, id, holder, false, 99))
+	require.Equal(t, ter.TesSUCCESS, RequireAuthAt(view, id, holder, false, 100))
+	require.Equal(t, ter.TecEXPIRED, RequireAuthAt(view, id, holder, false, 101))
+}
+
+func TestTransferRateRoundingIsDirectional(t *testing.T) {
+	const rate = uint32(1_250_000_000)
+	value, ok := MultiplyRate(1, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(2), value)
+	value, ok = DivideRate(1, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(0), value)
+	value, ok = MultiplyRate(4, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(5), value)
+	value, ok = DivideRate(5, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(4), value)
+	value, ok = MultiplyRate(-1, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(-1), value)
+	value, ok = DivideRate(-1, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(-1), value)
+}
+
+func TestTransferRateScalingReportsOverflow(t *testing.T) {
+	const rate = uint32(1_250_000_000)
+
+	value, ok := MultiplyRate(math.MaxInt64, RateOne)
+	require.True(t, ok)
+	require.Equal(t, int64(math.MaxInt64), value)
+
+	value, ok = MultiplyRate(math.MaxInt64, rate)
+	require.False(t, ok)
+	require.Zero(t, value)
+
+	value, ok = DivideRate(math.MaxInt64, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(7_378_697_629_483_820_645), value)
+}
+
+func TestSendTransferRateOverflowReturnsTefException(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, sender, receiver [20]byte
+	issuer[19] = 1
+	sender[19] = 2
+	receiver[19] = 3
+	id := keylet.MakeMPTID(1, issuer)
+	maximum := uint64(math.MaxInt64)
+	raw, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+		Issuer:        issuer,
+		Sequence:      1,
+		TransferFee:   25_000,
+		MaximumAmount: &maximum,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
+
+	gross, result := Send(view, id, sender, receiver, math.MaxInt64, false, false)
+	require.Equal(t, ter.TefEXCEPTION, result)
+	require.Zero(t, gross)
+}
+
+func putTestAccount(t *testing.T, view *mptTestView, account [20]byte, flags uint32, vaultID [32]byte) {
+	t.Helper()
+	raw, err := state.SerializeAccountRoot(&state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(account),
+		Balance:  1_000_000_000,
+		Sequence: 1,
+		Flags:    flags,
+		VaultID:  vaultID,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(account), raw))
+}
+
+func putTestIssuance(t *testing.T, view *mptTestView, id [24]byte, flags uint32, reference *string) {
+	t.Helper()
+	raw, err := state.SerializeMPTokenIssuance(&state.MPTokenIssuanceData{
+		Issuer:           Issuer(id),
+		Sequence:         1,
+		Flags:            flags,
+		ReferenceHolding: reference,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.MPTIssuance(id), raw))
+}
+
+func putTestHolding(t *testing.T, view *mptTestView, id [24]byte, account [20]byte, flags uint32) {
+	t.Helper()
+	raw, err := state.SerializeMPToken(&state.MPTokenData{
+		Account:           account,
+		MPTokenIssuanceID: id,
+		Flags:             flags,
+	})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.MPTokenByID(id, account), raw))
+}
+
+func putTestVault(t *testing.T, view *mptTestView, vaultID [32]byte, owner, pseudo [20]byte, shareID, assetID [24]byte) {
+	t.Helper()
+	hexRaw, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType":  "Vault",
+		"Flags":            uint32(0),
+		"Sequence":         uint32(1),
+		"OwnerNode":        "0",
+		"Owner":            state.EncodeAccountIDSafe(owner),
+		"Account":          state.EncodeAccountIDSafe(pseudo),
+		"Asset":            map[string]any{"mpt_issuance_id": EncodeID(assetID)},
+		"ShareMPTID":       EncodeID(shareID),
+		"WithdrawalPolicy": uint8(0),
+	})
+	require.NoError(t, err)
+	raw, err := hex.DecodeString(hexRaw)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.VaultByID(vaultID), raw))
+}

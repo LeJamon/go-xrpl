@@ -68,6 +68,9 @@ func (pf *Pathfinder) rankMinAmount(maxPaths int) tx.Amount {
 		}
 		return minAmount
 	}
+	if minAmount.IsMPT() {
+		return minAmount.Div(state.NewXRPAmountFromInt(divisor), false)
+	}
 	if f := minAmount.Float64(); f > 0 {
 		return state.NewIssuedAmountFromFloat64(f/float64(divisor), minAmount.Currency, minAmount.Issuer)
 	}
@@ -190,6 +193,9 @@ func largestAmount(amt tx.Amount) tx.Amount {
 		// INITIAL_XRP = 100 billion XRP = 100,000,000,000 * 1,000,000 drops
 		return state.NewXRPAmountFromInt(100_000_000_000_000_000)
 	}
+	if amt.IsMPT() {
+		return state.NewMPTAmountWithIssuanceID(9_223_372_036_854_775_807, amt.Issuer, amt.MPTIssuanceID())
+	}
 	// Maximum IOU amount: 9999999999999999e80
 	return state.NewIssuedAmountFromFloat64(9999999999999999e80, amt.Currency, amt.Issuer)
 }
@@ -199,7 +205,7 @@ func largestAmount(amt tx.Amount) tx.Amount {
 // can cover the entire payment by itself.
 // Reference: rippled Pathfinder::getBestPaths()
 func (pf *Pathfinder) GetBestPaths(maxPaths int, extraPaths [][]payment.PathStep, srcIssuer [20]byte) (bestPaths [][]payment.PathStep, fullLiquidityPath []payment.PathStep) {
-	issuerIsSender := (pf.srcCurrency == "XRP" || pf.srcCurrency == "") || srcIssuer == pf.srcAccount
+	issuerIsSender := pf.sourceIssue().IsXRP() || srcIssuer == pf.srcAccount
 
 	// Rank extra paths
 	var extraRanks []PathRank
