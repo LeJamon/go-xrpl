@@ -92,6 +92,8 @@ single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
 - [x] Run focused tests, full transaction/integration coverage, build, vet, lint,
       and final rippled 3.2.0 review
 - [x] Resolve the uncached CI goimports alignment failure and re-run lint
+- [x] Fix the terminal resource-manager Start/Stop race exposed by core CI
+- [x] Run focused race tests, strict lint, and the core package suite
 
 ## Review
 
@@ -113,6 +115,9 @@ Verification:
 - `just build-all`, `just build-nocgo`, `just vet`, and `just lint` pass.
 - The CI-only goimports finding in `strand.go` was corrected and reproduced
   locally with the formatter check before repushing.
+- The core CI race exposed a pre-existing terminal lifecycle gap in the resource
+  manager. Start/Stop are now serialized against late startup, and the exact
+  core `-race` shard plus repeated manager/Components lifecycle tests pass.
 - The full module test run passes outside the established out-of-scope
   conformance failures.
 - Final conformance: 941 pass / 117 fail overall, 879 pass / 0 fail in scope;

@@ -247,6 +247,49 @@ func TestStartStop_Idempotent(t *testing.T) {
 	m.Stop() // second call is a no-op
 }
 
+func TestStartStop_Concurrent(t *testing.T) {
+	for range 200 {
+		m, _ := newTestManager()
+
+		started := make(chan struct{})
+		go func() {
+			m.Start()
+			close(started)
+		}()
+		m.Stop()
+		<-started
+
+		m.mu.Lock()
+		stop := m.stop
+		m.mu.Unlock()
+		leftRunning := false
+		if stop != nil {
+			select {
+			case <-stop:
+			default:
+				leftRunning = true
+				close(stop)
+			}
+		}
+		m.wg.Wait()
+		if leftRunning {
+			t.Fatal("concurrent Stop returned before a late Start was stopped")
+		}
+	}
+}
+
+func TestStartAfterStopIsNoop(t *testing.T) {
+	m, _ := newTestManager()
+	m.Stop()
+	m.Start()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.stop != nil {
+		t.Fatal("Start after Stop must not arm periodic activity")
+	}
+}
+
 // TestDrop_BlacklistAndReadmit mirrors rippled's testDrop second and
 // third blocks (Logic_test.cpp:158-196): after a Consumer is dropped,
 // reacquiring the same endpoint must show a Drop disposition (the
