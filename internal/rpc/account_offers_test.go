@@ -1278,6 +1278,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Failed to get account offers")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
+		assert.NotContains(t, rpcErr.Message, "database connection failed")
 	})
 }

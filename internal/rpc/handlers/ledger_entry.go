@@ -387,7 +387,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
+		return nil, rpcInternalError("ledger_entry: ledger query failed", err)
 	}
 
 	response := map[string]any{

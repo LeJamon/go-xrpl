@@ -114,20 +114,20 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 	messageHex, err := binarycodec.EncodeForSigningClaim(claimJSON)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode claim: %v", err))
+		return nil, rpcInternalError("channel_authorize: claim encoding failed", err)
 	}
 
 	// Convert hex message to raw bytes for signing
 	messageBytes, err := hex.DecodeString(messageHex)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode message: %v", err))
+		return nil, rpcInternalError("channel_authorize: claim decoding failed", err)
 	}
 
 	// Sign the message
 	// The Sign functions expect the raw message bytes (as a string)
 	signature, err := signMessage(messageBytes, privateKeyHex, request.KeyType)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Exception occurred during signing: %v", err))
+		return nil, rpcInternalError("channel_authorize: claim signing failed", err)
 	}
 
 	response := map[string]any{

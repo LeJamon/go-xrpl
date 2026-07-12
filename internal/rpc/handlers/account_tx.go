@@ -139,7 +139,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
+		return nil, rpcInternalError("account_tx: transaction query failed", err)
 	}
 
 	// Cache for ledger lookups by sequence, to avoid repeated lookups

@@ -12,7 +12,13 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
+
+func rpcInternalError(operation string, err error) *types.RpcError {
+	xrpllog.Named(xrpllog.PartitionRPC).Error(operation, "err", err)
+	return types.RpcErrorInternal("Internal error.")
+}
 
 // RequireLedgerService checks that the ledger service is available
 // on the request's service container. Returns an RpcError if not.

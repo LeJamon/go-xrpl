@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -54,7 +53,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
+		return nil, rpcInternalError("account_nfts: ledger query failed", err)
 	}
 
 	// Build NFTs array with proper field handling

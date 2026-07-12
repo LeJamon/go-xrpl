@@ -97,7 +97,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 		}
-		return nil, types.RpcErrorInternal("Failed to read source account: " + err.Error())
+		return nil, rpcInternalError("submit_multisigned: source account lookup failed", err)
 	}
 
 	// --- Post-serialization validation (rippled TransactionSign.cpp:1325-1391) ---
@@ -183,7 +183,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Encode the transaction to binary
 	txBlob, encErr := binarycodec.Encode(txMap)
 	if encErr != nil {
-		return nil, types.RpcErrorInternal("Failed to encode transaction: " + encErr.Error())
+		return nil, rpcInternalError("submit_multisigned: transaction encoding failed", encErr)
 	}
 
 	// Calculate transaction hash
@@ -192,7 +192,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Submit the transaction
 	txJSON, encErr := json.Marshal(txMap)
 	if encErr != nil {
-		return nil, types.RpcErrorInternal("Failed to marshal transaction: " + encErr.Error())
+		return nil, rpcInternalError("submit_multisigned: transaction marshaling failed", encErr)
 	}
 
 	// Route fail_hard submissions through the optional surface so they
@@ -212,7 +212,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
 	}
 	if submitErr != nil {
-		return nil, types.RpcErrorInternal("Transaction submission failed: " + submitErr.Error())
+		return nil, rpcInternalError("submit_multisigned: transaction submission failed", submitErr)
 	}
 
 	txMap["hash"] = txHash

@@ -733,24 +733,20 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		submitError   error
-		expectedError string
+		name        string
+		submitError error
 	}{
 		{
-			name:          "Internal error",
-			submitError:   errors.New("internal ledger error"),
-			expectedError: "Failed to submit transaction",
+			name:        "Internal error",
+			submitError: errors.New("internal ledger error"),
 		},
 		{
-			name:          "Network error",
-			submitError:   errors.New("network unavailable"),
-			expectedError: "Failed to submit transaction",
+			name:        "Network error",
+			submitError: errors.New("network unavailable"),
 		},
 		{
-			name:          "Validation error",
-			submitError:   errors.New("transaction validation failed"),
-			expectedError: "Failed to submit transaction",
+			name:        "Validation error",
+			submitError: errors.New("transaction validation failed"),
 		},
 	}
 
@@ -773,7 +769,9 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.Message, tc.expectedError)
+			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, "Internal error.", rpcErr.Message)
+			assert.NotContains(t, rpcErr.Message, tc.submitError.Error())
 		})
 	}
 }

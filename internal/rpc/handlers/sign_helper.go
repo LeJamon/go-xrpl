@@ -176,7 +176,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	// Derive address from public key
 	address, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive address: %v", err))
+		return nil, rpcInternalError("sign: account address derivation failed", err)
 	}
 
 	// Parse the transaction JSON
@@ -209,7 +209,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to read source account: %v", err))
+			return nil, rpcInternalError("sign: source account lookup failed", err)
 		}
 
 		// Auto-fill Sequence from the open ledger / TxQ; a present
@@ -221,7 +221,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 				if errors.Is(err, svcerr.ErrAccountNotFound) {
 					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 				}
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", err))
+				return nil, rpcInternalError("sign: sequence autofill failed", err)
 			}
 			txMap["Sequence"] = seq
 		}
@@ -262,7 +262,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 				if errors.As(feeErr, &hfe) {
 					return nil, types.RpcErrorHighFee(hfe.Error())
 				}
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
+				return nil, rpcInternalError("sign: fee autofill failed", feeErr)
 			}
 			txMap["Fee"] = formatUint64AsString(fee)
 		}
@@ -282,7 +282,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 
 	txBytes, err := json.Marshal(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to marshal transaction: %v", err))
+		return nil, rpcInternalError("sign: transaction marshaling failed", err)
 	}
 
 	transaction, err := tx.ParseJSON(txBytes)
@@ -295,14 +295,14 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 
 	signature, err := sign.SignTransaction(transaction, privateKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
+		return nil, rpcInternalError("sign: transaction signing failed", err)
 	}
 
 	txMap["TxnSignature"] = signature
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
+		return nil, rpcInternalError("sign: transaction encoding failed", err)
 	}
 
 	txHash := CalculateTxHash(txBlob)

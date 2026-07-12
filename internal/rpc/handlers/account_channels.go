@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -71,7 +70,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
+		return nil, rpcInternalError("account_channels: ledger query failed", err)
 	}
 
 	// Build channels array with proper field handling

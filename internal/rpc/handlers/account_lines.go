@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -64,7 +63,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
+		return nil, rpcInternalError("account_lines: ledger query failed", err)
 	}
 
 	// Filter out default-state trust lines when ignore_default is true

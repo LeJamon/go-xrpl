@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -93,7 +92,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		case errors.Is(err, svcerr.ErrInvalidMarker):
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT offers: %v", err))
+		return nil, rpcInternalError("nft_offers: ledger query failed", err)
 	}
 
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil

@@ -110,13 +110,13 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// Encode for multisigning (adds the signer's account as suffix)
 	signingPayload, err := binarycodec.EncodeForMultisigning(txMapForSigning, request.Account)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode for multisigning: %v", err))
+		return nil, rpcInternalError("sign_for: multisigning payload encoding failed", err)
 	}
 
 	// Sign the payload
 	signature, err := signPayload(signingPayload, privateKey, keyType)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
+		return nil, rpcInternalError("sign_for: transaction signing failed", err)
 	}
 
 	newSigner := map[string]any{
@@ -146,7 +146,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
+		return nil, rpcInternalError("sign_for: transaction encoding failed", err)
 	}
 
 	txHash := CalculateTxHash(txBlob)

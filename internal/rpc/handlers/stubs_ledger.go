@@ -83,7 +83,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *types.RpcError) {
 	result, err := walker.GetOwnerInfo(ctx.Context, account, ledgerIndex)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
+		return nil, rpcInternalError("owner_info: ledger query failed", err)
 	}
 
 	section := make(map[string]any)

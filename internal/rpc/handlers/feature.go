@@ -64,7 +64,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 			return nil, types.RpcErrorNotSupported("amendment voting is not available on this server")
 		}
 		if err := ctrl.SetAmendmentVote(ctx.Context, f.ID, *request.Vetoed); err != nil {
-			return nil, types.RpcErrorInternal("failed to record amendment vote: " + err.Error())
+			return nil, rpcInternalError("feature: recording amendment vote failed", err)
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]any{

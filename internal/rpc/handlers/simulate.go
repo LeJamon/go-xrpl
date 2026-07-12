@@ -117,7 +117,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 			if errors.As(feeErr, &hfe) {
 				return nil, types.RpcErrorHighFee(hfe.Error())
 			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
+			return nil, rpcInternalError("simulate: fee autofill failed", feeErr)
 		}
 		txJsonMap["Fee"] = strconv.FormatUint(fee, 10)
 	}
@@ -159,7 +159,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 			case errors.Is(seqErr, svcerr.ErrAccountNotFound):
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			default:
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
+				return nil, rpcInternalError("simulate: sequence autofill failed", seqErr)
 			}
 		}
 		txJsonMap["Sequence"] = seq
@@ -235,7 +235,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Simulation failed: %v", err))
+		return nil, rpcInternalError("simulate: transaction simulation failed", err)
 	}
 
 	// rippled overrides the tesSUCCESS message for simulate (Simulate.cpp:258-262).

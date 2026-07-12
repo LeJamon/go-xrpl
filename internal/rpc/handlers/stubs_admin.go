@@ -161,7 +161,7 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 	stored, err := store.SetCanDelete(seq)
 	if err != nil {
-		return nil, types.RpcErrorInternal("failed to persist can_delete: " + err.Error())
+		return nil, rpcInternalError("can_delete: persisting boundary failed", err)
 	}
 	return map[string]any{"can_delete": stored}, nil
 }

@@ -1353,7 +1353,8 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Failed to get book offers")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Message, "ledger not found")
 }
 
 // TestBookOffersMarkerPassthrough exercises the handler's marker handling:

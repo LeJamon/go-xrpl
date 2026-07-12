@@ -85,7 +85,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorExpectedField("marker", "valid")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
+		return nil, rpcInternalError("ledger_data: ledger query failed", err)
 	}
 
 	// Build state array based on binary flag

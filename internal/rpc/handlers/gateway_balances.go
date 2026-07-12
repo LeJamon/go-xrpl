@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -92,7 +91,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			}
 			return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
+		return nil, rpcInternalError("gateway_balances: ledger query failed", err)
 	}
 
 	// Build response matching rippled's GatewayBalances.cpp format: rippled only

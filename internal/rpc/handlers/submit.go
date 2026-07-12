@@ -99,7 +99,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if txBlobHex == "" {
 		encoded, err := binarycodec.Encode(txJsonMap)
 		if err != nil {
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode tx_json: %v", err))
+			return nil, rpcInternalError("submit: transaction encoding failed", err)
 		}
 		txBlobHex = encoded
 	}
@@ -123,7 +123,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
 	}
 	if submitErr != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", submitErr))
+		return nil, rpcInternalError("submit: transaction submission failed", submitErr)
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 

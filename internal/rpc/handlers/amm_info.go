@@ -104,7 +104,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		// Decode the account to get AMMID
 		decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(accountEntry.Node))
 		if decodeErr != nil {
-			return nil, types.RpcErrorInternal("Failed to decode account: " + decodeErr.Error())
+			return nil, rpcInternalError("amm_info: account decoding failed", decodeErr)
 		}
 
 		ammIDHex, ok := decoded["AMMID"].(string)
@@ -149,7 +149,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(ammEntry.Node))
 	if decodeErr != nil {
-		return nil, types.RpcErrorInternal("Failed to decode AMM: " + decodeErr.Error())
+		return nil, rpcInternalError("amm_info: AMM decoding failed", decodeErr)
 	}
 
 	// Build the response

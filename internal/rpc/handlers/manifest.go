@@ -83,7 +83,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(master[:])
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("encode master key: %v", err))
+		return nil, rpcInternalError("manifest: master key encoding failed", err)
 	}
 
 	details := map[string]any{
@@ -93,7 +93,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if ephOK {
 		ephB58, err := addresscodec.EncodeNodePublicKey(ephemeral[:])
 		if err != nil {
-			return nil, types.RpcErrorInternal(fmt.Sprintf("encode ephemeral key: %v", err))
+			return nil, rpcInternalError("manifest: ephemeral key encoding failed", err)
 		}
 		details["ephemeral_key"] = ephB58
 	}

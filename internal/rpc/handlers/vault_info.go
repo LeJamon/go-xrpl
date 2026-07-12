@@ -79,7 +79,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	vaultDecoded, decodeErr := binarycodec.Decode(hex.EncodeToString(vaultEntry.Node))
 	if decodeErr != nil {
-		return nil, types.RpcErrorInternal("Failed to decode Vault: " + decodeErr.Error())
+		return nil, rpcInternalError("vault_info: vault decoding failed", decodeErr)
 	}
 
 	// Get the ShareMPTID to lookup the MPToken issuance
