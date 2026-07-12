@@ -212,6 +212,11 @@ type Adaptor struct {
 	// wiring — GenerateNegativeUNLPseudoTx degrades to no vote.
 	validationHistorian consensus.ValidationHistorian
 
+	// remoteFeeMu serializes validated-ledger callbacks so a delayed older
+	// notification cannot overwrite the fee computed for a newer ledger.
+	remoteFeeMu  sync.Mutex
+	remoteFeeSeq uint32
+
 	txSetCache *TxSetCache
 
 	// Peer-reported last-closed ledger hashes, keyed by overlay peer ID.
@@ -500,7 +505,7 @@ func New(cfg Config) *Adaptor {
 		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
 	}
 
-	return &Adaptor{
+	a := &Adaptor{
 		ledgerService:     cfg.LedgerService,
 		sender:            sender,
 		identity:          cfg.Identity,
@@ -524,6 +529,12 @@ func New(cfg Config) *Adaptor {
 		relayValidations:  cfg.RelayValidations,
 		logger:            logger,
 	}
+	if a.ledgerService != nil {
+		a.ledgerService.SetOnValidatedLedger(func(seq uint32, hash, parentHash [32]byte) {
+			a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
+		})
+	}
+	return a
 }
 
 // SetValidationHistorian wires per-ledger trusted-validation lookups into the
@@ -1811,51 +1822,66 @@ func (a *Adaptor) ancestorOf(ledger consensus.Ledger, targetSeq uint32) consensu
 
 // OnLedgerFullyValidated fires at trusted-validation quorum. It advances the
 // service's validated_ledger only if our stored ledger at that seq has the
-// matching hash (fork safety, keyed on the ledger not seq alone), then refreshes
-// LoadFeeTrack's remoteFee from the median sfLoadFee across trusted validations.
+// matching hash (fork safety, keyed on the ledger not seq alone).
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
 	a.ledgerService.SetValidatedLedger(seq, hash)
-	a.refreshRemoteFee(ledgerID)
 	a.logger.Info("Ledger fully validated",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 	)
 }
 
-// refreshRemoteFee takes the sfLoadFee of each trusted validation
-// (defaulting to LoadBase when the validator omitted the field) and
-// forwards the median to LoadFeeTrack.
-func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
-	if a.ledgerService == nil || a.validationHistorian == nil {
+func (a *Adaptor) refreshRemoteFee(seq uint32, ledgerID, parentID consensus.LedgerID) {
+	if a.ledgerService == nil {
 		return
 	}
+
+	a.mu.Lock()
+	historian := a.validationHistorian
+	a.mu.Unlock()
+
+	a.remoteFeeMu.Lock()
+	defer a.remoteFeeMu.Unlock()
+	if seq <= a.remoteFeeSeq {
+		return
+	}
+	if historian == nil {
+		return
+	}
+
 	ft := a.ledgerService.FeeTrack()
 	if ft == nil {
 		return
 	}
-	vals := a.validationHistorian.GetTrustedValidations(ledgerID)
-	if len(vals) == 0 {
-		return
-	}
 	base := ft.GetLoadBase()
+
+	fees := collectValidationFees(historian, ledgerID, base)
+	fees = append(fees, collectValidationFees(historian, parentID, base)...)
+	fee := base
+	if len(fees) > 0 {
+		slices.Sort(fees)
+		fee = fees[len(fees)/2]
+	}
+	ft.SetRemoteFee(fee)
+	a.remoteFeeSeq = seq
+}
+
+func collectValidationFees(historian consensus.ValidationHistorian, ledgerID consensus.LedgerID, base uint32) []uint32 {
+	vals := historian.GetTrustedValidations(ledgerID)
 	fees := make([]uint32, 0, len(vals))
 	for _, v := range vals {
-		if v == nil {
+		if v == nil || !v.Full {
 			continue
 		}
 		fee := v.LoadFee
-		if fee == 0 {
+		if !v.HasLoadFee() {
 			fee = base
 		}
 		fees = append(fees, fee)
 	}
-	if len(fees) == 0 {
-		return
-	}
-	slices.Sort(fees)
-	ft.SetRemoteFee(fees[len(fees)/2])
+	return fees
 }
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {

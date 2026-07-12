@@ -161,20 +161,26 @@ func FromGenesis(
 	}
 }
 
-// NewFromHeader creates a closed/validated ledger from a deserialized header
-// and existing state/tx maps. Used during initial sync to adopt a peer's ledger.
+// NewFromHeader creates a closed ledger from a deserialized header and existing
+// state/tx maps. The header's Validated flag determines whether it is already
+// validated; peer wire headers omit that local state and remain closed until
+// quorum promotion.
 func NewFromHeader(
 	hdr header.LedgerHeader,
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) *Ledger {
+	state := StateClosed
+	if hdr.Validated {
+		state = StateValidated
+	}
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
 		header:   hdr,
 		fees:     fees,
-		state:    StateValidated,
+		state:    state,
 	}
 }
 

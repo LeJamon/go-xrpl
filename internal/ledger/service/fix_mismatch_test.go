@@ -24,6 +24,7 @@ func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger
 		LedgerIndex: seq,
 		Hash:        hash,
 		ParentHash:  parentHash,
+		Validated:   true,
 	}
 	return ledger.NewFromHeader(hdr, stateMap, txMap, drops.Fees{})
 }
@@ -283,8 +284,8 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 
 	baseSeq := svc.GetClosedLedgerIndex() + 1
 
-	// Seed B at seq S+0; makeStubLedger's NewFromHeader already marks
-	// the ledger as validated (state=StateValidated). Adopt D at seq
+	// Seed B at seq S+0; makeStubLedger explicitly marks the header
+	// validated. Adopt D at seq
 	// S+1 whose parentHash does not equal B.Hash() — fixMismatch must
 	// purge B and log ERROR. The validatedLedger pointer must not
 	// silently flip.

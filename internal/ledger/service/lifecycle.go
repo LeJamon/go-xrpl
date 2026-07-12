@@ -399,7 +399,8 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 // ahead of the TxQ.
 func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs, disputedBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	if s.closedLedger == nil {
 		return 0, ErrNoClosedLedger
@@ -594,6 +595,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 // must NOT be flipped to validated.
 func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	s.mu.Lock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	l, ok := s.ledgerHistory[seq]
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
 	// or "different-hash" (same-height fork) — both stash and arm acquisition.
@@ -638,6 +640,7 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	pool := s.localTxs
 	event := s.drainPendingValidationLocked(expectedHash)
 	callback := s.eventCallback
+	notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
 	s.mu.Unlock()
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
@@ -650,6 +653,7 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	if event != nil && callback != nil {
 		go callback(event)
 	}
+	notification.notify()
 }
 
 // SubmitHeldAdoptionResult describes the disposition of a candidate ledger. When
@@ -688,7 +692,8 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	// Evict stale entries on every submission.
 	s.evictExpiredHeldAdoptionsLocked()
@@ -787,7 +792,8 @@ func (s *Service) NeedsInitialSync() bool {
 // have changed state).
 func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	if !s.needsInitialSync {
 		return errors.New("not in initial sync mode")
@@ -814,10 +820,12 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 
 	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
 
-	// Adopted becomes closedLedger and joins history but is NOT marked validated
-	// (no quorum yet); validatedLedger advances later via SetValidatedLedger.
 	// Source closedLedger from the install helper so validated-precedence holds.
-	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	s.closedLedger = canonical
+	if canonical == adopted {
+		s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
+	}
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
@@ -843,7 +851,8 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 // AdoptLedgerHeader but after needsInitialSync is cleared.
 func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	if s.genesisLedger == nil {
 		return errors.New("no genesis ledger available")
@@ -875,9 +884,11 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 
 	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
 
-	// Advance closedLedger to the peer's tip but NOT validatedLedger: "closed"
-	// is not "validated"; the quorum gate in SetValidatedLedger owns that.
-	s.closedLedger = s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
+	s.closedLedger = canonical
+	if canonical == adopted {
+		s.drainPendingLedgerValidationLocked(h.LedgerIndex, adopted)
+	}
 
 	openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 	if err != nil {
@@ -907,7 +918,8 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 // adopted ledger.
 func (s *Service) AdoptLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 	return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
 }
 
