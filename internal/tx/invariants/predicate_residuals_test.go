@@ -16,7 +16,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// offerSLE encodes an Offer ledger entry with XRP, IOU, or MPT amounts.
 func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
 	t.Helper()
 	hexStr, err := binarycodec.Encode(map[string]any{

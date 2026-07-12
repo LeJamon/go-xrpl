@@ -162,7 +162,6 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return result
 		}
 	} else if !c.SendMax.IsNative() {
-		// IOU-specific checks
 		// Reference: CreateCheck.cpp L116-161
 		issuerID, err := state.DecodeAccountID(c.SendMax.Issuer)
 		if err != nil {

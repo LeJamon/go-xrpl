@@ -139,7 +139,6 @@ const (
 	PathTypeCurrency uint8 = 0x10
 	// PathTypeIssuer indicates path element has issuer
 	PathTypeIssuer uint8 = 0x20
-	// PathTypeMPT indicates path element has an MPTokenIssuanceID.
 	PathTypeMPT uint8 = 0x40
 )
 

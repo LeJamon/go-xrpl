@@ -277,11 +277,6 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 			return ter.TemDISABLED
 		}
 	}
-	// The per-type seams (checkExtraFeatures, flags mask, and rules-aware preflight) run for
-	// inner transactions exactly as they do on the outer path, mirroring rippled
-	// which preflights each inner via the full invokePreflight<T>. Without them an
-	// inner tx that adopts a seam would skip that validation, since inner txs
-	// reach Apply directly and never run preclaim.
 	if result := checkExtraFeatures(innerTx, rules); result != ter.TesSUCCESS {
 		return result
 	}

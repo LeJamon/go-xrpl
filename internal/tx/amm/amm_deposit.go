@@ -1004,7 +1004,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			// Skip if depositor IS the issuer.
 			if accountID != issuerID {
 				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View); err != nil {
 					return TecUNFUNDED_AMM
