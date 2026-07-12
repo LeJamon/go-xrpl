@@ -349,6 +349,45 @@ func TestGetLedgerQueryTypePresence(t *testing.T) {
 	})
 }
 
+func TestGetLedgerZeroValuePresence(t *testing.T) {
+	t.Run("absent", func(t *testing.T) {
+		encoded, err := Encode(&GetLedger{InfoType: LedgerInfoBase})
+		if err != nil {
+			t.Fatalf("Encode error: %v", err)
+		}
+		decoded, err := Decode(TypeGetLedger, encoded)
+		if err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+		got := decoded.(*GetLedger)
+		if got.HasLedgerSeq() || got.HasRequestCookie() {
+			t.Fatalf("zero-value fields unexpectedly present: seq=%v cookie=%v", got.HasLedgerSeq(), got.HasRequestCookie())
+		}
+	})
+
+	t.Run("explicit zero", func(t *testing.T) {
+		encoded, err := Encode(&GetLedger{
+			InfoType:         LedgerInfoBase,
+			LedgerSeqSet:     true,
+			RequestCookieSet: true,
+		})
+		if err != nil {
+			t.Fatalf("Encode error: %v", err)
+		}
+		decoded, err := Decode(TypeGetLedger, encoded)
+		if err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+		got := decoded.(*GetLedger)
+		if !got.HasLedgerSeq() || !got.HasRequestCookie() {
+			t.Fatalf("explicit zero presence lost: seq=%v cookie=%v", got.HasLedgerSeq(), got.HasRequestCookie())
+		}
+		if got.LedgerSeq != 0 || got.RequestCookie != 0 {
+			t.Fatalf("explicit zero values changed: seq=%d cookie=%d", got.LedgerSeq, got.RequestCookie)
+		}
+	})
+}
+
 func TestLedgerDataRoundtrip(t *testing.T) {
 	original := &LedgerData{
 		LedgerHash: bytes.Repeat([]byte{0xAA}, 32),
@@ -380,6 +419,24 @@ func TestLedgerDataRoundtrip(t *testing.T) {
 	}
 	if len(decoded.Nodes) != len(original.Nodes) {
 		t.Fatalf("Nodes length = %d, want %d", len(decoded.Nodes), len(original.Nodes))
+	}
+}
+
+func TestLedgerDataZeroCookiePresence(t *testing.T) {
+	encoded, err := Encode(&LedgerData{
+		InfoType:         LedgerInfoBase,
+		RequestCookieSet: true,
+	})
+	if err != nil {
+		t.Fatalf("Encode error: %v", err)
+	}
+	decoded, err := Decode(TypeLedgerData, encoded)
+	if err != nil {
+		t.Fatalf("Decode error: %v", err)
+	}
+	got := decoded.(*LedgerData)
+	if !got.HasRequestCookie() || got.RequestCookie != 0 {
+		t.Fatalf("explicit zero cookie presence lost: present=%v value=%d", got.HasRequestCookie(), got.RequestCookie)
 	}
 }
 

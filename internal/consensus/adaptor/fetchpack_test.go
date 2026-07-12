@@ -186,6 +186,28 @@ func TestMakeFetchPack_UnknownOrOpenHaveYieldsNoPack(t *testing.T) {
 	require.Nil(t, objs)
 }
 
+func TestMakeFetchPack_RespectsConfiguredFetchDepth(t *testing.T) {
+	want := makeGenesisLedger(t)
+	have, err := ledger.NewOpen(want, time.Now())
+	require.NoError(t, err)
+	require.NoError(t, have.Close(time.Now(), 0))
+
+	lookup := newFakeLookup()
+	lookup.add(want)
+	lookup.add(have)
+	p := newLedgerProviderForTest(lookup)
+
+	lookup.earliestFetch = have.Sequence() + 1
+	objects, err := p.MakeFetchPack(have.Hash(), 0)
+	require.ErrorIs(t, err, peermanagement.ErrFetchPackTooEarly)
+	assert.Nil(t, objects)
+
+	lookup.earliestFetch = have.Sequence()
+	objects, err = p.MakeFetchPack(have.Hash(), 0)
+	require.NoError(t, err)
+	assert.NotEmpty(t, objects)
+}
+
 // TestHandleFetchPackReply_VerifiesAndCaches drives a fetch-pack reply through
 // the router and asserts only verifiable SHAMap nodes are cached — the leading
 // header object and a tampered node are dropped.

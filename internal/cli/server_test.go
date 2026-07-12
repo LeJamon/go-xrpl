@@ -24,6 +24,25 @@ type recordingSinkCall struct {
 	masterKeys [][33]byte
 }
 
+func TestEffectivePeerFetchDepth(t *testing.T) {
+	tests := []struct {
+		name         string
+		fetchDepth   uint32
+		onlineDelete int
+		want         uint32
+	}{
+		{name: "online delete clamps full history", fetchDepth: ^uint32(0), onlineDelete: 256, want: 256},
+		{name: "smaller fetch depth wins", fetchDepth: 512, onlineDelete: 1024, want: 512},
+		{name: "online delete disabled", fetchDepth: 512, onlineDelete: 0, want: 512},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, effectivePeerFetchDepth(tc.fetchDepth, tc.onlineDelete))
+		})
+	}
+}
+
 func (s *recordingSink) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

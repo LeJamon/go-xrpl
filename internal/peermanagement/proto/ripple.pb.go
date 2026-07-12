@@ -1972,9 +1972,9 @@ type TMGetLedger struct {
 	Itype         *TMLedgerInfoType      `protobuf:"varint,1,opt,name=itype,proto3,enum=protocol.TMLedgerInfoType,oneof" json:"itype,omitempty"`
 	Ltype         *TMLedgerType          `protobuf:"varint,2,opt,name=ltype,proto3,enum=protocol.TMLedgerType,oneof" json:"ltype,omitempty"`
 	LedgerHash    []byte                 `protobuf:"bytes,3,opt,name=ledger_hash,json=ledgerHash,proto3" json:"ledger_hash,omitempty"`
-	LedgerSeq     uint32                 `protobuf:"varint,4,opt,name=ledger_seq,json=ledgerSeq,proto3" json:"ledger_seq,omitempty"`
+	LedgerSeq     *uint32                `protobuf:"varint,4,opt,name=ledger_seq,json=ledgerSeq,proto3,oneof" json:"ledger_seq,omitempty"`
 	NodeIds       [][]byte               `protobuf:"bytes,5,rep,name=node_ids,json=nodeIds,proto3" json:"node_ids,omitempty"`
-	RequestCookie uint64                 `protobuf:"varint,6,opt,name=request_cookie,json=requestCookie,proto3" json:"request_cookie,omitempty"`
+	RequestCookie *uint64                `protobuf:"varint,6,opt,name=request_cookie,json=requestCookie,proto3,oneof" json:"request_cookie,omitempty"`
 	QueryType     *TMQueryType           `protobuf:"varint,7,opt,name=query_type,json=queryType,proto3,enum=protocol.TMQueryType,oneof" json:"query_type,omitempty"`
 	QueryDepth    uint32                 `protobuf:"varint,8,opt,name=query_depth,json=queryDepth,proto3" json:"query_depth,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -2033,8 +2033,8 @@ func (x *TMGetLedger) GetLedgerHash() []byte {
 }
 
 func (x *TMGetLedger) GetLedgerSeq() uint32 {
-	if x != nil {
-		return x.LedgerSeq
+	if x != nil && x.LedgerSeq != nil {
+		return *x.LedgerSeq
 	}
 	return 0
 }
@@ -2047,8 +2047,8 @@ func (x *TMGetLedger) GetNodeIds() [][]byte {
 }
 
 func (x *TMGetLedger) GetRequestCookie() uint64 {
-	if x != nil {
-		return x.RequestCookie
+	if x != nil && x.RequestCookie != nil {
+		return *x.RequestCookie
 	}
 	return 0
 }
@@ -2073,7 +2073,7 @@ type TMLedgerData struct {
 	LedgerSeq     *uint32                `protobuf:"varint,2,opt,name=ledger_seq,json=ledgerSeq,proto3,oneof" json:"ledger_seq,omitempty"`
 	Type          *TMLedgerInfoType      `protobuf:"varint,3,opt,name=type,proto3,enum=protocol.TMLedgerInfoType,oneof" json:"type,omitempty"`
 	Nodes         []*TMLedgerNode        `protobuf:"bytes,4,rep,name=nodes,proto3" json:"nodes,omitempty"`
-	RequestCookie uint32                 `protobuf:"varint,5,opt,name=request_cookie,json=requestCookie,proto3" json:"request_cookie,omitempty"`
+	RequestCookie *uint32                `protobuf:"varint,5,opt,name=request_cookie,json=requestCookie,proto3,oneof" json:"request_cookie,omitempty"`
 	Error         TMReplyError           `protobuf:"varint,6,opt,name=error,proto3,enum=protocol.TMReplyError" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2138,8 +2138,8 @@ func (x *TMLedgerData) GetNodes() []*TMLedgerNode {
 }
 
 func (x *TMLedgerData) GetRequestCookie() uint32 {
-	if x != nil {
-		return x.RequestCookie
+	if x != nil && x.RequestCookie != nil {
+		return *x.RequestCookie
 	}
 	return 0
 }
@@ -2786,35 +2786,38 @@ const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"\fTMLedgerNode\x12\x1f\n" +
 	"\bnodedata\x18\x01 \x01(\fH\x00R\bnodedata\x88\x01\x01\x12\x16\n" +
 	"\x06nodeid\x18\x02 \x01(\fR\x06nodeidB\v\n" +
-	"\t_nodedata\"\xf8\x02\n" +
+	"\t_nodedata\"\xa4\x03\n" +
 	"\vTMGetLedger\x125\n" +
 	"\x05itype\x18\x01 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x00R\x05itype\x88\x01\x01\x121\n" +
 	"\x05ltype\x18\x02 \x01(\x0e2\x16.protocol.TMLedgerTypeH\x01R\x05ltype\x88\x01\x01\x12\x1f\n" +
 	"\vledger_hash\x18\x03 \x01(\fR\n" +
-	"ledgerHash\x12\x1d\n" +
+	"ledgerHash\x12\"\n" +
 	"\n" +
-	"ledger_seq\x18\x04 \x01(\rR\tledgerSeq\x12\x19\n" +
-	"\bnode_ids\x18\x05 \x03(\fR\anodeIds\x12%\n" +
-	"\x0erequest_cookie\x18\x06 \x01(\x04R\rrequestCookie\x129\n" +
+	"ledger_seq\x18\x04 \x01(\rH\x02R\tledgerSeq\x88\x01\x01\x12\x19\n" +
+	"\bnode_ids\x18\x05 \x03(\fR\anodeIds\x12*\n" +
+	"\x0erequest_cookie\x18\x06 \x01(\x04H\x03R\rrequestCookie\x88\x01\x01\x129\n" +
 	"\n" +
-	"query_type\x18\a \x01(\x0e2\x15.protocol.TMQueryTypeH\x02R\tqueryType\x88\x01\x01\x12\x1f\n" +
+	"query_type\x18\a \x01(\x0e2\x15.protocol.TMQueryTypeH\x04R\tqueryType\x88\x01\x01\x12\x1f\n" +
 	"\vquery_depth\x18\b \x01(\rR\n" +
 	"queryDepthB\b\n" +
 	"\x06_itypeB\b\n" +
 	"\x06_ltypeB\r\n" +
-	"\v_query_type\"\xb8\x02\n" +
+	"\v_ledger_seqB\x11\n" +
+	"\x0f_request_cookieB\r\n" +
+	"\v_query_type\"\xd0\x02\n" +
 	"\fTMLedgerData\x12$\n" +
 	"\vledger_hash\x18\x01 \x01(\fH\x00R\n" +
 	"ledgerHash\x88\x01\x01\x12\"\n" +
 	"\n" +
 	"ledger_seq\x18\x02 \x01(\rH\x01R\tledgerSeq\x88\x01\x01\x123\n" +
 	"\x04type\x18\x03 \x01(\x0e2\x1a.protocol.TMLedgerInfoTypeH\x02R\x04type\x88\x01\x01\x12,\n" +
-	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12%\n" +
-	"\x0erequest_cookie\x18\x05 \x01(\rR\rrequestCookie\x12,\n" +
+	"\x05nodes\x18\x04 \x03(\v2\x16.protocol.TMLedgerNodeR\x05nodes\x12*\n" +
+	"\x0erequest_cookie\x18\x05 \x01(\rH\x03R\rrequestCookie\x88\x01\x01\x12,\n" +
 	"\x05error\x18\x06 \x01(\x0e2\x16.protocol.TMReplyErrorR\x05errorB\x0e\n" +
 	"\f_ledger_hashB\r\n" +
 	"\v_ledger_seqB\a\n" +
-	"\x05_type\"\xe5\x01\n" +
+	"\x05_typeB\x11\n" +
+	"\x0f_request_cookie\"\xe5\x01\n" +
 	"\x06TMPing\x122\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x19.protocol.TMPing.PingTypeH\x00R\x04type\x88\x01\x01\x12\x15\n" +
 	"\x03seq\x18\x02 \x01(\rH\x01R\x03seq\x88\x01\x01\x12 \n" +

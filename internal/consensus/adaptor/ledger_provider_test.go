@@ -21,7 +21,8 @@ import (
 // only one production code path (mtGET_LEDGER fallback) and are not
 // exercised by the LedgerProvider contract tests, so we leave it minimal.
 type fakeLookup struct {
-	byHash map[[32]byte]*ledger.Ledger
+	byHash        map[[32]byte]*ledger.Ledger
+	earliestFetch uint32
 }
 
 func newFakeLookup() *fakeLookup {
@@ -45,6 +46,8 @@ func (f *fakeLookup) GetLedgerBySequence(_ uint32) (*ledger.Ledger, error) {
 	// service's ErrLedgerNotFound contract closely enough for safety.
 	return nil, errors.New("not found")
 }
+
+func (f *fakeLookup) EarliestFetch() uint32 { return f.earliestFetch }
 
 // makeGenesisLedger returns a genesis-derived, validated (and therefore
 // immutable) ledger. It is the cheapest "real" ledger we can hand the

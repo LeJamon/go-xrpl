@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
@@ -138,4 +140,144 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 		return len(rs.sentTo(7)) > 0
 	}, time.Second, 10*time.Millisecond,
 		"router must serve a ledger at or above the floor")
+}
+
+func newFetchDepthServeRouter(t *testing.T) (*Router, *querytypeRecorder, *service.Service) {
+	t.Helper()
+	cfg := service.DefaultConfig()
+	cfg.FetchDepth = 2
+	svc, err := service.New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	for range 2 {
+		_, err := svc.AcceptLedger(t.Context())
+		require.NoError(t, err)
+	}
+
+	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
+	require.NoError(t, err)
+	sender := &querytypeRecorder{recordingSender: recordingSender{peerSupportsReplay: true}}
+	a := New(Config{
+		LedgerService: svc,
+		Sender:        sender,
+		Identity:      identity,
+		Validators:    []consensus.NodeID{identity.NodeID},
+	})
+	return NewRouter(&mockEngine{}, a, nil), sender, svc
+}
+
+func TestRouter_HandleGetLedger_RespectsConfiguredFetchDepth(t *testing.T) {
+	tests := []struct {
+		name          string
+		make          func(belowHash []byte, belowSeq, atSeq uint32) *message.GetLedger
+		serves        bool
+		wantBadReason string
+		wantCookie    bool
+	}{
+		{
+			name: "sequence below floor",
+			make: func(_ []byte, belowSeq, _ uint32) *message.GetLedger {
+				return &message.GetLedger{InfoType: message.LedgerInfoBase, LedgerSeq: belowSeq}
+			},
+		},
+		{
+			name: "hash below floor",
+			make: func(belowHash []byte, _, _ uint32) *message.GetLedger {
+				return &message.GetLedger{InfoType: message.LedgerInfoBase, LedgerHash: belowHash}
+			},
+		},
+		{
+			name: "explicit zero sequence does not select closed ledger",
+			make: func(_ []byte, _, _ uint32) *message.GetLedger {
+				return &message.GetLedger{
+					InfoType:     message.LedgerInfoBase,
+					LType:        message.LedgerTypeClosed,
+					LedgerSeqSet: true,
+				}
+			},
+		},
+		{
+			name: "sequence at floor",
+			make: func(_ []byte, _, atSeq uint32) *message.GetLedger {
+				return &message.GetLedger{InfoType: message.LedgerInfoBase, LedgerSeq: atSeq}
+			},
+			serves: true,
+		},
+		{
+			name: "hash and matching sequence below floor",
+			make: func(belowHash []byte, belowSeq, _ uint32) *message.GetLedger {
+				return &message.GetLedger{InfoType: message.LedgerInfoBase, LedgerHash: belowHash, LedgerSeq: belowSeq}
+			},
+			serves: true,
+		},
+		{
+			name: "matching request echoes explicit zero cookie",
+			make: func(belowHash []byte, belowSeq, _ uint32) *message.GetLedger {
+				return &message.GetLedger{
+					InfoType:         message.LedgerInfoBase,
+					LedgerHash:       belowHash,
+					LedgerSeq:        belowSeq,
+					RequestCookieSet: true,
+				}
+			},
+			serves:     true,
+			wantCookie: true,
+		},
+		{
+			name: "direct hash and mismatched sequence",
+			make: func(belowHash []byte, _, atSeq uint32) *message.GetLedger {
+				return &message.GetLedger{InfoType: message.LedgerInfoBase, LedgerHash: belowHash, LedgerSeq: atSeq}
+			},
+			wantBadReason: "get-ledger-sequence-mismatch",
+		},
+		{
+			name: "explicit zero cookie suppresses mismatch charge",
+			make: func(belowHash []byte, _, atSeq uint32) *message.GetLedger {
+				return &message.GetLedger{
+					InfoType:         message.LedgerInfoBase,
+					LedgerHash:       belowHash,
+					LedgerSeq:        atSeq,
+					RequestCookieSet: true,
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			router, sender, svc := newFetchDepthServeRouter(t)
+			earliest := svc.EarliestFetch()
+			require.Greater(t, earliest, uint32(1))
+			below, err := svc.GetLedgerBySequence(earliest - 1)
+			require.NoError(t, err)
+			belowHash := below.Hash()
+
+			req := tc.make(belowHash[:], earliest-1, earliest)
+			router.handleMessage(&peermanagement.InboundMessage{
+				PeerID:  7,
+				Type:    uint16(message.TypeGetLedger),
+				Payload: encodePayload(t, req),
+			})
+
+			badData, sent := sender.snapshot()
+			if tc.serves {
+				assert.NotEmpty(t, sent)
+			} else {
+				assert.Empty(t, sent)
+			}
+			if tc.wantBadReason != "" {
+				require.Len(t, badData, 1)
+				assert.Equal(t, tc.wantBadReason, badData[0].reason)
+			} else {
+				assert.Empty(t, badData)
+			}
+			if tc.wantCookie {
+				require.NotEmpty(t, sent)
+				_, decoded := decodeFrame(t, sent[0].frame)
+				response := decoded.(*message.LedgerData)
+				assert.True(t, response.HasRequestCookie())
+				assert.Zero(t, response.RequestCookie)
+			}
+		})
+	}
 }

@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
@@ -14,6 +15,7 @@ import (
 // exercised, the rest are inert stubs.
 type fakeFetchPackProvider struct {
 	objects []message.IndexedObject
+	err     error
 	gotHave [32]byte
 	calls   int
 }
@@ -36,7 +38,7 @@ func (f *fakeFetchPackProvider) GetProofPath(_ []byte, _ []byte, _ message.Ledge
 func (f *fakeFetchPackProvider) MakeFetchPack(have [32]byte, _ int) ([]message.IndexedObject, error) {
 	f.calls++
 	f.gotHave = have
-	return f.objects, nil
+	return f.objects, f.err
 }
 
 func newFetchPackTestOverlay(t *testing.T, prov LedgerProvider) (*Overlay, *Peer) {
@@ -131,6 +133,32 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 	}
 	assert.NotZero(t, peer.BadDataCount(),
 		"a valid fetch-pack request is charged feeHeavyBurdenPeer up front even when the pack is empty")
+}
+
+func TestServeFetchPack_TooEarlyAddsMalformedCharge(t *testing.T) {
+	controlOverlay, controlPeer := newFetchPackTestOverlay(t, &fakeFetchPackProvider{})
+	controlOverlay.serveFetchPack(controlPeer.ID(), &message.GetObjectByHash{
+		ObjType:    message.ObjectTypeFetchPack,
+		Query:      true,
+		LedgerHash: bytes.Repeat([]byte{0x33}, 32),
+	})
+
+	prov := &fakeFetchPackProvider{err: errors.Join(ErrFetchPackTooEarly)}
+	o, peer := newFetchPackTestOverlay(t, prov)
+
+	o.serveFetchPack(peer.ID(), &message.GetObjectByHash{
+		ObjType:    message.ObjectTypeFetchPack,
+		Query:      true,
+		LedgerHash: bytes.Repeat([]byte{0x33}, 32),
+	})
+
+	require.Equal(t, 1, prov.calls)
+	assert.Greater(t, peer.Load(), controlPeer.Load())
+	select {
+	case <-peer.send:
+		t.Fatal("a too-early fetch pack must not produce a reply")
+	default:
+	}
 }
 
 // TestServeFetchPack_BadHashCharged: a malformed (non-32-byte) ledger hash is

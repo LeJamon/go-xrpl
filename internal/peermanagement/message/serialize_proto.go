@@ -191,13 +191,17 @@ var codecs = map[MessageType]msgCodec{
 			itype := proto.TMLedgerInfoType(m.InfoType)
 			ltype := proto.TMLedgerType(m.LType)
 			out := &proto.TMGetLedger{
-				Itype:         &itype,
-				Ltype:         &ltype,
-				LedgerHash:    m.LedgerHash,
-				LedgerSeq:     m.LedgerSeq,
-				NodeIds:       m.NodeIDs,
-				RequestCookie: m.RequestCookie,
-				QueryDepth:    m.QueryDepth,
+				Itype:      &itype,
+				Ltype:      &ltype,
+				LedgerHash: m.LedgerHash,
+				NodeIds:    m.NodeIDs,
+				QueryDepth: m.QueryDepth,
+			}
+			if m.HasLedgerSeq() {
+				out.LedgerSeq = pb.Uint32(m.LedgerSeq)
+			}
+			if m.HasRequestCookie() {
+				out.RequestCookie = pb.Uint64(m.RequestCookie)
 			}
 			if m.QueryType != nil {
 				qt := proto.TMQueryType(*m.QueryType)
@@ -208,13 +212,15 @@ var codecs = map[MessageType]msgCodec{
 		decode: func(pmsg pb.Message) (Message, error) {
 			p := pmsg.(*proto.TMGetLedger)
 			g := &GetLedger{
-				InfoType:      LedgerInfoType(p.GetItype()),
-				LType:         LedgerType(p.GetLtype()),
-				LedgerHash:    p.GetLedgerHash(),
-				LedgerSeq:     p.GetLedgerSeq(),
-				NodeIDs:       p.GetNodeIds(),
-				RequestCookie: p.GetRequestCookie(),
-				QueryDepth:    p.GetQueryDepth(),
+				InfoType:         LedgerInfoType(p.GetItype()),
+				LType:            LedgerType(p.GetLtype()),
+				LedgerHash:       p.GetLedgerHash(),
+				LedgerSeq:        p.GetLedgerSeq(),
+				LedgerSeqSet:     p.LedgerSeq != nil,
+				NodeIDs:          p.GetNodeIds(),
+				RequestCookie:    p.GetRequestCookie(),
+				RequestCookieSet: p.RequestCookie != nil,
+				QueryDepth:       p.GetQueryDepth(),
 			}
 			if p.QueryType != nil {
 				qt := LedgerQueryType(*p.QueryType)
@@ -238,14 +244,17 @@ var codecs = map[MessageType]msgCodec{
 				}
 			}
 			ledgerInfoType := proto.TMLedgerInfoType(m.InfoType)
-			return &proto.TMLedgerData{
-				LedgerHash:    m.LedgerHash,
-				LedgerSeq:     pb.Uint32(m.LedgerSeq),
-				Type:          &ledgerInfoType,
-				Nodes:         nodes,
-				RequestCookie: m.RequestCookie,
-				Error:         proto.TMReplyError(m.Error),
-			}, nil
+			out := &proto.TMLedgerData{
+				LedgerHash: m.LedgerHash,
+				LedgerSeq:  pb.Uint32(m.LedgerSeq),
+				Type:       &ledgerInfoType,
+				Nodes:      nodes,
+				Error:      proto.TMReplyError(m.Error),
+			}
+			if m.HasRequestCookie() {
+				out.RequestCookie = pb.Uint32(m.RequestCookie)
+			}
+			return out, nil
 		},
 		decode: func(pmsg pb.Message) (Message, error) {
 			p := pmsg.(*proto.TMLedgerData)
@@ -257,12 +266,13 @@ var codecs = map[MessageType]msgCodec{
 				}
 			}
 			return &LedgerData{
-				LedgerHash:    p.GetLedgerHash(),
-				LedgerSeq:     p.GetLedgerSeq(),
-				InfoType:      LedgerInfoType(p.GetType()),
-				Nodes:         nodes,
-				RequestCookie: p.GetRequestCookie(),
-				Error:         ReplyError(p.GetError()),
+				LedgerHash:       p.GetLedgerHash(),
+				LedgerSeq:        p.GetLedgerSeq(),
+				InfoType:         LedgerInfoType(p.GetType()),
+				Nodes:            nodes,
+				RequestCookie:    p.GetRequestCookie(),
+				RequestCookieSet: p.RequestCookie != nil,
+				Error:            ReplyError(p.GetError()),
 			}, nil
 		},
 	},

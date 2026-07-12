@@ -19,7 +19,7 @@ import (
 // request_cookie = our local id for the original requester so the eventual
 // TMLedgerData reply routes back through routeRelayedLedgerData.
 func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.GetLedger) bool {
-	if req.QueryType == nil || req.RequestCookie != 0 {
+	if req.QueryType == nil || req.HasRequestCookie() {
 		return false
 	}
 
@@ -77,6 +77,7 @@ func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagem
 	target := uint64(ld.RequestCookie)
 	out := *ld
 	out.RequestCookie = 0
+	out.RequestCookieSet = false
 	frame, err := encodeFrame(message.TypeLedgerData, &out)
 	if err != nil {
 		r.logger.Warn("failed to encode relayed ledger_data", "error", err)
