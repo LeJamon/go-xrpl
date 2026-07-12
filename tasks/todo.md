@@ -91,6 +91,7 @@ single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
 - [x] Preserve internal storage errors through MPT authorization and funding paths
 - [x] Run focused tests, full transaction/integration coverage, build, vet, lint,
       and final rippled 3.2.0 review
+- [x] Resolve the uncached CI goimports alignment failure and re-run lint
 
 ## Review
 
@@ -110,6 +111,8 @@ Verification:
 - Focused state, payment, engine, invariant, mptutil, offer, check, AMM, MPT,
   deposit-preauth, and delegate suites pass uncached.
 - `just build-all`, `just build-nocgo`, `just vet`, and `just lint` pass.
+- The CI-only goimports finding in `strand.go` was corrected and reproduced
+  locally with the formatter check before repushing.
 - The full module test run passes outside the established out-of-scope
   conformance failures.
 - Final conformance: 941 pass / 117 fail overall, 879 pass / 0 fail in scope;

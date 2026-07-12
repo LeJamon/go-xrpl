@@ -139,7 +139,7 @@ const (
 	PathTypeCurrency uint8 = 0x10
 	// PathTypeIssuer indicates path element has issuer
 	PathTypeIssuer uint8 = 0x20
-	PathTypeMPT uint8 = 0x40
+	PathTypeMPT    uint8 = 0x40
 )
 
 // ToStrands converts payment paths to executable strands
