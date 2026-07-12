@@ -189,6 +189,8 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 	if applied {
 		e.view.AdjustDropsDestroyed(drops.XRPAmount(fee))
 		metadata.TransactionIndex = e.txCount.Add(1) - 1
+	} else {
+		metadata = nil
 	}
 
 	e.logger.Debug("apply result",
@@ -304,7 +306,9 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	// Apply the transaction
 	var result ter.Result
 	if appliable, ok := tx.(txcore.Appliable); ok {
-		result = appliable.Apply(ctx)
+		result = e.invokeApplySafely(txHash, func() ter.Result {
+			return appliable.Apply(ctx)
+		})
 	} else {
 		result = ter.TesSUCCESS
 	}
@@ -326,13 +330,16 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	}
 
 	// Assign TransactionIndex for applied pseudo-transactions
-	if result.IsApplied() {
+	applied := result.IsApplied()
+	if applied {
 		metadata.TransactionIndex = e.txCount.Add(1) - 1
+	} else {
+		metadata = nil
 	}
 
 	return txcore.ApplyResult{
 		Result:   result,
-		Applied:  result.IsApplied(),
+		Applied:  applied,
 		Fee:      0, // Pseudo-transactions have no fee
 		Metadata: metadata,
 		Message:  result.Message(),
