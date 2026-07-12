@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -239,7 +240,17 @@ func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (
 	if parseErr != nil {
 		return nil, types.RPCErrorInvalidTransaction(parseErr.Error())
 	}
-	if validateErr := parsedTx.Validate(); validateErr != nil {
+	var validateErr error
+	if validator, ok := parsedTx.(tx.RulesAwareValidator); ok {
+		var rules *amendment.Rules
+		if source, ok := ctx.Services.Ledger.(types.TransactionRulesSource); ok {
+			rules = source.TransactionRules()
+		}
+		validateErr = validator.ValidateRules(rules)
+	} else {
+		validateErr = parsedTx.Validate()
+	}
+	if validateErr != nil {
 		return nil, types.RPCErrorInvalidTransaction(validateErr.Error())
 	}
 

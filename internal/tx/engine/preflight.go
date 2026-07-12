@@ -123,13 +123,9 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 		return ter.TemBAD_AMOUNT
 	}
 
-	// T::preflight — the tx-type-specific body: the rules-free Validate() plus
-	// any amendment-gated tem* checks that genuinely belong in the per-type
-	// preflight body (RulesPreflighter).
-	if err := tx.Validate(); err != nil {
-		return parseValidationError(err)
-	}
-	if result := checkPreflightRules(tx, rules); result != ter.TesSUCCESS {
+	// T::preflight — the tx-type-specific body. Most types use Validate followed
+	// by RulesPreflighter; types with interleaved checks use RulesAwareValidator.
+	if result := validatePreflightBody(tx, rules); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -237,6 +233,19 @@ func checkPreflightRules(tx txcore.Transaction, rules *amendment.Rules) ter.Resu
 	return ter.TesSUCCESS
 }
 
+func validatePreflightBody(transaction txcore.Transaction, rules *amendment.Rules) ter.Result {
+	if validator, ok := transaction.(txcore.RulesAwareValidator); ok {
+		if err := validator.ValidateRules(rules); err != nil {
+			return parseValidationError(err)
+		}
+		return ter.TesSUCCESS
+	}
+	if err := transaction.Validate(); err != nil {
+		return parseValidationError(err)
+	}
+	return checkPreflightRules(transaction, rules)
+}
+
 // BatchOuter is implemented by transaction types whose inner transactions
 // each need to pass preflight as part of the outer's preflight pipeline.
 // Reference: rippled Batch.cpp preflight() — `ripple::preflight(..., tapBATCH)`
@@ -289,10 +298,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	if err := innerTx.Validate(); err != nil {
-		return parseValidationError(err)
-	}
-	return checkPreflightRules(innerTx, rules)
+	return validatePreflightBody(innerTx, rules)
 }
 
 // preflightInnerBatchFlag rejects a transaction reaching the outer preflight

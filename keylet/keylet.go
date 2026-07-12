@@ -448,10 +448,10 @@ func BookBase(pays, gets BookSide, domainID *[32]byte) Keylet {
 	if domainID != nil {
 		data = append(data, domainID[:])
 	}
-	return Keylet{
+	return Quality(Keylet{
 		Type: entry.TypeDirectoryNode,
 		Key:  indexHash(spaceBookDir, data...),
-	}
+	}, 0)
 }
 
 // Quality returns a keylet with the quality (exchange rate) encoded in the last 8 bytes.

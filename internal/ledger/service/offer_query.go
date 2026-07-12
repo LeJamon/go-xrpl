@@ -457,10 +457,7 @@ func (s *Service) buildBookOffer(
 
 // computeBookBase returns the book directory base for the given
 // taker_pays / taker_gets / optional domain, matching rippled's getBookBase
-// (Indexes.cpp:114-138). rippled normalizes the low 8 bytes to zero via
-// keylet::quality({ltDIR_NODE, index}, 0); keylet.BookDir returns the raw
-// hash including its natural low-8 bytes, so we must zero them here so the
-// returned key sorts strictly below every quality tier in the book.
+// (Indexes.cpp:114-138).
 func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
 	pays, err := bookSideFromAmount(takerPays)
 	if err != nil {
@@ -478,11 +475,7 @@ func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte
 			return [32]byte{}, err
 		}
 	}
-	key := keylet.BookBase(pays, gets, domainID).Key
-	for i := 24; i < 32; i++ {
-		key[i] = 0
-	}
-	return key, nil
+	return keylet.BookBase(pays, gets, domainID).Key, nil
 }
 
 func bookSideFromAmount(amount tx.Amount) (keylet.BookSide, error) {
@@ -628,10 +621,14 @@ func dirRateMantissaExp(q uint64) (int64, int) {
 // to drops afterwards.
 func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 	mantissa, exponent := dirRateMantissaExp(q)
+	value := newRPCNumber(mantissa, exponent)
+	iouMantissa, iouExponent := value.NormalizeToRange(
+		uint64(state.MinMantissa), uint64(state.MaxMantissa),
+	)
 	if takerPays.IsNative() {
-		return tx.NewIssuedAmount(mantissa, exponent, "", "")
+		return tx.NewIssuedAmount(iouMantissa, iouExponent, "", "")
 	}
-	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
+	return tx.NewIssuedAmount(iouMantissa, iouExponent, takerPays.Currency, takerPays.Issuer)
 }
 
 // extractOfferProof returns the SHAMap proof for an offer key as a list of
@@ -659,32 +656,36 @@ func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
 }
 
 // multiplyByDirRate computes `multiply(getsFunded, saDirRate, takerPays.issue())`.
-// `Amount.Mul` preserves the *left* operand's currency, so for IOU output we
-// place saDirRate on the left (it already carries takerPays' issue). For XRP
-// output the product is a unitless IOU which we collapse to drops — mirrors
-// rippled's STAmount(asset, mantissa, exp) cast at STAmount.cpp:1404.
+// RPC execution uses Number arithmetic unconditionally; unlike transaction
+// execution, it has no ledger-rules scope that can select legacy arithmetic.
 func multiplyByDirRate(getsFunded, saDirRate, takerPays tx.Amount) tx.Amount {
-	product := saDirRate.Mul(getsFunded, false)
+	product := amountAsXRPLNumber(saDirRate).Mul(amountAsXRPLNumber(getsFunded))
 	if takerPays.IsMPT() {
-		m := integralProductValue(product)
-		return state.NewMPTAmountWithIssuanceID(m, amountIssuer(takerPays), takerPays.MPTIssuanceID())
+		value := product.ToInt64WithMode(state.RoundToNearest)
+		return state.NewMPTAmountWithIssuanceID(value, amountIssuer(takerPays), takerPays.MPTIssuanceID())
 	}
-	if !takerPays.IsNative() {
-		return product
+	if takerPays.IsNative() {
+		return tx.NewXRPAmount(product.ToInt64WithMode(state.RoundToNearest))
 	}
-	return tx.NewXRPAmount(integralProductValue(product))
+	mantissa, exponent := product.NormalizeToRange(
+		uint64(state.MinMantissa), uint64(state.MaxMantissa),
+	)
+	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
 }
 
-func integralProductValue(product tx.Amount) int64 {
-	m := product.Mantissa()
-	e := product.Exponent()
-	for e > 0 {
-		m *= 10
-		e--
+func amountAsXRPLNumber(amount tx.Amount) state.XRPLNumber {
+	if value, ok := amount.MPTRaw(); ok {
+		return newRPCNumber(value, 0)
 	}
-	for e < 0 {
-		m /= 10
-		e++
+	if amount.IsNative() {
+		return newRPCNumber(amount.Drops(), 0)
 	}
-	return m
+	return newRPCNumber(amount.Mantissa(), amount.Exponent())
+
+}
+
+func newRPCNumber(mantissa int64, exponent int) state.XRPLNumber {
+	return state.NewXRPLNumberScaled(
+		mantissa, exponent, state.MantissaScaleLarge, state.RoundToNearest,
+	)
 }

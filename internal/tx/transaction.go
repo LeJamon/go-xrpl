@@ -61,6 +61,14 @@ type RulesPreflighter interface {
 	PreflightRules(rules *amendment.Rules) error
 }
 
+// RulesAwareValidator is implemented by transaction types whose preflight body
+// interleaves rules-dependent and rules-independent checks. The engine invokes
+// ValidateRules in place of Validate followed by PreflightRules, preserving the
+// transactor's exact check order without storing ledger rules on the transaction.
+type RulesAwareValidator interface {
+	ValidateRules(rules *amendment.Rules) error
+}
+
 // ExtraFeaturesChecker is implemented by transaction types with an amendment
 // gate that rippled evaluates in T::checkExtraFeatures — which runs in
 // invokePreflight BEFORE preflight1's common checks (flags mask, NetworkID,

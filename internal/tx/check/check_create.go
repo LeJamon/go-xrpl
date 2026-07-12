@@ -176,12 +176,14 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		if err != nil {
 			return ter.TefINTERNAL
 		}
-		issuerAccount, err := state.ParseAccountRoot(issuerData)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
-			return ter.TecFROZEN
+		if issuerData != nil {
+			issuerAccount, err := state.ParseAccountRoot(issuerData)
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
+				return ter.TecFROZEN
+			}
 		}
 
 		accountID := ctx.AccountID

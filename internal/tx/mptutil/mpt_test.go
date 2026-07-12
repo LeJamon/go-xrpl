@@ -255,26 +255,82 @@ func TestRequireAuthAtRejectsExpiredDomainCredential(t *testing.T) {
 	require.Equal(t, ter.TecEXPIRED, RequireAuthAt(view, id, holder, false, 101))
 }
 
-func TestTransferRateRoundingIsDirectional(t *testing.T) {
-	const rate = uint32(1_250_000_000)
-	value, ok := MultiplyRate(1, rate)
-	require.True(t, ok)
-	require.Equal(t, int64(2), value)
-	value, ok = DivideRate(1, rate)
-	require.True(t, ok)
-	require.Equal(t, int64(0), value)
-	value, ok = MultiplyRate(4, rate)
-	require.True(t, ok)
-	require.Equal(t, int64(5), value)
-	value, ok = DivideRate(5, rate)
-	require.True(t, ok)
-	require.Equal(t, int64(4), value)
-	value, ok = MultiplyRate(-1, rate)
-	require.True(t, ok)
-	require.Equal(t, int64(-1), value)
-	value, ok = DivideRate(-1, rate)
-	require.True(t, ok)
-	require.Equal(t, int64(-1), value)
+func TestDecodeIDRequiresExactHex(t *testing.T) {
+	id := keylet.MakeMPTID(7, [20]byte{1, 2, 3, 4})
+	encoded := EncodeID(id)
+
+	for _, value := range []string{encoded, strings.ToLower(encoded)} {
+		decoded, err := DecodeID(value)
+		require.NoError(t, err)
+		require.Equal(t, id, decoded)
+	}
+
+	for _, value := range []string{
+		"",
+		"0",
+		encoded[:len(encoded)-1],
+		encoded + "0",
+		" " + encoded,
+		encoded + " ",
+		"\t" + encoded,
+		"G" + encoded[1:],
+	} {
+		_, err := DecodeID(value)
+		require.ErrorIs(t, err, ErrInvalidID, "value %q", value)
+	}
+}
+
+func TestTransferRateMultiplicationRoundsToNearestEven(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount int64
+		rate   uint32
+		want   int64
+	}{
+		{name: "below half", amount: 1, rate: 1_250_000_000, want: 1},
+		{name: "tie to even", amount: 2, rate: 1_250_000_000, want: 2},
+		{name: "tie to odd", amount: 1, rate: 1_500_000_000, want: 2},
+		{name: "above half", amount: 1, rate: 1_500_000_001, want: 2},
+		{name: "negative below half", amount: -1, rate: 1_250_000_000, want: -1},
+		{name: "negative tie to even", amount: -2, rate: 1_250_000_000, want: -2},
+		{name: "negative tie to odd", amount: -1, rate: 1_500_000_000, want: -2},
+		{name: "negative above half", amount: -1, rate: 1_500_000_001, want: -2},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := MultiplyRate(test.amount, test.rate)
+			require.True(t, ok)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestTransferRateDivisionRoundsToNearestEven(t *testing.T) {
+	tests := []struct {
+		name   string
+		amount int64
+		rate   uint32
+		want   int64
+	}{
+		{name: "rippled transfer fee vector", amount: 90, rate: 1_100_000_000, want: 82},
+		{name: "below half", amount: 3, rate: 1_200_000_001, want: 2},
+		{name: "tie to even", amount: 3, rate: 1_200_000_000, want: 2},
+		{name: "tie to odd", amount: 9, rate: 1_200_000_000, want: 8},
+		{name: "above half", amount: 3, rate: 1_199_999_999, want: 3},
+		{name: "negative below half", amount: -3, rate: 1_200_000_001, want: -2},
+		{name: "negative tie to even", amount: -3, rate: 1_200_000_000, want: -2},
+		{name: "negative tie to odd", amount: -9, rate: 1_200_000_000, want: -8},
+		{name: "negative above half", amount: -3, rate: 1_199_999_999, want: -3},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := DivideRate(test.amount, test.rate)
+			require.True(t, ok)
+			require.Equal(t, test.want, got)
+		})
+	}
 }
 
 func TestTransferRateScalingReportsOverflow(t *testing.T) {
@@ -283,14 +339,27 @@ func TestTransferRateScalingReportsOverflow(t *testing.T) {
 	value, ok := MultiplyRate(math.MaxInt64, RateOne)
 	require.True(t, ok)
 	require.Equal(t, int64(math.MaxInt64), value)
+	value, ok = MultiplyRate(math.MinInt64, RateOne)
+	require.True(t, ok)
+	require.Equal(t, int64(math.MinInt64), value)
 
 	value, ok = MultiplyRate(math.MaxInt64, rate)
+	require.False(t, ok)
+	require.Zero(t, value)
+	value, ok = MultiplyRate(math.MinInt64, rate)
 	require.False(t, ok)
 	require.Zero(t, value)
 
 	value, ok = DivideRate(math.MaxInt64, rate)
 	require.True(t, ok)
-	require.Equal(t, int64(7_378_697_629_483_820_645), value)
+	require.Equal(t, int64(7_378_697_629_483_820_646), value)
+	value, ok = DivideRate(math.MinInt64, rate)
+	require.True(t, ok)
+	require.Equal(t, int64(-7_378_697_629_483_820_646), value)
+
+	value, ok = DivideRate(1, 0)
+	require.False(t, ok)
+	require.Zero(t, value)
 }
 
 func TestSendTransferRateOverflowReturnsTefException(t *testing.T) {

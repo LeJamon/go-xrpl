@@ -113,3 +113,43 @@ Verification:
   the existing out-of-scope Batch, Vault, XChain, and XChainSim suites.
 - The full module test run passes outside those same out-of-scope conformance
   failures.
+
+## PR #1309 conformance remediation — rippled v3.2.0
+
+- [x] Make Payment flags, preflight, preclaim, and Apply select the legacy MPT
+      path only before MPTokensV2; route amendment-on MPT payments through Flow.
+- [x] Preserve mpt_issuance_id in Payment path validation and serialization.
+- [x] Make pathfinder index AMM liquidity in both directions, preserve hidden
+      MPT assets on internal account nodes, reject maxed holdings/bad assets,
+      and pass ledger timing plus all relevant amendments to every calculation.
+- [x] Replace directional MPT transfer-rate rounding and partially funded
+      book_offers conversion with exact nearest-even arithmetic.
+- [x] Preserve permissioned-book domains and deterministic ordering in
+      book_changes; align book_offers proof presence semantics.
+- [x] Implement rippled's persistent path_find create/update/status/close state
+      machine and canonical response amounts.
+- [x] Treat an absent IOU issuer as not globally frozen in CheckCreate; make
+      BookBase quality-zero and MPT ID parsing exact.
+- [x] Port focused regression cases from rippled v3.2.0 for every finding and
+      re-audit all changed production call sites.
+- [x] Run formatting, focused/full tests, relevant conformance, vet, lint, and
+      build; record exact results below.
+- [x] Commit and push the completed remediation to the PR branch.
+
+### Remediation review
+
+- Reviewed against the exact local rippled v3.2.0 snapshot at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`. Both independent final audits are
+  clean with no remaining blocking, minor, or nit findings.
+- Resolved all 16 findings in the original conformance review plus adjacent
+  audit findings in simulate validation, cumulative path ranking, exact
+  full-liquidity retry selection, large-scale RPC Number precision, stale
+  persistent-path updates, replacement ordering, and close latency.
+- `just fmt`, focused Payment/engine/MPT/Check/Offer/keylet/ledger/RPC tests, and
+  `go test -race ./internal/rpc/...` pass.
+- `just vet`, `just lint` (0 issues), `just build-all`, and `just build-nocgo`
+  pass.
+- `just test` passes every package except the documented out-of-scope
+  conformance suites. `just conformance --failing` reports 941 pass / 117 fail
+  overall, with 879 pass / 0 fail in scope; the 117 failures remain confined to
+  Batch, Vault, XChain, and XChainSim.

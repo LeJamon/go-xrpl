@@ -17,7 +17,8 @@ import (
 // Each WebSocket connection can have at most one active session (matching rippled).
 // Reference: rippled PathRequest class + PathFind.cpp handler
 type PathFindSession struct {
-	mu sync.Mutex
+	mu        sync.Mutex
+	computeMu sync.Mutex
 
 	// Request parameters (immutable after creation)
 	srcAccount    [20]byte
@@ -27,13 +28,12 @@ type PathFindSession struct {
 	srcCurrencies []payment.Issue
 	convertAll    bool
 
-	// Original string representations for response formatting
+	// Canonical account strings for response formatting
 	srcAccountStr string
 	dstAccountStr string
-	dstAmountRaw  json.RawMessage
 
-	// Last computed result (updated on each ledger close)
-	lastResult *pathfinder.PathRequestResult
+	// Last response state (updated on each ledger close)
+	lastStatus *PathFindEvent
 
 	// Request ID from the original create command
 	id any
@@ -208,9 +208,8 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 		sendMax:       sendMax,
 		srcCurrencies: srcCurrencies,
 		convertAll:    convertAll,
-		srcAccountStr: request.SourceAccount,
-		dstAccountStr: request.DestinationAccount,
-		dstAmountRaw:  request.DestinationAmount,
+		srcAccountStr: state.EncodeAccountIDSafe(srcAccount),
+		dstAccountStr: state.EncodeAccountIDSafe(dstAccount),
 		id:            id,
 	}
 
@@ -218,31 +217,69 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 }
 
 // Execute runs pathfinding against the given ledger view and stores the result.
-// Returns the formatted PathFindEvent for sending to the client.
-func (s *PathFindSession) Execute(view tx.LedgerView) *PathFindEvent {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
+// Full updates are returned in pushed-event form; the initial fast result is
+// returned in response-result form.
+func (s *PathFindSession) Execute(view tx.LedgerView, fullReply bool) *PathFindEvent {
 	pr := pathfinder.NewPathRequest(
 		s.srcAccount, s.dstAccount,
 		s.dstAmount, s.sendMax,
 		s.srcCurrencies, s.convertAll,
 	)
-	result := pr.Execute(view)
-	s.lastResult = result
-
-	return s.buildEvent(result, true)
+	return s.executeAndStore(func() *pathfinder.PathRequestResult {
+		return pr.Execute(view)
+	}, fullReply)
 }
 
-// GetLastResult returns the last computed result as a PathFindEvent (for status).
-func (s *PathFindSession) GetLastResult() *PathFindEvent {
+func (s *PathFindSession) executeAndStore(
+	execute func() *pathfinder.PathRequestResult,
+	fullReply bool,
+) *PathFindEvent {
+	s.computeMu.Lock()
+	defer s.computeMu.Unlock()
+
+	result := execute()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.storeResultLocked(result, fullReply)
+}
+
+func (s *PathFindSession) storeResultLocked(result *pathfinder.PathRequestResult, fullReply bool) *PathFindEvent {
+	status := s.buildEvent(result, fullReply)
+	s.lastStatus = status
+
+	event := clonePathFindEvent(status)
+	if fullReply {
+		event.Type = "path_find"
+	}
+	return event
+}
+
+// Status returns the stored response state with rippled's success marker.
+func (s *PathFindSession) Status() *PathFindEvent {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.lastResult == nil {
-		return s.buildEvent(&pathfinder.PathRequestResult{}, false)
+	status := s.statusLocked()
+	status.Status = "success"
+	return clonePathFindEvent(status)
+}
+
+// Close returns the stored response state with the closed marker set.
+func (s *PathFindSession) Close() *PathFindEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	status := s.statusLocked()
+	status.Closed = true
+	return clonePathFindEvent(status)
+}
+
+func (s *PathFindSession) statusLocked() *PathFindEvent {
+	if s.lastStatus == nil {
+		s.lastStatus = s.buildEvent(&pathfinder.PathRequestResult{}, false)
 	}
-	return s.buildEvent(s.lastResult, false)
+	return s.lastStatus
 }
 
 // buildEvent formats a PathRequestResult into a PathFindEvent for the WebSocket client.
@@ -260,14 +297,18 @@ func (s *PathFindSession) buildEvent(result *pathfinder.PathRequestResult, fullR
 	}
 
 	return &PathFindEvent{
-		Type:               "path_find",
 		ID:                 s.id,
 		SourceAccount:      s.srcAccountStr,
 		DestinationAccount: s.dstAccountStr,
-		DestinationAmount:  s.dstAmountRaw,
+		DestinationAmount:  pathFindAmountJSON(s.dstAmount),
 		FullReply:          fullReply,
 		Alternatives:       alternatives,
 	}
+}
+
+func clonePathFindEvent(event *PathFindEvent) *PathFindEvent {
+	clone := *event
+	return &clone
 }
 
 func pathFindAmountJSON(amount tx.Amount) json.RawMessage {

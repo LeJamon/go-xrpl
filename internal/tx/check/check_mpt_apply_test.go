@@ -167,6 +167,63 @@ func TestCheckCreateStoresMPTSendMaxAndChecksLock(t *testing.T) {
 	}
 }
 
+func TestCheckCreateAllowsMissingIOUIssuer(t *testing.T) {
+	srcID := checkMPTAccountID(0x34)
+	dstID := checkMPTAccountID(0x35)
+	issuerID := checkMPTAccountID(0x36)
+	view := newCheckMPTView()
+	src := putCheckMPTAccount(t, view, srcID, 0)
+	putCheckMPTAccount(t, view, dstID, 0)
+
+	srcAddress := state.EncodeAccountIDSafe(srcID)
+	dstAddress := state.EncodeAccountIDSafe(dstID)
+	issuerAddress := state.EncodeAccountIDSafe(issuerID)
+	create := NewCheckCreate(
+		srcAddress,
+		dstAddress,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddress),
+	)
+	sequence := uint32(8)
+	create.Sequence = &sequence
+	if err := create.Validate(); err != nil {
+		t.Fatalf("validate check with missing IOU issuer: %v", err)
+	}
+
+	if result := create.Apply(checkMPTContext(view, src, srcID)); result != ter.TesSUCCESS {
+		t.Fatalf("create check with missing IOU issuer = %v, want tesSUCCESS", result)
+	}
+	if exists, err := view.Exists(keylet.Check(srcID, sequence)); err != nil || !exists {
+		t.Fatalf("created check missing: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestCheckCreateRejectsGloballyFrozenIOUIssuer(t *testing.T) {
+	srcID := checkMPTAccountID(0x37)
+	dstID := checkMPTAccountID(0x38)
+	issuerID := checkMPTAccountID(0x39)
+	view := newCheckMPTView()
+	src := putCheckMPTAccount(t, view, srcID, 0)
+	putCheckMPTAccount(t, view, dstID, 0)
+	issuer := putCheckMPTAccount(t, view, issuerID, 0)
+	issuer.Flags = state.LsfGlobalFreeze
+	issuerData, err := state.SerializeAccountRoot(issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.Update(keylet.Account(issuerID), issuerData); err != nil {
+		t.Fatal(err)
+	}
+
+	create := NewCheckCreate(
+		state.EncodeAccountIDSafe(srcID),
+		state.EncodeAccountIDSafe(dstID),
+		state.NewIssuedAmountFromFloat64(100, "USD", state.EncodeAccountIDSafe(issuerID)),
+	)
+	if result := create.Apply(checkMPTContext(view, src, srcID)); result != ter.TecFROZEN {
+		t.Fatalf("create check with globally frozen IOU issuer = %v, want tecFROZEN", result)
+	}
+}
+
 func TestCheckCashMPTCreatesHoldingAndAppliesTransferFee(t *testing.T) {
 	issuerID := checkMPTAccountID(0x41)
 	srcID := checkMPTAccountID(0x42)
@@ -232,7 +289,7 @@ func TestCheckCashMPTCreatesHoldingAndAppliesTransferFee(t *testing.T) {
 	}
 }
 
-func TestCheckCashMPTTransferFeeRoundsInputUp(t *testing.T) {
+func TestCheckCashMPTTransferFeeRoundsToNearest(t *testing.T) {
 	issuerID := checkMPTAccountID(0x61)
 	srcID := checkMPTAccountID(0x62)
 	dstID := checkMPTAccountID(0x63)
@@ -246,11 +303,43 @@ func TestCheckCashMPTTransferFeeRoundsInputUp(t *testing.T) {
 	putCheckMPTHolding(t, view, mptID, srcID, 1, 0)
 	putCheckMPTHolding(t, view, mptID, dstID, 0, 0)
 
+	checkKey := keylet.Check(srcID, 1)
+	srcDir, err := state.DirInsert(view, keylet.OwnerDir(srcID), checkKey.Key, false, func(dir *state.DirectoryNode) { dir.Owner = srcID })
+	if err != nil {
+		t.Fatal(err)
+	}
+	dstDir, err := state.DirInsert(view, keylet.OwnerDir(dstID), checkKey.Key, false, func(dir *state.DirectoryNode) { dir.Owner = dstID })
+	if err != nil {
+		t.Fatal(err)
+	}
 	amount := state.NewMPTAmountWithIssuanceID(1, "", mptHex)
-	check := &state.CheckData{Account: srcID, DestinationID: dstID, SendMaxAmount: amount}
+	check := &state.CheckData{
+		Account:         srcID,
+		DestinationID:   dstID,
+		Sequence:        1,
+		OwnerNode:       srcDir.Page,
+		DestinationNode: dstDir.Page,
+		HasDestNode:     true,
+		SendMaxAmount:   amount,
+	}
+	checkData, err := state.SerializeCheckFromData(check)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.Insert(checkKey, checkData); err != nil {
+		t.Fatal(err)
+	}
 	cash := &CheckCash{Amount: &amount}
-	if result := cash.applyCashMPTAmount(checkMPTContext(view, dst, dstID), check, keylet.Check(srcID, 1), amount, false); result != ter.TecPATH_PARTIAL {
-		t.Fatalf("cash MPT check = %v, want tecPATH_PARTIAL", result)
+	if result := cash.applyCashMPTAmount(checkMPTContext(view, dst, dstID), check, checkKey, amount, false); result != ter.TesSUCCESS {
+		t.Fatalf("cash MPT check = %v, want tesSUCCESS", result)
+	}
+	source, _, result := mptutil.ReadHolding(view, mptID, srcID)
+	if result != ter.TesSUCCESS || source.MPTAmount != 0 {
+		t.Fatalf("source holding = %v/%v, want 0", source, result)
+	}
+	destination, _, result := mptutil.ReadHolding(view, mptID, dstID)
+	if result != ter.TesSUCCESS || destination.MPTAmount != 1 {
+		t.Fatalf("destination holding = %v/%v, want 1", destination, result)
 	}
 }
 

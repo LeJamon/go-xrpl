@@ -4,7 +4,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -66,7 +65,8 @@ type PathRequest struct {
 // may use. Parsed MPT amounts must encode a non-zero issuer in their issuance
 // ID, matching rippled's validAsset check.
 func IsValidAsset(amount tx.Amount) bool {
-	return payment.GetIssue(amount).IsConsistent()
+	issue := payment.GetIssue(amount)
+	return issue.IsConsistent() && (issue.IsMPT || issue.IsXRP() || issue.Currency != tx.BadCurrency)
 }
 
 // ParseSourceMPTID parses the uint192 syntax accepted for an MPT entry in
@@ -112,13 +112,7 @@ func (pr *PathRequest) SetSearchLevel(level int) {
 func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 	cache := NewRippleLineCache(ledger)
 	parentCloseTime := ledgerParentCloseTime(ledger)
-	fixReducedOffersV2 := false
-	if rules := ledger.Rules(); rules != nil {
-		fixReducedOffersV2 = rules.Enabled(amendment.FeatureFixReducedOffersV2)
-	}
-	calculationOptions := []payment.RippleCalculateOption{
-		payment.WithAmendments(parentCloseTime, fixReducedOffersV2),
-	}
+	calculationOptions := newFlowCalculationSettings(ledger, parentCloseTime).options()
 
 	// Determine source currencies
 	srcCurrencies := pr.sourceCurrencies
@@ -252,8 +246,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		calcResult := validateRC.Result
 
 		// If insufficient and we have a full-liquidity path, try adding it
-		if !pr.convertAll && len(fullLiquidityPath) > 0 &&
-			(calcResult != ter.TesSUCCESS || validateRC.ActualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
+		if !pr.convertAll && len(fullLiquidityPath) > 0 && shouldRetryWithFullLiquidityPath(calcResult) {
 			bestPaths = append(bestPaths, fullLiquidityPath)
 			calcResult = payment.RippleCalculate(
 				ledger,
@@ -306,6 +299,10 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 	}
 
 	return result
+}
+
+func shouldRetryWithFullLiquidityPath(result ter.Result) bool {
+	return result == ter.TerNO_LINE || result == ter.TecPATH_PARTIAL
 }
 
 type parentCloseTimeView interface {

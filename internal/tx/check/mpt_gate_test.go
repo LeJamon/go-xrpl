@@ -93,3 +93,26 @@ func TestCheckRejectsMPTWithZeroIssuer(t *testing.T) {
 		assertCheckResultError(t, cash.Validate(), ter.TemBAD_CURRENCY)
 	}
 }
+
+func TestCheckRejectsWhitespacePaddedMPTIssuanceID(t *testing.T) {
+	source, _ := state.EncodeAccountID(checkMPTAccountID(0x53))
+	destination, _ := state.EncodeAccountID(checkMPTAccountID(0x54))
+	for _, issuanceID := range []string{" " + mptGateID, mptGateID + " "} {
+		amount := state.NewMPTAmountWithIssuanceID(1, "", issuanceID)
+		assertCheckResultError(
+			t,
+			NewCheckCreate(source, destination, amount).Validate(),
+			ter.TemBAD_CURRENCY,
+		)
+
+		for _, useDeliverMin := range []bool{false, true} {
+			cash := NewCheckCash(destination, strings.Repeat("0", 64))
+			if useDeliverMin {
+				cash.DeliverMin = &amount
+			} else {
+				cash.Amount = &amount
+			}
+			assertCheckResultError(t, cash.Validate(), ter.TemBAD_CURRENCY)
+		}
+	}
+}
