@@ -47,8 +47,10 @@ type KVDatabaseImpl struct {
 	store         kvstore.KeyValueStore
 	cache         *Cache
 	negativeCache *NegativeCache
-	name          string
-	stats         struct {
+	// Advances after a successful backend write and before negative-cache invalidation.
+	storeGeneration atomic.Uint64
+	name            string
+	stats           struct {
 		reads             uint64
 		fetchHits         uint64
 		cacheHits         uint64
@@ -114,17 +116,16 @@ func (d *KVDatabaseImpl) Store(ctx context.Context, node *Node) error {
 	if err != nil {
 		return fmt.Errorf("store failed: %w", err)
 	}
+	if d.negativeCache != nil {
+		d.storeGeneration.Add(1)
+		d.negativeCache.Remove(node.Hash)
+	}
 
 	atomic.AddUint64(&d.stats.writes, 1)
 	atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
 
 	if d.cache != nil {
 		d.cache.Put(node)
-	}
-
-	// Remove from negative cache since node now exists
-	if d.negativeCache != nil {
-		d.negativeCache.Remove(node.Hash)
 	}
 
 	return nil
@@ -150,19 +151,23 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 		atomic.AddUint64(&d.stats.cacheMisses, 1)
 	}
 
+	var storeGeneration uint64
 	if d.negativeCache != nil {
 		if d.negativeCache.IsMissing(hash) {
 			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
 			return nil, nil
 		}
+		storeGeneration = d.storeGeneration.Load()
 	}
 
 	data, err := d.store.Get(hash[:])
 	if err != nil {
 		if errors.Is(err, kvstore.ErrNotFound) {
-			// Mark as missing in negative cache
 			if d.negativeCache != nil {
 				d.negativeCache.MarkMissing(hash)
+				if d.storeGeneration.Load() != storeGeneration {
+					d.negativeCache.Remove(hash)
+				}
 			}
 			return nil, nil
 		}
@@ -209,6 +214,14 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 	if err != nil {
 		return fmt.Errorf("store batch commit failed: %w", err)
 	}
+	if d.negativeCache != nil {
+		d.storeGeneration.Add(1)
+		for _, node := range nodes {
+			if node != nil {
+				d.negativeCache.Remove(node.Hash)
+			}
+		}
+	}
 
 	for _, node := range nodes {
 		if node == nil {
@@ -218,9 +231,6 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 		atomic.AddUint64(&d.stats.writeBytes, uint64(len(node.Data)))
 		if d.cache != nil {
 			d.cache.Put(node)
-		}
-		if d.negativeCache != nil {
-			d.negativeCache.Remove(node.Hash)
 		}
 	}
 
