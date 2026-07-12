@@ -183,7 +183,9 @@ func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
 // tx applies, the sandbox is committed exactly once, and the cleared preceding
 // txs are removed from the queue (rippled TxQ.cpp:602-611, 1218).
 func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
-	q, aq, preceding, newTx, _, seqProxy := setupClearQueue()
+	q, aq, preceding, newTx, account, seqProxy := setupClearQueue()
+	aq.DropPenalty = true
+	aq.RetryPenalty = true
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
@@ -208,5 +210,17 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 	}
 	if _, stillQueued := aq.Transactions[NewSeqProxySequence(1)]; stillQueued {
 		t.Errorf("preceding tx must be erased from the queue after a successful clear")
+	}
+	retained, exists := q.byAccount[account]
+	if !exists || retained != aq {
+		t.Fatal("account queue must survive a successful clear until the next closed ledger")
+	}
+	if !retained.DropPenalty || !retained.RetryPenalty {
+		t.Error("account penalties must survive a successful clear")
+	}
+
+	q.ProcessClosedLedger(&stubClosedLedgerCtx{}, false)
+	if _, exists := q.byAccount[account]; exists {
+		t.Error("empty account queue must be removed after a closed ledger")
 	}
 }

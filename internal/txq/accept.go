@@ -85,7 +85,7 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 		candidate.LastResult = result
 
 		// Check if it's a permanent failure
-		if isTefFailure(result) || isTemMalformed(result) || candidate.RetriesRemaining <= 0 {
+		if result.IsTef() || isTemMalformed(result) || candidate.RetriesRemaining <= 0 {
 			// Mark penalties
 			if candidate.RetriesRemaining <= 0 {
 				aq.RetryPenalty = true
@@ -219,11 +219,6 @@ func (q *TxQ) indexInByFee(c *Candidate) int {
 		}
 	}
 	return -1
-}
-
-// isTefFailure returns true if the result is a tef (fee claimed, not applied) failure.
-func isTefFailure(result ter.Result) bool {
-	return result <= -180 && result >= -199
 }
 
 // isTemMalformed returns true if the result is a tem (malformed) failure.
