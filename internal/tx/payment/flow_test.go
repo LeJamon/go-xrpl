@@ -3,12 +3,14 @@ package payment
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -22,6 +24,15 @@ type paymentMockLedgerView struct {
 	data       map[[32]byte][]byte
 	ownerCount map[[20]byte]uint32
 	rules      *amendment.Rules
+}
+
+type paymentReadErrorView struct {
+	*paymentMockLedgerView
+	err error
+}
+
+func (v *paymentReadErrorView) Read(keylet.Keylet) ([]byte, error) {
+	return nil, v.err
 }
 
 func newPaymentMockLedgerView() *paymentMockLedgerView {
@@ -321,6 +332,64 @@ func TestPaymentSandbox_ChildSandbox(t *testing.T) {
 	if parentAccount2.Balance != 25_000_000 {
 		t.Errorf("expected parent balance after apply=25M, got %d", parentAccount2.Balance)
 	}
+}
+
+func TestPaymentSandbox_ApplyAtomicallyReinsertAfterErase(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	key := keylet.Keylet{Key: [32]byte{1}}
+	original := []byte{1}
+	replacement := []byte{2}
+	view.data[key.Key] = original
+
+	sandbox := NewPaymentSandbox(view)
+	require.NoError(t, sandbox.Erase(key))
+	require.NoError(t, sandbox.ApplyAtomically(func(writer ledgercore.Writer) error {
+		return writer.Insert(key, replacement)
+	}))
+
+	require.False(t, sandbox.deletions[key.Key])
+	require.NotContains(t, sandbox.insertions, key.Key)
+	require.Equal(t, replacement, sandbox.modifications[key.Key])
+	require.NoError(t, sandbox.ApplyToView(view))
+	require.Equal(t, replacement, view.data[key.Key])
+}
+
+func TestPaymentSandbox_ApplyAtomicallyEraseAfterInsert(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	key := keylet.Keylet{Key: [32]byte{1}}
+	sandbox := NewPaymentSandbox(view)
+	require.NoError(t, sandbox.Insert(key, []byte{1}))
+
+	require.NoError(t, sandbox.ApplyAtomically(func(writer ledgercore.Writer) error {
+		return writer.Erase(key)
+	}))
+
+	require.Empty(t, sandbox.deletions)
+	require.Empty(t, sandbox.insertions)
+	require.Empty(t, sandbox.modifications)
+	require.NoError(t, sandbox.ApplyToView(view))
+	require.NotContains(t, view.data, key.Key)
+}
+
+func TestPaymentSandbox_ApplyAtomicallyMergeFailureRollsBack(t *testing.T) {
+	injected := errors.New("injected read failure")
+	view := &paymentReadErrorView{
+		paymentMockLedgerView: newPaymentMockLedgerView(),
+		err:                   injected,
+	}
+	key := keylet.Keylet{Key: [32]byte{1}}
+	sandbox := NewPaymentSandbox(view)
+	require.NoError(t, sandbox.Erase(key))
+
+	err := sandbox.ApplyAtomically(func(writer ledgercore.Writer) error {
+		return writer.Insert(key, []byte{1})
+	})
+	require.ErrorIs(t, err, injected)
+	require.True(t, sandbox.deletions[key.Key])
+	require.Empty(t, sandbox.insertions)
+	require.Empty(t, sandbox.modifications)
+	require.ErrorIs(t, sandbox.Insert(key, []byte{2}), injected)
+	require.True(t, sandbox.deletions[key.Key])
 }
 
 // XRPEndpointStep Tests

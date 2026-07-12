@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
@@ -69,7 +71,7 @@ type ThreadedOwner struct {
 // ApplyStateTable wraps a LedgerView and tracks all modifications
 // for automatic metadata generation, similar to rippled's ApplyStateTable
 type ApplyStateTable struct {
-	base             tx.LedgerView
+	base             AtomicLedgerView
 	items            map[[32]byte]*TrackedEntry
 	threadOnlyOwners map[[32]byte]*ThreadedOwner
 	drops            drops.XRPAmount
@@ -78,10 +80,18 @@ type ApplyStateTable struct {
 	rules            *amendment.Rules
 }
 
+// AtomicLedgerView is a ledger view that can commit a group of writes as one unit.
+type AtomicLedgerView interface {
+	tx.LedgerView
+	ledgercore.AtomicWriter
+}
+
+var _ AtomicLedgerView = (*ApplyStateTable)(nil)
+
 // NewApplyStateTable creates a new ApplyStateTable wrapping the given base view.
 // rules controls amendment-gated behaviour (threading, metadata flags).
 // If nil, defaults to all amendments enabled.
-func NewApplyStateTable(base tx.LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
+func NewApplyStateTable(base AtomicLedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
 	return &ApplyStateTable{
 		base:             base,
 		items:            make(map[[32]byte]*TrackedEntry),
@@ -90,6 +100,49 @@ func NewApplyStateTable(base tx.LedgerView, txHash [32]byte, txSeq uint32, rules
 		txSeq:            txSeq,
 		rules:            rules,
 	}
+}
+
+func (t *ApplyStateTable) clone() *ApplyStateTable {
+	items := make(map[[32]byte]*TrackedEntry, len(t.items))
+	for key, entry := range t.items {
+		cloned := *entry
+		cloned.Original = bytes.Clone(entry.Original)
+		cloned.Current = bytes.Clone(entry.Current)
+		items[key] = &cloned
+	}
+
+	threadOnlyOwners := make(map[[32]byte]*ThreadedOwner, len(t.threadOnlyOwners))
+	for key, owner := range t.threadOnlyOwners {
+		cloned := *owner
+		cloned.Updated = bytes.Clone(owner.Updated)
+		threadOnlyOwners[key] = &cloned
+	}
+
+	return &ApplyStateTable{
+		base:             t.base,
+		items:            items,
+		threadOnlyOwners: threadOnlyOwners,
+		drops:            t.drops,
+		txHash:           t.txHash,
+		txSeq:            t.txSeq,
+		rules:            t.rules,
+	}
+}
+
+func (t *ApplyStateTable) adopt(staged *ApplyStateTable) {
+	t.items = staged.items
+	t.threadOnlyOwners = staged.threadOnlyOwners
+	t.drops = staged.drops
+}
+
+// ApplyAtomically stages changes in an isolated copy of the table.
+func (t *ApplyStateTable) ApplyAtomically(apply func(ledgercore.Writer) error) error {
+	staged := t.clone()
+	if err := apply(staged); err != nil {
+		return err
+	}
+	t.adopt(staged)
+	return nil
 }
 
 // Read reads a ledger entry, tracking it as cached
@@ -338,21 +391,45 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return bestKey, bestData, found, nil
 }
 
+func sortedLedgerKeys[V any](entries map[[32]byte]V) [][32]byte {
+	keys := make([][32]byte, 0, len(entries))
+	for key := range entries {
+		keys = append(keys, key)
+	}
+	slices.SortFunc(keys, func(a, b [32]byte) int {
+		return bytes.Compare(a[:], b[:])
+	})
+	return keys
+}
+
 // Apply commits all changes to the base view and returns generated metadata.
-// Threading is applied first (PreviousTxnID/PreviousTxnLgrSeq updates),
-// then metadata is generated from the final state.
+// Threading and metadata generation complete before changes are flushed.
 // Reference: rippled ApplyStateTable.cpp apply() lines 113-292
 func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
-	// Phase 1: Apply threading to all entries
-	// This updates PreviousTxnID/PreviousTxnLgrSeq on entries and their owners
-	t.applyThreading()
+	staged := t.clone()
+	staged.applyThreading()
+	metadata, err := staged.applyOrdered(
+		staged.base,
+		sortedLedgerKeys(staged.items),
+		sortedLedgerKeys(staged.threadOnlyOwners),
+	)
+	if err != nil {
+		return nil, err
+	}
+	t.adopt(staged)
+	return metadata, nil
+}
 
-	// Phase 2: Generate metadata and apply to base
+func (t *ApplyStateTable) applyOrdered(
+	atomicBase ledgercore.AtomicWriter,
+	itemKeys, ownerKeys [][32]byte,
+) (*tx.Metadata, error) {
 	metadata := &tx.Metadata{
 		AffectedNodes: make([]tx.AffectedNode, 0),
 	}
 
-	for key, entry := range t.items {
+	for _, key := range itemKeys {
+		entry := t.items[key]
 		switch entry.Action {
 		case ActionCache:
 			// No change, skip
@@ -364,10 +441,6 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 				return nil, err
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
-
-			if err := t.base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
-				return nil, err
-			}
 
 		case ActionModify:
 			// Skip if no actual change
@@ -381,20 +454,12 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			if err := t.base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
-				return nil, err
-			}
-
 		case ActionErase:
 			node, err := t.buildDeletedNode(key, entry.Original, entry.Current)
 			if err != nil {
 				return nil, err
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
-
-			if err := t.base.Erase(keylet.Keylet{Key: key}); err != nil {
-				return nil, err
-			}
 		}
 	}
 
@@ -410,7 +475,8 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	// zero. Those extra leaves inflated every tx's meta blob → tx+meta
 	// SHAMap root diverged from rippled → fork at the first ledger
 	// carrying transactions that touched fresh owner accounts.
-	for key, owner := range t.threadOnlyOwners {
+	for _, key := range ownerKeys {
+		owner := t.threadOnlyOwners[key]
 		if entry, alreadyEmitted := t.items[key]; alreadyEmitted {
 			// Skip the bare emission only when the tracked item emits its own
 			// node. A no-op ActionModify (Original == Current) is dropped by the
@@ -434,14 +500,45 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 		}
-
-		if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
-			return nil, err
-		}
 	}
 
-	if t.drops.IsPositive() {
-		t.base.AdjustDropsDestroyed(t.drops)
+	// Metadata builders may fail; keep the base unchanged until all succeed.
+	err := atomicBase.ApplyAtomically(func(base ledgercore.Writer) error {
+		for _, key := range itemKeys {
+			entry := t.items[key]
+			switch entry.Action {
+			case ActionInsert:
+				if err := base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
+					return err
+				}
+			case ActionModify:
+				if bytes.Equal(entry.Original, entry.Current) {
+					continue
+				}
+				if err := base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
+					return err
+				}
+			case ActionErase:
+				if err := base.Erase(keylet.Keylet{Key: key}); err != nil {
+					return err
+				}
+			}
+		}
+
+		for _, key := range ownerKeys {
+			owner := t.threadOnlyOwners[key]
+			if err := base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
+				return err
+			}
+		}
+
+		if t.drops.IsPositive() {
+			base.AdjustDropsDestroyed(t.drops)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return metadata, nil
@@ -469,8 +566,9 @@ func (t *ApplyStateTable) applyThreading() {
 		key   [32]byte
 		entry *TrackedEntry
 	}
-	var work []threadWork
-	for key, entry := range t.items {
+	work := make([]threadWork, 0, len(t.items))
+	for _, key := range sortedLedgerKeys(t.items) {
+		entry := t.items[key]
 		if entry.Action == ActionInsert || entry.Action == ActionModify || entry.Action == ActionErase {
 			work = append(work, threadWork{key, entry})
 		}

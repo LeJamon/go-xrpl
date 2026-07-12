@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -203,6 +204,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	}
 
 	// Apply all tracked changes to the base view and generate metadata automatically
+	table.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
 	generatedMeta, err := table.Apply()
 	if err != nil {
 		return ter.TefINTERNAL, 0
@@ -455,6 +457,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	}
 
 	// Apply all tracked changes and generate proper metadata
+	tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL
@@ -885,6 +888,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 		return ter.TefINVARIANT_FAILED
 	}
 
+	invTecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
 	generatedMeta, applyErr := invTecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL

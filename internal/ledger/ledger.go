@@ -85,6 +85,13 @@ type Writer interface {
 	AdjustDropsDestroyed(drops drops.XRPAmount)
 }
 
+// AtomicWriter can commit a group of ledger and destroyed-drop changes as one
+// unit. The supplied writer is valid only for the duration of apply.
+type AtomicWriter interface {
+	Writer
+	ApplyAtomically(apply func(Writer) error) error
+}
+
 // Ledger represents a single ledger in the chain
 type Ledger struct {
 	mu sync.RWMutex
@@ -101,6 +108,8 @@ type Ledger struct {
 	// Drops destroyed in this ledger (transaction fees)
 	dropsDestroyed drops.XRPAmount
 }
+
+var _ AtomicWriter = (*Ledger)(nil)
 
 // NewOpen creates a new open ledger based on a parent ledger
 func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
@@ -428,6 +437,36 @@ func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	defer l.mu.Unlock()
 
 	l.dropsDestroyed = l.dropsDestroyed.Add(drops)
+}
+
+// ApplyAtomically commits state changes made through apply as one unit.
+func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state != StateOpen {
+		return ErrLedgerImmutable
+	}
+
+	stateMap, err := l.stateMap.MutableFork()
+	if err != nil {
+		return fmt.Errorf("fork ledger state: %w", err)
+	}
+	staged := &Ledger{
+		stateMap:       stateMap,
+		txMap:          l.txMap,
+		header:         l.header,
+		fees:           l.fees,
+		state:          l.state,
+		dropsDestroyed: l.dropsDestroyed,
+	}
+	if err := apply(staged); err != nil {
+		return err
+	}
+
+	l.stateMap = staged.stateMap
+	l.dropsDestroyed = staged.dropsDestroyed
+	return nil
 }
 
 // AdoptState replaces this ledger's state map, tx map, and destroyed-drops tally

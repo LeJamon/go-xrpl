@@ -1,11 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"strconv"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
@@ -22,7 +24,9 @@ const recoveryTestAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 // fee actually charged — is destroyed.
 type recordingBaseView struct {
 	*mockBaseView
-	destroyed drops.XRPAmount
+	destroyed          drops.XRPAmount
+	insideAtomic       bool
+	outsideAdjustments int
 }
 
 func newRecordingBaseView() *recordingBaseView {
@@ -30,13 +34,34 @@ func newRecordingBaseView() *recordingBaseView {
 }
 
 func (r *recordingBaseView) AdjustDropsDestroyed(d drops.XRPAmount) {
+	if !r.insideAtomic {
+		r.outsideAdjustments++
+	}
 	r.destroyed += d
+}
+
+func (r *recordingBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
+	staged := newRecordingBaseView()
+	for key, data := range r.data {
+		staged.data[key] = bytes.Clone(data)
+	}
+	staged.destroyed = r.destroyed
+	staged.insideAtomic = true
+	staged.outsideAdjustments = r.outsideAdjustments
+	if err := apply(staged); err != nil {
+		return err
+	}
+	staged.insideAtomic = false
+	r.mockBaseView = staged.mockBaseView
+	r.destroyed = staged.destroyed
+	r.outsideAdjustments = staged.outsideAdjustments
+	return nil
 }
 
 // recoveryEngine builds an engine over the supplied view configured for a
 // closed-ledger apply (OpenLedger=false) with signature verification skipped, so
 // a single-signed BaseTx reaches preclaim/commit without real crypto.
-func recoveryEngine(view txcore.LedgerView, flags txcore.ApplyFlags) *Engine {
+func recoveryEngine(view applystate.AtomicLedgerView, flags txcore.ApplyFlags) *Engine {
 	return NewEngine(view, txcore.EngineConfig{
 		BaseFee:                   10,
 		LedgerSequence:            100,
@@ -94,6 +119,26 @@ func recoveryTx(fee, seq uint32) *txcore.BaseTx {
 	return tx
 }
 
+func TestApply_SuccessStagesFeeAtomically(t *testing.T) {
+	view := newRecordingBaseView()
+	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
+
+	res := recoveryEngine(view, txcore.TapNONE).Apply(recoveryTx(10, 1))
+	if res.Result != ter.TesSUCCESS || !res.Applied {
+		t.Fatalf("result/applied = %s/%v, want tesSUCCESS/true", res.Result, res.Applied)
+	}
+	if view.destroyed != drops.XRPAmount(10) {
+		t.Fatalf("destroyed drops = %d, want 10", view.destroyed)
+	}
+	if view.outsideAdjustments != 0 {
+		t.Fatalf("destroyed drops adjusted %d times outside atomic commit", view.outsideAdjustments)
+	}
+	acct := readRecoveryAccount(t, view, acctKey)
+	if acct.Balance != 999_990 || acct.Sequence != 2 {
+		t.Fatalf("payer balance/seq = %d/%d, want 999990/2", acct.Balance, acct.Sequence)
+	}
+}
+
 // TestApply_TecInsuffFee_ClampsToBalance is the Item 1 regression: a closed-ledger
 // apply that hits tecINSUFF_FEE (payer balance non-zero but below the fee) must
 // charge only the balance, leaving the payer at exactly 0 — never underflowing
@@ -120,6 +165,9 @@ func TestApply_TecInsuffFee_ClampsToBalance(t *testing.T) {
 	}
 	if view.destroyed != drops.XRPAmount(5) {
 		t.Fatalf("destroyed drops = %d, want 5 (clamped fee)", view.destroyed)
+	}
+	if view.outsideAdjustments != 0 {
+		t.Fatalf("destroyed drops adjusted %d times outside atomic commit", view.outsideAdjustments)
 	}
 	acct := readRecoveryAccount(t, view, acctKey)
 	if acct.Balance != 0 {
@@ -252,6 +300,9 @@ func TestApply_Retry_WorkOnTecReapplied(t *testing.T) {
 	if view.destroyed != drops.XRPAmount(10) {
 		t.Fatalf("destroyed drops = %d, want 10 (fee claimed)", view.destroyed)
 	}
+	if view.outsideAdjustments != 0 {
+		t.Fatalf("destroyed drops adjusted %d times outside atomic commit", view.outsideAdjustments)
+	}
 	acct := readRecoveryAccount(t, view, acctKey)
 	if acct.Balance != 999_990 {
 		t.Fatalf("payer balance = %d, want 999990 (fee charged)", acct.Balance)
@@ -291,6 +342,12 @@ func TestApply_PreclaimTec_InvariantViolation(t *testing.T) {
 	res := e.Apply(recoveryTx(10, 1))
 	if res.Result != ter.TecINVARIANT_FAILED {
 		t.Fatalf("result = %s, want tecINVARIANT_FAILED", res.Result)
+	}
+	if view.destroyed != drops.XRPAmount(5) {
+		t.Fatalf("destroyed drops = %d, want 5 (clamped fee)", view.destroyed)
+	}
+	if view.outsideAdjustments != 0 {
+		t.Fatalf("destroyed drops adjusted %d times outside atomic commit", view.outsideAdjustments)
 	}
 }
 
