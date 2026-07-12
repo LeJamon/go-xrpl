@@ -64,7 +64,6 @@ func TestMPT_DeliveredAmount(t *testing.T) {
 		env, mptAlice, bob, carol := setup(t)
 		r := env.Submit(
 			paybuilder.PayIssued(bob, carol, mptAlice.MPTAmount(1000)).
-				MPTIssuanceID(mptAlice.IssuanceID()).
 				PartialPayment().
 				Build(),
 		)
@@ -77,7 +76,6 @@ func TestMPT_DeliveredAmount(t *testing.T) {
 		env, mptAlice, bob, carol := setup(t)
 		r := env.Submit(
 			paybuilder.PayIssued(bob, carol, mptAlice.MPTAmount(1000)).
-				MPTIssuanceID(mptAlice.IssuanceID()).
 				SendMax(mptAlice.MPTAmount(1200)).
 				PartialPayment().
 				Build(),
@@ -92,7 +90,6 @@ func TestMPT_DeliveredAmount(t *testing.T) {
 		env, mptAlice, bob, carol := setup(t)
 		r := env.Submit(
 			paybuilder.PayIssued(bob, carol, mptAlice.MPTAmount(100)).
-				MPTIssuanceID(mptAlice.IssuanceID()).
 				SendMax(mptAlice.MPTAmount(125)).
 				Build(),
 		)
@@ -107,9 +104,7 @@ func TestMPT_DeliveredAmount(t *testing.T) {
 	t.Run("IssuerToHolderFull_NoField", func(t *testing.T) {
 		env, mptAlice, bob, _ := setup(t)
 		r := env.Submit(
-			paybuilder.PayIssued(mptAlice.Issuer(), bob, mptAlice.MPTAmount(500)).
-				MPTIssuanceID(mptAlice.IssuanceID()).
-				Build(),
+			paybuilder.PayIssued(mptAlice.Issuer(), bob, mptAlice.MPTAmount(500)).Build(),
 		)
 		jtx.RequireTxSuccess(t, r)
 		if r.Metadata != nil && r.Metadata.DeliveredAmount != nil {
@@ -141,7 +136,6 @@ func TestMPT_DeliveredAmount(t *testing.T) {
 
 		r := env.Submit(
 			paybuilder.PayIssued(bob, carol, mptAlice.MPTAmount(1000)).
-				MPTIssuanceID(mptAlice.IssuanceID()).
 				PartialPayment().
 				Build(),
 		)

@@ -213,7 +213,6 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	// deposit preauth runs, so the expired credential is NOT deleted.
 	result = env.Submit(
 		payment.PayIssued(bob, cindy, mptAlice.MPTAmount(10)).
-			MPTIssuanceID(mptAlice.IssuanceID()).
 			CredentialIDs([]string{credIdx}).
 			Build(),
 	)

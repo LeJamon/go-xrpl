@@ -435,10 +435,15 @@ func (c *CheckCash) applyCashMPTAmount(ctx *tx.ApplyContext, check *state.CheckD
 	dstID := ctx.AccountID
 	issuerID := issuance.Issuer
 
-	if result := mptutil.RequireAuthAt(ctx.View, mptID, srcID, true, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+	if result := mptutil.RequireAuthAt(ctx.View, mptID, srcID, true, ctx.Config.ParentCloseTime); result == ter.TefINTERNAL {
+		return result
+	} else if result != ter.TesSUCCESS {
 		return ter.TecPATH_PARTIAL
 	}
 	srcFunds, result := mptutil.Funds(ctx.View, mptID, srcID, true)
+	if result == ter.TefINTERNAL {
+		return result
+	}
 	if result != ter.TesSUCCESS || srcFunds < requested {
 		return ter.TecPATH_PARTIAL
 	}

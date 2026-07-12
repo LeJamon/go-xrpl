@@ -82,22 +82,39 @@ single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
 
 ## Finalization fixes
 
-- [ ] Match the mask predicate to the MPT Amount, not the legacy issuance field
-- [ ] Preserve rippled's ordered MPTokensV1/V2 Payment preflight semantics
-- [ ] Route MPTokensV2 Payments through the MPT-capable flow engine
-- [ ] Port valid-fee flag, path, SendMax, disabled-gate, and routing regressions
-- [ ] Remove the legacy standalone Payment issuance field and builder plumbing
-- [ ] Run focused tests, full transaction/integration coverage, build, vet, lint,
+- [x] Match the mask predicate to the MPT Amount, not the legacy issuance field
+- [x] Preserve rippled's ordered MPTokensV1/V2 Payment preflight semantics
+- [x] Route MPTokensV2 Payments through the MPT-capable flow engine
+- [x] Port valid-fee flag, path, SendMax, disabled-gate, and routing regressions
+- [x] Remove the legacy standalone Payment issuance field and builder plumbing
+- [x] Reject malformed MPT JSON, noAccount paths, and invalid MPT offer images
+- [x] Preserve internal storage errors through MPT authorization and funding paths
+- [x] Run focused tests, full transaction/integration coverage, build, vet, lint,
       and final rippled 3.2.0 review
 
 ## Review
 
-PR #1298 covered its advertised sweep, but the earlier Payment adoption still
-used the MPTokensV1 mask after MPTokensV2 activation. `Payment.GetFlagsMask` is
-now rule-aware: MPTokensV1 rejects `tfLimitQuality` at preflight0, while
-MPTokensV2 permits it so a malformed fee returns `temBAD_FEE`. Finalization
-against rippled 3.2.0 found that the rule-aware body and apply routing were not
-yet wired; the corrective work is tracked above.
+Finalized PR #1308 against local rippled v3.2.0. Payment now uses the MPT Amount
+as the authoritative asset identity, preserves rippled's V1/V2 preflight order
+and TER precedence, and routes MPTokensV2 through Flow while retaining the V1
+direct-transfer path. The standalone Go-only issuance field was removed.
+
+The final review also fixed MPT wire/path serialization, cross-asset and
+MPT-to-MPT offer crossing, destination checks, noAccount rejection, MPT offer
+invariant parsing, pseudo-account authorization gating, canonical integral MPT
+JSON parsing, and propagation of ledger storage/parse errors through shared MPT,
+Offer, Check, AMM, and FlowCross code.
+
+Verification:
+
+- Focused state, payment, engine, invariant, mptutil, offer, check, AMM, MPT,
+  deposit-preauth, and delegate suites pass uncached.
+- `just build-all`, `just build-nocgo`, `just vet`, and `just lint` pass.
+- The full module test run passes outside the established out-of-scope
+  conformance failures.
+- Final conformance: 941 pass / 117 fail overall, 879 pass / 0 fail in scope;
+  the 117 failures remain the out-of-scope Batch, Vault, XChain, and XChainSim
+  suites.
 
 # Issue #1287 — MPTokensV2 amendment-on engine support
 

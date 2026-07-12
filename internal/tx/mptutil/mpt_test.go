@@ -2,6 +2,7 @@ package mptutil
 
 import (
 	"encoding/hex"
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -16,17 +18,31 @@ import (
 )
 
 type mptTestView struct {
-	data        map[[32]byte][]byte
-	adjustments [][3]uint32
-	rules       *amendment.Rules
+	data         map[[32]byte][]byte
+	readErrors   map[[32]byte]error
+	existsErrors map[[32]byte]error
+	adjustments  [][3]uint32
+	rules        *amendment.Rules
 }
 
 func newMPTTestView() *mptTestView {
-	return &mptTestView{data: make(map[[32]byte][]byte)}
+	return &mptTestView{
+		data:         make(map[[32]byte][]byte),
+		readErrors:   make(map[[32]byte]error),
+		existsErrors: make(map[[32]byte]error),
+	}
 }
 
-func (v *mptTestView) Read(k keylet.Keylet) ([]byte, error) { return v.data[k.Key], nil }
+func (v *mptTestView) Read(k keylet.Keylet) ([]byte, error) {
+	if err := v.readErrors[k.Key]; err != nil {
+		return nil, err
+	}
+	return v.data[k.Key], nil
+}
 func (v *mptTestView) Exists(k keylet.Keylet) (bool, error) {
+	if err := v.existsErrors[k.Key]; err != nil {
+		return false, err
+	}
 	_, exists := v.data[k.Key]
 	return exists, nil
 }
@@ -50,6 +66,135 @@ func (v *mptTestView) Rules() *amendment.Rules {
 }
 func (v *mptTestView) AdjustOwnerCount(_ [20]byte, current, next uint32) {
 	v.adjustments = append(v.adjustments, [3]uint32{current, next})
+}
+
+func TestMPTReadsPropagateStorageErrors(t *testing.T) {
+	view := newMPTTestView()
+	var id [24]byte
+	id[23] = 1
+	var holder [20]byte
+	holder[19] = 2
+	readErr := errors.New("storage read failed")
+
+	view.readErrors[keylet.MPTIssuance(id).Key] = readErr
+	_, _, result := ReadIssuance(view, id)
+	require.Equal(t, ter.TefINTERNAL, result)
+
+	delete(view.readErrors, keylet.MPTIssuance(id).Key)
+	view.readErrors[keylet.MPTokenByID(id, holder).Key] = readErr
+	_, _, result = ReadHolding(view, id, holder)
+	require.Equal(t, ter.TefINTERNAL, result)
+}
+
+func TestMPTAuthorizationPropagatesAccountReadError(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, holder [20]byte
+	issuer[19] = 1
+	holder[19] = 2
+	id := keylet.MakeMPTID(1, issuer)
+	putTestAccount(t, view, issuer, 0, [32]byte{})
+	putTestIssuance(t, view, id, entry.LsfMPTRequireAuth, nil)
+	view.readErrors[keylet.Account(holder).Key] = errors.New("storage read failed")
+
+	require.Equal(t, ter.TefINTERNAL, RequireAuth(view, id, holder, false))
+}
+
+func TestPseudoAccountImplicitAuthorizationRequiresAmendment(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, pseudo [20]byte
+	issuer[19] = 1
+	pseudo[19] = 2
+	id := keylet.MakeMPTID(1, issuer)
+	putTestIssuance(t, view, id, entry.LsfMPTRequireAuth, nil)
+	putTestAccount(t, view, issuer, 0, [32]byte{})
+	putTestAccount(t, view, pseudo, 0, [32]byte{1})
+
+	view.rules = amendment.NewRules(nil)
+	require.Equal(t, ter.TecNO_AUTH, RequireAuth(view, id, pseudo, false))
+
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureSingleAssetVault})
+	require.Equal(t, ter.TesSUCCESS, RequireAuth(view, id, pseudo, false))
+
+	view.rules = amendment.NewRules([][32]byte{amendment.FeatureMPTokensV2})
+	require.Equal(t, ter.TesSUCCESS, RequireAuth(view, id, pseudo, false))
+}
+
+func TestIOUTransferCheckPropagatesTrustLineReadError(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, from, to [20]byte
+	issuer[19] = 1
+	from[19] = 2
+	to[19] = 3
+	putTestAccount(t, view, issuer, 0, [32]byte{})
+	view.readErrors[keylet.Line(from, issuer, "USD").Key] = errors.New("storage read failed")
+	asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
+
+	require.Equal(t, ter.TefINTERNAL, canTransferAsset(view, asset, from, to, 0))
+}
+
+func TestMPTAuthorizationPropagatesMalformedTrustLine(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, holder [20]byte
+	issuer[19] = 1
+	holder[19] = 2
+	putTestAccount(t, view, issuer, state.LsfRequireAuth, [32]byte{})
+	view.data[keylet.Line(holder, issuer, "USD").Key] = []byte{1}
+	asset := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuer)}
+
+	require.Equal(t, ter.TefINTERNAL, requireAssetAuthAt(view, asset, holder, true, 0, 0))
+}
+
+func TestDomainAuthorizationPropagatesLedgerErrors(t *testing.T) {
+	view := newMPTTestView()
+	var owner, holder, credentialIssuer [20]byte
+	owner[19] = 1
+	holder[19] = 2
+	credentialIssuer[19] = 3
+	domainID := [32]byte{1}
+	domainHex := strings.ToUpper(hex.EncodeToString(domainID[:]))
+	credentialType := []byte("KYC")
+	domainRaw, err := state.SerializePermissionedDomain(&state.PermissionedDomainData{
+		Owner:    owner,
+		Sequence: 1,
+		AcceptedCredentials: []state.PermissionedDomainCredential{{
+			Issuer: credentialIssuer, CredentialType: credentialType,
+		}},
+	}, state.EncodeAccountIDSafe(owner))
+	require.NoError(t, err)
+	view.data[keylet.PermissionedDomainByID(domainID).Key] = domainRaw
+
+	domainKey := keylet.PermissionedDomainByID(domainID)
+	view.readErrors[domainKey.Key] = errors.New("domain read failed")
+	require.Equal(t, ter.TefINTERNAL, validDomain(view, domainHex, holder, 0))
+	delete(view.readErrors, domainKey.Key)
+
+	credentialKey := keylet.Credential(holder, credentialIssuer, credentialType)
+	view.readErrors[credentialKey.Key] = errors.New("credential read failed")
+	require.Equal(t, ter.TefINTERNAL, validDomain(view, domainHex, holder, 0))
+	delete(view.readErrors, credentialKey.Key)
+	view.data[credentialKey.Key] = []byte{1}
+	require.Equal(t, ter.TefINTERNAL, validDomain(view, domainHex, holder, 0))
+}
+
+func TestMPTHoldingMutationsPropagateStorageErrors(t *testing.T) {
+	view := newMPTTestView()
+	var issuer, holder [20]byte
+	issuer[19] = 1
+	holder[19] = 2
+	id := keylet.MakeMPTID(1, issuer)
+	tokenKey := keylet.MPTokenByID(id, holder)
+	storageErr := errors.New("storage failure")
+
+	view.existsErrors[tokenKey.Key] = storageErr
+	require.Equal(t, ter.TefINTERNAL, EnsureHolding(view, id, holder, 0, true))
+	delete(view.existsErrors, tokenKey.Key)
+
+	view.readErrors[keylet.Account(holder).Key] = storageErr
+	require.Equal(t, ter.TefINTERNAL, EnsureHolding(view, id, holder, 0, true))
+	delete(view.readErrors, keylet.Account(holder).Key)
+
+	view.readErrors[tokenKey.Key] = storageErr
+	require.Equal(t, ter.TefINTERNAL, RemoveHolding(view, id, holder, true))
 }
 
 func TestEnsureAndRemoveHolding(t *testing.T) {

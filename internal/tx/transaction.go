@@ -61,6 +61,12 @@ type RulesPreflighter interface {
 	PreflightRules(rules *amendment.Rules) error
 }
 
+// RulesAwarePreflighter is implemented by transaction types whose complete
+// type-specific preflight body must interleave amendment-dependent checks.
+type RulesAwarePreflighter interface {
+	PreflightWithRules(rules *amendment.Rules) error
+}
+
 // ExtraFeaturesChecker is implemented by transaction types with an amendment
 // gate that rippled evaluates in T::checkExtraFeatures — which runs in
 // invokePreflight BEFORE preflight1's common checks (flags mask, NetworkID,

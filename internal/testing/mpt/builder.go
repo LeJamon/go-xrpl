@@ -418,14 +418,8 @@ func (m *MPTTester) Pay(src, dest *jtx.Account, amount int64, expectedErr ...str
 
 	mptAmount := m.MPTAmount(amount)
 
-	// Use stored issuance ID, or compute it from current sequence if not yet created
-	id := m.id
-	if id == "" {
-		id = makeMPTIDHex(m.env.Seq(m.issuer), m.issuer)
-	}
-
 	result := m.env.Submit(
-		paybuilder.PayIssued(src, dest, mptAmount).MPTIssuanceID(id).Build(),
+		paybuilder.PayIssued(src, dest, mptAmount).Build(),
 	)
 
 	if len(expectedErr) > 0 && expectedErr[0] != "" {
@@ -445,7 +439,6 @@ func (m *MPTTester) PayWithSendMax(src, dest *jtx.Account, amount int64, sendMax
 	mptSendMax := m.MPTAmount(sendMax)
 	result := m.env.Submit(
 		paybuilder.PayIssued(src, dest, mptAmount).
-			MPTIssuanceID(m.id).
 			SendMax(mptSendMax).
 			Build(),
 	)
@@ -466,7 +459,6 @@ func (m *MPTTester) PayWithFlags(src, dest *jtx.Account, amount int64, flags uin
 	mptAmount := m.MPTAmount(amount)
 	result := m.env.Submit(
 		paybuilder.PayIssued(src, dest, mptAmount).
-			MPTIssuanceID(m.id).
 			Flags(flags).
 			Build(),
 	)
@@ -485,7 +477,7 @@ func (m *MPTTester) PayFull(src, dest *jtx.Account, amount, sendMax, deliverMin 
 	m.t.Helper()
 
 	mptAmount := m.MPTAmount(amount)
-	builder := paybuilder.PayIssued(src, dest, mptAmount).MPTIssuanceID(m.id)
+	builder := paybuilder.PayIssued(src, dest, mptAmount)
 
 	if sendMax != 0 {
 		mptSendMax := m.MPTAmount(sendMax)
@@ -550,11 +542,11 @@ func (m *MPTTester) Claw(issuer, holder *jtx.Account, amount int64, expectedErr 
 // serializes as a 33-byte MPToken amount rather than being misrouted through the
 // IOU path (which loses precision and rejects values above 16 significant digits).
 func (m *MPTTester) MPTAmount(amount int64) tx.Amount {
-	if m.id != "" {
-		return state.NewMPTAmountWithIssuanceID(amount, m.issuer.Address, m.id)
+	id := m.id
+	if id == "" {
+		id = makeMPTIDHex(m.env.Seq(m.issuer), m.issuer)
 	}
-	// Issuance not yet created: fall back to a raw MPT value (no embedded ID).
-	return state.NewMPTAmountDirect(amount, "MPT", m.issuer.Address)
+	return state.NewMPTAmountWithIssuanceID(amount, m.issuer.Address, id)
 }
 
 // mptokenAmount reads the holder's MPToken balance from the ledger.

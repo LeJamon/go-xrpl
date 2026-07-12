@@ -274,6 +274,17 @@ func TestOfferMPTPreclaimPermissionsAndFunding(t *testing.T) {
 		require.Equal(t, ter.TesSUCCESS, offer.Preclaim(view, config))
 	})
 
+	t.Run("corrupt holding is internal error", func(t *testing.T) {
+		view := newOfferMPTLedgerView()
+		putOfferMPTAccount(t, view, issuer)
+		putOfferMPTAccount(t, view, holder)
+		putOfferMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, 100, 1_000)
+		view.data[keylet.MPTokenByID(id, holder).Key] = []byte{1}
+
+		offer := newOffer(holder, tx.NewXRPAmount(1_000), offerMPTAmount(id, 10))
+		require.Equal(t, ter.TefINTERNAL, offer.Preclaim(view, config))
+	})
+
 	t.Run("trading disabled", func(t *testing.T) {
 		view := newOfferMPTLedgerView()
 		putOfferMPTAccount(t, view, issuer)

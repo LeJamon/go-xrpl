@@ -71,7 +71,10 @@ func Issuer(id [24]byte) [20]byte {
 func ReadIssuance(view state.LedgerView, id [24]byte) (*state.MPTokenIssuanceData, keylet.Keylet, ter.Result) {
 	k := keylet.MPTIssuance(id)
 	raw, err := view.Read(k)
-	if err != nil || raw == nil {
+	if err != nil {
+		return nil, k, ter.TefINTERNAL
+	}
+	if raw == nil {
 		return nil, k, ter.TecOBJECT_NOT_FOUND
 	}
 	issuance, err := state.ParseMPTokenIssuance(raw)
@@ -84,7 +87,10 @@ func ReadIssuance(view state.LedgerView, id [24]byte) (*state.MPTokenIssuanceDat
 func ReadHolding(view state.LedgerView, id [24]byte, account [20]byte) (*state.MPTokenData, keylet.Keylet, ter.Result) {
 	k := keylet.MPTokenByID(id, account)
 	raw, err := view.Read(k)
-	if err != nil || raw == nil {
+	if err != nil {
+		return nil, k, ter.TefINTERNAL
+	}
+	if raw == nil {
 		return nil, k, ter.TecNO_AUTH
 	}
 	token, err := state.ParseMPToken(raw)
@@ -236,8 +242,13 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, strong 
 	}
 
 	token, _, tokenResult := ReadHolding(view, id, account)
-	if tokenResult != ter.TesSUCCESS && strong {
-		return ter.TecNO_AUTH
+	if tokenResult != ter.TesSUCCESS {
+		if tokenResult != ter.TecNO_AUTH {
+			return tokenResult
+		}
+		if strong {
+			return ter.TecNO_AUTH
+		}
 	}
 	if issuance.DomainID != nil {
 		domainResult := validDomain(view, *issuance.DomainID, account, parentCloseTime)
@@ -255,8 +266,22 @@ func requireAuthAt(view state.LedgerView, id [24]byte, account [20]byte, strong 
 		return ter.TesSUCCESS
 	}
 
-	accountRaw, _ := view.Read(keylet.Account(account))
-	if accountRoot, err := state.ParseAccountRoot(accountRaw); err == nil && accountRoot.IsPseudoAccount() {
+	rules := view.Rules()
+	if rules == nil || (!rules.Enabled(amendment.FeatureSingleAssetVault) && !rules.Enabled(amendment.FeatureMPTokensV2)) {
+		return ter.TecNO_AUTH
+	}
+	accountRaw, err := view.Read(keylet.Account(account))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if accountRaw == nil {
+		return ter.TecNO_AUTH
+	}
+	accountRoot, err := state.ParseAccountRoot(accountRaw)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if accountRoot.IsPseudoAccount() {
 		return ter.TesSUCCESS
 	}
 	return ter.TecNO_AUTH
@@ -306,7 +331,7 @@ func requireAssetAuthAt(view state.LedgerView, asset tx.Asset, account [20]byte,
 	}
 	line, err := state.ParseRippleState(lineRaw)
 	if err != nil {
-		return ter.TecNO_AUTH
+		return ter.TefINTERNAL
 	}
 	if state.CompareAccountIDs(account, issuer) > 0 {
 		if line.Flags&state.LsfLowAuth == 0 {
@@ -358,7 +383,10 @@ func validDomain(view state.LedgerView, domainIDHex string, account [20]byte, pa
 	var domainID [32]byte
 	copy(domainID[:], domainBytes)
 	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
-	if err != nil || raw == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if raw == nil {
 		return ter.TecOBJECT_NOT_FOUND
 	}
 	domain, err := state.ParsePermissionedDomain(raw)
@@ -368,12 +396,15 @@ func validDomain(view state.LedgerView, domainIDHex string, account [20]byte, pa
 	foundExpired := false
 	for _, accepted := range domain.AcceptedCredentials {
 		credentialRaw, err := view.Read(keylet.Credential(account, accepted.Issuer, accepted.CredentialType))
-		if err != nil || credentialRaw == nil {
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if credentialRaw == nil {
 			continue
 		}
 		credentialEntry, err := credential.ParseCredentialEntry(credentialRaw)
 		if err != nil {
-			continue
+			return ter.TefINTERNAL
 		}
 		if credential.CheckCredentialExpired(credentialEntry, parentCloseTime) {
 			foundExpired = true
@@ -476,21 +507,35 @@ func canTransferAsset(view state.LedgerView, asset tx.Asset, from, to [20]byte, 
 	if err != nil {
 		return ter.TefINTERNAL
 	}
-	isRippleDisabled := func(account [20]byte) bool {
-		lineRaw, _ := view.Read(keylet.Line(account, issuer, asset.Currency))
+	isRippleDisabled := func(account [20]byte) (bool, ter.Result) {
+		lineRaw, err := view.Read(keylet.Line(account, issuer, asset.Currency))
+		if err != nil {
+			return false, ter.TefINTERNAL
+		}
 		if lineRaw == nil {
-			return issuerAccount.Flags&state.LsfDefaultRipple == 0
+			return issuerAccount.Flags&state.LsfDefaultRipple == 0, ter.TesSUCCESS
 		}
 		line, err := state.ParseRippleState(lineRaw)
 		if err != nil {
-			return true
+			return false, ter.TefINTERNAL
 		}
 		if state.CompareAccountIDs(issuer, account) > 0 {
-			return line.Flags&state.LsfHighNoRipple != 0
+			return line.Flags&state.LsfHighNoRipple != 0, ter.TesSUCCESS
 		}
-		return line.Flags&state.LsfLowNoRipple != 0
+		return line.Flags&state.LsfLowNoRipple != 0, ter.TesSUCCESS
 	}
-	if isRippleDisabled(from) && isRippleDisabled(to) {
+	fromDisabled, result := isRippleDisabled(from)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if !fromDisabled {
+		return ter.TesSUCCESS
+	}
+	toDisabled, result := isRippleDisabled(to)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if toDisabled {
 		return ter.TerNO_RIPPLE
 	}
 	return ter.TesSUCCESS
@@ -603,13 +648,20 @@ func EnsureHolding(view state.LedgerView, id [24]byte, holder [20]byte, flags ui
 		return ter.TesSUCCESS
 	}
 	k := keylet.MPTokenByID(id, holder)
-	if exists, err := view.Exists(k); err == nil && exists {
+	exists, err := view.Exists(k)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if exists {
 		return ter.TesSUCCESS
 	}
 
 	accountKey := keylet.Account(holder)
 	accountRaw, err := view.Read(accountKey)
-	if err != nil || accountRaw == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if accountRaw == nil {
 		return ter.TecNO_DST
 	}
 	account, err := state.ParseAccountRoot(accountRaw)
@@ -650,7 +702,10 @@ func EnsureHolding(view state.LedgerView, id [24]byte, holder [20]byte, flags ui
 func RemoveHolding(view state.LedgerView, id [24]byte, holder [20]byte, adjustOwnerCount bool) ter.Result {
 	tokenKey := keylet.MPTokenByID(id, holder)
 	raw, err := view.Read(tokenKey)
-	if err != nil || raw == nil {
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if raw == nil {
 		if holder == Issuer(id) {
 			return ter.TesSUCCESS
 		}

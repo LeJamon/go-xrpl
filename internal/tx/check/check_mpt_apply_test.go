@@ -312,6 +312,32 @@ func TestCheckCashMissingMPTIssuanceIsPathPartial(t *testing.T) {
 	}
 }
 
+func TestCheckCashCorruptMPTHoldingIsInternalError(t *testing.T) {
+	issuerID := checkMPTAccountID(0x74)
+	srcID := checkMPTAccountID(0x75)
+	dstID := checkMPTAccountID(0x76)
+	mptID := keylet.MakeMPTID(1, issuerID)
+	view := newCheckMPTView()
+	putCheckMPTAccount(t, view, issuerID, 1)
+	putCheckMPTAccount(t, view, srcID, 1)
+	dst := putCheckMPTAccount(t, view, dstID, 1)
+	putCheckMPTIssuance(t, view, mptID, issuerID, entry.LsfMPTCanTransfer, 0, 1)
+	view.data[keylet.MPTokenByID(mptID, srcID).Key] = []byte{1}
+
+	amount := state.NewMPTAmountWithIssuanceID(1, "", mptutil.EncodeID(mptID))
+	check := &state.CheckData{Account: srcID, DestinationID: dstID, SendMaxAmount: amount}
+	result := (&CheckCash{Amount: &amount}).applyCashMPTAmount(
+		checkMPTContext(view, dst, dstID),
+		check,
+		keylet.Check(srcID, 1),
+		amount,
+		false,
+	)
+	if result != ter.TefINTERNAL {
+		t.Fatalf("cash corrupt MPT holding = %v, want tefINTERNAL", result)
+	}
+}
+
 func TestCheckCashRejectsIllegalStoredMPT(t *testing.T) {
 	srcID := checkMPTAccountID(0x81)
 	dstID := checkMPTAccountID(0x82)
