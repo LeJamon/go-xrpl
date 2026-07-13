@@ -3,6 +3,7 @@ package payment
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -35,20 +36,57 @@ func TestXRPEndpointStep_CheckGlobalFreeze(t *testing.T) {
 }
 
 func TestXRPEndpointStep_CheckUnresolvableAMM(t *testing.T) {
-	view := newPaymentMockLedgerView()
-	acct := [20]byte{2}
-	root := &state.AccountRoot{
-		Account:  state.EncodeAccountIDSafe(acct),
-		Balance:  100_000_000,
-		Sequence: 1,
+	tests := []struct {
+		name     string
+		disabled bool
+		want     ter.Result
+	}{
+		{name: "enabled", want: ter.TecINTERNAL},
+		{name: "disabled", disabled: true, want: ter.TesSUCCESS},
 	}
-	root.AMMID[0] = 1
-	data, err := state.SerializeAccountRoot(root)
-	require.NoError(t, err)
-	view.data[keylet.Account(acct).Key] = data
 
-	sb := NewPaymentSandbox(view)
-	require.Equal(t, ter.TecINTERNAL, NewXRPEndpointStep(acct, true).Check(sb))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			view := newPaymentMockLedgerView()
+			if test.disabled {
+				view.rules = amendment.NewRulesBuilder().
+					FromPreset(amendment.PresetAllSupported).
+					DisableByName("fixFrozenLPTokenTransfer").
+					Build()
+			}
+			acct := [20]byte{2}
+			root := &state.AccountRoot{
+				Account:  state.EncodeAccountIDSafe(acct),
+				Balance:  100_000_000,
+				Sequence: 1,
+			}
+			root.AMMID[0] = 1
+			data, err := state.SerializeAccountRoot(root)
+			require.NoError(t, err)
+			view.data[keylet.Account(acct).Key] = data
+
+			sb := NewPaymentSandbox(view)
+			require.Equal(t, test.want, NewXRPEndpointStep(acct, true).Check(sb))
+		})
+	}
+}
+
+func TestXRPEndpointStep_CheckAccount(t *testing.T) {
+	tests := []struct {
+		name    string
+		account [20]byte
+		want    ter.Result
+	}{
+		{name: "zero", want: ter.TemBAD_PATH},
+		{name: "missing", account: [20]byte{2}, want: ter.TerNO_ACCOUNT},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sb := NewPaymentSandbox(newPaymentMockLedgerView())
+			require.Equal(t, test.want, NewXRPEndpointStep(test.account, true).Check(sb))
+		})
+	}
 }
 
 // TestXRPEndpointStep_xrpLiquid_DeferredCredit proves that XRP credited to an

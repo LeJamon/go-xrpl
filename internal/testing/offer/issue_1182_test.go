@@ -12,15 +12,21 @@ import (
 
 func TestOffer_IoCSell_GlobalFrozenTaker(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		frozen bool
+		name                 string
+		frozen               bool
+		immediateOfferKilled bool
 	}{
-		{name: "crosses", frozen: false},
-		{name: "globally_frozen_taker", frozen: true},
+		{name: "crosses", immediateOfferKilled: true},
+		{name: "globally_frozen_taker", frozen: true, immediateOfferKilled: true},
+		{name: "globally_frozen_taker_legacy", frozen: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := jtx.NewTestEnv(t)
-			env.EnableFeature("ImmediateOfferKilled")
+			if tc.immediateOfferKilled {
+				env.EnableFeature("ImmediateOfferKilled")
+			} else {
+				env.DisableFeature("ImmediateOfferKilled")
+			}
 
 			const coreCurrency = "434F524500000000000000000000000000000000"
 			issuer := jtx.NewAccount("core issuer")
@@ -58,6 +64,8 @@ func TestOffer_IoCSell_GlobalFrozenTaker(t *testing.T) {
 			require.NoError(t, err)
 			takerXRPBefore := env.Balance(taker)
 			makerXRPBefore := env.Balance(maker)
+			takerOwnerCountBefore := env.OwnerCount(taker)
+			makerOwnerCountBefore := env.OwnerCount(maker)
 
 			result = env.Submit(OfferCreate(
 				taker,
@@ -65,12 +73,21 @@ func TestOffer_IoCSell_GlobalFrozenTaker(t *testing.T) {
 				takerGets,
 			).ImmediateOrCancel().Sell().Build())
 
-			if tc.frozen {
+			if tc.frozen && tc.immediateOfferKilled {
 				jtx.RequireTxClaimed(t, result, jtx.TecKILLED)
+			} else {
+				jtx.RequireTxSuccess(t, result)
+			}
+			RequireOfferCount(t, env, taker, 0)
+			jtx.RequireOwnerCount(t, env, taker, takerOwnerCountBefore)
+			jtx.RequireOwnerCount(t, env, maker, makerOwnerCountBefore)
+
+			if tc.frozen {
 				require.Equal(t, takerXRPBefore-env.BaseFee(), env.Balance(taker))
 				require.Equal(t, makerXRPBefore, env.Balance(maker))
 				jtx.RequireIOUBalance(t, env, taker, issuer, coreCurrency, 0.98745)
 				jtx.RequireIOUBalance(t, env, maker, issuer, coreCurrency, 0)
+				RequireOfferCount(t, env, maker, 1)
 
 				offerAfter, err := env.LedgerEntry(offerKey)
 				require.NoError(t, err)
@@ -78,15 +95,15 @@ func TestOffer_IoCSell_GlobalFrozenTaker(t *testing.T) {
 				return
 			}
 
-			jtx.RequireTxSuccess(t, result)
 			require.Equal(t, takerXRPBefore-env.BaseFee()+37_919, env.Balance(taker))
 			require.Equal(t, makerXRPBefore-37_919, env.Balance(maker))
 			jtx.RequireIOUBalance(t, env, taker, issuer, coreCurrency, 0)
 			jtx.RequireIOUBalance(t, env, maker, issuer, coreCurrency, 0.98745)
-
-			offerAfter, err := env.LedgerEntry(offerKey)
-			require.NoError(t, err)
-			require.NotEqual(t, offerBefore, offerAfter)
+			RequireOfferCount(t, env, maker, 1)
+			RequireIsOffer(t, env, maker,
+				core(3_372_252_095_660_040, -13),
+				tx.NewXRPAmount(12_950_020),
+			)
 		})
 	}
 }

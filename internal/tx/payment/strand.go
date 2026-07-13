@@ -659,6 +659,9 @@ func (ctx *StrandContext) buildStrandSteps(
 		} else if !cur.hasAccount && next.hasAccount {
 			// Offer to account
 			if curIssue.IsXRP() {
+				if !isLast {
+					return nil, ter.TemBAD_PATH
+				}
 				// XRP coming out of a book — need XRPEndpointStep for the recipient
 				step, result := ctx.newXRPEndpointStep(next.account, true, false) // destination, isFirst=false
 				if result != ter.TesSUCCESS {
