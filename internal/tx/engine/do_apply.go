@@ -313,12 +313,9 @@ func (e *Engine) invokeApplySafely(txHash [32]byte, apply func() ter.Result) (re
 	return result
 }
 
-// invokeApplyInner is the body of invokeApply, separated so the panic-recovery
-// defer in invokeApplySafely does not have to walk back through the dispatch.
 func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 	sigWithMaster := txcore.SignedWithMasterKey(e.config.SkipSignatureVerification, st.common)
 
-	// All transaction types implement Appliable
 	ctx := &txcore.ApplyContext{
 		View:             st.table,
 		Account:          st.account,
