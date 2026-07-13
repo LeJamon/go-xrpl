@@ -467,19 +467,25 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 			name:    "subscribe",
 			command: "subscribe",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid subscription parameters.","id":7,"request":{"command":"subscribe","id":7},"status":"error","type":"response"}`,
-			invoke:  (*WebSocketServer).handleSubscribe,
+			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+				ws.handleSpecialCommand(conn, ctx, cmd, ws.executeSubscribe)
+			},
 		},
 		{
 			name:    "unsubscribe",
 			command: "unsubscribe",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid unsubscription parameters.","id":7,"request":{"command":"unsubscribe","id":7},"status":"error","type":"response"}`,
-			invoke:  (*WebSocketServer).handleUnsubscribe,
+			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+				ws.handleSpecialCommand(conn, ctx, cmd, ws.executeUnsubscribe)
+			},
 		},
 		{
 			name:    "path find",
 			command: "path_find",
 			want:    `{"error":"invalidParams","error_code":31,"error_message":"Invalid parameters.","id":7,"request":{"command":"path_find","id":7},"status":"error","type":"response"}`,
-			invoke:  (*WebSocketServer).handlePathFind,
+			invoke: func(ws *WebSocketServer, conn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
+				ws.handleSpecialCommand(conn, ctx, cmd, ws.executePathFind)
+			},
 		},
 	}
 	for _, test := range tests {

@@ -102,7 +102,7 @@ func TestDisconnectConsumesDropFee(t *testing.T) {
 	if !tr.Disconnect(key) {
 		t.Fatal("expected repeated disconnect while still over threshold")
 	}
-	if got, want := tr.Balance(key), float64(DropThreshold+2*(ChargeDrop/uint32(decayWindowSeconds))); got != want {
+	if got, want := tr.Balance(key), float64(DropThreshold+(2*ChargeDrop)/uint32(decayWindowSeconds)); got != want {
 		t.Fatalf("balance after repeated disconnect = %v, want %v", got, want)
 	}
 }

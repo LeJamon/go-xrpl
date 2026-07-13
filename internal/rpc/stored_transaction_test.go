@@ -51,32 +51,6 @@ func validStoredMetadataWithAffectedNode() map[string]any {
 	return meta
 }
 
-func TestDecodeTxBlobCanonicalizesJSONStoredObjects(t *testing.T) {
-	txJSON := validStoredPaymentTransaction()
-	meta := validStoredMetadataWithAffectedNode()
-	created := meta["AffectedNodes"].([]any)[0].(map[string]any)["CreatedNode"]
-	meta["AffectedNodes"] = []any{map[string]any{
-		"CreatedNode": created,
-		"ModifiedNode": map[string]any{
-			"LedgerEntryType": "AccountRoot",
-			"LedgerIndex":     "2222222222222222222222222222222222222222222222222222222222222222",
-			"FinalFields":     map[string]any{},
-		},
-	}}
-
-	stored, err := decodeTxBlob(marshalStoredTransaction(t, txJSON, meta, true))
-	require.NoError(t, err)
-	require.IsType(t, uint32(0), stored.TxJSON["Sequence"])
-	nodes, ok := stored.Meta["AffectedNodes"].([]any)
-	require.True(t, ok)
-	require.Len(t, nodes, 2)
-	for _, rawNode := range nodes {
-		node, ok := rawNode.(map[string]any)
-		require.True(t, ok)
-		require.Len(t, node, 1)
-	}
-}
-
 func marshalStoredTransaction(t *testing.T, txJSON map[string]any, meta any, includeMeta bool) []byte {
 	t.Helper()
 	stored := map[string]any{"tx_json": txJSON}

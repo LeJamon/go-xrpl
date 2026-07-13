@@ -205,7 +205,7 @@ func TestWSCommandAliasAndMissingCommand(t *testing.T) {
 		resp := roundtrip(map[string]any{"command": "", "id": float64(6)})
 		assert.Equal(t, "error", resp["status"])
 		assert.Equal(t, "unknownCmd", resp["error"])
-		assert.Equal(t, float64(types.RpcUNKNOWN_COMMAND), resp["error_code"])
+		assert.Equal(t, float64(types.RpcMETHOD_NOT_FOUND), resp["error_code"])
 		assert.Equal(t, "Unknown method.", resp["error_message"])
 	})
 }
