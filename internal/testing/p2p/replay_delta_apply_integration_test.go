@@ -2,11 +2,13 @@ package p2p
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	consensuscommon "github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
@@ -19,6 +21,7 @@ import (
 	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -123,6 +126,62 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	wantTx, err := successor.TxMapHash()
 	require.NoError(t, err)
 	assert.Equal(t, wantTx, gotTx, "derived TxHash must match successor's")
+}
+
+func TestReplayDelta_Apply_PseudoTransaction(t *testing.T) {
+	env := xrplgoTesting.NewTestEnv(t)
+	env.Close()
+	parent := env.LastClosedLedger()
+	require.NotNil(t, parent)
+
+	ledgerSequence := parent.Sequence() + 1
+	txBlob, err := consensuscommon.BuildPseudoTx(tx.TypeAmendment, func(base tx.BaseTx) tx.Transaction {
+		return &pseudo.EnableAmendment{
+			BaseTx:         base,
+			Amendment:      strings.Repeat("AB", 32),
+			LedgerSequence: &ledgerSequence,
+		}
+	})
+	require.NoError(t, err)
+	txn, err := tx.ParseFromBinary(txBlob)
+	require.NoError(t, err)
+	txn.SetRawBytes(txBlob)
+	txHash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+
+	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
+	successor, txMetaBlob := buildClosedSuccessor(t, parent, txn, txBlob, txHash, closeTime)
+	successorHash := successor.Hash()
+	resp := &message.ReplayDeltaResponse{
+		LedgerHash:   successorHash[:],
+		LedgerHeader: header.AddRaw(successor.Header(), false),
+		Transactions: [][]byte{txMetaBlob},
+	}
+	rd := inbound.NewReplayDelta(successorHash, 7, parent, nil)
+	require.NoError(t, rd.GotResponse(resp))
+
+	derived, err := rd.Apply(tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		SkipSignatureVerification: false,
+		Rules:                     amendment.AllSupportedRules(),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, derived)
+	assert.Equal(t, successorHash, derived.Hash())
+
+	gotState, err := derived.StateMapHash()
+	require.NoError(t, err)
+	wantState, err := successor.StateMapHash()
+	require.NoError(t, err)
+	assert.Equal(t, wantState, gotState)
+
+	gotTx, err := derived.TxMapHash()
+	require.NoError(t, err)
+	wantTx, err := successor.TxMapHash()
+	require.NoError(t, err)
+	assert.Equal(t, wantTx, gotTx)
 }
 
 // TestReplay_TefTxDoesNotInstallPeerLeaf verifies D5 — the apply
@@ -250,9 +309,17 @@ func buildClosedSuccessor(
 		ApplyFlags:                tx.TapNONE,
 		Rules:                     amendment.AllSupportedRules(),
 	})
-	res := engine.Apply(txn)
+	var res tx.ApplyResult
+	if txn.TxType().IsPseudoTransaction() {
+		res = engine.ApplyPseudo(txn)
+	} else {
+		res = engine.Apply(txn)
+	}
 	require.True(t, res.Result.IsApplied(),
 		"setup tx must apply cleanly (got %s: %s)", res.Result.String(), res.Message)
+	require.NotNil(t, res.Metadata)
+	require.Equal(t, uint32(0), res.Metadata.TransactionIndex)
+	require.Equal(t, uint32(1), engine.TxCount())
 
 	// Build the tx-with-meta blob and install it as a leaf — this is
 	// what the peer would have serialized and what Apply expects to

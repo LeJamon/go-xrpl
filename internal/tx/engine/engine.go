@@ -25,7 +25,7 @@ import (
 // for observers — it is not a license to call Apply concurrently.
 type Engine struct {
 	// View provides access to ledger state
-	view txcore.LedgerView
+	view applystate.AtomicLedgerView
 
 	// Config holds engine configuration
 	config txcore.EngineConfig
@@ -59,7 +59,7 @@ type rulesView struct {
 func (v rulesView) Rules() *amendment.Rules { return v.rules }
 
 // NewEngine creates a new transaction engine
-func NewEngine(view txcore.LedgerView, config txcore.EngineConfig) *Engine {
+func NewEngine(view applystate.AtomicLedgerView, config txcore.EngineConfig) *Engine {
 	logger := config.Logger
 	if logger == nil {
 		logger = xrpllog.Discard()

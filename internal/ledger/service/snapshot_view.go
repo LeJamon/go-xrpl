@@ -16,6 +16,8 @@ type snapshotView struct {
 	ledger   *ledger.Ledger // for TxExists
 }
 
+var _ ledger.AtomicWriter = (*snapshotView)(nil)
+
 // newSnapshotView creates a new snapshot-based ledger view.
 func newSnapshotView(snapshot *shamap.SHAMap, l *ledger.Ledger) *snapshotView {
 	return &snapshotView{
@@ -53,6 +55,19 @@ func (v *snapshotView) Erase(k keylet.Keylet) error {
 
 func (v *snapshotView) AdjustDropsDestroyed(d drops.XRPAmount) {
 	// No-op for simulation — drops destroyed are discarded
+}
+
+func (v *snapshotView) ApplyAtomically(apply func(ledger.Writer) error) error {
+	stateMap, err := v.stateMap.MutableFork()
+	if err != nil {
+		return err
+	}
+	staged := newSnapshotView(stateMap, v.ledger)
+	if err := apply(staged); err != nil {
+		return err
+	}
+	v.stateMap = staged.stateMap
+	return nil
 }
 
 func (v *snapshotView) ForEach(fn func(key [32]byte, data []byte) bool) error {

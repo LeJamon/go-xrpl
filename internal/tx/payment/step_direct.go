@@ -822,40 +822,40 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) ter.R
 		}
 	}
 
-	// 2. Read trust line — if it doesn't exist, skip freeze checks.
+	// 2. Read trust line — if it doesn't exist, skip trust-line freeze checks.
 	// During offer crossing, trust lines may not exist yet (created on demand).
 	// Reference: rippled StepChecks.h:51 — `if (auto sle = view.read(...))`
 	trustLineKey := keylet.Line(src, dst, currency)
 	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		// No trust line — nothing to freeze-check
-		return ter.TesSUCCESS
-	}
-
-	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
+	if data != nil {
+		rs, err := state.ParseRippleState(data)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
 
-	// 3. Check individual freeze
-	// Reference: rippled StepChecks.h:53 — (dst > src) ? lsfHighFreeze : lsfLowFreeze
-	// If src is low (dst is high), check lsfHighFreeze (dst's side)
-	// If src is high (dst is low), check lsfLowFreeze (dst's side)
-	srcIsLow := state.CompareAccountIDs(src, dst) < 0
-	if srcIsLow {
-		if (rs.Flags & state.LsfHighFreeze) != 0 {
+		// 3. Check individual freeze
+		// Reference: rippled StepChecks.h:53 — (dst > src) ? lsfHighFreeze : lsfLowFreeze
+		// If src is low (dst is high), check lsfHighFreeze (dst's side)
+		// If src is high (dst is low), check lsfLowFreeze (dst's side)
+		srcIsLow := state.CompareAccountIDs(src, dst) < 0
+		if srcIsLow {
+			if (rs.Flags & state.LsfHighFreeze) != 0 {
+				return ter.TerNO_LINE
+			}
+		} else {
+			if (rs.Flags & state.LsfLowFreeze) != 0 {
+				return ter.TerNO_LINE
+			}
+		}
+
+		// 4. Check deep freeze — either side having deep freeze blocks the line
+		// Reference: rippled StepChecks.h:58-62
+		if (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0 {
 			return ter.TerNO_LINE
 		}
-	} else {
-		if (rs.Flags & state.LsfLowFreeze) != 0 {
-			return ter.TerNO_LINE
-		}
-	}
-
-	// 4. Check deep freeze — either side having deep freeze blocks the line
-	// Reference: rippled StepChecks.h:58-62
-	if (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0 {
-		return ter.TerNO_LINE
 	}
 
 	// 5. LP-token arm: a step toward an AMM pseudo-account (the LP-token issuer,
