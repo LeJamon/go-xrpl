@@ -436,7 +436,6 @@ func (a *Aggregator) OnChange(cb func(validators []consensus.NodeID, masterKeys 
 	a.onChange = cb
 }
 
-// SetStaticValidatorCount updates the non-publisher portion of the trusted UNL.
 func (a *Aggregator) SetStaticValidatorCount(count int) {
 	if count < 0 {
 		count = 0

@@ -26,7 +26,6 @@ func MaxPayloadSizeForType(t MessageType) uint32 {
 	return payloadSizeLimit(t)
 }
 
-// IsKnownMessageType reports whether this implementation can dispatch t.
 func IsKnownMessageType(t MessageType) bool {
 	_, known := codecs[t]
 	return known

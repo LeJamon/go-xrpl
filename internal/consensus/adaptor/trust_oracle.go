@@ -109,7 +109,6 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	return result
 }
 
-// GetTrustedMasterKeys returns the master keys for the current effective UNL.
 func (a *Adaptor) GetTrustedMasterKeys() [][33]byte {
 	a.mu.Lock()
 	defer a.mu.Unlock()
