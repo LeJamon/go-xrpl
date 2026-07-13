@@ -416,6 +416,11 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, amount int64) error {
 
 // Check validates the XRPEndpointStep before use
 func (s *XRPEndpointStep) Check(sb *PaymentSandbox) ter.Result {
+	var xrpAccount [20]byte
+	if s.account == xrpAccount {
+		return ter.TemBAD_PATH
+	}
+
 	// Check account exists
 	accountKey := keylet.Account(s.account)
 	exists, err := sb.Exists(accountKey)
@@ -424,6 +429,14 @@ func (s *XRPEndpointStep) Check(sb *PaymentSandbox) ter.Result {
 	}
 	if !exists {
 		return ter.TerNO_ACCOUNT
+	}
+
+	src, dst := s.account, xrpAccount
+	if s.isLast {
+		src, dst = xrpAccount, s.account
+	}
+	if result := checkFreeze(sb, src, dst, "XRP"); result != ter.TesSUCCESS {
+		return result
 	}
 
 	return ter.TesSUCCESS
