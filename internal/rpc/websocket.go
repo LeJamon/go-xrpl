@@ -901,9 +901,9 @@ func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
 // without waiting out the 90 s read deadline. Used by the slow-consumer
 // Disconnect callback and the send-error path; idempotent — closeConnection
 // closes again and gorilla tolerates the double close.
-func (wsConn *WebSocketConnection) closeSocket() {
-	wsConn.cancel()
-	wsConn.conn.Close()
+func (c *WebSocketConnection) closeSocket() {
+	c.cancel()
+	c.conn.Close()
 }
 
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {

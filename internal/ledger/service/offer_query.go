@@ -681,7 +681,6 @@ func amountAsXRPLNumber(amount tx.Amount) state.XRPLNumber {
 		return newRPCNumber(amount.Drops(), 0)
 	}
 	return newRPCNumber(amount.Mantissa(), amount.Exponent())
-
 }
 
 func newRPCNumber(mantissa int64, exponent int) state.XRPLNumber {
