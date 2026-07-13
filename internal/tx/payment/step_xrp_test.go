@@ -5,9 +5,51 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
+
+func TestXRPEndpointStep_CheckGlobalFreeze(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	acct := [20]byte{1}
+	root := &state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(acct),
+		Balance:  100_000_000,
+		Flags:    state.LsfGlobalFreeze,
+		Sequence: 1,
+	}
+	data, err := state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	view.data[keylet.Account(acct).Key] = data
+
+	sb := NewPaymentSandbox(view)
+	require.Equal(t, ter.TerNO_LINE, NewXRPEndpointStep(acct, true).Check(sb))
+	require.Equal(t, ter.TesSUCCESS, NewXRPEndpointStep(acct, false).Check(sb))
+
+	ctx := NewStrandContext(sb, [20]byte{2}, acct)
+	ctx.Fix1781 = true
+	ctx.SeenDirectIssues[0][Issue{Currency: "XRP"}] = true
+	_, result := ctx.newXRPEndpointStep(acct, true, false)
+	require.Equal(t, ter.TerNO_LINE, result)
+}
+
+func TestXRPEndpointStep_CheckUnresolvableAMM(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	acct := [20]byte{2}
+	root := &state.AccountRoot{
+		Account:  state.EncodeAccountIDSafe(acct),
+		Balance:  100_000_000,
+		Sequence: 1,
+	}
+	root.AMMID[0] = 1
+	data, err := state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	view.data[keylet.Account(acct).Key] = data
+
+	sb := NewPaymentSandbox(view)
+	require.Equal(t, ter.TecINTERNAL, NewXRPEndpointStep(acct, true).Check(sb))
+}
 
 // TestXRPEndpointStep_xrpLiquid_DeferredCredit proves that XRP credited to an
 // account earlier in the same payment is not double-counted as spendable

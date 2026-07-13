@@ -426,5 +426,14 @@ func (s *XRPEndpointStep) Check(sb *PaymentSandbox) ter.Result {
 		return ter.TerNO_ACCOUNT
 	}
 
+	var xrpAccount [20]byte
+	src, dst := s.account, xrpAccount
+	if s.isLast {
+		src, dst = xrpAccount, s.account
+	}
+	if result := checkFreeze(sb, src, dst, "XRP"); result != ter.TesSUCCESS {
+		return result
+	}
+
 	return ter.TesSUCCESS
 }
