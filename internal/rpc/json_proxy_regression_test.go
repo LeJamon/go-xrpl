@@ -47,7 +47,7 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, response.Code)
 	require.Equal(t, 1, targetCalls)
-	assert.Equal(t, int64(types.MaxJobQueueClients-1), services.ClientLoad.InFlight())
+	assert.Equal(t, types.MaxJobQueueClients-1, services.ClientLoad.InFlight())
 	assert.Equal(t,
 		float64(loadtrack.ChargeHeavy/uint32(loadtrack.DecayWindow/time.Second)),
 		server.loadTracker.LocalBalance(transportRegressionClientIP),
