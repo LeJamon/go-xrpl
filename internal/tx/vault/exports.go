@@ -23,51 +23,51 @@ type AssetReadView interface {
 func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (state.XRPLNumber, bool) {
 	vd, err := parseVault(vaultData)
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return newVaultNumber(0, 0), false
 	}
 	if isNativeAsset(vd.Asset) {
 		data, rerr := view.Read(keylet.Account(account))
 		if rerr != nil || data == nil {
-			return state.NewXRPLNumber(0, 0), false
+			return newVaultNumber(0, 0), false
 		}
 		ar, perr := state.ParseAccountRoot(data)
 		if perr != nil {
-			return state.NewXRPLNumber(0, 0), false
+			return newVaultNumber(0, 0), false
 		}
-		return state.NewXRPLNumber(int64(ar.Balance), 0), true
+		return newVaultNumber(int64(ar.Balance), 0), true
 	}
 	if vd.AssetIsMPT {
 		data, rerr := view.Read(keylet.MPTokenByID(vd.AssetMPTID, account))
 		if rerr != nil {
-			return state.NewXRPLNumber(0, 0), false
+			return newVaultNumber(0, 0), false
 		}
 		if data == nil {
-			return state.NewXRPLNumber(0, 0), true
+			return newVaultNumber(0, 0), true
 		}
 		token, perr := state.ParseMPToken(data)
 		if perr != nil {
-			return state.NewXRPLNumber(0, 0), false
+			return newVaultNumber(0, 0), false
 		}
-		return state.NewXRPLNumber(int64(token.MPTAmount), 0), true
+		return newVaultNumber(int64(token.MPTAmount), 0), true
 	}
 	issuerID, derr := state.DecodeAccountID(vd.Asset.Issuer)
 	if derr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return newVaultNumber(0, 0), false
 	}
 	data, rerr := view.Read(keylet.Line(account, issuerID, vd.Asset.Currency))
 	if rerr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return newVaultNumber(0, 0), false
 	}
 	if data == nil {
-		return state.NewXRPLNumber(0, 0), true
+		return newVaultNumber(0, 0), true
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return newVaultNumber(0, 0), false
 	}
 	bal, berr := vaultNumber(rs.Balance.Value())
 	if berr != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return newVaultNumber(0, 0), false
 	}
 	// Balance is stored in the low account's terms; negate for the high account.
 	if bytes.Compare(account[:], issuerID[:]) > 0 {
@@ -81,7 +81,7 @@ func PseudoAssetHolds(view AssetReadView, account [20]byte, vaultData []byte) (s
 func ParseLedgerNumber(s string) (state.XRPLNumber, bool) {
 	n, err := vaultNumber(s)
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), false
+		return newVaultNumber(0, 0), false
 	}
 	return n, true
 }

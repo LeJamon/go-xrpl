@@ -52,37 +52,42 @@ func main() {
 
 // fieldRender carries the resolved per-field data the template needs.
 type fieldRender struct {
-	Name            string // canonical XRPL field name
-	GoField         string // Go struct field name (mirrors XRPL name)
-	BitConst        string // const name of the presence bit
-	GoType          string // Go type of the slot
-	XRPLType        string // XRPL type name (UInt32, Hash256, ...)
-	TypeCode        int    // XRPL type code
-	FieldCode       int    // XRPL field code
-	Meta            spec.Meta
-	Comparer        string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
-	IsAmount        bool
-	IsHash          bool // hex-string default-value check
-	XRPOnly         bool // Balance on AccountRoot uses readAmount (XRP-only)
-	IsBaseTenUInt64 bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
-	ReadCall        string
-	DecodeKind      string
+	Name             string // canonical XRPL field name
+	GoField          string // Go struct field name (mirrors XRPL name)
+	BitConst         string // const name of the presence bit
+	GoType           string // Go type of the slot
+	XRPLType         string // XRPL type name (UInt32, Hash256, ...)
+	TypeCode         int    // XRPL type code
+	FieldCode        int    // XRPL field code
+	Meta             spec.Meta
+	Style            spec.Style
+	DeferredRequired bool
+	Comparer         string // "String" | "Uint32" | "Int" | "Amount" — selects emitIfChanged*
+	IsAmount         bool
+	IsHash           bool // hex-string default-value check
+	XRPOnly          bool // Balance on AccountRoot uses readAmount (XRP-only)
+	IsBaseTenUInt64  bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
+	ReadCall         string
+	DecodeKind       string
 	// DefaultExpr is a Go boolean expression (using the entry's receiver) that
 	// is true when the decoded field holds its rippled type-default. It mirrors
 	// STBase::isDefault() per type and gates CreatedNode.NewFields emission
 	// (rippled ApplyStateTable.cpp: `!obj.isDefault()`). Empty means the type
 	// has no default to filter.
-	DefaultExpr string
+	DefaultExpr       string // default predicate using the entry receiver
+	SetterDefaultExpr string // default predicate using a setter's value argument
 }
 
 type entryRender struct {
-	Name           string              // ledger-entry-type name
-	StructName     string              // Go struct name (= entry name)
-	Receiver       string              // single-letter receiver
-	BitPrefix      string              // prefix for presence-bit constants
-	Fields         []fieldRender       // emit-ordered (creator order)
-	DecodeArms     map[int][]decodeArm // typeCode -> list of dispatch arms
-	HasUnsupported bool                // any Amount field that may be IOU
+	Name                   string              // ledger-entry-type name
+	StructName             string              // Go struct name (= entry name)
+	Receiver               string              // single-letter receiver
+	BitPrefix              string              // prefix for presence-bit constants
+	Fields                 []fieldRender       // emit-ordered (creator order)
+	DecodeArms             map[int][]decodeArm // typeCode -> list of dispatch arms
+	HasUnsupported         bool                // any Amount field that may be IOU
+	AllowBadCurrencyDecode bool
+	EntryTypeCode          int
 }
 
 type decodeArm struct {
@@ -98,12 +103,49 @@ type decodeArm struct {
 }
 
 func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (string, []byte, error) {
+	entryTypeCode, err := defs.LedgerEntryTypeCode(entry.Name)
+	if err != nil {
+		return "", nil, fmt.Errorf("ledger entry type %s: %w", entry.Name, err)
+	}
 	er := entryRender{
-		Name:       entry.Name,
-		StructName: entry.Name,
-		Receiver:   strings.ToLower(entry.Name[:1]),
-		BitPrefix:  bitPrefixFor(entry.Name),
-		DecodeArms: map[int][]decodeArm{},
+		Name:                   entry.Name,
+		StructName:             entry.Name,
+		Receiver:               strings.ToLower(entry.Name[:1]),
+		BitPrefix:              bitPrefixFor(entry.Name),
+		DecodeArms:             map[int][]decodeArm{},
+		AllowBadCurrencyDecode: entry.AllowBadCurrencyDecode,
+		EntryTypeCode:          int(entryTypeCode),
+	}
+	fieldsByName := make(map[string]spec.Field, len(entry.Fields))
+	fieldInstances := make(map[string]*definitions.FieldInstance, len(entry.Fields))
+	for _, f := range entry.Fields {
+		if _, exists := fieldsByName[f.Name]; exists {
+			return "", nil, fmt.Errorf("field %s: duplicate specification", f.Name)
+		}
+		fi, err := defs.FieldInstanceByName(f.Name)
+		if err != nil {
+			return "", nil, fmt.Errorf("field %s: %w", f.Name, err)
+		}
+		fieldsByName[f.Name] = f
+		fieldInstances[f.Name] = fi
+	}
+	for _, f := range entry.Fields {
+		if f.DecodeAlias == "" {
+			continue
+		}
+		if !f.DecodeOnly {
+			return "", nil, fmt.Errorf("field %s: decode alias requires DecodeOnly", f.Name)
+		}
+		target, ok := fieldsByName[f.DecodeAlias]
+		if !ok {
+			return "", nil, fmt.Errorf("field %s: decode alias target %s is not specified", f.Name, f.DecodeAlias)
+		}
+		if target.DecodeOnly {
+			return "", nil, fmt.Errorf("field %s: decode alias target %s is decode-only", f.Name, f.DecodeAlias)
+		}
+		if fieldInstances[f.Name].Type != fieldInstances[f.DecodeAlias].Type {
+			return "", nil, fmt.Errorf("field %s: decode alias target %s has XRPL type %s, want %s", f.Name, f.DecodeAlias, fieldInstances[f.DecodeAlias].Type, fieldInstances[f.Name].Type)
+		}
 	}
 
 	// Every ledger entry carries LedgerEntryType (UInt16 fieldCode 1) as its
@@ -122,27 +164,46 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 	}}
 
 	for _, f := range entry.Fields {
-		fi, err := defs.FieldInstanceByName(f.Name)
-		if err != nil {
-			return "", nil, fmt.Errorf("field %s: %w", f.Name, err)
+		if f.Style < spec.StyleRequired || f.Style > spec.StyleDefault {
+			return "", nil, fmt.Errorf("field %s: serialization style is not set", f.Name)
 		}
+		if f.DeferredRequired && f.Style != spec.StyleRequired {
+			return "", nil, fmt.Errorf("field %s: only required fields may be deferred", f.Name)
+		}
+		fi := fieldInstances[f.Name]
 
-		// DecodeOnly fields are tolerated on the wire but never stored, emitted,
-		// or re-encoded. Add only a consume-and-discard decode arm (mirroring the
-		// synthetic LedgerEntryType arm: MetaNever + empty BitConst) so legacy
-		// blobs decode while Encode produces the canonical field set.
+		// DecodeOnly fields are tolerated on the wire but never emitted under
+		// their legacy name. By default their values are discarded; an explicit
+		// alias stores the value in the canonical target field.
 		if f.DecodeOnly {
+			arm := decodeArm{
+				TypeCode:  int(fi.FieldHeader.TypeCode),
+				FieldCode: int(fi.Nth),
+				XRPLType:  fi.Type,
+				GoField:   f.Name,
+				BitConst:  "",
+				GoType:    "",
+				Meta:      spec.MetaNever,
+			}
+			if f.DecodeAlias != "" {
+				target := fieldsByName[f.DecodeAlias]
+				targetRender, err := makeFieldRender(target, fieldInstances[f.DecodeAlias], entry.Name, er.BitPrefix, er.Receiver)
+				if err != nil {
+					return "", nil, fmt.Errorf("render decode alias target %s: %w", f.DecodeAlias, err)
+				}
+				arm.GoField = targetRender.GoField
+				arm.BitConst = targetRender.BitConst
+				arm.GoType = targetRender.GoType
+				arm.XRPOnly = targetRender.XRPOnly
+				arm.IsBaseTenUInt64 = targetRender.IsBaseTenUInt64
+				arm.Meta = target.Meta
+				if arm.XRPLType == "Amount" && !arm.XRPOnly {
+					er.HasUnsupported = true
+				}
+			}
 			er.DecodeArms[int(fi.FieldHeader.TypeCode)] = append(
 				er.DecodeArms[int(fi.FieldHeader.TypeCode)],
-				decodeArm{
-					TypeCode:  int(fi.FieldHeader.TypeCode),
-					FieldCode: int(fi.Nth),
-					XRPLType:  fi.Type,
-					GoField:   f.Name,
-					BitConst:  "",
-					GoType:    "",
-					Meta:      spec.MetaNever,
-				})
+				arm)
 			continue
 		}
 
@@ -189,13 +250,15 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 
 func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bitPrefix, receiver string) (fieldRender, error) {
 	fr := fieldRender{
-		Name:      f.Name,
-		GoField:   f.Name,
-		BitConst:  bitPrefix + "Bit" + f.Name,
-		XRPLType:  fi.Type,
-		TypeCode:  int(fi.FieldHeader.TypeCode),
-		FieldCode: int(fi.Nth),
-		Meta:      f.Meta,
+		Name:             f.Name,
+		GoField:          f.Name,
+		BitConst:         bitPrefix + "Bit" + f.Name,
+		XRPLType:         fi.Type,
+		TypeCode:         int(fi.FieldHeader.TypeCode),
+		FieldCode:        int(fi.Nth),
+		Meta:             f.Meta,
+		Style:            f.Style,
+		DeferredRequired: f.DeferredRequired,
 	}
 	// Balance on AccountRoot is always XRP. Other Amount fields may be IOU.
 	if entryName == "AccountRoot" && f.Name == "Balance" {
@@ -296,7 +359,8 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 		return fr, fmt.Errorf("unsupported XRPL type %q for field %s", fi.Type, f.Name)
 	}
 
-	fr.DefaultExpr = defaultExprFor(fr, receiver)
+	fr.DefaultExpr = defaultExprFor(fr, receiver+"."+fr.GoField)
+	fr.SetterDefaultExpr = setterDefaultExprFor(fr)
 	return fr, nil
 }
 
@@ -306,8 +370,8 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 // zero; STBlob/STAccount: empty; STVector256/STArray/STObject/STXChainBridge:
 // empty/default) so a field present in the canonical SLE blob but equal to its
 // type default is dropped from NewFields, exactly as rippled does.
-func defaultExprFor(fr fieldRender, receiver string) string {
-	g := receiver + "." + fr.GoField
+func defaultExprFor(fr fieldRender, value string) string {
+	g := value
 	switch {
 	case fr.IsAmount:
 		// STAmount::isDefault(): zero XRP only (IOU/MPT decode to a map and are
@@ -336,6 +400,18 @@ func defaultExprFor(fr fieldRender, receiver string) string {
 		return g + ` == ""`
 	}
 	return ""
+}
+
+func setterDefaultExprFor(fr fieldRender) string {
+	expr := defaultExprFor(fr, "value")
+	switch {
+	case fr.GoType == "any":
+		return "value == nil || (" + expr + ")"
+	case fr.IsHash && fr.XRPLType != "Blob":
+		return `value == "" || (` + expr + ")"
+	default:
+		return expr
+	}
 }
 
 func bitPrefixFor(entryName string) string {
@@ -390,6 +466,9 @@ var tmpl = template.Must(template.New("entry").Funcs(template.FuncMap{
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -402,10 +481,15 @@ func init() {
 // {{ .StructName }} is the typed representation of a {{ .Name }} ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type {{ .StructName }} struct {
 	present uint64
+	decoded bool
+	dirty   bool
+{{- if .AllowBadCurrencyDecode }}
+	decodedBinary []byte
+{{- end }}
 {{ range .Fields }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }}{{ if .IsBaseTenUInt64 }} // UInt64 (decimal string, sMD_BaseTen){{ else }} // UInt64 (lowercase hex, no leading zeros){{ end }}{{ end }}
 {{ end }}}
 
@@ -414,11 +498,41 @@ const (
 {{ else }}	{{ $f.BitConst }}
 {{ end }}{{ end }})
 
+{{ range .Fields }}// Set{{ .GoField }} assigns {{ .Name }} and updates its serialized presence.
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .GoType }}) {
+	{{ $.Receiver }}.{{ .GoField }} = value
+	{{ $.Receiver }}.dirty = true
+{{- if eq .Style 3 }}
+	if {{ .SetterDefaultExpr }} {
+		{{ $.Receiver }}.present &^= {{ .BitConst }}
+		return
+	}
+{{- end }}
+	{{ $.Receiver }}.present |= {{ .BitConst }}
+}
+
+{{ end }}func ({{ .Receiver }} *{{ .StructName }}) validateRequired() error {
+	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty {
+		return nil
+	}
+{{- range .Fields }}{{ if and (eq .Style 1) (not .DeferredRequired) }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} == 0 {
+		return errors.New({{ printf "%q" (printf "ledgerfields: %s: required field %s is not set" $.Name .Name) }})
+	}
+{{- end }}{{ end }}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 	*{{ .Receiver }} = {{ .StructName }}{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
+{{- if .AllowBadCurrencyDecode }}
+	preserveDecodedBinary := false
+{{- end }}
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -464,6 +578,9 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 {{- if eq $first.XRPLType "Amount" }}
 {{- if $first.XRPOnly }}
 			val, err := sr.readAmount()
+{{- else if $.AllowBadCurrencyDecode }}
+			val, badCurrency, err := sr.readAmountAnyAllowBadCurrency()
+			preserveDecodedBinary = preserveDecodedBinary || badCurrency
 {{- else }}
 			val, err := sr.readAmountAny()
 {{- end }}
@@ -564,7 +681,10 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			case {{ $arm.FieldCode }}:
 {{- if and (eq $arm.Meta 3) (isZero $arm.BitConst) }}
 {{- if eq $arm.GoField "LedgerEntryType" }}
-				_ = val // synthetic LedgerEntryType; discard
+				if val != {{ $.EntryTypeCode }} {
+					return fmt.Errorf("ledgerfields: {{ $.Name }}: LedgerEntryType is %d, want {{ $.EntryTypeCode }}", val)
+				}
+				sawLedgerEntryType = true
 {{- else }}
 				_ = val // {{ $arm.GoField }} decoded for tolerance only; discard
 {{- end }}
@@ -587,6 +707,15 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			return newErrUnknownField({{ printf "%q" $.Name }}, typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New({{ printf "%q" (printf "ledgerfields: %s: missing LedgerEntryType" .Name) }})
+	}
+{{- if .AllowBadCurrencyDecode }}
+	if preserveDecodedBinary {
+		{{ .Receiver }}.decodedBinary = append([]byte(nil), data...)
+	}
+{{- end }}
+	{{ .Receiver }}.decoded = true
 	return nil
 }
 
@@ -692,10 +821,17 @@ func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
+	if err := {{ .Receiver }}.validateRequired(); err != nil {
+		return nil, err
+	}
+{{- if .AllowBadCurrencyDecode }}
+	if {{ .Receiver }}.decoded && !{{ .Receiver }}.dirty && len({{ .Receiver }}.decodedBinary) != 0 {
+		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
+	}
+{{- end }}
 	return binarycodec.EncodeBytes({{ .Receiver }}.ToMap())
 }
 

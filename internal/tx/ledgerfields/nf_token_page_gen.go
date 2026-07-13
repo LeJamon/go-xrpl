@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // NFTokenPage is the typed representation of a NFTokenPage ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type NFTokenPage struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	PreviousPageMin   string // Hash256 (uppercase hex)
 	NextPageMin       string // Hash256 (uppercase hex)
 	NFTokens          []any
@@ -39,11 +44,68 @@ const (
 	nftokenpageBitPreviousTxnLgrSeq
 )
 
+// SetPreviousPageMin assigns PreviousPageMin and updates its serialized presence.
+func (n *NFTokenPage) SetPreviousPageMin(value string) {
+	n.PreviousPageMin = value
+	n.dirty = true
+	n.present |= nftokenpageBitPreviousPageMin
+}
+
+// SetNextPageMin assigns NextPageMin and updates its serialized presence.
+func (n *NFTokenPage) SetNextPageMin(value string) {
+	n.NextPageMin = value
+	n.dirty = true
+	n.present |= nftokenpageBitNextPageMin
+}
+
+// SetNFTokens assigns NFTokens and updates its serialized presence.
+func (n *NFTokenPage) SetNFTokens(value []any) {
+	n.NFTokens = value
+	n.dirty = true
+	n.present |= nftokenpageBitNFTokens
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (n *NFTokenPage) SetFlags(value uint32) {
+	n.Flags = value
+	n.dirty = true
+	n.present |= nftokenpageBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (n *NFTokenPage) SetPreviousTxnID(value string) {
+	n.PreviousTxnID = value
+	n.dirty = true
+	n.present |= nftokenpageBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (n *NFTokenPage) SetPreviousTxnLgrSeq(value uint32) {
+	n.PreviousTxnLgrSeq = value
+	n.dirty = true
+	n.present |= nftokenpageBitPreviousTxnLgrSeq
+}
+
+func (n *NFTokenPage) validateRequired() error {
+	if n.decoded && !n.dirty {
+		return nil
+	}
+	if n.present&nftokenpageBitNFTokens == 0 {
+		return errors.New("ledgerfields: NFTokenPage: required field NFTokens is not set")
+	}
+	if n.present&nftokenpageBitFlags == 0 {
+		return errors.New("ledgerfields: NFTokenPage: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (n *NFTokenPage) Decode(data []byte) error {
 	*n = NFTokenPage{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -58,7 +120,10 @@ func (n *NFTokenPage) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 80 {
+					return fmt.Errorf("ledgerfields: NFTokenPage: LedgerEntryType is %d, want 80", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
@@ -111,6 +176,10 @@ func (n *NFTokenPage) Decode(data []byte) error {
 			return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: NFTokenPage: missing LedgerEntryType")
+	}
+	n.decoded = true
 	return nil
 }
 
@@ -237,10 +306,12 @@ func (n *NFTokenPage) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (n *NFTokenPage) Encode() ([]byte, error) {
+	if err := n.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(n.ToMap())
 }
 

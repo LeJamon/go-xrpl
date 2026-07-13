@@ -2,10 +2,11 @@ package state
 
 import (
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // DIDData represents a DID ledger entry.
@@ -24,78 +25,62 @@ type DIDData struct {
 
 // SerializeDID serializes a DID ledger entry using the binary codec.
 func SerializeDID(did *DIDData, accountAddress string) ([]byte, error) {
-	jsonObj := map[string]any{
-		"LedgerEntryType": "DID",
-		"Account":         accountAddress,
-		"OwnerNode":       strconv.FormatUint(did.OwnerNode, 16),
-		"Flags":           uint32(0),
-	}
+	entry := &ledgerfields.DID{}
+	entry.SetAccount(accountAddress)
+	entry.SetOwnerNode(strconv.FormatUint(did.OwnerNode, 16))
+	entry.SetFlags(0)
 
 	if did.URI != "" {
-		jsonObj["URI"] = did.URI
+		entry.SetURI(did.URI)
 	}
 	if did.DIDDocument != "" {
-		jsonObj["DIDDocument"] = did.DIDDocument
+		entry.SetDIDDocument(did.DIDDocument)
 	}
 	if did.Data != "" {
-		jsonObj["Data"] = did.Data
+		entry.SetData(did.Data)
 	}
 
 	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if did.PreviousTxnID != emptyHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(did.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = did.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(did.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(did.PreviousTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, err
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // ParseDID parses a DID ledger entry from binary data.
 func ParseDID(data []byte) (*DIDData, error) {
-	did := &DIDData{}
+	var decoded ledgerfields.DID
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode DID: %w", err)
+	}
+	fields := decoded.ToMap()
+	did := &DIDData{
+		URI:               strings.ToLower(decoded.URI),
+		DIDDocument:       strings.ToLower(decoded.DIDDocument),
+		Data:              strings.ToLower(decoded.Data),
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+	}
 
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			if f.FieldCode == 5 { // PreviousTxnLgrSeq
-				did.PreviousTxnLgrSeq = f.UInt32()
-			}
-
-		case stUInt64:
-			if f.FieldCode == 4 { // OwnerNode
-				did.OwnerNode = f.UInt64()
-			}
-
-		case stHash256:
-			if f.FieldCode == 5 { // PreviousTxnID
-				did.PreviousTxnID = f.Hash256()
-			}
-
-		case stAccountID:
-			if id, ok := f.AccountID(); ok && f.FieldCode == 1 { // Account
-				did.Account = id
-			}
-
-		case stBlob:
-			switch f.FieldCode {
-			case 5: // URI
-				did.URI = hex.EncodeToString(f.VLBytes())
-			case 26: // DIDDocument
-				did.DIDDocument = hex.EncodeToString(f.VLBytes())
-			case 27: // Data
-				did.Data = hex.EncodeToString(f.VLBytes())
-			}
+	var err error
+	if _, ok := fields["Account"]; ok {
+		did.Account, err = decodeLedgerAccount("DID.Account", decoded.Account)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+	}
+	if _, ok := fields["OwnerNode"]; ok {
+		did.OwnerNode, err = parseLedgerUint64("DID.OwnerNode", decoded.OwnerNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["PreviousTxnID"]; ok {
+		if err := decodeLedgerHex("DID.PreviousTxnID", decoded.PreviousTxnID, did.PreviousTxnID[:]); err != nil {
+			return nil, err
+		}
 	}
 
 	return did, nil

@@ -4,6 +4,7 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -16,10 +17,11 @@ import (
 // It is encoded as 12 bytes: 8-byte signed mantissa + 4-byte signed exponent, both big-endian.
 type Number struct{}
 
-// Constants for mantissa and exponent normalization per XRPL Number spec.
+// Constants for the large mantissa range used by every serialized STNumber.
 var (
-	minMantissa       = big.NewInt(1000000000000000) // 10^15
-	maxMantissa       = big.NewInt(9999999999999999) // 10^16 - 1
+	minMantissa, _    = new(big.Int).SetString("1000000000000000000", 10) // 10^18
+	maxMantissa, _    = new(big.Int).SetString("9999999999999999999", 10) // 10^19 - 1
+	maxWireMantissa   = big.NewInt(math.MaxInt64)
 	minExponent       = int32(-32768)
 	maxExponent       = int32(32768)
 	defaultZeroExp    = int32(-2147483648) // 0x80000000
@@ -27,13 +29,9 @@ var (
 	ErrNumberOverflow = errors.New("mantissa and exponent are too large")
 )
 
-// numberRangeLog is log10 of the normalized mantissa minimum. It drives
-// to_string's scientific-vs-decimal threshold and padding. STNumber serializes
-// and normalizes at the small scale (rangeLog 15) on the current chain; the
-// large scale (rangeLog 18) is threaded in when SingleAssetVault /
-// LendingProtocol activate (Number/codec Phase B). formatNumberText is faithful
-// for either value.
-const numberRangeLog = 15
+// numberRangeLog is log10 of the normalized mantissa minimum. STNumber is only
+// used by Vault, LoanBroker, and Loan, whose amendments install the large range.
+const numberRangeLog = 18
 
 // numberRegex matches decimal/float/scientific number strings.
 // Pattern: optional sign, integer part, optional decimal, optional exponent
@@ -50,10 +48,14 @@ func (n *Number) FromJSON(value any) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	wireMantissa, wireExponent, err := numberExternal(mantissa, exponent)
+	if err != nil {
+		return nil, err
+	}
 
 	buf := make([]byte, 12)
-	writeInt64BE(buf, mantissa.Int64(), 0)
-	writeInt32BE(buf, exponent, 8)
+	writeInt64BE(buf, wireMantissa, 0)
+	writeInt32BE(buf, wireExponent, 8)
 
 	return buf, nil
 }
@@ -134,9 +136,9 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	return mantissa, exponent, nil
 }
 
-// normalize adjusts mantissa and exponent to XRPL constraints, mirroring
-// rippled's Number::normalize (Number.cpp): it rounds the discarded low-order
-// digits half-to-even and clamps to canonical zero on underflow.
+// normalize adjusts mantissa and exponent to the large XRPL Number range. The
+// extra maxWireMantissa step mirrors Number's signed external representation:
+// values above int64 are rounded one decimal place before serialization.
 func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	if mantissa.Sign() == 0 {
 		return big.NewInt(0), defaultZeroExp, nil
@@ -158,14 +160,17 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	dropped := new(big.Int)
 	scale := big.NewInt(1)
 	rem := new(big.Int)
-	for m.Cmp(maxMantissa) > 0 {
-		if exponent >= maxExponent {
-			return nil, 0, ErrNumberOverflow
-		}
+	dropDigit := func() {
 		exponent++
 		m.DivMod(m, ten, rem)
 		dropped.Add(dropped, new(big.Int).Mul(rem, scale))
 		scale.Mul(scale, ten)
+	}
+	for m.Cmp(maxMantissa) > 0 {
+		if exponent >= maxExponent {
+			return nil, 0, ErrNumberOverflow
+		}
+		dropDigit()
 	}
 
 	// Underflow clamps to canonical zero.
@@ -173,17 +178,45 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 		return big.NewInt(0), defaultZeroExp, nil
 	}
 
-	// Round half-to-even on the discarded digits. When any digit was dropped
-	// scale is 10^k with k>=1, so half (scale/2) is exact.
-	if scale.Cmp(big.NewInt(1)) > 0 {
-		half := new(big.Int).Div(scale, big.NewInt(2))
-		if cmp := dropped.Cmp(half); cmp > 0 || (cmp == 0 && m.Bit(0) == 1) {
+	// Large normalized values may exceed int64 internally, but the serialized
+	// mantissa may not. Drop once more so rounding occurs in the wire range.
+	if m.Cmp(maxWireMantissa) > 0 {
+		if exponent >= maxExponent {
+			return nil, 0, ErrNumberOverflow
+		}
+		dropDigit()
+	}
+
+	shouldRoundUp := func() bool {
+		if scale.Cmp(big.NewInt(1)) == 0 {
+			return false
+		}
+		half := new(big.Int).Div(new(big.Int).Set(scale), big.NewInt(2))
+		cmp := dropped.Cmp(half)
+		return cmp > 0 || (cmp == 0 && m.Bit(0) == 1)
+	}
+	if shouldRoundUp() {
+		if m.Cmp(maxMantissa) < 0 && m.Cmp(maxWireMantissa) < 0 {
 			m.Add(m, big.NewInt(1))
-			if m.Cmp(maxMantissa) > 0 {
-				m.Div(m, ten)
-				exponent++
+		} else {
+			// fixCleanup3_2_0 cusp behavior: dividing first preserves the digit
+			// that made an increment unsafe, then rounds the shorter mantissa.
+			if exponent >= maxExponent {
+				return nil, 0, ErrNumberOverflow
+			}
+			dropDigit()
+			if shouldRoundUp() {
+				m.Add(m, big.NewInt(1))
 			}
 		}
+	}
+
+	if m.Cmp(minMantissa) < 0 {
+		m.Mul(m, ten)
+		exponent--
+	}
+	if exponent < minExponent {
+		return big.NewInt(0), defaultZeroExp, nil
 	}
 
 	if exponent > maxExponent {
@@ -195,6 +228,30 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	}
 
 	return m, exponent, nil
+}
+
+// numberExternal returns Number's signed, on-wire mantissa and exponent. A
+// large internal mantissa above int64 is guaranteed to end in zero and is
+// exposed by rippled as mantissa/10 with exponent+1.
+func numberExternal(mantissa *big.Int, exponent int32) (int64, int32, error) {
+	if mantissa.Sign() == 0 {
+		return 0, defaultZeroExp, nil
+	}
+	negative := mantissa.Sign() < 0
+	m := new(big.Int).Abs(mantissa)
+	if m.Cmp(maxWireMantissa) > 0 {
+		q, r := new(big.Int), new(big.Int)
+		q.QuoRem(m, big.NewInt(10), r)
+		if r.Sign() != 0 || q.Cmp(maxWireMantissa) > 0 || exponent >= maxExponent {
+			return 0, 0, ErrNumberOverflow
+		}
+		m = q
+		exponent++
+	}
+	if negative {
+		m.Neg(m)
+	}
+	return m.Int64(), exponent, nil
 }
 
 // formatNumberText renders a normalized (mantissa, exponent) as rippled's

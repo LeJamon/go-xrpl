@@ -73,6 +73,7 @@ func TestRemoveExpiredCredentials_DeletionFailure(t *testing.T) {
 			CredentialType: credType,
 			Expiration:     &exp,
 			Flags:          LsfCredentialAccepted,
+			HasSubjectNode: true,
 		})
 		require.NoError(t, serr)
 		require.NoError(t, view.Insert(credKey, credBlob))

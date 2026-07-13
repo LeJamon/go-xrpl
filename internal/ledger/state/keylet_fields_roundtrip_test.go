@@ -93,3 +93,33 @@ func TestOracle_OmitsDocumentIDWhenAbsent(t *testing.T) {
 		t.Fatalf("OracleDocumentID must be absent when HasOracleDocumentID is false")
 	}
 }
+
+func TestOracle_RoundTripsPresentZeroScale(t *testing.T) {
+	in := &OracleData{
+		Owner:          [20]byte{1},
+		Provider:       "AB",
+		AssetClass:     "CD",
+		LastUpdateTime: 100,
+		PriceDataSeries: []OraclePriceData{
+			{BaseAsset: "XRP", QuoteAsset: "USD", Scale: 0, HasScale: true},
+		},
+	}
+	want, err := SerializeOracle(in)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	out, err := ParseOracle(want)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(out.PriceDataSeries) != 1 || !out.PriceDataSeries[0].HasScale || out.PriceDataSeries[0].Scale != 0 {
+		t.Fatalf("present zero Scale not preserved: %+v", out.PriceDataSeries)
+	}
+	got, err := SerializeOracle(out)
+	if err != nil {
+		t.Fatalf("reserialize: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("round-trip bytes differ:\nwant %X\n got %X", want, got)
+	}
+}

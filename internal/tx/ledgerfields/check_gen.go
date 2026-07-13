@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Check is the typed representation of a Check ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Check struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	Destination       string // AccountID (base58)
 	SendMax           any    // Amount (XRP string | IOU map)
@@ -53,11 +58,132 @@ const (
 	checkBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (c *Check) SetAccount(value string) {
+	c.Account = value
+	c.dirty = true
+	c.present |= checkBitAccount
+}
+
+// SetDestination assigns Destination and updates its serialized presence.
+func (c *Check) SetDestination(value string) {
+	c.Destination = value
+	c.dirty = true
+	c.present |= checkBitDestination
+}
+
+// SetSendMax assigns SendMax and updates its serialized presence.
+func (c *Check) SetSendMax(value any) {
+	c.SendMax = value
+	c.dirty = true
+	c.present |= checkBitSendMax
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (c *Check) SetSequence(value uint32) {
+	c.Sequence = value
+	c.dirty = true
+	c.present |= checkBitSequence
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (c *Check) SetOwnerNode(value string) {
+	c.OwnerNode = value
+	c.dirty = true
+	c.present |= checkBitOwnerNode
+}
+
+// SetDestinationNode assigns DestinationNode and updates its serialized presence.
+func (c *Check) SetDestinationNode(value string) {
+	c.DestinationNode = value
+	c.dirty = true
+	c.present |= checkBitDestinationNode
+}
+
+// SetExpiration assigns Expiration and updates its serialized presence.
+func (c *Check) SetExpiration(value uint32) {
+	c.Expiration = value
+	c.dirty = true
+	c.present |= checkBitExpiration
+}
+
+// SetInvoiceID assigns InvoiceID and updates its serialized presence.
+func (c *Check) SetInvoiceID(value string) {
+	c.InvoiceID = value
+	c.dirty = true
+	c.present |= checkBitInvoiceID
+}
+
+// SetSourceTag assigns SourceTag and updates its serialized presence.
+func (c *Check) SetSourceTag(value uint32) {
+	c.SourceTag = value
+	c.dirty = true
+	c.present |= checkBitSourceTag
+}
+
+// SetDestinationTag assigns DestinationTag and updates its serialized presence.
+func (c *Check) SetDestinationTag(value uint32) {
+	c.DestinationTag = value
+	c.dirty = true
+	c.present |= checkBitDestinationTag
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (c *Check) SetFlags(value uint32) {
+	c.Flags = value
+	c.dirty = true
+	c.present |= checkBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (c *Check) SetPreviousTxnID(value string) {
+	c.PreviousTxnID = value
+	c.dirty = true
+	c.present |= checkBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (c *Check) SetPreviousTxnLgrSeq(value uint32) {
+	c.PreviousTxnLgrSeq = value
+	c.dirty = true
+	c.present |= checkBitPreviousTxnLgrSeq
+}
+
+func (c *Check) validateRequired() error {
+	if c.decoded && !c.dirty {
+		return nil
+	}
+	if c.present&checkBitAccount == 0 {
+		return errors.New("ledgerfields: Check: required field Account is not set")
+	}
+	if c.present&checkBitDestination == 0 {
+		return errors.New("ledgerfields: Check: required field Destination is not set")
+	}
+	if c.present&checkBitSendMax == 0 {
+		return errors.New("ledgerfields: Check: required field SendMax is not set")
+	}
+	if c.present&checkBitSequence == 0 {
+		return errors.New("ledgerfields: Check: required field Sequence is not set")
+	}
+	if c.present&checkBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Check: required field OwnerNode is not set")
+	}
+	if c.present&checkBitDestinationNode == 0 {
+		return errors.New("ledgerfields: Check: required field DestinationNode is not set")
+	}
+	if c.present&checkBitFlags == 0 {
+		return errors.New("ledgerfields: Check: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (c *Check) Decode(data []byte) error {
 	*c = Check{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -72,7 +198,10 @@ func (c *Check) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 67 {
+					return fmt.Errorf("ledgerfields: Check: LedgerEntryType is %d, want 67", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Check", typeCode, fieldCode)
 			}
@@ -168,6 +297,10 @@ func (c *Check) Decode(data []byte) error {
 			return newErrUnknownField("Check", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Check: missing LedgerEntryType")
+	}
+	c.decoded = true
 	return nil
 }
 
@@ -364,10 +497,12 @@ func (c *Check) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (c *Check) Encode() ([]byte, error) {
+	if err := c.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(c.ToMap())
 }
 

@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Amendments is the typed representation of a Amendments ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Amendments struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Flags             uint32
 	Amendments        []string
 	Majorities        []any
@@ -37,11 +42,58 @@ const (
 	amendmentsBitPreviousTxnLgrSeq
 )
 
+// SetFlags assigns Flags and updates its serialized presence.
+func (a *Amendments) SetFlags(value uint32) {
+	a.Flags = value
+	a.dirty = true
+	a.present |= amendmentsBitFlags
+}
+
+// SetAmendments assigns Amendments and updates its serialized presence.
+func (a *Amendments) SetAmendments(value []string) {
+	a.Amendments = value
+	a.dirty = true
+	a.present |= amendmentsBitAmendments
+}
+
+// SetMajorities assigns Majorities and updates its serialized presence.
+func (a *Amendments) SetMajorities(value []any) {
+	a.Majorities = value
+	a.dirty = true
+	a.present |= amendmentsBitMajorities
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (a *Amendments) SetPreviousTxnID(value string) {
+	a.PreviousTxnID = value
+	a.dirty = true
+	a.present |= amendmentsBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (a *Amendments) SetPreviousTxnLgrSeq(value uint32) {
+	a.PreviousTxnLgrSeq = value
+	a.dirty = true
+	a.present |= amendmentsBitPreviousTxnLgrSeq
+}
+
+func (a *Amendments) validateRequired() error {
+	if a.decoded && !a.dirty {
+		return nil
+	}
+	if a.present&amendmentsBitFlags == 0 {
+		return errors.New("ledgerfields: Amendments: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (a *Amendments) Decode(data []byte) error {
 	*a = Amendments{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -56,7 +108,10 @@ func (a *Amendments) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 102 {
+					return fmt.Errorf("ledgerfields: Amendments: LedgerEntryType is %d, want 102", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
@@ -115,6 +170,10 @@ func (a *Amendments) Decode(data []byte) error {
 			return newErrUnknownField("Amendments", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Amendments: missing LedgerEntryType")
+	}
+	a.decoded = true
 	return nil
 }
 
@@ -231,10 +290,12 @@ func (a *Amendments) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (a *Amendments) Encode() ([]byte, error) {
+	if err := a.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(a.ToMap())
 }
 

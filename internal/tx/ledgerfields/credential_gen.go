@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Credential is the typed representation of a Credential ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Credential struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Subject           string // AccountID (base58)
 	Issuer            string // AccountID (base58)
 	CredentialType    string // Blob (uppercase hex)
@@ -47,11 +52,105 @@ const (
 	credentialBitPreviousTxnLgrSeq
 )
 
+// SetSubject assigns Subject and updates its serialized presence.
+func (c *Credential) SetSubject(value string) {
+	c.Subject = value
+	c.dirty = true
+	c.present |= credentialBitSubject
+}
+
+// SetIssuer assigns Issuer and updates its serialized presence.
+func (c *Credential) SetIssuer(value string) {
+	c.Issuer = value
+	c.dirty = true
+	c.present |= credentialBitIssuer
+}
+
+// SetCredentialType assigns CredentialType and updates its serialized presence.
+func (c *Credential) SetCredentialType(value string) {
+	c.CredentialType = value
+	c.dirty = true
+	c.present |= credentialBitCredentialType
+}
+
+// SetExpiration assigns Expiration and updates its serialized presence.
+func (c *Credential) SetExpiration(value uint32) {
+	c.Expiration = value
+	c.dirty = true
+	c.present |= credentialBitExpiration
+}
+
+// SetURI assigns URI and updates its serialized presence.
+func (c *Credential) SetURI(value string) {
+	c.URI = value
+	c.dirty = true
+	c.present |= credentialBitURI
+}
+
+// SetIssuerNode assigns IssuerNode and updates its serialized presence.
+func (c *Credential) SetIssuerNode(value string) {
+	c.IssuerNode = value
+	c.dirty = true
+	c.present |= credentialBitIssuerNode
+}
+
+// SetSubjectNode assigns SubjectNode and updates its serialized presence.
+func (c *Credential) SetSubjectNode(value string) {
+	c.SubjectNode = value
+	c.dirty = true
+	c.present |= credentialBitSubjectNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (c *Credential) SetFlags(value uint32) {
+	c.Flags = value
+	c.dirty = true
+	c.present |= credentialBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (c *Credential) SetPreviousTxnID(value string) {
+	c.PreviousTxnID = value
+	c.dirty = true
+	c.present |= credentialBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (c *Credential) SetPreviousTxnLgrSeq(value uint32) {
+	c.PreviousTxnLgrSeq = value
+	c.dirty = true
+	c.present |= credentialBitPreviousTxnLgrSeq
+}
+
+func (c *Credential) validateRequired() error {
+	if c.decoded && !c.dirty {
+		return nil
+	}
+	if c.present&credentialBitSubject == 0 {
+		return errors.New("ledgerfields: Credential: required field Subject is not set")
+	}
+	if c.present&credentialBitIssuer == 0 {
+		return errors.New("ledgerfields: Credential: required field Issuer is not set")
+	}
+	if c.present&credentialBitCredentialType == 0 {
+		return errors.New("ledgerfields: Credential: required field CredentialType is not set")
+	}
+	if c.present&credentialBitIssuerNode == 0 {
+		return errors.New("ledgerfields: Credential: required field IssuerNode is not set")
+	}
+	if c.present&credentialBitFlags == 0 {
+		return errors.New("ledgerfields: Credential: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (c *Credential) Decode(data []byte) error {
 	*c = Credential{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -66,7 +165,10 @@ func (c *Credential) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 129 {
+					return fmt.Errorf("ledgerfields: Credential: LedgerEntryType is %d, want 129", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
@@ -153,6 +255,10 @@ func (c *Credential) Decode(data []byte) error {
 			return newErrUnknownField("Credential", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Credential: missing LedgerEntryType")
+	}
+	c.decoded = true
 	return nil
 }
 
@@ -319,10 +425,12 @@ func (c *Credential) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (c *Credential) Encode() ([]byte, error) {
+	if err := c.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(c.ToMap())
 }
 

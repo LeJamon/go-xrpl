@@ -6,7 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
@@ -53,8 +52,6 @@ func (v *vaultData) assetToIssueMap() map[string]any {
 }
 
 // serializeVault encodes a vault ledger entry to its canonical binary form.
-// soeDEFAULT fields (the NUMBER totals, Scale, Data) are omitted when zero to
-// match rippled's STObject serialization.
 func serializeVault(v *vaultData) ([]byte, error) {
 	ownerAddr, err := state.EncodeAccountID(v.Owner)
 	if err != nil {
@@ -65,48 +62,42 @@ func serializeVault(v *vaultData) ([]byte, error) {
 		return nil, fmt.Errorf("encode pseudo account: %w", err)
 	}
 
-	obj := map[string]any{
-		"LedgerEntryType":  "Vault",
-		"Flags":            v.Flags,
-		"Sequence":         v.Sequence,
-		"OwnerNode":        fmt.Sprintf("%X", v.OwnerNode),
-		"Owner":            ownerAddr,
-		"Account":          pseudoAddr,
-		"Asset":            v.assetToIssueMap(),
-		"ShareMPTID":       strings.ToUpper(hex.EncodeToString(v.ShareMPTID[:])),
-		"WithdrawalPolicy": v.WithdrawalPolicy,
-	}
-
-	if v.AssetsTotal != "" {
-		obj["AssetsTotal"] = v.AssetsTotal
-	}
-	if v.AssetsAvailable != "" {
-		obj["AssetsAvailable"] = v.AssetsAvailable
-	}
-	if v.AssetsMaximum != "" {
-		obj["AssetsMaximum"] = v.AssetsMaximum
-	}
-	if v.LossUnrealized != "" {
-		obj["LossUnrealized"] = v.LossUnrealized
-	}
-	if v.Scale != 0 {
-		obj["Scale"] = v.Scale
-	}
+	entry := &ledgerfields.Vault{}
+	entry.SetFlags(v.Flags)
+	entry.SetSequence(v.Sequence)
+	entry.SetOwnerNode(fmt.Sprintf("%X", v.OwnerNode))
+	entry.SetOwner(ownerAddr)
+	entry.SetAccount(pseudoAddr)
+	entry.SetAsset(v.assetToIssueMap())
+	entry.SetAssetsTotal(vaultWireNumber(v.AssetsTotal))
+	entry.SetAssetsAvailable(vaultWireNumber(v.AssetsAvailable))
+	entry.SetAssetsMaximum(vaultWireNumber(v.AssetsMaximum))
+	entry.SetLossUnrealized(vaultWireNumber(v.LossUnrealized))
+	entry.SetShareMPTID(strings.ToUpper(hex.EncodeToString(v.ShareMPTID[:])))
+	entry.SetWithdrawalPolicy(int(v.WithdrawalPolicy))
+	entry.SetScale(int(v.Scale))
 	if v.Data != "" {
-		obj["Data"] = strings.ToUpper(v.Data)
+		entry.SetData(strings.ToUpper(v.Data))
 	}
 
 	var zeroHash [32]byte
 	if v.PreviousTxnID != zeroHash {
-		obj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(v.PreviousTxnID[:]))
-		obj["PreviousTxnLgrSeq"] = v.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(v.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(v.PreviousTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(obj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("encode vault: %w", err)
 	}
-	return hex.DecodeString(hexStr)
+	return data, nil
+}
+
+func vaultWireNumber(value string) string {
+	if value == "" {
+		return "0"
+	}
+	return value
 }
 
 // parseVault decodes a vault ledger entry via the canonical ledgerfields

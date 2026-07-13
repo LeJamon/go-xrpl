@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Vault is the typed representation of a Vault ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Vault struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Sequence          uint32
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	Owner             string // AccountID (base58)
@@ -59,11 +64,176 @@ const (
 	vaultBitPreviousTxnLgrSeq
 )
 
+// SetSequence assigns Sequence and updates its serialized presence.
+func (v *Vault) SetSequence(value uint32) {
+	v.Sequence = value
+	v.dirty = true
+	v.present |= vaultBitSequence
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (v *Vault) SetOwnerNode(value string) {
+	v.OwnerNode = value
+	v.dirty = true
+	v.present |= vaultBitOwnerNode
+}
+
+// SetOwner assigns Owner and updates its serialized presence.
+func (v *Vault) SetOwner(value string) {
+	v.Owner = value
+	v.dirty = true
+	v.present |= vaultBitOwner
+}
+
+// SetAccount assigns Account and updates its serialized presence.
+func (v *Vault) SetAccount(value string) {
+	v.Account = value
+	v.dirty = true
+	v.present |= vaultBitAccount
+}
+
+// SetData assigns Data and updates its serialized presence.
+func (v *Vault) SetData(value string) {
+	v.Data = value
+	v.dirty = true
+	v.present |= vaultBitData
+}
+
+// SetAsset assigns Asset and updates its serialized presence.
+func (v *Vault) SetAsset(value any) {
+	v.Asset = value
+	v.dirty = true
+	v.present |= vaultBitAsset
+}
+
+// SetAssetsTotal assigns AssetsTotal and updates its serialized presence.
+func (v *Vault) SetAssetsTotal(value any) {
+	v.AssetsTotal = value
+	v.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		v.present &^= vaultBitAssetsTotal
+		return
+	}
+	v.present |= vaultBitAssetsTotal
+}
+
+// SetAssetsAvailable assigns AssetsAvailable and updates its serialized presence.
+func (v *Vault) SetAssetsAvailable(value any) {
+	v.AssetsAvailable = value
+	v.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		v.present &^= vaultBitAssetsAvailable
+		return
+	}
+	v.present |= vaultBitAssetsAvailable
+}
+
+// SetAssetsMaximum assigns AssetsMaximum and updates its serialized presence.
+func (v *Vault) SetAssetsMaximum(value any) {
+	v.AssetsMaximum = value
+	v.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		v.present &^= vaultBitAssetsMaximum
+		return
+	}
+	v.present |= vaultBitAssetsMaximum
+}
+
+// SetLossUnrealized assigns LossUnrealized and updates its serialized presence.
+func (v *Vault) SetLossUnrealized(value any) {
+	v.LossUnrealized = value
+	v.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		v.present &^= vaultBitLossUnrealized
+		return
+	}
+	v.present |= vaultBitLossUnrealized
+}
+
+// SetShareMPTID assigns ShareMPTID and updates its serialized presence.
+func (v *Vault) SetShareMPTID(value string) {
+	v.ShareMPTID = value
+	v.dirty = true
+	v.present |= vaultBitShareMPTID
+}
+
+// SetWithdrawalPolicy assigns WithdrawalPolicy and updates its serialized presence.
+func (v *Vault) SetWithdrawalPolicy(value int) {
+	v.WithdrawalPolicy = value
+	v.dirty = true
+	v.present |= vaultBitWithdrawalPolicy
+}
+
+// SetScale assigns Scale and updates its serialized presence.
+func (v *Vault) SetScale(value int) {
+	v.Scale = value
+	v.dirty = true
+	if value == 0 {
+		v.present &^= vaultBitScale
+		return
+	}
+	v.present |= vaultBitScale
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (v *Vault) SetFlags(value uint32) {
+	v.Flags = value
+	v.dirty = true
+	v.present |= vaultBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (v *Vault) SetPreviousTxnID(value string) {
+	v.PreviousTxnID = value
+	v.dirty = true
+	v.present |= vaultBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (v *Vault) SetPreviousTxnLgrSeq(value uint32) {
+	v.PreviousTxnLgrSeq = value
+	v.dirty = true
+	v.present |= vaultBitPreviousTxnLgrSeq
+}
+
+func (v *Vault) validateRequired() error {
+	if v.decoded && !v.dirty {
+		return nil
+	}
+	if v.present&vaultBitSequence == 0 {
+		return errors.New("ledgerfields: Vault: required field Sequence is not set")
+	}
+	if v.present&vaultBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Vault: required field OwnerNode is not set")
+	}
+	if v.present&vaultBitOwner == 0 {
+		return errors.New("ledgerfields: Vault: required field Owner is not set")
+	}
+	if v.present&vaultBitAccount == 0 {
+		return errors.New("ledgerfields: Vault: required field Account is not set")
+	}
+	if v.present&vaultBitAsset == 0 {
+		return errors.New("ledgerfields: Vault: required field Asset is not set")
+	}
+	if v.present&vaultBitShareMPTID == 0 {
+		return errors.New("ledgerfields: Vault: required field ShareMPTID is not set")
+	}
+	if v.present&vaultBitWithdrawalPolicy == 0 {
+		return errors.New("ledgerfields: Vault: required field WithdrawalPolicy is not set")
+	}
+	if v.present&vaultBitFlags == 0 {
+		return errors.New("ledgerfields: Vault: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (v *Vault) Decode(data []byte) error {
 	*v = Vault{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -78,7 +248,10 @@ func (v *Vault) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 132 {
+					return fmt.Errorf("ledgerfields: Vault: LedgerEntryType is %d, want 132", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -216,6 +389,10 @@ func (v *Vault) Decode(data []byte) error {
 			return newErrUnknownField("Vault", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Vault: missing LedgerEntryType")
+	}
+	v.decoded = true
 	return nil
 }
 
@@ -442,10 +619,12 @@ func (v *Vault) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (v *Vault) Encode() ([]byte, error) {
+	if err := v.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(v.ToMap())
 }
 

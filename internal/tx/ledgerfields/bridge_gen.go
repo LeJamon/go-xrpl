@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Bridge is the typed representation of a Bridge ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Bridge struct {
 	present                  uint64
+	decoded                  bool
+	dirty                    bool
 	Account                  string // AccountID (base58)
 	SignatureReward          any    // Amount (XRP string | IOU map)
 	MinAccountCreateAmount   any    // Amount (XRP string | IOU map)
@@ -49,11 +54,121 @@ const (
 	bridgeBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (b *Bridge) SetAccount(value string) {
+	b.Account = value
+	b.dirty = true
+	b.present |= bridgeBitAccount
+}
+
+// SetSignatureReward assigns SignatureReward and updates its serialized presence.
+func (b *Bridge) SetSignatureReward(value any) {
+	b.SignatureReward = value
+	b.dirty = true
+	b.present |= bridgeBitSignatureReward
+}
+
+// SetMinAccountCreateAmount assigns MinAccountCreateAmount and updates its serialized presence.
+func (b *Bridge) SetMinAccountCreateAmount(value any) {
+	b.MinAccountCreateAmount = value
+	b.dirty = true
+	b.present |= bridgeBitMinAccountCreateAmount
+}
+
+// SetXChainBridge assigns XChainBridge and updates its serialized presence.
+func (b *Bridge) SetXChainBridge(value any) {
+	b.XChainBridge = value
+	b.dirty = true
+	b.present |= bridgeBitXChainBridge
+}
+
+// SetXChainClaimID assigns XChainClaimID and updates its serialized presence.
+func (b *Bridge) SetXChainClaimID(value string) {
+	b.XChainClaimID = value
+	b.dirty = true
+	b.present |= bridgeBitXChainClaimID
+}
+
+// SetXChainAccountCreateCount assigns XChainAccountCreateCount and updates its serialized presence.
+func (b *Bridge) SetXChainAccountCreateCount(value string) {
+	b.XChainAccountCreateCount = value
+	b.dirty = true
+	b.present |= bridgeBitXChainAccountCreateCount
+}
+
+// SetXChainAccountClaimCount assigns XChainAccountClaimCount and updates its serialized presence.
+func (b *Bridge) SetXChainAccountClaimCount(value string) {
+	b.XChainAccountClaimCount = value
+	b.dirty = true
+	b.present |= bridgeBitXChainAccountClaimCount
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (b *Bridge) SetOwnerNode(value string) {
+	b.OwnerNode = value
+	b.dirty = true
+	b.present |= bridgeBitOwnerNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (b *Bridge) SetFlags(value uint32) {
+	b.Flags = value
+	b.dirty = true
+	b.present |= bridgeBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (b *Bridge) SetPreviousTxnID(value string) {
+	b.PreviousTxnID = value
+	b.dirty = true
+	b.present |= bridgeBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (b *Bridge) SetPreviousTxnLgrSeq(value uint32) {
+	b.PreviousTxnLgrSeq = value
+	b.dirty = true
+	b.present |= bridgeBitPreviousTxnLgrSeq
+}
+
+func (b *Bridge) validateRequired() error {
+	if b.decoded && !b.dirty {
+		return nil
+	}
+	if b.present&bridgeBitAccount == 0 {
+		return errors.New("ledgerfields: Bridge: required field Account is not set")
+	}
+	if b.present&bridgeBitSignatureReward == 0 {
+		return errors.New("ledgerfields: Bridge: required field SignatureReward is not set")
+	}
+	if b.present&bridgeBitXChainBridge == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainBridge is not set")
+	}
+	if b.present&bridgeBitXChainClaimID == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainClaimID is not set")
+	}
+	if b.present&bridgeBitXChainAccountCreateCount == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainAccountCreateCount is not set")
+	}
+	if b.present&bridgeBitXChainAccountClaimCount == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainAccountClaimCount is not set")
+	}
+	if b.present&bridgeBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Bridge: required field OwnerNode is not set")
+	}
+	if b.present&bridgeBitFlags == 0 {
+		return errors.New("ledgerfields: Bridge: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (b *Bridge) Decode(data []byte) error {
 	*b = Bridge{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -68,7 +183,10 @@ func (b *Bridge) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 105 {
+					return fmt.Errorf("ledgerfields: Bridge: LedgerEntryType is %d, want 105", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Bridge", typeCode, fieldCode)
 			}
@@ -175,6 +293,10 @@ func (b *Bridge) Decode(data []byte) error {
 			return newErrUnknownField("Bridge", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Bridge: missing LedgerEntryType")
+	}
+	b.decoded = true
 	return nil
 }
 
@@ -351,10 +473,12 @@ func (b *Bridge) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (b *Bridge) Encode() ([]byte, error) {
+	if err := b.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(b.ToMap())
 }
 

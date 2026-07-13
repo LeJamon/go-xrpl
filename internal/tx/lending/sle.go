@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
@@ -66,8 +65,7 @@ type loanBrokerData struct {
 	PreviousTxnLgrSeq    uint32
 }
 
-// serializeLoanBroker encodes a LoanBroker entry to canonical binary. soeDEFAULT
-// fields are omitted when at their default to match rippled's STObject encoding.
+// serializeLoanBroker encodes a LoanBroker entry to canonical binary.
 func serializeLoanBroker(b *loanBrokerData) ([]byte, error) {
 	ownerAddr, err := state.EncodeAccountID(b.Owner)
 	if err != nil {
@@ -77,51 +75,33 @@ func serializeLoanBroker(b *loanBrokerData) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode account: %w", err)
 	}
-	obj := map[string]any{
-		"LedgerEntryType": "LoanBroker",
-		"Flags":           b.Flags,
-		"Sequence":        b.Sequence,
-		"OwnerNode":       fmt.Sprintf("%X", b.OwnerNode),
-		"VaultNode":       fmt.Sprintf("%X", b.VaultNode),
-		"VaultID":         strings.ToUpper(hex.EncodeToString(b.VaultID[:])),
-		"Account":         pseudoAddr,
-		"Owner":           ownerAddr,
-		"LoanSequence":    b.LoanSequence,
-	}
-	if b.Data != "" {
-		obj["Data"] = strings.ToUpper(b.Data)
-	}
-	if b.ManagementFeeRate != 0 {
-		obj["ManagementFeeRate"] = uint32(b.ManagementFeeRate)
-	}
-	if b.OwnerCount != 0 {
-		obj["OwnerCount"] = b.OwnerCount
-	}
-	if b.DebtTotal != "" {
-		obj["DebtTotal"] = b.DebtTotal
-	}
-	if b.DebtMaximum != "" {
-		obj["DebtMaximum"] = b.DebtMaximum
-	}
-	if b.CoverAvailable != "" {
-		obj["CoverAvailable"] = b.CoverAvailable
-	}
-	if b.CoverRateMinimum != 0 {
-		obj["CoverRateMinimum"] = b.CoverRateMinimum
-	}
-	if b.CoverRateLiquidation != 0 {
-		obj["CoverRateLiquidation"] = b.CoverRateLiquidation
-	}
+	entry := &ledgerfields.LoanBroker{}
+	entry.SetFlags(b.Flags)
+	entry.SetSequence(b.Sequence)
+	entry.SetOwnerNode(fmt.Sprintf("%X", b.OwnerNode))
+	entry.SetVaultNode(fmt.Sprintf("%X", b.VaultNode))
+	entry.SetVaultID(strings.ToUpper(hex.EncodeToString(b.VaultID[:])))
+	entry.SetAccount(pseudoAddr)
+	entry.SetOwner(ownerAddr)
+	entry.SetLoanSequence(b.LoanSequence)
+	entry.SetData(strings.ToUpper(b.Data))
+	entry.SetManagementFeeRate(int(b.ManagementFeeRate))
+	entry.SetOwnerCount(b.OwnerCount)
+	entry.SetDebtTotal(wireNum(b.DebtTotal))
+	entry.SetDebtMaximum(wireNum(b.DebtMaximum))
+	entry.SetCoverAvailable(wireNum(b.CoverAvailable))
+	entry.SetCoverRateMinimum(b.CoverRateMinimum)
+	entry.SetCoverRateLiquidation(b.CoverRateLiquidation)
 	var zeroHash [32]byte
 	if b.PreviousTxnID != zeroHash {
-		obj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(b.PreviousTxnID[:]))
-		obj["PreviousTxnLgrSeq"] = b.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(b.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(b.PreviousTxnLgrSeq)
 	}
-	hexStr, err := binarycodec.Encode(obj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("encode loan broker: %w", err)
 	}
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // parseLoanBroker decodes a LoanBroker entry via the ledgerfields decoder.
@@ -195,47 +175,43 @@ func serializeLoan(l *loanData) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode borrower: %w", err)
 	}
-	obj := map[string]any{
-		"LedgerEntryType": "Loan",
-		"Flags":           l.Flags,
-		"OwnerNode":       fmt.Sprintf("%X", l.OwnerNode),
-		"LoanBrokerNode":  fmt.Sprintf("%X", l.LoanBrokerNode),
-		"LoanBrokerID":    strings.ToUpper(hex.EncodeToString(l.LoanBrokerID[:])),
-		"LoanSequence":    l.LoanSequence,
-		"Borrower":        borrowerAddr,
-		"StartDate":       l.StartDate,
-		"PaymentInterval": l.PaymentInterval,
-		"PeriodicPayment": defaultNum(l.PeriodicPayment),
-	}
-	putNum(obj, "LoanOriginationFee", l.LoanOriginationFee)
-	putNum(obj, "LoanServiceFee", l.LoanServiceFee)
-	putNum(obj, "LatePaymentFee", l.LatePaymentFee)
-	putNum(obj, "ClosePaymentFee", l.ClosePaymentFee)
-	putU32(obj, "OverpaymentFee", l.OverpaymentFee)
-	putU32(obj, "InterestRate", l.InterestRate)
-	putU32(obj, "LateInterestRate", l.LateInterestRate)
-	putU32(obj, "CloseInterestRate", l.CloseInterestRate)
-	putU32(obj, "OverpaymentInterestRate", l.OverpaymentInterestRate)
-	putU32(obj, "GracePeriod", l.GracePeriod)
-	putU32(obj, "PreviousPaymentDueDate", l.PreviousPaymentDueDate)
-	putU32(obj, "NextPaymentDueDate", l.NextPaymentDueDate)
-	putU32(obj, "PaymentRemaining", l.PaymentRemaining)
-	putNum(obj, "PrincipalOutstanding", l.PrincipalOutstanding)
-	putNum(obj, "TotalValueOutstanding", l.TotalValueOutstanding)
-	putNum(obj, "ManagementFeeOutstanding", l.ManagementFeeOutstanding)
-	if l.LoanScale != 0 {
-		obj["LoanScale"] = l.LoanScale
-	}
+	entry := &ledgerfields.Loan{}
+	entry.SetFlags(l.Flags)
+	entry.SetOwnerNode(fmt.Sprintf("%X", l.OwnerNode))
+	entry.SetLoanBrokerNode(fmt.Sprintf("%X", l.LoanBrokerNode))
+	entry.SetLoanBrokerID(strings.ToUpper(hex.EncodeToString(l.LoanBrokerID[:])))
+	entry.SetLoanSequence(l.LoanSequence)
+	entry.SetBorrower(borrowerAddr)
+	entry.SetLoanOriginationFee(wireNum(l.LoanOriginationFee))
+	entry.SetLoanServiceFee(wireNum(l.LoanServiceFee))
+	entry.SetLatePaymentFee(wireNum(l.LatePaymentFee))
+	entry.SetClosePaymentFee(wireNum(l.ClosePaymentFee))
+	entry.SetOverpaymentFee(l.OverpaymentFee)
+	entry.SetInterestRate(l.InterestRate)
+	entry.SetLateInterestRate(l.LateInterestRate)
+	entry.SetCloseInterestRate(l.CloseInterestRate)
+	entry.SetOverpaymentInterestRate(l.OverpaymentInterestRate)
+	entry.SetStartDate(l.StartDate)
+	entry.SetPaymentInterval(l.PaymentInterval)
+	entry.SetGracePeriod(l.GracePeriod)
+	entry.SetPreviousPaymentDueDate(l.PreviousPaymentDueDate)
+	entry.SetNextPaymentDueDate(l.NextPaymentDueDate)
+	entry.SetPaymentRemaining(l.PaymentRemaining)
+	entry.SetPeriodicPayment(wireNum(l.PeriodicPayment))
+	entry.SetPrincipalOutstanding(wireNum(l.PrincipalOutstanding))
+	entry.SetTotalValueOutstanding(wireNum(l.TotalValueOutstanding))
+	entry.SetManagementFeeOutstanding(wireNum(l.ManagementFeeOutstanding))
+	entry.SetLoanScale(int(l.LoanScale))
 	var zeroHash [32]byte
 	if l.PreviousTxnID != zeroHash {
-		obj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(l.PreviousTxnID[:]))
-		obj["PreviousTxnLgrSeq"] = l.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(l.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(l.PreviousTxnLgrSeq)
 	}
-	hexStr, err := binarycodec.Encode(obj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("encode loan: %w", err)
 	}
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // parseLoan decodes a Loan entry via the ledgerfields decoder.
@@ -289,25 +265,11 @@ func normNum(v any) string {
 	return s
 }
 
-// defaultNum renders a soeREQUIRED NUMBER: it is always present, so an empty
-// (zero) value serializes as "0".
-func defaultNum(s string) string {
+func wireNum(s string) string {
 	if s == "" {
 		return "0"
 	}
 	return s
-}
-
-func putNum(obj map[string]any, key, s string) {
-	if s != "" {
-		obj[key] = s
-	}
-}
-
-func putU32(obj map[string]any, key string, v uint32) {
-	if v != 0 {
-		obj[key] = v
-	}
 }
 
 func hash256(s string) [32]byte {

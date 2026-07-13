@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // AccountRoot is the typed representation of a AccountRoot ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type AccountRoot struct {
 	present              uint64
+	decoded              bool
+	dirty                bool
 	Account              string // AccountID (base58)
 	Balance              any    // Amount (XRP string | IOU map)
 	Sequence             uint32
@@ -75,11 +80,211 @@ const (
 	accountrootBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (a *AccountRoot) SetAccount(value string) {
+	a.Account = value
+	a.dirty = true
+	a.present |= accountrootBitAccount
+}
+
+// SetBalance assigns Balance and updates its serialized presence.
+func (a *AccountRoot) SetBalance(value any) {
+	a.Balance = value
+	a.dirty = true
+	a.present |= accountrootBitBalance
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (a *AccountRoot) SetSequence(value uint32) {
+	a.Sequence = value
+	a.dirty = true
+	a.present |= accountrootBitSequence
+}
+
+// SetOwnerCount assigns OwnerCount and updates its serialized presence.
+func (a *AccountRoot) SetOwnerCount(value uint32) {
+	a.OwnerCount = value
+	a.dirty = true
+	a.present |= accountrootBitOwnerCount
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (a *AccountRoot) SetFlags(value uint32) {
+	a.Flags = value
+	a.dirty = true
+	a.present |= accountrootBitFlags
+}
+
+// SetRegularKey assigns RegularKey and updates its serialized presence.
+func (a *AccountRoot) SetRegularKey(value string) {
+	a.RegularKey = value
+	a.dirty = true
+	a.present |= accountrootBitRegularKey
+}
+
+// SetDomain assigns Domain and updates its serialized presence.
+func (a *AccountRoot) SetDomain(value string) {
+	a.Domain = value
+	a.dirty = true
+	a.present |= accountrootBitDomain
+}
+
+// SetEmailHash assigns EmailHash and updates its serialized presence.
+func (a *AccountRoot) SetEmailHash(value string) {
+	a.EmailHash = value
+	a.dirty = true
+	a.present |= accountrootBitEmailHash
+}
+
+// SetMessageKey assigns MessageKey and updates its serialized presence.
+func (a *AccountRoot) SetMessageKey(value string) {
+	a.MessageKey = value
+	a.dirty = true
+	a.present |= accountrootBitMessageKey
+}
+
+// SetTransferRate assigns TransferRate and updates its serialized presence.
+func (a *AccountRoot) SetTransferRate(value uint32) {
+	a.TransferRate = value
+	a.dirty = true
+	a.present |= accountrootBitTransferRate
+}
+
+// SetTickSize assigns TickSize and updates its serialized presence.
+func (a *AccountRoot) SetTickSize(value int) {
+	a.TickSize = value
+	a.dirty = true
+	a.present |= accountrootBitTickSize
+}
+
+// SetNFTokenMinter assigns NFTokenMinter and updates its serialized presence.
+func (a *AccountRoot) SetNFTokenMinter(value string) {
+	a.NFTokenMinter = value
+	a.dirty = true
+	a.present |= accountrootBitNFTokenMinter
+}
+
+// SetMintedNFTokens assigns MintedNFTokens and updates its serialized presence.
+func (a *AccountRoot) SetMintedNFTokens(value uint32) {
+	a.MintedNFTokens = value
+	a.dirty = true
+	if value == 0 {
+		a.present &^= accountrootBitMintedNFTokens
+		return
+	}
+	a.present |= accountrootBitMintedNFTokens
+}
+
+// SetBurnedNFTokens assigns BurnedNFTokens and updates its serialized presence.
+func (a *AccountRoot) SetBurnedNFTokens(value uint32) {
+	a.BurnedNFTokens = value
+	a.dirty = true
+	if value == 0 {
+		a.present &^= accountrootBitBurnedNFTokens
+		return
+	}
+	a.present |= accountrootBitBurnedNFTokens
+}
+
+// SetFirstNFTokenSequence assigns FirstNFTokenSequence and updates its serialized presence.
+func (a *AccountRoot) SetFirstNFTokenSequence(value uint32) {
+	a.FirstNFTokenSequence = value
+	a.dirty = true
+	a.present |= accountrootBitFirstNFTokenSequence
+}
+
+// SetAccountTxnID assigns AccountTxnID and updates its serialized presence.
+func (a *AccountRoot) SetAccountTxnID(value string) {
+	a.AccountTxnID = value
+	a.dirty = true
+	a.present |= accountrootBitAccountTxnID
+}
+
+// SetWalletLocator assigns WalletLocator and updates its serialized presence.
+func (a *AccountRoot) SetWalletLocator(value string) {
+	a.WalletLocator = value
+	a.dirty = true
+	a.present |= accountrootBitWalletLocator
+}
+
+// SetTicketCount assigns TicketCount and updates its serialized presence.
+func (a *AccountRoot) SetTicketCount(value uint32) {
+	a.TicketCount = value
+	a.dirty = true
+	a.present |= accountrootBitTicketCount
+}
+
+// SetAMMID assigns AMMID and updates its serialized presence.
+func (a *AccountRoot) SetAMMID(value string) {
+	a.AMMID = value
+	a.dirty = true
+	a.present |= accountrootBitAMMID
+}
+
+// SetVaultID assigns VaultID and updates its serialized presence.
+func (a *AccountRoot) SetVaultID(value string) {
+	a.VaultID = value
+	a.dirty = true
+	a.present |= accountrootBitVaultID
+}
+
+// SetLoanBrokerID assigns LoanBrokerID and updates its serialized presence.
+func (a *AccountRoot) SetLoanBrokerID(value string) {
+	a.LoanBrokerID = value
+	a.dirty = true
+	a.present |= accountrootBitLoanBrokerID
+}
+
+// SetWalletSize assigns WalletSize and updates its serialized presence.
+func (a *AccountRoot) SetWalletSize(value uint32) {
+	a.WalletSize = value
+	a.dirty = true
+	a.present |= accountrootBitWalletSize
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (a *AccountRoot) SetPreviousTxnID(value string) {
+	a.PreviousTxnID = value
+	a.dirty = true
+	a.present |= accountrootBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (a *AccountRoot) SetPreviousTxnLgrSeq(value uint32) {
+	a.PreviousTxnLgrSeq = value
+	a.dirty = true
+	a.present |= accountrootBitPreviousTxnLgrSeq
+}
+
+func (a *AccountRoot) validateRequired() error {
+	if a.decoded && !a.dirty {
+		return nil
+	}
+	if a.present&accountrootBitAccount == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Account is not set")
+	}
+	if a.present&accountrootBitBalance == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Balance is not set")
+	}
+	if a.present&accountrootBitSequence == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Sequence is not set")
+	}
+	if a.present&accountrootBitOwnerCount == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field OwnerCount is not set")
+	}
+	if a.present&accountrootBitFlags == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (a *AccountRoot) Decode(data []byte) error {
 	*a = AccountRoot{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -94,7 +299,10 @@ func (a *AccountRoot) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 97 {
+					return fmt.Errorf("ledgerfields: AccountRoot: LedgerEntryType is %d, want 97", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -240,6 +448,10 @@ func (a *AccountRoot) Decode(data []byte) error {
 			return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: AccountRoot: missing LedgerEntryType")
+	}
+	a.decoded = true
 	return nil
 }
 
@@ -546,10 +758,12 @@ func (a *AccountRoot) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (a *AccountRoot) Encode() ([]byte, error) {
+	if err := a.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(a.ToMap())
 }
 

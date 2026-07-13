@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // FeeSettings is the typed representation of a FeeSettings ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type FeeSettings struct {
 	present               uint64
+	decoded               bool
+	dirty                 bool
 	BaseFee               string // UInt64 (lowercase hex, no leading zeros)
 	ReferenceFeeUnits     uint32
 	ReserveBase           uint32
@@ -47,11 +52,93 @@ const (
 	feesettingsBitPreviousTxnLgrSeq
 )
 
+// SetBaseFee assigns BaseFee and updates its serialized presence.
+func (f *FeeSettings) SetBaseFee(value string) {
+	f.BaseFee = value
+	f.dirty = true
+	f.present |= feesettingsBitBaseFee
+}
+
+// SetReferenceFeeUnits assigns ReferenceFeeUnits and updates its serialized presence.
+func (f *FeeSettings) SetReferenceFeeUnits(value uint32) {
+	f.ReferenceFeeUnits = value
+	f.dirty = true
+	f.present |= feesettingsBitReferenceFeeUnits
+}
+
+// SetReserveBase assigns ReserveBase and updates its serialized presence.
+func (f *FeeSettings) SetReserveBase(value uint32) {
+	f.ReserveBase = value
+	f.dirty = true
+	f.present |= feesettingsBitReserveBase
+}
+
+// SetReserveIncrement assigns ReserveIncrement and updates its serialized presence.
+func (f *FeeSettings) SetReserveIncrement(value uint32) {
+	f.ReserveIncrement = value
+	f.dirty = true
+	f.present |= feesettingsBitReserveIncrement
+}
+
+// SetBaseFeeDrops assigns BaseFeeDrops and updates its serialized presence.
+func (f *FeeSettings) SetBaseFeeDrops(value any) {
+	f.BaseFeeDrops = value
+	f.dirty = true
+	f.present |= feesettingsBitBaseFeeDrops
+}
+
+// SetReserveBaseDrops assigns ReserveBaseDrops and updates its serialized presence.
+func (f *FeeSettings) SetReserveBaseDrops(value any) {
+	f.ReserveBaseDrops = value
+	f.dirty = true
+	f.present |= feesettingsBitReserveBaseDrops
+}
+
+// SetReserveIncrementDrops assigns ReserveIncrementDrops and updates its serialized presence.
+func (f *FeeSettings) SetReserveIncrementDrops(value any) {
+	f.ReserveIncrementDrops = value
+	f.dirty = true
+	f.present |= feesettingsBitReserveIncrementDrops
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (f *FeeSettings) SetFlags(value uint32) {
+	f.Flags = value
+	f.dirty = true
+	f.present |= feesettingsBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (f *FeeSettings) SetPreviousTxnID(value string) {
+	f.PreviousTxnID = value
+	f.dirty = true
+	f.present |= feesettingsBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (f *FeeSettings) SetPreviousTxnLgrSeq(value uint32) {
+	f.PreviousTxnLgrSeq = value
+	f.dirty = true
+	f.present |= feesettingsBitPreviousTxnLgrSeq
+}
+
+func (f *FeeSettings) validateRequired() error {
+	if f.decoded && !f.dirty {
+		return nil
+	}
+	if f.present&feesettingsBitFlags == 0 {
+		return errors.New("ledgerfields: FeeSettings: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (f *FeeSettings) Decode(data []byte) error {
 	*f = FeeSettings{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -66,7 +153,10 @@ func (f *FeeSettings) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 115 {
+					return fmt.Errorf("ledgerfields: FeeSettings: LedgerEntryType is %d, want 115", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
@@ -140,6 +230,10 @@ func (f *FeeSettings) Decode(data []byte) error {
 			return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: FeeSettings: missing LedgerEntryType")
+	}
+	f.decoded = true
 	return nil
 }
 
@@ -306,10 +400,12 @@ func (f *FeeSettings) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (f *FeeSettings) Encode() ([]byte, error) {
+	if err := f.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(f.ToMap())
 }
 

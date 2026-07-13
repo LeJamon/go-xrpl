@@ -424,15 +424,15 @@ func withdrawToDestExceedsLimit(view tx.LedgerView, from, to [20]byte, amount tx
 func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	bal, berr := vaultNumber(rs.Balance.Value())
 	if berr != nil {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	if bytes.Compare(account[:], issuer[:]) > 0 {
 		bal = bal.Negate()
@@ -444,11 +444,11 @@ func lineBalanceInTerms(view tx.LedgerView, account, issuer [20]byte, currency s
 func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) state.XRPLNumber {
 	data, err := view.Read(keylet.Line(account, issuer, currency))
 	if err != nil || len(data) == 0 {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	var lim state.Amount
 	if bytes.Compare(account[:], issuer[:]) < 0 {
@@ -458,7 +458,7 @@ func lineLimit(view tx.LedgerView, account, issuer [20]byte, currency string) st
 	}
 	n, nerr := vaultNumber(lim.Value())
 	if nerr != nil {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	return n
 }
@@ -483,55 +483,55 @@ func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]by
 	if isNativeAsset(asset) {
 		ar, err := tx.ReadAccountRoot(view, accountID)
 		if err != nil || ar == nil {
-			return state.NewXRPLNumber(0, 0), err
+			return newVaultNumber(0, 0), err
 		}
 		reserve := config.AccountReserve(ar.OwnerCount)
 		liquid := int64(ar.Balance) - int64(reserve)
 		if liquid < 0 {
 			liquid = 0
 		}
-		return state.NewXRPLNumber(liquid, 0), nil
+		return newVaultNumber(liquid, 0), nil
 	}
 
 	if asset.IsMPT() {
 		id, ok := assetMPTID(asset)
 		if !ok {
-			return state.NewXRPLNumber(0, 0), nil
+			return newVaultNumber(0, 0), nil
 		}
 		if mptIDIssuer(id) == accountID {
 			iss, _ := readMPTIssuance(view, id)
 			if iss == nil {
-				return state.NewXRPLNumber(0, 0), nil
+				return newVaultNumber(0, 0), nil
 			}
 			maxAmt := entry.MaxMPTokenAmount
 			if iss.MaximumAmount != nil {
 				maxAmt = *iss.MaximumAmount
 			}
-			return state.NewXRPLNumber(int64(maxAmt-iss.OutstandingAmount), 0), nil
+			return newVaultNumber(int64(maxAmt-iss.OutstandingAmount), 0), nil
 		}
-		return state.NewXRPLNumber(int64(holderMPTBalance(view, id, accountID)), 0), nil
+		return newVaultNumber(int64(holderMPTBalance(view, id, accountID)), 0), nil
 	}
 
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), err
+		return newVaultNumber(0, 0), err
 	}
 	if accountID == issuerID {
 		// The issuer's spendable balance is effectively unbounded.
-		return state.NewXRPLNumber(9999999999999999, 80), nil
+		return newVaultNumber(9999999999999999, 80), nil
 	}
 
 	lineData, rerr := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
 	if rerr != nil || lineData == nil {
-		return state.NewXRPLNumber(0, 0), nil
+		return newVaultNumber(0, 0), nil
 	}
 	rs, perr := state.ParseRippleState(lineData)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0), perr
+		return newVaultNumber(0, 0), perr
 	}
 	bal, berr := vaultNumber(rs.Balance.Value())
 	if berr != nil {
-		return state.NewXRPLNumber(0, 0), berr
+		return newVaultNumber(0, 0), berr
 	}
 	// Balance is stored in the low account's terms; negate for the high account.
 	if bytes.Compare(accountID[:], issuerID[:]) > 0 {

@@ -190,7 +190,7 @@ func (v *VaultWithdraw) sharesToAssetAmount(view tx.LedgerView, vd *vaultData) (
 	}
 	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
 	lossN, _ := vaultNumber(vd.LossUnrealized)
-	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
+	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
 	assetsN := sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, sharesN)
 	return state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), vd.Asset.Currency, vd.Asset.Issuer), ter.TesSUCCESS
 }
@@ -220,14 +220,14 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
 	availN, _ := vaultNumber(vd.AssetsAvailable)
 	lossN, _ := vaultNumber(vd.LossUnrealized)
-	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
+	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
 
 	fix320 := ctx.Rules().FixCleanup3_2_0Enabled()
 	// The sole shareholder owns the future value too, so the unrealized-loss
 	// subtraction is waived — otherwise they could burn every share yet strand
 	// future value in the vault.
 	if fix320 && isSoleShareholder(ctx.View, ctx.AccountID, vd.ShareMPTID, issuance.OutstandingAmount) {
-		lossN = state.NewXRPLNumber(0, 0)
+		lossN = newVaultNumber(0, 0)
 	}
 
 	var sharesRedeemedN, assetsWithdrawnN state.XRPLNumber

@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // DID is the typed representation of a DID ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type DID struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	DIDDocument       string // Blob (uppercase hex)
 	URI               string // Blob (uppercase hex)
@@ -43,11 +48,85 @@ const (
 	didBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (d *DID) SetAccount(value string) {
+	d.Account = value
+	d.dirty = true
+	d.present |= didBitAccount
+}
+
+// SetDIDDocument assigns DIDDocument and updates its serialized presence.
+func (d *DID) SetDIDDocument(value string) {
+	d.DIDDocument = value
+	d.dirty = true
+	d.present |= didBitDIDDocument
+}
+
+// SetURI assigns URI and updates its serialized presence.
+func (d *DID) SetURI(value string) {
+	d.URI = value
+	d.dirty = true
+	d.present |= didBitURI
+}
+
+// SetData assigns Data and updates its serialized presence.
+func (d *DID) SetData(value string) {
+	d.Data = value
+	d.dirty = true
+	d.present |= didBitData
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (d *DID) SetOwnerNode(value string) {
+	d.OwnerNode = value
+	d.dirty = true
+	d.present |= didBitOwnerNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (d *DID) SetFlags(value uint32) {
+	d.Flags = value
+	d.dirty = true
+	d.present |= didBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (d *DID) SetPreviousTxnID(value string) {
+	d.PreviousTxnID = value
+	d.dirty = true
+	d.present |= didBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (d *DID) SetPreviousTxnLgrSeq(value uint32) {
+	d.PreviousTxnLgrSeq = value
+	d.dirty = true
+	d.present |= didBitPreviousTxnLgrSeq
+}
+
+func (d *DID) validateRequired() error {
+	if d.decoded && !d.dirty {
+		return nil
+	}
+	if d.present&didBitAccount == 0 {
+		return errors.New("ledgerfields: DID: required field Account is not set")
+	}
+	if d.present&didBitOwnerNode == 0 {
+		return errors.New("ledgerfields: DID: required field OwnerNode is not set")
+	}
+	if d.present&didBitFlags == 0 {
+		return errors.New("ledgerfields: DID: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (d *DID) Decode(data []byte) error {
 	*d = DID{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -62,7 +141,10 @@ func (d *DID) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 73 {
+					return fmt.Errorf("ledgerfields: DID: LedgerEntryType is %d, want 73", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("DID", typeCode, fieldCode)
 			}
@@ -139,6 +221,10 @@ func (d *DID) Decode(data []byte) error {
 			return newErrUnknownField("DID", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: DID: missing LedgerEntryType")
+	}
+	d.decoded = true
 	return nil
 }
 
@@ -285,10 +371,12 @@ func (d *DID) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DID) Encode() ([]byte, error) {
+	if err := d.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(d.ToMap())
 }
 

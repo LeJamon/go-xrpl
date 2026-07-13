@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // DirectoryNode is the typed representation of a DirectoryNode ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type DirectoryNode struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Flags             uint32
 	RootIndex         string // Hash256 (uppercase hex)
 	Indexes           []string
@@ -61,11 +66,148 @@ const (
 	directorynodeBitPreviousTxnLgrSeq
 )
 
+// SetFlags assigns Flags and updates its serialized presence.
+func (d *DirectoryNode) SetFlags(value uint32) {
+	d.Flags = value
+	d.dirty = true
+	d.present |= directorynodeBitFlags
+}
+
+// SetRootIndex assigns RootIndex and updates its serialized presence.
+func (d *DirectoryNode) SetRootIndex(value string) {
+	d.RootIndex = value
+	d.dirty = true
+	d.present |= directorynodeBitRootIndex
+}
+
+// SetIndexes assigns Indexes and updates its serialized presence.
+func (d *DirectoryNode) SetIndexes(value []string) {
+	d.Indexes = value
+	d.dirty = true
+	d.present |= directorynodeBitIndexes
+}
+
+// SetIndexNext assigns IndexNext and updates its serialized presence.
+func (d *DirectoryNode) SetIndexNext(value string) {
+	d.IndexNext = value
+	d.dirty = true
+	d.present |= directorynodeBitIndexNext
+}
+
+// SetIndexPrevious assigns IndexPrevious and updates its serialized presence.
+func (d *DirectoryNode) SetIndexPrevious(value string) {
+	d.IndexPrevious = value
+	d.dirty = true
+	d.present |= directorynodeBitIndexPrevious
+}
+
+// SetOwner assigns Owner and updates its serialized presence.
+func (d *DirectoryNode) SetOwner(value string) {
+	d.Owner = value
+	d.dirty = true
+	d.present |= directorynodeBitOwner
+}
+
+// SetTakerPaysCurrency assigns TakerPaysCurrency and updates its serialized presence.
+func (d *DirectoryNode) SetTakerPaysCurrency(value string) {
+	d.TakerPaysCurrency = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerPaysCurrency
+}
+
+// SetTakerPaysIssuer assigns TakerPaysIssuer and updates its serialized presence.
+func (d *DirectoryNode) SetTakerPaysIssuer(value string) {
+	d.TakerPaysIssuer = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerPaysIssuer
+}
+
+// SetTakerPaysMPT assigns TakerPaysMPT and updates its serialized presence.
+func (d *DirectoryNode) SetTakerPaysMPT(value string) {
+	d.TakerPaysMPT = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerPaysMPT
+}
+
+// SetTakerGetsCurrency assigns TakerGetsCurrency and updates its serialized presence.
+func (d *DirectoryNode) SetTakerGetsCurrency(value string) {
+	d.TakerGetsCurrency = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerGetsCurrency
+}
+
+// SetTakerGetsIssuer assigns TakerGetsIssuer and updates its serialized presence.
+func (d *DirectoryNode) SetTakerGetsIssuer(value string) {
+	d.TakerGetsIssuer = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerGetsIssuer
+}
+
+// SetTakerGetsMPT assigns TakerGetsMPT and updates its serialized presence.
+func (d *DirectoryNode) SetTakerGetsMPT(value string) {
+	d.TakerGetsMPT = value
+	d.dirty = true
+	d.present |= directorynodeBitTakerGetsMPT
+}
+
+// SetExchangeRate assigns ExchangeRate and updates its serialized presence.
+func (d *DirectoryNode) SetExchangeRate(value string) {
+	d.ExchangeRate = value
+	d.dirty = true
+	d.present |= directorynodeBitExchangeRate
+}
+
+// SetNFTokenID assigns NFTokenID and updates its serialized presence.
+func (d *DirectoryNode) SetNFTokenID(value string) {
+	d.NFTokenID = value
+	d.dirty = true
+	d.present |= directorynodeBitNFTokenID
+}
+
+// SetDomainID assigns DomainID and updates its serialized presence.
+func (d *DirectoryNode) SetDomainID(value string) {
+	d.DomainID = value
+	d.dirty = true
+	d.present |= directorynodeBitDomainID
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (d *DirectoryNode) SetPreviousTxnID(value string) {
+	d.PreviousTxnID = value
+	d.dirty = true
+	d.present |= directorynodeBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (d *DirectoryNode) SetPreviousTxnLgrSeq(value uint32) {
+	d.PreviousTxnLgrSeq = value
+	d.dirty = true
+	d.present |= directorynodeBitPreviousTxnLgrSeq
+}
+
+func (d *DirectoryNode) validateRequired() error {
+	if d.decoded && !d.dirty {
+		return nil
+	}
+	if d.present&directorynodeBitFlags == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Flags is not set")
+	}
+	if d.present&directorynodeBitRootIndex == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field RootIndex is not set")
+	}
+	if d.present&directorynodeBitIndexes == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Indexes is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (d *DirectoryNode) Decode(data []byte) error {
 	*d = DirectoryNode{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -80,7 +222,10 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 100 {
+					return fmt.Errorf("ledgerfields: DirectoryNode: LedgerEntryType is %d, want 100", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
@@ -210,6 +355,10 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: DirectoryNode: missing LedgerEntryType")
+	}
+	d.decoded = true
 	return nil
 }
 
@@ -435,10 +584,12 @@ func (d *DirectoryNode) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DirectoryNode) Encode() ([]byte, error) {
+	if err := d.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(d.ToMap())
 }
 

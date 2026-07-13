@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // DepositPreauth is the typed representation of a DepositPreauth ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type DepositPreauth struct {
 	present              uint64
+	decoded              bool
+	dirty                bool
 	Account              string // AccountID (base58)
 	Authorize            string // AccountID (base58)
 	OwnerNode            string // UInt64 (lowercase hex, no leading zeros)
@@ -41,11 +46,78 @@ const (
 	depositpreauthBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (d *DepositPreauth) SetAccount(value string) {
+	d.Account = value
+	d.dirty = true
+	d.present |= depositpreauthBitAccount
+}
+
+// SetAuthorize assigns Authorize and updates its serialized presence.
+func (d *DepositPreauth) SetAuthorize(value string) {
+	d.Authorize = value
+	d.dirty = true
+	d.present |= depositpreauthBitAuthorize
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (d *DepositPreauth) SetOwnerNode(value string) {
+	d.OwnerNode = value
+	d.dirty = true
+	d.present |= depositpreauthBitOwnerNode
+}
+
+// SetAuthorizeCredentials assigns AuthorizeCredentials and updates its serialized presence.
+func (d *DepositPreauth) SetAuthorizeCredentials(value []any) {
+	d.AuthorizeCredentials = value
+	d.dirty = true
+	d.present |= depositpreauthBitAuthorizeCredentials
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (d *DepositPreauth) SetFlags(value uint32) {
+	d.Flags = value
+	d.dirty = true
+	d.present |= depositpreauthBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (d *DepositPreauth) SetPreviousTxnID(value string) {
+	d.PreviousTxnID = value
+	d.dirty = true
+	d.present |= depositpreauthBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (d *DepositPreauth) SetPreviousTxnLgrSeq(value uint32) {
+	d.PreviousTxnLgrSeq = value
+	d.dirty = true
+	d.present |= depositpreauthBitPreviousTxnLgrSeq
+}
+
+func (d *DepositPreauth) validateRequired() error {
+	if d.decoded && !d.dirty {
+		return nil
+	}
+	if d.present&depositpreauthBitAccount == 0 {
+		return errors.New("ledgerfields: DepositPreauth: required field Account is not set")
+	}
+	if d.present&depositpreauthBitOwnerNode == 0 {
+		return errors.New("ledgerfields: DepositPreauth: required field OwnerNode is not set")
+	}
+	if d.present&depositpreauthBitFlags == 0 {
+		return errors.New("ledgerfields: DepositPreauth: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (d *DepositPreauth) Decode(data []byte) error {
 	*d = DepositPreauth{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -60,7 +132,10 @@ func (d *DepositPreauth) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 112 {
+					return fmt.Errorf("ledgerfields: DepositPreauth: LedgerEntryType is %d, want 112", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 			}
@@ -134,6 +209,10 @@ func (d *DepositPreauth) Decode(data []byte) error {
 			return newErrUnknownField("DepositPreauth", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: DepositPreauth: missing LedgerEntryType")
+	}
+	d.decoded = true
 	return nil
 }
 
@@ -270,10 +349,12 @@ func (d *DepositPreauth) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (d *DepositPreauth) Encode() ([]byte, error) {
+	if err := d.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(d.ToMap())
 }
 

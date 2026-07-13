@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // SignerList is the typed representation of a SignerList ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type SignerList struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Owner             string // AccountID (base58)
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	SignerQuorum      uint32
@@ -43,11 +48,91 @@ const (
 	signerlistBitPreviousTxnLgrSeq
 )
 
+// SetOwner assigns Owner and updates its serialized presence.
+func (s *SignerList) SetOwner(value string) {
+	s.Owner = value
+	s.dirty = true
+	s.present |= signerlistBitOwner
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (s *SignerList) SetOwnerNode(value string) {
+	s.OwnerNode = value
+	s.dirty = true
+	s.present |= signerlistBitOwnerNode
+}
+
+// SetSignerQuorum assigns SignerQuorum and updates its serialized presence.
+func (s *SignerList) SetSignerQuorum(value uint32) {
+	s.SignerQuorum = value
+	s.dirty = true
+	s.present |= signerlistBitSignerQuorum
+}
+
+// SetSignerEntries assigns SignerEntries and updates its serialized presence.
+func (s *SignerList) SetSignerEntries(value []any) {
+	s.SignerEntries = value
+	s.dirty = true
+	s.present |= signerlistBitSignerEntries
+}
+
+// SetSignerListID assigns SignerListID and updates its serialized presence.
+func (s *SignerList) SetSignerListID(value uint32) {
+	s.SignerListID = value
+	s.dirty = true
+	s.present |= signerlistBitSignerListID
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (s *SignerList) SetFlags(value uint32) {
+	s.Flags = value
+	s.dirty = true
+	s.present |= signerlistBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (s *SignerList) SetPreviousTxnID(value string) {
+	s.PreviousTxnID = value
+	s.dirty = true
+	s.present |= signerlistBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (s *SignerList) SetPreviousTxnLgrSeq(value uint32) {
+	s.PreviousTxnLgrSeq = value
+	s.dirty = true
+	s.present |= signerlistBitPreviousTxnLgrSeq
+}
+
+func (s *SignerList) validateRequired() error {
+	if s.decoded && !s.dirty {
+		return nil
+	}
+	if s.present&signerlistBitOwnerNode == 0 {
+		return errors.New("ledgerfields: SignerList: required field OwnerNode is not set")
+	}
+	if s.present&signerlistBitSignerQuorum == 0 {
+		return errors.New("ledgerfields: SignerList: required field SignerQuorum is not set")
+	}
+	if s.present&signerlistBitSignerEntries == 0 {
+		return errors.New("ledgerfields: SignerList: required field SignerEntries is not set")
+	}
+	if s.present&signerlistBitSignerListID == 0 {
+		return errors.New("ledgerfields: SignerList: required field SignerListID is not set")
+	}
+	if s.present&signerlistBitFlags == 0 {
+		return errors.New("ledgerfields: SignerList: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (s *SignerList) Decode(data []byte) error {
 	*s = SignerList{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -62,7 +147,10 @@ func (s *SignerList) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 83 {
+					return fmt.Errorf("ledgerfields: SignerList: LedgerEntryType is %d, want 83", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
@@ -141,6 +229,10 @@ func (s *SignerList) Decode(data []byte) error {
 			return newErrUnknownField("SignerList", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: SignerList: missing LedgerEntryType")
+	}
+	s.decoded = true
 	return nil
 }
 
@@ -287,10 +379,12 @@ func (s *SignerList) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (s *SignerList) Encode() ([]byte, error) {
+	if err := s.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(s.ToMap())
 }
 

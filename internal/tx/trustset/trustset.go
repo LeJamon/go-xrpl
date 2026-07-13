@@ -551,50 +551,41 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		// Handle QualityIn
 		if bQualityIn {
-			if uQualityIn != 0 {
-				if bHigh {
-					rs.HighQualityIn = uQualityIn
-				} else {
-					rs.LowQualityIn = uQualityIn
-				}
+			if bHigh {
+				rs.HighQualityIn = uQualityIn
+				rs.HasHighQualityIn = uQualityIn != 0
 			} else {
-				if bHigh {
-					rs.HighQualityIn = 0
-				} else {
-					rs.LowQualityIn = 0
-				}
+				rs.LowQualityIn = uQualityIn
+				rs.HasLowQualityIn = uQualityIn != 0
 			}
 		}
 
 		// Handle QualityOut
 		if bQualityOut {
-			if uQualityOut != 0 {
-				if bHigh {
-					rs.HighQualityOut = uQualityOut
-				} else {
-					rs.LowQualityOut = uQualityOut
-				}
+			if bHigh {
+				rs.HighQualityOut = uQualityOut
+				rs.HasHighQualityOut = uQualityOut != 0
 			} else {
-				if bHigh {
-					rs.HighQualityOut = 0
-				} else {
-					rs.LowQualityOut = 0
-				}
+				rs.LowQualityOut = uQualityOut
+				rs.HasLowQualityOut = uQualityOut != 0
 			}
 		}
 
-		// Normalize quality values
-		if rs.LowQualityIn == protocol.QualityOne {
-			rs.LowQualityIn = 0
+		lowQualityIn := rs.LowQualityIn
+		if lowQualityIn == protocol.QualityOne {
+			lowQualityIn = 0
 		}
-		if rs.LowQualityOut == protocol.QualityOne {
-			rs.LowQualityOut = 0
+		lowQualityOut := rs.LowQualityOut
+		if lowQualityOut == protocol.QualityOne {
+			lowQualityOut = 0
 		}
-		if rs.HighQualityIn == protocol.QualityOne {
-			rs.HighQualityIn = 0
+		highQualityIn := rs.HighQualityIn
+		if highQualityIn == protocol.QualityOne {
+			highQualityIn = 0
 		}
-		if rs.HighQualityOut == protocol.QualityOne {
-			rs.HighQualityOut = 0
+		highQualityOut := rs.HighQualityOut
+		if highQualityOut == protocol.QualityOne {
+			highQualityOut = 0
 		}
 
 		// Check if trust line should be deleted
@@ -607,12 +598,12 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			bHighDefRipple = (issuerAccount.Flags & state.LsfDefaultRipple) != 0
 		}
 
-		bLowReserveSet := rs.LowQualityIn != 0 || rs.LowQualityOut != 0 ||
+		bLowReserveSet := lowQualityIn != 0 || lowQualityOut != 0 ||
 			((rs.Flags&state.LsfLowNoRipple) == 0) != bLowDefRipple ||
 			(rs.Flags&state.LsfLowFreeze) != 0 || !rs.LowLimit.IsZero() ||
 			rs.Balance.Signum() > 0
 
-		bHighReserveSet := rs.HighQualityIn != 0 || rs.HighQualityOut != 0 ||
+		bHighReserveSet := highQualityIn != 0 || highQualityOut != 0 ||
 			((rs.Flags&state.LsfHighNoRipple) == 0) != bHighDefRipple ||
 			(rs.Flags&state.LsfHighFreeze) != 0 || !rs.HighLimit.IsZero() ||
 			rs.Balance.Signum() < 0
@@ -623,8 +614,9 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		bHighReserved := (rs.Flags & state.LsfHighReserve) != 0
 
 		bDefault := !bLowReserveSet && !bHighReserveSet
+		badCurrency := keylet.CurrencyBytes(t.LimitAmount.Currency) == keylet.BadCurrency()
 
-		if bDefault {
+		if bDefault || badCurrency {
 			// Remove from both owner directories before erasing
 			// Reference: rippled trustDelete() in View.cpp
 			var lowAccountID, highAccountID [20]byte

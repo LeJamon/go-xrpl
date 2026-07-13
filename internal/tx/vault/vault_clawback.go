@@ -171,7 +171,7 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 			if aerr != nil {
 				return ter.TefINTERNAL
 			}
-			if want.Cmp(state.NewXRPLNumber(int64(held), 0)) != 0 {
+			if want.Cmp(newVaultNumber(int64(held), 0)) != 0 {
 				return ter.TecLIMIT_EXCEEDED
 			}
 		}
@@ -235,11 +235,11 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
 	availN, _ := vaultNumber(vd.AssetsAvailable)
 	lossN, _ := vaultNumber(vd.LossUnrealized)
-	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
+	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
 
 	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
 	var sharesDestroyed uint64
-	assetsRecoveredN := state.NewXRPLNumber(0, 0)
+	assetsRecoveredN := newVaultNumber(0, 0)
 	clampAssets := false
 
 	if v.clawsBackShares(vd, accountID) {
@@ -247,7 +247,7 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		sharesDestroyed = held
 	} else if v.Amount == nil || v.Amount.Signum() == 0 {
 		sharesDestroyed = held
-		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, state.NewXRPLNumber(int64(held), 0))
+		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, newVaultNumber(int64(held), 0))
 		// Pre-fixCleanup3_1_3 the zero-amount path returned without clamping to
 		// AssetsAvailable, over-recovering when a loan was outstanding.
 		clampAssets = ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
@@ -262,7 +262,7 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 			s = held
 		}
 		sharesDestroyed = s
-		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, state.NewXRPLNumber(int64(s), 0))
+		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, newVaultNumber(int64(s), 0))
 		clampAssets = true
 	}
 
@@ -272,7 +272,7 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		assetsRecoveredN = availN
 		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, availN, true)
 		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
-		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, state.NewXRPLNumber(int64(sharesDestroyed), 0))
+		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, newVaultNumber(int64(sharesDestroyed), 0))
 		if assetsRecoveredN.Cmp(availN) > 0 {
 			return ter.TecINTERNAL
 		}

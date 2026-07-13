@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // NegativeUNL is the typed representation of a NegativeUNL ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type NegativeUNL struct {
 	present             uint64
+	decoded             bool
+	dirty               bool
 	Flags               uint32
 	DisabledValidators  []any
 	ValidatorToDisable  string // Blob (uppercase hex)
@@ -39,11 +44,65 @@ const (
 	negativeunlBitPreviousTxnLgrSeq
 )
 
+// SetFlags assigns Flags and updates its serialized presence.
+func (n *NegativeUNL) SetFlags(value uint32) {
+	n.Flags = value
+	n.dirty = true
+	n.present |= negativeunlBitFlags
+}
+
+// SetDisabledValidators assigns DisabledValidators and updates its serialized presence.
+func (n *NegativeUNL) SetDisabledValidators(value []any) {
+	n.DisabledValidators = value
+	n.dirty = true
+	n.present |= negativeunlBitDisabledValidators
+}
+
+// SetValidatorToDisable assigns ValidatorToDisable and updates its serialized presence.
+func (n *NegativeUNL) SetValidatorToDisable(value string) {
+	n.ValidatorToDisable = value
+	n.dirty = true
+	n.present |= negativeunlBitValidatorToDisable
+}
+
+// SetValidatorToReEnable assigns ValidatorToReEnable and updates its serialized presence.
+func (n *NegativeUNL) SetValidatorToReEnable(value string) {
+	n.ValidatorToReEnable = value
+	n.dirty = true
+	n.present |= negativeunlBitValidatorToReEnable
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (n *NegativeUNL) SetPreviousTxnID(value string) {
+	n.PreviousTxnID = value
+	n.dirty = true
+	n.present |= negativeunlBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (n *NegativeUNL) SetPreviousTxnLgrSeq(value uint32) {
+	n.PreviousTxnLgrSeq = value
+	n.dirty = true
+	n.present |= negativeunlBitPreviousTxnLgrSeq
+}
+
+func (n *NegativeUNL) validateRequired() error {
+	if n.decoded && !n.dirty {
+		return nil
+	}
+	if n.present&negativeunlBitFlags == 0 {
+		return errors.New("ledgerfields: NegativeUNL: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (n *NegativeUNL) Decode(data []byte) error {
 	*n = NegativeUNL{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -58,7 +117,10 @@ func (n *NegativeUNL) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 78 {
+					return fmt.Errorf("ledgerfields: NegativeUNL: LedgerEntryType is %d, want 78", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
@@ -120,6 +182,10 @@ func (n *NegativeUNL) Decode(data []byte) error {
 			return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: NegativeUNL: missing LedgerEntryType")
+	}
+	n.decoded = true
 	return nil
 }
 
@@ -246,10 +312,12 @@ func (n *NegativeUNL) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (n *NegativeUNL) Encode() ([]byte, error) {
+	if err := n.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(n.ToMap())
 }
 

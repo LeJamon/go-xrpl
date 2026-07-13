@@ -221,7 +221,7 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 	}
-	shareTotalN := state.NewXRPLNumber(int64(issuance.OutstandingAmount), 0)
+	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
 	sharesN := assetsToSharesDeposit(assetsTotalN, shareTotalN, assetsN, vd.Scale)
 	if sharesN.IsZero() {
 		return ter.TecPRECISION_LOSS

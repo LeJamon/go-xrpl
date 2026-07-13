@@ -1,15 +1,16 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"math/big"
 	"strings"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -26,26 +27,32 @@ type RippleState struct {
 	// HighLimit is the trust limit set by the high account
 	HighLimit Amount
 
-	// LowNode is the directory node for the low account
-	LowNode uint64
+	LowNode    uint64
+	HasLowNode bool
 
-	// HighNode is the directory node for the high account
-	HighNode uint64
+	HighNode    uint64
+	HasHighNode bool
 
 	// Flags for the trust line
 	Flags uint32
 
 	// LowQualityIn/Out and HighQualityIn/Out for transfer rates
-	LowQualityIn   uint32
-	LowQualityOut  uint32
-	HighQualityIn  uint32
-	HighQualityOut uint32
+	LowQualityIn      uint32
+	HasLowQualityIn   bool
+	LowQualityOut     uint32
+	HasLowQualityOut  bool
+	HighQualityIn     uint32
+	HasHighQualityIn  bool
+	HighQualityOut    uint32
+	HasHighQualityOut bool
 
 	// PreviousTxnID is the hash of the previous transaction that modified this entry
 	PreviousTxnID [32]byte
 
 	// PreviousTxnLgrSeq is the ledger sequence of the previous transaction
 	PreviousTxnLgrSeq uint32
+	decodedOptionals  map[string]any
+	binaryBadCurrency bool
 }
 
 // RippleState flags.
@@ -63,24 +70,6 @@ const (
 	LsfHighDeepFreeze = entry.LsfHighDeepFreeze
 )
 
-// Ledger entry type code for RippleState
-const ledgerEntryTypeRippleState = uint16(entry.TypeRippleState)
-
-// Field codes for RippleState (based on XRPL binary serialization format)
-const (
-	fieldCodeRSBalance      = 2  // Amount field code for Balance
-	fieldCodeLowLimit       = 6  // Amount field code for LowLimit
-	fieldCodeHighLimit      = 7  // Amount field code for HighLimit
-	fieldCodeLowNode        = 7  // UInt64 field code for LowNode
-	fieldCodeHighNode       = 8  // UInt64 field code for HighNode
-	fieldCodePrevTxnID      = 5  // Hash256 field code for PreviousTxnID
-	fieldCodePrevTxnLgrSeq  = 5  // UInt32 field code for PreviousTxnLgrSeq
-	fieldCodeHighQualityIn  = 16 // UInt32 field code for HighQualityIn (nth=16 in definitions.json)
-	fieldCodeHighQualityOut = 17 // UInt32 field code for HighQualityOut (nth=17 in definitions.json)
-	fieldCodeLowQualityIn   = 18 // UInt32 field code for LowQualityIn (nth=18 in definitions.json)
-	fieldCodeLowQualityOut  = 19 // UInt32 field code for LowQualityOut (nth=19 in definitions.json)
-)
-
 // AccountOneAddress is the special issuer address used for Balance in RippleState
 // This is ACCOUNT_ONE in rippled - a special address that represents no account
 const AccountOneAddress = "rrrrrrrrrrrrrrrrrrrrBZbvji"
@@ -88,80 +77,87 @@ const AccountOneAddress = "rrrrrrrrrrrrrrrrrrrrBZbvji"
 // Keep internal alias for backwards compatibility within the package
 const accountOne = AccountOneAddress
 
+const badCurrencyHex = "0000000000000000000000005852500000000000"
+
 // ParseRippleState parses a RippleState from binary data
 func ParseRippleState(data []byte) (*RippleState, error) {
-	if len(data) < 20 {
-		return nil, errors.New("ripple state data too short")
+	var decoded ledgerfields.RippleState
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode RippleState: %w", err)
 	}
-
-	rs := &RippleState{}
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt16:
-			if f.FieldCode == fieldCodeLedgerEntryType {
-				if f.UInt16() != ledgerEntryTypeRippleState {
-					return errors.New("not a RippleState entry")
-				}
-			}
-
-		case stUInt32:
-			switch f.FieldCode {
-			case fieldCodeFlags:
-				rs.Flags = f.UInt32()
-			case fieldCodePrevTxnLgrSeq:
-				rs.PreviousTxnLgrSeq = f.UInt32()
-			case fieldCodeLowQualityIn:
-				rs.LowQualityIn = f.UInt32()
-			case fieldCodeLowQualityOut:
-				rs.LowQualityOut = f.UInt32()
-			case fieldCodeHighQualityIn:
-				rs.HighQualityIn = f.UInt32()
-			case fieldCodeHighQualityOut:
-				rs.HighQualityOut = f.UInt32()
-			}
-
-		case stUInt64:
-			switch f.FieldCode {
-			case fieldCodeLowNode:
-				rs.LowNode = f.UInt64()
-			case fieldCodeHighNode:
-				rs.HighNode = f.UInt64()
-			}
-
-		case stHash256:
-			if f.FieldCode == fieldCodePrevTxnID {
-				rs.PreviousTxnID = f.Hash256()
-			}
-
-		case stAmount:
-			// RippleState's Balance/LowLimit/HighLimit are IOU amounts (48
-			// bytes); a non-IOU value is foreign here and is skipped.
-			if len(f.Value) != 48 {
-				return nil
-			}
-			amt, err := ParseIOUAmountBinary(f.Value)
-			if err != nil {
-				// A trust line whose Balance/limit fails to parse is corrupt;
-				// returning a zero amount with no error would silently diverge
-				// the trust line's state from the ledger.
-				return fmt.Errorf("RippleState amount (field %d) parse failed: %w", f.FieldCode, err)
-			}
-			switch f.FieldCode {
-			case fieldCodeRSBalance:
-				rs.Balance = amt
-			case fieldCodeLowLimit:
-				rs.LowLimit = amt
-			case fieldCodeHighLimit:
-				rs.HighLimit = amt
-			}
+	fields := decoded.ToMap()
+	decodeIssued := func(field string, value any) (Amount, error) {
+		amount, err := decodeLedgerAmount("RippleState."+field, value)
+		if err != nil {
+			return Amount{}, err
 		}
-		return nil
-	})
+		if amount.IsNative() || amount.IsMPT() {
+			return Amount{}, fmt.Errorf("RippleState.%s: expected issued-currency amount", field)
+		}
+		return amount, nil
+	}
+	balance, err := decodeIssued("Balance", decoded.Balance)
 	if err != nil {
 		return nil, err
 	}
+	lowLimit, err := decodeIssued("LowLimit", decoded.LowLimit)
+	if err != nil {
+		return nil, err
+	}
+	highLimit, err := decodeIssued("HighLimit", decoded.HighLimit)
+	if err != nil {
+		return nil, err
+	}
+	badCurrencyAmounts := 0
+	for _, amount := range []Amount{balance, lowLimit, highLimit} {
+		if amount.Currency == badCurrencyHex {
+			badCurrencyAmounts++
+		}
+	}
+	if badCurrencyAmounts != 0 && badCurrencyAmounts != 3 {
+		return nil, errors.New("RippleState has inconsistent badCurrency amounts")
+	}
 
+	rs := &RippleState{
+		Balance:           balance,
+		LowLimit:          lowLimit,
+		HighLimit:         highLimit,
+		Flags:             decoded.Flags,
+		LowQualityIn:      decoded.LowQualityIn,
+		LowQualityOut:     decoded.LowQualityOut,
+		HighQualityIn:     decoded.HighQualityIn,
+		HighQualityOut:    decoded.HighQualityOut,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		decodedOptionals:  make(map[string]any),
+		binaryBadCurrency: badCurrencyAmounts == 3,
+	}
+	if _, ok := fields["LowNode"]; ok {
+		rs.LowNode, err = parseLedgerUint64("RippleState.LowNode", decoded.LowNode)
+		if err != nil {
+			return nil, err
+		}
+		rs.HasLowNode = true
+	}
+	if _, ok := fields["HighNode"]; ok {
+		rs.HighNode, err = parseLedgerUint64("RippleState.HighNode", decoded.HighNode)
+		if err != nil {
+			return nil, err
+		}
+		rs.HasHighNode = true
+	}
+	_, rs.HasLowQualityIn = fields["LowQualityIn"]
+	_, rs.HasLowQualityOut = fields["LowQualityOut"]
+	_, rs.HasHighQualityIn = fields["HighQualityIn"]
+	_, rs.HasHighQualityOut = fields["HighQualityOut"]
+	if _, ok := fields["PreviousTxnID"]; ok {
+		if err := decodeLedgerHex("RippleState.PreviousTxnID", decoded.PreviousTxnID, rs.PreviousTxnID[:]); err != nil {
+			return nil, err
+		}
+		rs.decodedOptionals["PreviousTxnID"] = rs.PreviousTxnID
+	}
+	if _, ok := fields["PreviousTxnLgrSeq"]; ok {
+		rs.decodedOptionals["PreviousTxnLgrSeq"] = rs.PreviousTxnLgrSeq
+	}
 	return rs, nil
 }
 
@@ -171,68 +167,14 @@ func ParseIOUAmountBinary(data []byte) (Amount, error) {
 	if len(data) != 48 {
 		return Amount{}, errors.New("invalid IOU amount length")
 	}
-
-	// First 8 bytes: value (mantissa + exponent)
-	// Bytes 8-27: currency code (20 bytes / 160 bits)
-	// Bytes 28-47: issuer account ID (20 bytes / 160 bits)
-
-	// Decode the 20-byte currency (bytes 8-27) with the canonical codec rules
-	// (rippled to_string semantics): a standard-form code renders as its 3-char
-	// symbol only when those bytes are in the legal ISO alphabet, otherwise as
-	// full hex. Reusing the shared decoder keeps this string byte-identical to
-	// how the transaction amount and binary codec render the same currency. A
-	// private "any zero-prefixed bytes are a 3-char code" shortcut here yielded
-	// strings like "6-7" for non-ISO codes that no longer matched the amount's
-	// hex form, so Amount arithmetic rejected the currency mismatch and
-	// rippleCredit failed with tefINTERNAL — silently dropping the delivery.
-	currency, err := types.DecodeCurrencyCode(data[8:28])
+	amount, err := parseCanonicalAmountBinary(data)
 	if err != nil {
-		return Amount{}, err
+		return Amount{}, fmt.Errorf("invalid IOU amount: %w", err)
 	}
-
-	// Parse issuer (last 20 bytes)
-	var issuerID [20]byte
-	copy(issuerID[:], data[28:48])
-	issuer, _ := encodeAccountID(issuerID)
-
-	// Parse value from first 8 bytes
-	// Bit 63: not XRP (always 1 for IOU)
-	// Bit 62: sign (1 = positive)
-	// Bits 54-61: exponent (8 bits, biased by 97)
-	// Bits 0-53: mantissa (54 bits)
-	rawValue := binary.BigEndian.Uint64(data[0:8])
-
-	if rawValue == 0x8000000000000000 { // Zero
-		return NewIssuedAmountFromValue(0, zeroExponent, currency, issuer), nil
+	if amount.IsNative() || amount.IsMPT() {
+		return Amount{}, errors.New("invalid IOU amount: expected issued currency")
 	}
-
-	positive := (rawValue & 0x4000000000000000) != 0
-	exponent := int((rawValue>>54)&0xFF) - 97
-	mantissa := int64(rawValue & 0x003FFFFFFFFFFFFF)
-
-	if !positive {
-		mantissa = -mantissa
-	}
-
-	// Validate bounds before calling NewIssuedAmountFromValue, which panics
-	// on overflow (matching rippled's Throw<std::overflow_error>). When parsing
-	// binary data from the ledger, a panic would crash the server. Return an
-	// error instead for out-of-range values that normalization cannot fix.
-	//
-	// The raw 54-bit mantissa can be up to ~1.8e16. Normalization divides by 10
-	// until mantissa <= MaxMantissa (9.999e15), incrementing exponent each time.
-	// If mantissa > MaxMantissa and exponent >= MaxExponent, normalization would
-	// need to increment exponent past MaxExponent, causing overflow. Similarly,
-	// if exponent already exceeds MaxExponent, it will always overflow.
-	absMantissa := mantissa
-	if absMantissa < 0 {
-		absMantissa = -absMantissa
-	}
-	if absMantissa != 0 && (exponent > MaxExponent || (exponent >= MaxExponent && absMantissa > MaxMantissa)) {
-		return Amount{}, fmt.Errorf("IOU amount overflow: mantissa %d exponent %d exceeds representable range", mantissa, exponent)
-	}
-
-	return NewIssuedAmountFromValue(mantissa, exponent, currency, issuer), nil
+	return amount, nil
 }
 
 // ParseMPTAmountBinary parses an MPT amount from 33 bytes of binary data.
@@ -244,46 +186,29 @@ func ParseMPTAmountBinary(data []byte) (Amount, error) {
 	if len(data) != 33 {
 		return Amount{}, errors.New("invalid MPT amount length: expected 33 bytes")
 	}
-
-	header := data[0]
-	positive := (header & 0x40) != 0
-
-	// Parse 8-byte value as big-endian uint64
-	msb := binary.BigEndian.Uint32(data[1:5])
-	lsb := binary.BigEndian.Uint32(data[5:9])
-	msbBig := new(big.Int).SetUint64(uint64(msb))
-	lsbBig := new(big.Int).SetUint64(uint64(lsb))
-	shifted := new(big.Int).Lsh(msbBig, 32)
-	num := new(big.Int).Or(shifted, lsbBig)
-
-	// An MPT magnitude must fit in int64 (max 2^63-1). num.Int64() wraps
-	// two's-complement for magnitudes >= 2^63, silently decoding an
-	// out-of-range positive amount as a large negative one, so reject before
-	// converting.
-	if num.BitLen() > 63 {
-		return Amount{}, fmt.Errorf("MPT amount out of range: %s", num.String())
+	amount, err := parseCanonicalAmountBinary(data)
+	if err != nil {
+		return Amount{}, fmt.Errorf("invalid MPT amount: %w", err)
 	}
-
-	value := num.Int64()
-	if !positive {
-		value = -value
+	if !amount.IsMPT() {
+		return Amount{}, errors.New("invalid MPT amount: expected MPToken issuance")
 	}
-
-	// Parse 24-byte issuance ID (hex-encoded, uppercase)
-	issuanceID := strings.ToUpper(hex.EncodeToString(data[9:33]))
-
-	// Build Amount directly to set the private mptIssuanceID field.
-	iouVal := NewIOUAmountValue(value, 0)
-	raw := value
-	return Amount{
-		iou:           iouVal,
-		Native:        false,
-		mptRaw:        &raw,
-		mptIssuanceID: issuanceID,
-	}, nil
+	return amount, nil
 }
 
-// serializeAmount serializes an Amount to a map suitable for binarycodec.Encode
+func parseCanonicalAmountBinary(data []byte) (Amount, error) {
+	parser := serdes.NewBinaryParser(data, definitions.Get())
+	decoded, err := (&types.Amount{}).ToJSON(parser)
+	if err != nil {
+		return Amount{}, err
+	}
+	if parser.Remaining() != 0 {
+		return Amount{}, errors.New("trailing amount bytes")
+	}
+	return decodeLedgerAmount("Amount", decoded)
+}
+
+// serializeAmount renders an Amount in the canonical JSON amount form.
 func serializeAmount(amount Amount, currency string, useAccountOne bool) map[string]any {
 	valueStr := amount.Value()
 	curr := currency
@@ -312,42 +237,72 @@ func SerializeRippleState(rs *RippleState) ([]byte, error) {
 			currency = rs.HighLimit.Currency
 		}
 	}
-
-	jsonObj := map[string]any{
-		"LedgerEntryType": "RippleState",
-		"Flags":           rs.Flags,
-		"Balance":         serializeAmount(rs.Balance, currency, true),
-		"LowLimit":        serializeAmount(rs.LowLimit, currency, false),
-		"HighLimit":       serializeAmount(rs.HighLimit, currency, false),
-		"LowNode":         fmt.Sprintf("%x", rs.LowNode),
-		"HighNode":        fmt.Sprintf("%x", rs.HighNode),
+	binaryBadCurrency := rs.binaryBadCurrency && currency == badCurrencyHex
+	encodedCurrency := currency
+	if binaryBadCurrency {
+		encodedCurrency = "USD"
 	}
 
-	if rs.LowQualityIn != 0 {
-		jsonObj["LowQualityIn"] = rs.LowQualityIn
+	entry := &ledgerfields.RippleState{}
+	entry.SetFlags(rs.Flags)
+	entry.SetBalance(serializeAmount(rs.Balance, encodedCurrency, true))
+	entry.SetLowLimit(serializeAmount(rs.LowLimit, encodedCurrency, false))
+	entry.SetHighLimit(serializeAmount(rs.HighLimit, encodedCurrency, false))
+	if rs.HasLowNode || rs.LowNode != 0 {
+		entry.SetLowNode(fmt.Sprintf("%x", rs.LowNode))
 	}
-	if rs.LowQualityOut != 0 {
-		jsonObj["LowQualityOut"] = rs.LowQualityOut
+	if rs.HasHighNode || rs.HighNode != 0 {
+		entry.SetHighNode(fmt.Sprintf("%x", rs.HighNode))
 	}
-	if rs.HighQualityIn != 0 {
-		jsonObj["HighQualityIn"] = rs.HighQualityIn
+	if rs.HasLowQualityIn || rs.LowQualityIn != 0 {
+		entry.SetLowQualityIn(rs.LowQualityIn)
 	}
-	if rs.HighQualityOut != 0 {
-		jsonObj["HighQualityOut"] = rs.HighQualityOut
+	if rs.HasLowQualityOut || rs.LowQualityOut != 0 {
+		entry.SetLowQualityOut(rs.LowQualityOut)
+	}
+	if rs.HasHighQualityIn || rs.HighQualityIn != 0 {
+		entry.SetHighQualityIn(rs.HighQualityIn)
+	}
+	if rs.HasHighQualityOut || rs.HighQualityOut != 0 {
+		entry.SetHighQualityOut(rs.HighQualityOut)
 	}
 
-	if rs.PreviousTxnID != [32]byte{} {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(rs.PreviousTxnID[:]))
+	if rs.PreviousTxnID != [32]byte{} || decodedFieldUnchanged(rs.decodedOptionals, "PreviousTxnID", rs.PreviousTxnID) {
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(rs.PreviousTxnID[:])))
+	}
+	if rs.PreviousTxnLgrSeq != 0 || decodedFieldUnchanged(rs.decodedOptionals, "PreviousTxnLgrSeq", rs.PreviousTxnLgrSeq) {
+		entry.SetPreviousTxnLgrSeq(rs.PreviousTxnLgrSeq)
 	}
 
-	if rs.PreviousTxnLgrSeq != 0 {
-		jsonObj["PreviousTxnLgrSeq"] = rs.PreviousTxnLgrSeq
-	}
-
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := entry.Encode()
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode RippleState: %w", err)
+		return nil, err
+	}
+	if !binaryBadCurrency {
+		return data, nil
 	}
 
-	return hex.DecodeString(hexStr)
+	badCurrency := keylet.BadCurrency()
+	amounts := 0
+	err = WalkFields(data, func(field Field) error {
+		if field.TypeCode != stAmount {
+			return nil
+		}
+		switch field.FieldCode {
+		case 2, 6, 7:
+			if len(field.Value) != types.CurrencyAmountByteLength {
+				return fmt.Errorf("RippleState amount field %d is not issued currency", field.FieldCode)
+			}
+			copy(field.Value[8:28], badCurrency[:])
+			amounts++
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if amounts != 3 {
+		return nil, fmt.Errorf("RippleState badCurrency encoding patched %d amounts, want 3", amounts)
+	}
+	return data, nil
 }

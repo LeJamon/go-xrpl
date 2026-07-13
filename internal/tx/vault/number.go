@@ -19,16 +19,25 @@ import (
 // the field decodes off the ledger.
 func vaultNumber(s string) (state.XRPLNumber, error) {
 	if s == "" || s == "0" {
-		return state.NewXRPLNumber(0, 0), nil
+		return newVaultNumber(0, 0), nil
 	}
 	num := &types.Number{}
 	b, err := num.FromJSON(s)
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), fmt.Errorf("parse number %q: %w", s, err)
+		return newVaultNumber(0, 0), fmt.Errorf("parse number %q: %w", s, err)
 	}
 	mantissa := int64(binary.BigEndian.Uint64(b[:8]))
 	exp := int32(binary.BigEndian.Uint32(b[8:12]))
-	return state.NewXRPLNumber(mantissa, int(exp)), nil
+	return newVaultNumber(mantissa, int(exp)), nil
+}
+
+func newVaultNumber(mantissa int64, exponent int) state.XRPLNumber {
+	return state.NewXRPLNumberScaled(
+		mantissa,
+		exponent,
+		state.MantissaScaleLarge,
+		state.RoundToNearest,
+	)
 }
 
 // numberToString renders an XRPLNumber into the vault NUMBER-field convention:
@@ -45,7 +54,7 @@ func numberToString(n state.XRPLNumber) string {
 // drops and MPT in its integer units; an IOU carries a decimal value.
 func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
 	if a.IsNative() {
-		return state.NewXRPLNumber(a.Drops(), 0), nil
+		return newVaultNumber(a.Drops(), 0), nil
 	}
 	if a.IsMPT() {
 		return vaultNumber(a.Value())
@@ -55,7 +64,7 @@ func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
 
 // pow10 returns 10^scale as an XRPLNumber.
 func pow10(scale uint8) state.XRPLNumber {
-	return state.NewXRPLNumber(1, int(scale))
+	return newVaultNumber(1, int(scale))
 }
 
 // roundToVaultScale rounds a deposit amount down to the vault's post-deposit
@@ -93,7 +102,7 @@ func sharesToAssetsDeposit(assetsTotal, shareTotal, shares state.XRPLNumber, sca
 func assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets state.XRPLNumber, truncate bool) state.XRPLNumber {
 	effective := assetsTotal.Sub(lossUnrealized)
 	if effective.IsZero() {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	result := shareTotal.Mul(assets).Div(effective)
 	if truncate {
@@ -106,7 +115,7 @@ func assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets stat
 func sharesToAssetsWithdraw(assetsTotal, lossUnrealized, shareTotal, shares state.XRPLNumber) state.XRPLNumber {
 	effective := assetsTotal.Sub(lossUnrealized)
 	if effective.IsZero() {
-		return state.NewXRPLNumber(0, 0)
+		return newVaultNumber(0, 0)
 	}
 	return effective.Mul(shares).Div(shareTotal)
 }

@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // PermissionedDomain is the typed representation of a PermissionedDomain ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type PermissionedDomain struct {
 	present             uint64
+	decoded             bool
+	dirty               bool
 	Owner               string // AccountID (base58)
 	Sequence            uint32
 	AcceptedCredentials []any
@@ -41,11 +46,84 @@ const (
 	permissioneddomainBitPreviousTxnLgrSeq
 )
 
+// SetOwner assigns Owner and updates its serialized presence.
+func (p *PermissionedDomain) SetOwner(value string) {
+	p.Owner = value
+	p.dirty = true
+	p.present |= permissioneddomainBitOwner
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (p *PermissionedDomain) SetSequence(value uint32) {
+	p.Sequence = value
+	p.dirty = true
+	p.present |= permissioneddomainBitSequence
+}
+
+// SetAcceptedCredentials assigns AcceptedCredentials and updates its serialized presence.
+func (p *PermissionedDomain) SetAcceptedCredentials(value []any) {
+	p.AcceptedCredentials = value
+	p.dirty = true
+	p.present |= permissioneddomainBitAcceptedCredentials
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (p *PermissionedDomain) SetOwnerNode(value string) {
+	p.OwnerNode = value
+	p.dirty = true
+	p.present |= permissioneddomainBitOwnerNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (p *PermissionedDomain) SetFlags(value uint32) {
+	p.Flags = value
+	p.dirty = true
+	p.present |= permissioneddomainBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (p *PermissionedDomain) SetPreviousTxnID(value string) {
+	p.PreviousTxnID = value
+	p.dirty = true
+	p.present |= permissioneddomainBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (p *PermissionedDomain) SetPreviousTxnLgrSeq(value uint32) {
+	p.PreviousTxnLgrSeq = value
+	p.dirty = true
+	p.present |= permissioneddomainBitPreviousTxnLgrSeq
+}
+
+func (p *PermissionedDomain) validateRequired() error {
+	if p.decoded && !p.dirty {
+		return nil
+	}
+	if p.present&permissioneddomainBitOwner == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field Owner is not set")
+	}
+	if p.present&permissioneddomainBitSequence == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field Sequence is not set")
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field AcceptedCredentials is not set")
+	}
+	if p.present&permissioneddomainBitOwnerNode == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field OwnerNode is not set")
+	}
+	if p.present&permissioneddomainBitFlags == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (p *PermissionedDomain) Decode(data []byte) error {
 	*p = PermissionedDomain{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -60,7 +138,10 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 130 {
+					return fmt.Errorf("ledgerfields: PermissionedDomain: LedgerEntryType is %d, want 130", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
@@ -134,6 +215,10 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 			return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: PermissionedDomain: missing LedgerEntryType")
+	}
+	p.decoded = true
 	return nil
 }
 
@@ -270,10 +355,12 @@ func (p *PermissionedDomain) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (p *PermissionedDomain) Encode() ([]byte, error) {
+	if err := p.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(p.ToMap())
 }
 

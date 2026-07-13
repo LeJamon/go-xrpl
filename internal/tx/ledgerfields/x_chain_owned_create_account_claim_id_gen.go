@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // XChainOwnedCreateAccountClaimID is the typed representation of a XChainOwnedCreateAccountClaimID ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type XChainOwnedCreateAccountClaimID struct {
 	present                         uint64
+	decoded                         bool
+	dirty                           bool
 	Account                         string // AccountID (base58)
 	XChainBridge                    any
 	XChainAccountCreateCount        string // UInt64 (lowercase hex, no leading zeros)
@@ -43,11 +48,94 @@ const (
 	xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetAccount(value string) {
+	x.Account = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitAccount
+}
+
+// SetXChainBridge assigns XChainBridge and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetXChainBridge(value any) {
+	x.XChainBridge = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitXChainBridge
+}
+
+// SetXChainAccountCreateCount assigns XChainAccountCreateCount and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetXChainAccountCreateCount(value string) {
+	x.XChainAccountCreateCount = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitXChainAccountCreateCount
+}
+
+// SetXChainCreateAccountAttestations assigns XChainCreateAccountAttestations and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetXChainCreateAccountAttestations(value []any) {
+	x.XChainCreateAccountAttestations = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetOwnerNode(value string) {
+	x.OwnerNode = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitOwnerNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetFlags(value uint32) {
+	x.Flags = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnID(value string) {
+	x.PreviousTxnID = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (x *XChainOwnedCreateAccountClaimID) SetPreviousTxnLgrSeq(value uint32) {
+	x.PreviousTxnLgrSeq = value
+	x.dirty = true
+	x.present |= xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq
+}
+
+func (x *XChainOwnedCreateAccountClaimID) validateRequired() error {
+	if x.decoded && !x.dirty {
+		return nil
+	}
+	if x.present&xchainownedcreateaccountclaimidBitAccount == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field Account is not set")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field XChainBridge is not set")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field XChainAccountCreateCount is not set")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field XChainCreateAccountAttestations is not set")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitOwnerNode == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field OwnerNode is not set")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitFlags == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field Flags is not set")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader. Declared fields, including sMD_Never fields, are retained; unknown
+// fields are rejected.
 func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 	*x = XChainOwnedCreateAccountClaimID{}
 	sr := newStreamReader(data)
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
@@ -62,7 +150,10 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 116 {
+					return fmt.Errorf("ledgerfields: XChainOwnedCreateAccountClaimID: LedgerEntryType is %d, want 116", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 			}
@@ -152,6 +243,10 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 			return newErrUnknownField("XChainOwnedCreateAccountClaimID", typeCode, fieldCode)
 		}
 	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: missing LedgerEntryType")
+	}
+	x.decoded = true
 	return nil
 }
 
@@ -298,10 +393,12 @@ func (x *XChainOwnedCreateAccountClaimID) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
+	if err := x.validateRequired(); err != nil {
+		return nil, err
+	}
 	return binarycodec.EncodeBytes(x.ToMap())
 }
 
