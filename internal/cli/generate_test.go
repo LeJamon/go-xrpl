@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -86,6 +87,84 @@ func TestRunGenerateConfig(t *testing.T) {
 		!strings.Contains(string(validatorsData), "https://vl.altnet.rippletest.net") ||
 		!strings.Contains(string(validatorsData), "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860") {
 		t.Error("testnet validators config does not contain only the altnet trust anchor")
+	}
+}
+
+func TestRunGenerateConfig_DoesNotOverwriteExistingOutput(t *testing.T) {
+	prevNet, prevOut := generateNetwork, generateOutput
+	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
+
+	dir := t.TempDir()
+	validatorsPath := filepath.Join(dir, generatedValidatorsFilename)
+	if err := os.WriteFile(validatorsPath, []byte("operator-owned\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generateNetwork = "testnet"
+	generateOutput = filepath.Join(dir, "xrpld.toml")
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, nil); err == nil {
+		t.Fatal("expected existing validators output to be rejected")
+	}
+	data, err := os.ReadFile(validatorsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "operator-owned\n" {
+		t.Fatal("existing validators file was modified")
+	}
+	if _, err := os.Stat(generateOutput); !os.IsNotExist(err) {
+		t.Fatalf("config output exists after rejected generation: %v", err)
+	}
+}
+
+func TestRunGenerateConfig_RecoversIdenticalValidatorsOutput(t *testing.T) {
+	prevNet, prevOut := generateNetwork, generateOutput
+	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
+
+	dir := t.TempDir()
+	validatorsContent, ok := generateValidatorsContent("testnet")
+	if !ok {
+		t.Fatal("testnet validators config is unavailable")
+	}
+	if err := os.WriteFile(filepath.Join(dir, generatedValidatorsFilename), []byte(validatorsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generateNetwork = "testnet"
+	generateOutput = filepath.Join(dir, "xrpld.toml")
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, nil); err != nil {
+		t.Fatalf("runGenerateConfig: %v", err)
+	}
+	if _, err := os.Stat(generateOutput); err != nil {
+		t.Fatalf("config output was not recovered: %v", err)
+	}
+}
+
+func TestPublishGeneratedFiles_RollsBackPartialPublish(t *testing.T) {
+	dir := t.TempDir()
+	files := []generatedFile{
+		{path: filepath.Join(dir, "validators.toml"), data: []byte("validators")},
+		{path: filepath.Join(dir, "xrpld.toml"), data: []byte("config")},
+	}
+	links := 0
+	err := publishGeneratedFiles(files, func(oldPath, newPath string) error {
+		links++
+		if links == 2 {
+			return errors.New("injected publish failure")
+		}
+		return os.Link(oldPath, newPath)
+	})
+	if err == nil {
+		t.Fatal("expected publish failure")
+	}
+	for _, file := range files {
+		if _, err := os.Stat(file.path); !os.IsNotExist(err) {
+			t.Fatalf("published output %s was not rolled back: %v", file.path, err)
+		}
 	}
 }
 

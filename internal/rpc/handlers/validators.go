@@ -151,6 +151,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any
 	if ctx != nil && ctx.Services != nil && ctx.Services.ValidationQuorum != nil {
 		quorum = ctx.Services.ValidationQuorum()
 	}
+	quorumRPC := validationQuorumForRPC(quorum)
 
 	// Match rippled ValidatorList::count (ValidatorList.cpp:1547-1551):
 	// publisherLists_.size() + (localPublisherList non-empty ? 1 : 0).
@@ -203,7 +204,7 @@ func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any
 	resp := map[string]any{
 		"trusted_validator_keys": trustedKeys,
 		"publisher_lists":        publisherLists,
-		"validation_quorum":      quorum,
+		"validation_quorum":      quorumRPC,
 		"validator_list":         validatorListSummary,
 		"local_static_keys":      localStatic,
 		"signing_keys":           signingKeys,

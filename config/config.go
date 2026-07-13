@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -73,8 +74,22 @@ type Config struct {
 
 // Paths holds the paths to configuration files
 type Paths struct {
-	Main       string // Path to main config file (xrpld.toml)
-	Validators string // Path to validators file (validators.toml)
+	Main           string // Path to main config file (xrpld.toml)
+	Validators     string // Path to validators file (validators.toml)
+	SkipValidators bool   // Ignore trusted-validator configuration in standalone mode
+}
+
+// LocalStateDir returns a filesystem directory for node-local state.
+func (c *Config) LocalStateDir() string {
+	if c.DatabasePath != "" &&
+		!strings.HasPrefix(c.DatabasePath, "postgres://") &&
+		!strings.HasPrefix(c.DatabasePath, "postgresql://") {
+		return c.DatabasePath
+	}
+	if c.NodeDB.Path == "" {
+		return ""
+	}
+	return filepath.Dir(filepath.Clean(c.NodeDB.Path))
 }
 
 // networkIDByName maps rippled's named network aliases to their canonical

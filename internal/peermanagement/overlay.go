@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	mrand "math/rand/v2"
 	"net"
@@ -842,6 +844,9 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 	id, err := LoadIdentity(dataDir)
 	if err == nil {
 		return id, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
 	}
 
 	// Generate new identity

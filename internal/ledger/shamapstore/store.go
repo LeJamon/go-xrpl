@@ -43,8 +43,8 @@ type persistedState struct {
 }
 
 // New constructs the advisory-delete state store. advisoryDelete reflects the
-// node_db advisory_delete config flag. dataDir is the database_path used for
-// persistence; an empty dataDir disables persistence (in-memory only, e.g.
+// node_db advisory_delete config flag. dataDir is the filesystem directory
+// used for persistence; an empty dataDir disables persistence (in-memory only, e.g.
 // standalone / tests). Any previously persisted state is loaded immediately.
 func New(advisoryDelete bool, dataDir string) (*Store, error) {
 	s := &Store{advisoryDelete: advisoryDelete}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 
@@ -92,6 +93,26 @@ func TestValidatorsEmptyList(t *testing.T) {
 	// Quorum should be 0 for stub
 	assert.Equal(t, float64(0), resp["validation_quorum"],
 		"Stub should return validation_quorum of 0")
+}
+
+func TestValidatorsDisabledQuorumUsesRippledWireValue(t *testing.T) {
+	services := &types.ServiceContainer{
+		Ledger:           newMockLedgerService(),
+		ValidationQuorum: func() int { return math.MaxInt },
+	}
+	method := &handlers.ValidatorsMethod{}
+	ctx := &types.RPCContext{
+		Context: context.Background(), Role: types.RoleAdmin,
+		ApiVersion: types.ApiVersion1, Services: services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &resp))
+	assert.Equal(t, float64(math.MaxUint32), resp["validation_quorum"])
 }
 
 // TestValidatorsAdminOnly tests that the validators method requires admin role.

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,11 @@ import (
 )
 
 const generatedValidatorsFilename = "validators.toml"
+
+type generatedFile struct {
+	path string
+	data []byte
+}
 
 var (
 	generateNetwork string
@@ -42,18 +49,17 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 
 	content := generateConfigContent(networkID)
 	validatorsContent, hasValidators := generateValidatorsContent(networkID)
+	files := make([]generatedFile, 0, 2)
 	if hasValidators {
 		validatorsOutput := filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename)
 		if filepath.Clean(validatorsOutput) == filepath.Clean(generateOutput) {
 			return fmt.Errorf("output path must not be named %s", generatedValidatorsFilename)
 		}
-		if err := os.WriteFile(validatorsOutput, []byte(validatorsContent), 0644); err != nil { //nolint:gosec // G306: generated output, world-readable by intent
-			return fmt.Errorf("writing validators file: %w", err)
-		}
+		files = append(files, generatedFile{path: validatorsOutput, data: []byte(validatorsContent)})
 	}
-
-	if err := os.WriteFile(generateOutput, []byte(content), 0644); err != nil { //nolint:gosec // G306: generated output, world-readable by intent
-		return fmt.Errorf("writing config file: %w", err)
+	files = append(files, generatedFile{path: generateOutput, data: []byte(content)})
+	if err := publishGeneratedFiles(files, os.Link); err != nil {
+		return err
 	}
 
 	w := cmd.OutOrStdout()
@@ -70,6 +76,88 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 		fmt.Fprintln(w, "     xrpld server --standalone --conf", generateOutput)
 	} else {
 		fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+	}
+	return nil
+}
+
+func publishGeneratedFiles(files []generatedFile, link func(string, string) error) error {
+	seen := make(map[string]struct{}, len(files))
+	pending := make([]generatedFile, 0, len(files))
+	for _, file := range files {
+		path, err := filepath.Abs(file.path)
+		if err != nil {
+			return fmt.Errorf("resolve output path %s: %w", file.path, err)
+		}
+		path = filepath.Clean(path)
+		if _, ok := seen[path]; ok {
+			return fmt.Errorf("generated outputs resolve to the same path: %s", file.path)
+		}
+		seen[path] = struct{}{}
+		if info, err := os.Lstat(path); err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("output already exists and is not a regular file: %s", file.path)
+			}
+			existing, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return fmt.Errorf("read existing output %s: %w", file.path, readErr)
+			}
+			if !bytes.Equal(existing, file.data) {
+				return fmt.Errorf("output already exists with different content: %s", file.path)
+			}
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect output path %s: %w", file.path, err)
+		}
+		pending = append(pending, file)
+	}
+	files = pending
+
+	temps := make([]string, len(files))
+	defer func() {
+		for _, path := range temps {
+			if path != "" {
+				_ = os.Remove(path)
+			}
+		}
+	}()
+	for i, file := range files {
+		tmp, err := os.CreateTemp(filepath.Dir(file.path), "."+filepath.Base(file.path)+"-*")
+		if err != nil {
+			return fmt.Errorf("stage output %s: %w", file.path, err)
+		}
+		temps[i] = tmp.Name()
+		if err := tmp.Chmod(0o644); err != nil { //nolint:gosec // generated configuration is intentionally world-readable
+			_ = tmp.Close()
+			return fmt.Errorf("set output permissions %s: %w", file.path, err)
+		}
+		if _, err := tmp.Write(file.data); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("write staged output %s: %w", file.path, err)
+		}
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("sync staged output %s: %w", file.path, err)
+		}
+		if err := tmp.Close(); err != nil {
+			return fmt.Errorf("close staged output %s: %w", file.path, err)
+		}
+	}
+
+	published := make([]string, 0, len(files))
+	for i, file := range files {
+		if err := link(temps[i], file.path); err != nil {
+			var rollbackErr error
+			for _, path := range published {
+				if removeErr := os.Remove(path); removeErr != nil {
+					rollbackErr = errors.Join(rollbackErr, removeErr)
+				}
+			}
+			if rollbackErr != nil {
+				return fmt.Errorf("publish output %s: %w (rollback failed: %v)", file.path, err, rollbackErr)
+			}
+			return fmt.Errorf("publish output %s: %w", file.path, err)
+		}
+		published = append(published, file.path)
 	}
 	return nil
 }

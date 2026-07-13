@@ -178,7 +178,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.
 	if advisoryStore, asErr := shamapstore.New(
 		appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
-		appConfig.DatabasePath,
+		appConfig.LocalStateDir(),
 	); asErr != nil {
 		serverLog.Warn("Failed to load advisory-delete state", "err", asErr)
 	} else {
@@ -1273,6 +1273,8 @@ func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortConte
 	return &rpc.PortContext{
 		PortName:          name,
 		AdminNets:         adminNets,
+		AdminUser:         p.AdminUser,
+		AdminPassword:     p.AdminPassword,
 		SecureGatewayNets: secureGW,
 		Limit:             p.Limit,
 		SendQueue:         p.SendQueueLimit,
@@ -1282,10 +1284,11 @@ func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortConte
 // staticValidatorReloader is the writable surface
 // reloadTrustedValidators drives on a successful config reload.
 // Satisfied by *adaptor.Components, which routes the new static set
-// through staticMu + a merge with the live publisher-trust aggregator
+// through the component trust-merge lock and latest publisher snapshot
 // so a SIGHUP removal is not silently undone by the next OnChange.
 type staticValidatorReloader interface {
 	ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte)
+	ValidateValidatorReload(publisherKeys [][33]byte, publisherSites []string, publisherThreshold, staticValidatorCount int) error
 }
 
 // stallPinger is the optional surface the stall watchdog installs on the
@@ -1323,9 +1326,23 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 		serverLog.Error("SIGHUP UNL reload: re-load config failed", "err", err)
 		return
 	}
+	publisherKeys, err := adaptor.ParseValidatorListPublisherKeys(cfg)
+	if err != nil {
+		serverLog.Error("SIGHUP UNL reload: parse validator_list_keys failed", "err", err)
+		return
+	}
 	validators, masterKeys, err := adaptor.ParseValidatorKeysWithMaster(cfg)
 	if err != nil {
 		serverLog.Error("SIGHUP UNL reload: parse validators failed", "err", err)
+		return
+	}
+	if err := reloader.ValidateValidatorReload(
+		publisherKeys,
+		cfg.Validators.ValidatorListSites,
+		cfg.Validators.EffectiveListThreshold(),
+		len(validators),
+	); err != nil {
+		serverLog.Error("SIGHUP UNL reload rejected", "err", err)
 		return
 	}
 	reloader.ReloadStaticValidators(validators, masterKeys)

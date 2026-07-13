@@ -27,4 +27,17 @@ func TestOverlayOptionsFromConfigDataDir(t *testing.T) {
 	if peerCfg.DataDir != "" {
 		t.Fatalf("empty database_path set DataDir to %q", peerCfg.DataDir)
 	}
+
+	appCfg = &config.Config{
+		DatabasePath: "postgres://user:secret@db.example/xrpl",
+		NodeDB:       config.NodeDBConfig{Path: "/var/lib/xrpld/db/pebble"},
+	}
+	peerCfg = peermanagement.DefaultConfig()
+	for _, option := range OverlayOptionsFromConfig(appCfg) {
+		option(&peerCfg)
+	}
+	want = "/var/lib/xrpld/db/peers"
+	if peerCfg.DataDir != want {
+		t.Fatalf("PostgreSQL DataDir = %q, want %q", peerCfg.DataDir, want)
+	}
 }

@@ -93,12 +93,11 @@ func (e *Engine) shouldPause(roundTime time.Duration) bool {
 		return false
 	}
 
-	trusted := e.adaptor.GetTrustedValidators()
+	trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
 	totalValidators := len(trusted)
 	if totalValidators == 0 {
 		return false
 	}
-	quorum := e.adaptor.GetQuorum()
 	if quorum == 0 {
 		return false
 	}

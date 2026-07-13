@@ -119,14 +119,12 @@ func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig
 	req.Header.Set(HeaderCrawl, crawlValue(cfg.CrawlPublic))
 
 	addHandshakeHeaders(req.Header, id, sharedValue, cfg)
-	if ctl := MakeFeaturesRequestHeader(
+	req.Header.Set(HeaderProtocolCtl, MakeFeaturesRequestHeader(
 		cfg.EnableCompression,
 		cfg.EnableLedgerReplay,
 		cfg.EnableTxReduceRelay,
 		cfg.EnableVPReduceRelay,
-	); ctl != "" {
-		req.Header.Set(HeaderProtocolCtl, ctl)
-	}
+	))
 
 	return req, nil
 }
@@ -191,15 +189,13 @@ func BuildHandshakeResponse(request *http.Request, id *Identity, sharedValue []b
 	}
 
 	addHandshakeHeaders(resp.Header, id, sharedValue, cfg)
-	if ctl := MakeFeaturesResponseHeader(
+	resp.Header.Set(HeaderProtocolCtl, MakeFeaturesResponseHeader(
 		request.Header,
 		cfg.EnableCompression,
 		cfg.EnableLedgerReplay,
 		cfg.EnableTxReduceRelay,
 		cfg.EnableVPReduceRelay,
-	); ctl != "" {
-		resp.Header.Set(HeaderProtocolCtl, ctl)
-	}
+	))
 
 	return resp
 }
@@ -755,23 +751,26 @@ const (
 
 func GetFeatureValue(headers http.Header, feature string) (string, bool) {
 	headerValue := headers.Get(HeaderProtocolCtl)
-	if headerValue == "" {
-		return "", false
-	}
-	for f := range strings.SplitSeq(headerValue, FeatureDelimiter) {
-		f = strings.TrimSpace(f)
-		if f == "" {
-			continue
+	needle := feature + "="
+	// The wire protocol uses a case-sensitive substring search and stops the
+	// value at the first semicolon or whitespace byte.
+	for offset := 0; offset < len(headerValue); {
+		match := strings.Index(headerValue[offset:], needle)
+		if match < 0 {
+			return "", false
 		}
-		parts := strings.SplitN(f, "=", 2)
-		if len(parts) != 2 {
-			continue
+		start := offset + match + len(needle)
+		end := start
+		for end < len(headerValue) {
+			if headerValue[end] == ';' || isProtocolCtlWhitespace(headerValue[end]) {
+				break
+			}
+			end++
 		}
-		name := strings.TrimSpace(parts[0])
-		value := strings.TrimSpace(parts[1])
-		if strings.EqualFold(name, feature) {
-			return value, true
+		if end > start {
+			return headerValue[start:end], true
 		}
+		offset = start
 	}
 	return "", false
 }
@@ -783,12 +782,47 @@ func IsFeatureValue(headers http.Header, feature, value string) bool {
 	if !found {
 		return false
 	}
-	for v := range strings.SplitSeq(featureValue, ValueDelimiter) {
-		if strings.EqualFold(strings.TrimSpace(v), value) {
+	for len(featureValue) > 0 {
+		for len(featureValue) > 0 && (featureValue[0] == ',' || isProtocolCtlWhitespace(featureValue[0])) {
+			featureValue = featureValue[1:]
+		}
+		if featureValue == "" {
+			break
+		}
+
+		var token string
+		if featureValue[0] == '"' {
+			featureValue = featureValue[1:]
+			end := strings.IndexByte(featureValue, '"')
+			if end < 0 {
+				token = featureValue
+				featureValue = ""
+			} else {
+				token = featureValue[:end]
+				featureValue = featureValue[end+1:]
+			}
+		} else {
+			end := 0
+			for end < len(featureValue) && featureValue[end] != ',' && !isProtocolCtlWhitespace(featureValue[end]) {
+				end++
+			}
+			token = featureValue[:end]
+			featureValue = featureValue[end:]
+		}
+		if strings.EqualFold(token, value) {
 			return true
 		}
 	}
 	return false
+}
+
+func isProtocolCtlWhitespace(c byte) bool {
+	switch c {
+	case ' ', '\t', '\n', '\r', '\v', '\f':
+		return true
+	default:
+		return false
+	}
 }
 
 func FeatureEnabled(headers http.Header, feature string) bool {
@@ -912,43 +946,43 @@ func ParseHandshakeExtras(
 
 // MakeFeaturesRequestHeader builds the X-Protocol-Ctl value for a request.
 func MakeFeaturesRequestHeader(comprEnabled, ledgerReplayEnabled, txReduceRelayEnabled, vpReduceRelayEnabled bool) string {
-	var parts []string
+	var header strings.Builder
 
 	if comprEnabled {
-		parts = append(parts, FeatureNameCompr+"=lz4")
+		header.WriteString(FeatureNameCompr + "=lz4" + FeatureDelimiter)
 	}
 	if ledgerReplayEnabled {
-		parts = append(parts, FeatureNameLedgerReplay+"=1")
+		header.WriteString(FeatureNameLedgerReplay + "=1" + FeatureDelimiter)
 	}
 	if txReduceRelayEnabled {
-		parts = append(parts, FeatureNameTXRR+"=1")
+		header.WriteString(FeatureNameTXRR + "=1" + FeatureDelimiter)
 	}
 	if vpReduceRelayEnabled {
-		parts = append(parts, FeatureNameVPRR+"=1")
+		header.WriteString(FeatureNameVPRR + "=1" + FeatureDelimiter)
 	}
 
-	return strings.Join(parts, FeatureDelimiter)
+	return header.String()
 }
 
 // MakeFeaturesResponseHeader echoes back only features that are both
 // locally enabled AND requested by the peer.
 func MakeFeaturesResponseHeader(requestHeaders http.Header, comprEnabled, ledgerReplayEnabled, txReduceRelayEnabled, vpReduceRelayEnabled bool) string {
-	var parts []string
+	var header strings.Builder
 
 	if comprEnabled && IsFeatureValue(requestHeaders, FeatureNameCompr, "lz4") {
-		parts = append(parts, FeatureNameCompr+"=lz4")
+		header.WriteString(FeatureNameCompr + "=lz4" + FeatureDelimiter)
 	}
 	if ledgerReplayEnabled && FeatureEnabled(requestHeaders, FeatureNameLedgerReplay) {
-		parts = append(parts, FeatureNameLedgerReplay+"=1")
+		header.WriteString(FeatureNameLedgerReplay + "=1" + FeatureDelimiter)
 	}
 	if txReduceRelayEnabled && FeatureEnabled(requestHeaders, FeatureNameTXRR) {
-		parts = append(parts, FeatureNameTXRR+"=1")
+		header.WriteString(FeatureNameTXRR + "=1" + FeatureDelimiter)
 	}
 	if vpReduceRelayEnabled && FeatureEnabled(requestHeaders, FeatureNameVPRR) {
-		parts = append(parts, FeatureNameVPRR+"=1")
+		header.WriteString(FeatureNameVPRR + "=1" + FeatureDelimiter)
 	}
 
-	return strings.Join(parts, FeatureDelimiter)
+	return header.String()
 }
 
 // ParseProtocolCtlFeatures decodes the negotiated capabilities. txrr

@@ -143,7 +143,7 @@ func TestBuildHandshakeResponseNegotiatesFeatures(t *testing.T) {
 			ledgerReplay:  true,
 			txReduceRelay: true,
 			vpReduceRelay: true,
-			wantCtl:       "compr=lz4;ledgerreplay=1;txrr=1;vprr=1",
+			wantCtl:       "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
 		},
 		{
 			name:          "local_only",
@@ -162,7 +162,7 @@ func TestBuildHandshakeResponseNegotiatesFeatures(t *testing.T) {
 			compression:   true,
 			ledgerReplay:  true,
 			vpReduceRelay: true,
-			wantCtl:       "ledgerreplay=1",
+			wantCtl:       "ledgerreplay=1;",
 		},
 	}
 
@@ -180,6 +180,111 @@ func TestBuildHandshakeResponseNegotiatesFeatures(t *testing.T) {
 
 			resp := BuildHandshakeResponse(request, id, make([]byte, 32), cfg, "")
 			assert.Equal(t, tc.wantCtl, resp.Header.Get(HeaderProtocolCtl))
+		})
+	}
+}
+
+func TestProtocolCtlSerializationMatchesRippled(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	assert.Equal(t, "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
+		MakeFeaturesRequestHeader(true, true, true, true))
+	assert.Empty(t, MakeFeaturesRequestHeader(false, false, false, false))
+
+	request := emptyHandshakeRequest()
+	request.Header.Set(HeaderProtocolCtl, "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;")
+	assert.Equal(t, "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
+		MakeFeaturesResponseHeader(request.Header, true, true, true, true))
+
+	cfg := DefaultHandshakeConfig()
+	cfg.EnableCompression = false
+	cfg.EnableLedgerReplay = false
+	cfg.EnableTxReduceRelay = false
+	cfg.EnableVPReduceRelay = false
+
+	req, err := BuildHandshakeRequest(id, make([]byte, 32), cfg)
+	require.NoError(t, err)
+	values, ok := req.Header[http.CanonicalHeaderKey(HeaderProtocolCtl)]
+	require.True(t, ok)
+	require.Equal(t, []string{""}, values)
+
+	var raw bytes.Buffer
+	require.NoError(t, WriteRawHandshakeRequest(&raw, req))
+	assert.Contains(t, raw.String(), HeaderProtocolCtl+": \r\n")
+
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), id, make([]byte, 32), cfg, "")
+	values, ok = resp.Header[http.CanonicalHeaderKey(HeaderProtocolCtl)]
+	require.True(t, ok)
+	assert.Equal(t, []string{""}, values)
+	var rawResponse bytes.Buffer
+	require.NoError(t, resp.Write(&rawResponse))
+	assert.Contains(t, rawResponse.String(), HeaderProtocolCtl+": \r\n")
+}
+
+func TestInboundHandshakeStoresNegotiatedFeatures(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name                            string
+		offer                           string
+		compression, replay, txrr, vprr bool
+		wantCompression, wantReplay     bool
+		wantTXRR, wantVPRR              bool
+	}{
+		{
+			name:            "compression_only",
+			offer:           "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
+			compression:     true,
+			wantCompression: true,
+		},
+		{
+			name:       "ledger_replay_only",
+			offer:      "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
+			replay:     true,
+			wantReplay: true,
+		},
+		{
+			name:     "txrr_only",
+			offer:    "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
+			txrr:     true,
+			wantTXRR: true,
+		},
+		{
+			name:     "vprr_only",
+			offer:    "compr=lz4;ledgerreplay=1;txrr=1;vprr=1;",
+			vprr:     true,
+			wantVPRR: true,
+		},
+		{
+			name:        "local_features_not_offered",
+			compression: true,
+			replay:      true,
+			txrr:        true,
+			vprr:        true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := emptyHandshakeRequest()
+			request.Header.Set(HeaderProtocolCtl, tt.offer)
+			cfg := DefaultHandshakeConfig()
+			cfg.EnableCompression = tt.compression
+			cfg.EnableLedgerReplay = tt.replay
+			cfg.EnableTxReduceRelay = tt.txrr
+			cfg.EnableVPReduceRelay = tt.vprr
+			response := BuildHandshakeResponse(request, id, make([]byte, 32), cfg, "XRPL/2.2")
+
+			peer := NewPeer(1, Endpoint{Host: "192.0.2.1", Port: 51235}, true, id, make(chan Event, 1))
+			setInboundHandshakeState(peer, nil, "XRPL/2.2", cfg, response.Header)
+			features := peer.Capabilities().Features
+
+			assert.Equal(t, tt.wantCompression, features.Has(FeatureCompression))
+			assert.Equal(t, tt.wantReplay, features.Has(FeatureLedgerReplay))
+			assert.Equal(t, tt.wantTXRR, features.Has(FeatureTxReduceRelay))
+			assert.Equal(t, tt.wantVPRR, features.Has(FeatureVpReduceRelay))
 		})
 	}
 }
@@ -757,8 +862,43 @@ func TestGetFeatureValue(t *testing.T) {
 			wantExists: false,
 		},
 		{
-			name:       "case_insensitive",
+			name:       "feature_name_is_case_sensitive",
 			header:     "COMPR=lz4",
+			feature:    "compr",
+			wantValue:  "",
+			wantExists: false,
+		},
+		{
+			name:       "whitespace_before_equals_is_not_accepted",
+			header:     "compr =lz4",
+			feature:    "compr",
+			wantValue:  "",
+			wantExists: false,
+		},
+		{
+			name:       "whitespace_after_equals_is_not_accepted",
+			header:     "compr= lz4",
+			feature:    "compr",
+			wantValue:  "",
+			wantExists: false,
+		},
+		{
+			name:       "search_is_not_feature_boundary_anchored",
+			header:     "notcompr=lz4",
+			feature:    "compr",
+			wantValue:  "lz4",
+			wantExists: true,
+		},
+		{
+			name:       "value_stops_at_whitespace",
+			header:     "compr=lz4 ignored",
+			feature:    "compr",
+			wantValue:  "lz4",
+			wantExists: true,
+		},
+		{
+			name:       "search_skips_empty_match",
+			header:     "compr=;compr=lz4",
 			feature:    "compr",
 			wantValue:  "lz4",
 			wantExists: true,

@@ -246,7 +246,8 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// neg-UNL can mutate the UNL across boundaries), and advance the minSeq
 	// floor so far-stale validations are rejected at Add() not every pass.
 	if e.validationTracker != nil {
-		e.validationTracker.SetTrustedAndQuorum(e.adaptor.GetTrustedValidators(), e.adaptor.GetQuorum())
+		trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
+		e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
 		// Pull the negative-UNL from the accepted ledger so disabled
 		// validators are excluded from quorum.
 		e.validationTracker.SetNegativeUNL(e.adaptor.GetNegativeUNL())
@@ -259,7 +260,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// ignores the set — surface it for partial-outage visibility, not quorum.
 		slog.Debug("live validator participation",
 			"current", len(e.validationTracker.CurrentNodeIDs()),
-			"quorum", e.adaptor.GetQuorum(),
+			"quorum", quorum,
 			"ledger_seq", newLedger.Seq())
 	}
 

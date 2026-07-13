@@ -567,6 +567,97 @@ func TestDiscoveryConnectAttemptReservationAndCooldown(t *testing.T) {
 	d.finishConnectAttempt(address, connectAttemptSucceeded)
 }
 
+func TestDiscoveryConnectAttemptSuppressionUsesHost(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	addresses := []string{"192.0.2.10:51235", "192.0.2.10:51236"}
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  addresses,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	for _, address := range addresses {
+		d.AddPeer(address, 0, 0)
+	}
+
+	selected := d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1, "different ports on one host must not bypass suppression")
+	first := selected[0]
+	d.finishConnectAttempt(first, connectAttemptFailed)
+	assert.Empty(t, d.SelectPeersToConnect(2), "host suppression applies to every port")
+
+	d.mu.RLock()
+	attempt, ok := d.connectAttempts[first]
+	d.mu.RUnlock()
+	require.True(t, ok, "fixed retry state remains keyed by its full endpoint")
+	assert.Equal(t, 1, attempt.failures)
+
+	now = now.Add(recentConnectAttempt)
+	selected = d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1)
+	assert.Equal(t, connectAttemptHost(addresses[0]), connectAttemptHost(selected[0]))
+	d.finishConnectAttempt(selected[0], connectAttemptReleased)
+}
+
+func TestDiscoveryOrdinaryAttemptRetainsHostCooldownWithoutEndpointState(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	addresses := []string{"Peer.EXAMPLE:51235", "peer.example:51236"}
+	for _, address := range addresses {
+		d.AddPeer(address, 0, 0)
+	}
+
+	selected := d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1)
+	d.finishConnectAttempt(selected[0], connectAttemptFailed)
+
+	d.mu.RLock()
+	_, retained := d.connectAttempts[selected[0]]
+	d.mu.RUnlock()
+	assert.False(t, retained, "non-fixed endpoint state is released when its attempt finishes")
+	assert.Empty(t, d.SelectPeersToConnect(2), "case-normalized host cooldown remains active")
+
+	now = now.Add(recentConnectAttempt)
+	assert.Len(t, d.SelectPeersToConnect(2), 1)
+}
+
+func TestDiscoveryConnectedHostSuppressesOtherPorts(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	d.MarkConnected("192.0.2.20:51235", PeerID(1))
+	d.AddPeer("192.0.2.20:51236", 0, 0)
+
+	now = now.Add(2 * recentConnectAttempt)
+	assert.Empty(t, d.SelectPeersToConnect(2))
+}
+
+func TestDiscoveryInFlightHostSuppressionOutlivesCooldown(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	d := NewDiscovery(&Config{MaxOutbound: 25, Clock: func() time.Time { return now }}, make(chan Event, 1))
+	d.AddPeer("192.0.2.30:51235", 0, 0)
+	d.AddPeer("192.0.2.30:51236", 0, 0)
+
+	selected := d.SelectPeersToConnect(2)
+	require.Len(t, selected, 1)
+	now = now.Add(2 * recentConnectAttempt)
+	assert.Empty(t, d.SelectPeersToConnect(2))
+	d.finishConnectAttempt(selected[0], connectAttemptReleased)
+}
+
 func TestDiscoveryFixedPeerBackoff(t *testing.T) {
 	now := time.Unix(10_000, 0)
 	address := "fixed:51235"
@@ -597,6 +688,39 @@ func TestDiscoveryFixedPeerBackoff(t *testing.T) {
 	d.finishConnectAttempt(address, connectAttemptFailed)
 	now = now.Add(time.Minute)
 	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "success resets fixed-peer backoff")
+}
+
+func TestDiscoveryEvictionAndPruneCleanNonFixedAttemptState(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  []string{"fixed:51235"},
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	d.AddPeer("evicted:51235", 0, 0)
+	d.AddPeer("fixed:51235", 0, 0)
+	d.connectAttempts["evicted:51235"] = &connectAttempt{failures: 3}
+	d.connectAttempts["fixed:51235"] = &connectAttempt{failures: 3}
+
+	d.mu.Lock()
+	require.True(t, d.evictOldestLocked())
+	d.mu.Unlock()
+	assert.NotContains(t, d.connectAttempts, "evicted:51235")
+	assert.Contains(t, d.connectAttempts, "fixed:51235")
+
+	d.AddPeer("pruned:51235", 0, 0)
+	d.mu.Lock()
+	d.peers["pruned:51235"].LastSeen = now.Add(-2 * time.Hour)
+	d.peers["fixed:51235"].LastSeen = now.Add(-2 * time.Hour)
+	d.connectAttempts["pruned:51235"] = &connectAttempt{failures: 2}
+	d.mu.Unlock()
+
+	d.prune()
+	assert.NotContains(t, d.connectAttempts, "pruned:51235")
+	assert.Contains(t, d.connectAttempts, "fixed:51235")
 }
 
 // TestBootCacheFailedLastTime tests that LastFailed time is recorded

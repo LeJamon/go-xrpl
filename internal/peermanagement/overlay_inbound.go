@@ -258,8 +258,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 	peer.applyHandshakeExtras(extras)
 
-	caps := NewPeerCapabilities()
-	caps.Features = ParseProtocolCtlFeatures(req.Header)
 	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
 	if protocol == "" {
 		// Write a 400 Bad Request back so a misconfigured peer sees
@@ -281,13 +279,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 				ErrInvalidHandshake, req.Header.Get(HeaderUpgrade)))
 	}
 
-	peer.mu.Lock()
-	peer.bufReader = bufReader
-	peer.capabilities = caps
-	peer.protocolVersion = protocol
-	peer.handshakeCfg = hsCfg
-	peer.mu.Unlock()
-
 	// Decide admission before sending the 101 upgrade, mirroring rippled's
 	// onHandoff: a duplicate or slot-full dialer gets a rejection in lieu
 	// of the upgrade, never both on the same stream. The slot check needs
@@ -306,12 +297,31 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 
 	resp := BuildHandshakeResponse(req, o.identity, sharedValue, hsCfg, protocol) //nolint:bodyclose // locally-built response serialized via Write; nothing to close
+	setInboundHandshakeState(peer, bufReader, protocol, hsCfg, resp.Header)
 	addAddressHeaders(resp.Header, hsCfg, peerRemote)
 	if err := resp.Write(tlsConn); err != nil {
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)
 	}
 
 	return nil
+}
+
+func setInboundHandshakeState(
+	peer *Peer,
+	reader *bufio.Reader,
+	protocol string,
+	cfg HandshakeConfig,
+	negotiatedHeaders http.Header,
+) {
+	caps := NewPeerCapabilities()
+	caps.Features = ParseProtocolCtlFeatures(negotiatedHeaders)
+
+	peer.mu.Lock()
+	peer.bufReader = reader
+	peer.capabilities = caps
+	peer.protocolVersion = protocol
+	peer.handshakeCfg = cfg
+	peer.mu.Unlock()
 }
 
 // handshakeConfigFor builds the per-handshake config used by both

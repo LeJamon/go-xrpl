@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
 
@@ -287,6 +288,26 @@ func TestServerInfoResponseFields(t *testing.T) {
 		assert.True(t, ok)
 		assert.GreaterOrEqual(t, validationQuorum, float64(1))
 	})
+}
+
+func TestServerInfoDisabledQuorumUsesRippledWireValue(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.ValidationQuorum = func() int { return math.MaxInt }
+	method := &handlers.ServerInfoMethod{}
+	ctx := &types.RPCContext{
+		Context: context.Background(), Role: types.RoleGuest,
+		ApiVersion: types.ApiVersion1, Services: services,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	encoded, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &resp))
+	info := resp["info"].(map[string]any)
+	assert.Equal(t, float64(math.MaxUint32), info["validation_quorum"])
 }
 
 // TestServerInfoValidatedLedgerFields tests the validated_ledger nested object fields

@@ -75,6 +75,38 @@ func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
 	}
 }
 
+func TestValidationTrackerLiveQuorumUnavailableGate(t *testing.T) {
+	nodes := []consensus.NodeID{{1}, {2}, {3}}
+	vt := NewValidationTracker(2, 5*time.Minute)
+	vt.SetTrusted(nodes)
+
+	unavailable := true
+	vt.SetQuorumUnavailableFunc(func() bool { return unavailable })
+	fired := 0
+	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired++ })
+
+	ledger := consensus.LedgerID{1}
+	now := time.Now()
+	for _, node := range nodes[:2] {
+		vt.Add(&consensus.Validation{
+			LedgerID: ledger, LedgerSeq: 1, NodeID: node,
+			SignTime: now, Full: true,
+		})
+	}
+	if fired != 0 {
+		t.Fatal("unavailable quorum finalized a ledger using the cached finite quorum")
+	}
+
+	unavailable = false
+	vt.Add(&consensus.Validation{
+		LedgerID: ledger, LedgerSeq: 1, NodeID: nodes[2],
+		SignTime: now, Full: true,
+	})
+	if fired != 1 {
+		t.Fatalf("available quorum did not finalize after the live gate reopened: fired=%d", fired)
+	}
+}
+
 func TestValidationTracker_TrustedValidations(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 

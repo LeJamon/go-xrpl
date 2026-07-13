@@ -35,8 +35,13 @@ var _ consensus.Adaptor = (*Adaptor)(nil)
 // Adaptor implements consensus.Adaptor, bridging the consensus engine
 // to the ledger service, transaction queue, and P2P network.
 type Adaptor struct {
+	trustUpdateMu sync.Mutex
+	// trustTransitioning closes the finality window between publishing a new
+	// trust set and installing its matching tracker snapshot.
+	trustTransitioning atomic.Bool
+
 	// mu protects trustedValidators / trustedSet / trustedMasterKeys /
-	// quorum / operatingMode. Plain Mutex: these are mutated rarely and read
+	// operatingMode. Plain Mutex: these are mutated rarely and read
 	// a few times per round, so RWMutex isn't justified.
 	mu sync.Mutex
 
@@ -51,7 +56,6 @@ type Adaptor struct {
 	// trustedValidators; empty when the UNL was supplied as raw NodeIDs
 	// (some tests). Required for NegativeUNL voting.
 	trustedMasterKeys [][33]byte
-	quorum            int
 
 	operatingMode consensus.OperatingMode
 
@@ -163,10 +167,9 @@ type Adaptor struct {
 	// nil when no publisher trust is configured — nothing is listed.
 	listedFn func(consensus.NodeID) bool
 
-	// onTrustChanged fires after every SetTrustedValidators swap (outside
-	// a.mu) so the engine can promote stored validations at trust-change
-	// time. nil-safe.
-	onTrustChanged func()
+	// onTrustChanged publishes the matching trusted/quorum snapshot after
+	// every SetTrustedValidators swap. nil-safe.
+	onTrustChanged func([]consensus.NodeID, int)
 
 	// lastIssuedValidationSeq is the highest ledger seq this node has
 	// broadcast a validation for — rippled's localSeqEnforcer_.largest(),
@@ -335,10 +338,6 @@ func New(cfg Config) *Adaptor {
 		trustedSet[v] = struct{}{}
 	}
 
-	// Quorum: ceil(n * 0.8). computeQuorum with zero disabled validators
-	// is equivalent and avoids duplicating the formula.
-	quorum := computeQuorum(len(cfg.Validators), 0)
-
 	cookie := generateCookie()
 
 	logger := slog.Default().With("component", "consensus-adaptor")
@@ -391,7 +390,6 @@ func New(cfg Config) *Adaptor {
 		trustedValidators: cfg.Validators,
 		trustedSet:        trustedSet,
 		trustedMasterKeys: trustedMasterKeys,
-		quorum:            quorum,
 		operatingMode:     consensus.OpModeDisconnected,
 		stateAcct:         newStateAccounting(consensus.OpModeDisconnected, time.Now),
 		negUNLVoter:       negUNLVoter,

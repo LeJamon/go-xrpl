@@ -232,9 +232,9 @@ func TestStup_SnapshotStatic_ReturnsCopy(t *testing.T) {
 
 	// Mutating the returned slice must not affect the stored slice.
 	ids[0] = consensus.NodeID{0xFF}
-	c.staticMu.RLock()
+	c.trustMergeMu.Lock()
 	stored := c.staticValidators[0]
-	c.staticMu.RUnlock()
+	c.trustMergeMu.Unlock()
 	assert.NotEqual(t, consensus.NodeID{0xFF}, stored)
 }
 

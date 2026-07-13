@@ -40,3 +40,42 @@ func TestLoadOrCreateIdentityReturnsPersistenceError(t *testing.T) {
 		t.Fatal("expected identity persistence error")
 	}
 }
+
+func TestLoadOrCreateIdentityPreservesCorruptIdentity(t *testing.T) {
+	dataDir := t.TempDir()
+	keyPath := filepath.Join(dataDir, "node_identity.key")
+	want := []byte("not-a-private-key")
+	if err := os.WriteFile(keyPath, want, 0o600); err != nil {
+		t.Fatalf("write corrupt identity: %v", err)
+	}
+
+	if _, err := loadOrCreateIdentity(dataDir); err == nil {
+		t.Fatal("expected corrupt identity error")
+	}
+	got, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatalf("read preserved identity: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("identity file was replaced: got %q, want %q", got, want)
+	}
+}
+
+func TestLoadOrCreateIdentityPreservesUnreadableIdentityPath(t *testing.T) {
+	dataDir := t.TempDir()
+	keyPath := filepath.Join(dataDir, "node_identity.key")
+	if err := os.Mkdir(keyPath, 0o700); err != nil {
+		t.Fatalf("create identity directory: %v", err)
+	}
+
+	if _, err := loadOrCreateIdentity(dataDir); err == nil {
+		t.Fatal("expected identity read error")
+	}
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("stat preserved identity path: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("identity path was replaced")
+	}
+}
