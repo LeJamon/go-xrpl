@@ -654,7 +654,10 @@ func (r *replayRangeRunner) processBlock(
 	}
 
 	// Create open ledger with current state
-	openLedger := ledger.NewOpenWithHeader(ledgerHeader, preStateMap, txMap, fees)
+	openLedger, err := ledger.NewOpenWithHeader(ledgerHeader, preStateMap, txMap, fees)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating replay ledger: %w", err)
+	}
 
 	// Derive the active amendment set from the parent (pre) state's Amendments
 	// entry, mirroring rippled, where a ledger's rules come from its parent.

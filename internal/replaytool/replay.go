@@ -375,7 +375,10 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 
 	// Use NewOpenWithHeader to create open ledger directly with the exact header values
 	// This avoids the sequence increment that NewOpen would do
-	openLedger := ledger.NewOpenWithHeader(ledgerHeader, stateMap, txMap, fees)
+	openLedger, err := ledger.NewOpenWithHeader(ledgerHeader, stateMap, txMap, fees)
+	if err != nil {
+		return nil, nil, fmt.Errorf("creating replay ledger: %w", err)
+	}
 
 	fmt.Fprintf(r.out, "      Ledger sequence: %d\n", env.LedgerIndex)
 	fmt.Fprintf(r.out, "      Total coins:     %d drops\n", totalCoins)

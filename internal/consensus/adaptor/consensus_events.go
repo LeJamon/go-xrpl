@@ -21,13 +21,14 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 }
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
-	// An amendment-blocked node is never more than connected: it cannot
-	// build correct ledgers, so it must not claim to be synced.
-	if mode > consensus.OpModeConnected && a.IsAmendmentBlocked() {
-		mode = consensus.OpModeConnected
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// A blocked node is never more than connected: it cannot safely
+	// participate in consensus, so it must not claim to be synced.
+	if mode > consensus.OpModeConnected && (a.IsAmendmentBlocked() || a.IsUNLBlocked()) {
+		mode = consensus.OpModeConnected
+	}
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one

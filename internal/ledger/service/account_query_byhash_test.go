@@ -28,7 +28,10 @@ func newHistoricalLedger(t *testing.T, svc *Service, seq uint32, addr string, id
 	}
 	var h header.LedgerHeader
 	h.LedgerIndex = seq
-	hist := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+	hist, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
 
 	root := &state.AccountRoot{Account: addr, Balance: balance, Sequence: 1}
 	data, err := state.SerializeAccountRoot(root)

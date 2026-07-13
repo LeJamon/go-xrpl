@@ -79,7 +79,11 @@ func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(resultJSON, &resp))
 
-	raw, ok := resp["warnings"].([]any)
+	info, ok := resp["info"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := info["warnings"].([]any)
 	if !ok {
 		return nil
 	}

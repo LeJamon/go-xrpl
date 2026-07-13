@@ -806,7 +806,10 @@ func (s *Service) adoptLedgerWithStateLocked(
 		txMap = empty
 	}
 
-	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	adopted, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("failed to construct adopted ledger: %w", err)
+	}
 
 	// Invalidate the history tail if adopted doesn't chain to our seq-1 entry
 	// (divergent fork) so RPCs don't resolve stale state. See fixMismatchLocked.

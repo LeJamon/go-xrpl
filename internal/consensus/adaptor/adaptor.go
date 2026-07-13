@@ -374,9 +374,11 @@ func New(cfg Config) *Adaptor {
 	// UNLModify tx). nil otherwise — GenerateNegativeUNLPseudoTx returns no votes.
 	var negUNLVoter *negativeunlvote.Voter
 	var trustedMasterKeys [][33]byte
-	if cfg.Identity != nil && len(cfg.ValidatorMasterKeys) == len(cfg.Validators) && len(cfg.ValidatorMasterKeys) > 0 {
+	if len(cfg.ValidatorMasterKeys) == len(cfg.Validators) && len(cfg.ValidatorMasterKeys) > 0 {
 		trustedMasterKeys = make([][33]byte, len(cfg.ValidatorMasterKeys))
 		copy(trustedMasterKeys, cfg.ValidatorMasterKeys)
+	}
+	if cfg.Identity != nil && len(trustedMasterKeys) > 0 {
 		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
 	}
 
