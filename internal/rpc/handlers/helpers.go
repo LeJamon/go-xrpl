@@ -12,13 +12,38 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
+
+func logRPCError(operation string, err error) {
+	xrpllog.Named(xrpllog.PartitionRPC).Error(operation, "err", err)
+}
+
+func rpcInternalError(operation string, err error) *types.RpcError {
+	logRPCError(operation, err)
+	return types.RpcErrorInternal()
+}
+
+func rpcInternalInvariantError(operation string) *types.RpcError {
+	xrpllog.Named(xrpllog.PartitionRPC).Error(operation)
+	return types.RpcErrorInternal()
+}
+
+func rpcTransactionSubmissionError(operation string, err error) *types.RpcError {
+	logRPCError(operation, err)
+	return types.RpcErrorTransactionSubmission()
+}
+
+func rpcDBDeserializationError(operation string, err error) *types.RpcError {
+	logRPCError(operation, err)
+	return types.RpcErrorDBDeserialization()
+}
 
 // RequireLedgerService checks that the ledger service is available
 // on the request's service container. Returns an RpcError if not.
 func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	if services == nil || services.Ledger == nil {
-		return types.RpcErrorInternal("Ledger service not available")
+		return rpcInternalInvariantError("rpc: ledger service unavailable")
 	}
 	return nil
 }
@@ -50,16 +75,13 @@ func shedCheck(ctx *types.RpcContext) *types.ClientLoadShedder {
 	return ctx.Services.ClientLoad
 }
 
-// RequireNotBusyClient is the generic RPC admission gate fired before
-// every non-admin RPC dispatches. Mirrors rippled's fillHandler check
-// at RPCHandler.cpp:132-141: shed when the jtCLIENT-or-higher job count
-// exceeds Tuning::maxJobQueueClients (500).
+// RequireNotBusyClient rejects non-admin RPC requests when the client job queue is full.
 func RequireNotBusyClient(ctx *types.RpcContext) *types.RpcError {
 	s := shedCheck(ctx)
 	if s == nil {
 		return nil
 	}
-	if s.InFlight() > types.MaxJobQueueClients {
+	if s.InFlight() >= types.MaxJobQueueClients {
 		return types.RpcErrorTooBusy()
 	}
 	return nil
@@ -390,17 +412,38 @@ func (AdminHandler) RequiredCondition() types.Condition { return types.NoConditi
 //
 // It tries VL binary decode first, then falls back to JSON unmarshal.
 func decodeTxBlob(data []byte) (StoredTransaction, error) {
+	return decodeTxBlobWithMetadataMode(data, false, true, false)
+}
+
+func decodeTxBlobForTx(data []byte) (StoredTransaction, error) {
+	return decodeTxBlobWithMetadataMode(data, true, false, false)
+}
+
+func decodeTxBlobForTransactionEntry(data []byte) (StoredTransaction, error) {
+	return decodeTxBlobWithMetadataMode(data, false, true, true)
+}
+
+func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEmptyMetadata, requireBinaryMetadata bool) (StoredTransaction, error) {
 	// Try VL-encoded binary format first
 	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
 	if err == nil {
-		txJSON, decErr := binarycodec.Decode(hex.EncodeToString(txBytes))
+		if requireBinaryMetadata && metaBytes == nil {
+			return StoredTransaction{}, errors.New("stored transaction is missing binary metadata")
+		}
+		txJSON, decErr := binarycodec.DecodeBytes(txBytes)
 		if decErr == nil {
 			st := StoredTransaction{TxJSON: txJSON}
 			if len(metaBytes) > 0 {
-				metaJSON, metaErr := binarycodec.Decode(hex.EncodeToString(metaBytes))
-				if metaErr == nil {
-					st.Meta = metaJSON
+				metaJSON, metaErr := binarycodec.DecodeBytes(metaBytes)
+				if metaErr != nil {
+					return StoredTransaction{}, fmt.Errorf("decode transaction metadata: %w", metaErr)
 				}
+				st.Meta = metaJSON
+			} else if metaBytes != nil && (preserveEmptyMetadata || requireMetadataFields) {
+				st.Meta = map[string]any{}
+			}
+			if err := validateStoredTransaction(&st, requireMetadataFields); err != nil {
+				return StoredTransaction{}, err
 			}
 			return st, nil
 		}
@@ -411,7 +454,34 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	if jsonErr := json.Unmarshal(data, &st); jsonErr != nil {
 		return StoredTransaction{}, jsonErr
 	}
+	if err := validateStoredTransaction(&st, requireMetadataFields); err != nil {
+		return StoredTransaction{}, err
+	}
 	return st, nil
+}
+
+func validateStoredTransaction(st *StoredTransaction, requireMetadataFields bool) error {
+	if st.TxJSON == nil {
+		return errors.New("stored transaction is missing tx_json")
+	}
+	canonicalTx, err := tx.CanonicalizeSerializedTransaction(st.TxJSON)
+	if err != nil {
+		return fmt.Errorf("validate stored transaction: %w", err)
+	}
+	st.TxJSON = canonicalTx
+	if st.Meta != nil {
+		var canonicalMeta map[string]any
+		if requireMetadataFields {
+			canonicalMeta, err = tx.CanonicalizeSerializedMetadata(st.Meta)
+		} else {
+			canonicalMeta, err = tx.CanonicalizeSerializedObject(st.Meta)
+		}
+		if err != nil {
+			return fmt.Errorf("validate stored transaction metadata: %w", err)
+		}
+		st.Meta = canonicalMeta
+	}
+	return nil
 }
 
 // InjectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.

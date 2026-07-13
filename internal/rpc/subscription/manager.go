@@ -178,7 +178,7 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				return rpcErr
 			}
 			normalised = append(normalised, book)
-			if book.Both {
+			if book.Both || book.BothSides {
 				normalised = append(normalised, reverseBook(book))
 			}
 		}
@@ -225,7 +225,9 @@ func reverseBook(b types.BookRequest) types.BookRequest {
 		TakerPays: b.TakerGets,
 		TakerGets: b.TakerPays,
 		Snapshot:  b.Snapshot,
+		StateNow:  b.StateNow,
 		Both:      false,
+		BothSides: false,
 		Taker:     b.Taker,
 		Domain:    b.Domain,
 	}
@@ -682,7 +684,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 				return rpcErr
 			}
 			toRemove = append(toRemove, book)
-			if book.Both {
+			if book.Both || book.BothSides {
 				toRemove = append(toRemove, reverseBook(book))
 			}
 		}

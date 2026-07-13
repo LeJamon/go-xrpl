@@ -111,7 +111,7 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	// ip check (Connect.cpp:41), so connect in standalone reports notSynced
 	// regardless of the supplied params.
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("connect: ledger service unavailable")
 	}
 	if ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",

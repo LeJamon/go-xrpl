@@ -62,3 +62,13 @@ func TestParseAndCreateSession_AmountGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestParseAndCreateSession_DecodeErrorIsFixed(t *testing.T) {
+	_, rpcErr := ParseAndCreateSession(json.RawMessage(`{"private":"decoder-detail"`), nil)
+	if rpcErr == nil {
+		t.Fatal("expected invalid parameters error")
+	}
+	if rpcErr.ErrorString != "invalidParams" || rpcErr.Message != "Invalid parameters." {
+		t.Fatalf("error = %#v, want fixed invalidParams message", rpcErr)
+	}
+}

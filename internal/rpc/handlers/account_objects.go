@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -185,7 +184,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
+		return nil, rpcInternalError("account_objects: ledger query failed", err)
 	}
 
 	// Build account_objects array with deserialized fields. When
@@ -231,6 +230,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }
 

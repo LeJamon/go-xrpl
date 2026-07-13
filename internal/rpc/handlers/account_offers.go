@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -54,7 +53,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
+		return nil, rpcInternalError("account_offers: ledger query failed", err)
 	}
 
 	// Build response
@@ -70,5 +69,6 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }

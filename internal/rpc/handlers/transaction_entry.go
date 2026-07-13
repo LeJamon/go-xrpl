@@ -65,9 +65,9 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 
 	// Parse the stored transaction data (VL-encoded binary or JSON)
-	storedTx, err := decodeTxBlob(txInfo.TxData)
+	storedTx, err := decodeTxBlobForTransactionEntry(txInfo.TxData)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to parse transaction data")
+		return nil, rpcInternalError("transaction_entry: transaction decoding failed", err)
 	}
 
 	ledgerHash := txInfo.LedgerHash
@@ -76,20 +76,16 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		ledgerHash = fmt.Sprintf("%X", h)
 	}
 
-	// Inject DeliveredAmount for Payment transactions
-	if storedTx.Meta != nil {
-		InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
-	}
-
 	response := map[string]any{
 		"tx_json": storedTx.TxJSON,
 	}
 
-	// Metadata key: "meta" for v2+, "metadata" for v1
-	if ctx.ApiVersion > 1 {
-		response["meta"] = storedTx.Meta
-	} else {
-		response["metadata"] = storedTx.Meta
+	if storedTx.Meta != nil {
+		if ctx.ApiVersion > 1 {
+			response["meta"] = storedTx.Meta
+		} else {
+			response["metadata"] = storedTx.Meta
+		}
 	}
 
 	if ctx.ApiVersion > 1 {

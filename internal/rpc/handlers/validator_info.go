@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -36,7 +35,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 
 	validationPK := ctx.Services.ValidatorPublicKey
 	if len(validationPK) != 33 {
-		return nil, types.RpcErrorInternal("validator public key has invalid length")
+		return nil, rpcInternalInvariantError("validator_info: validator public key has invalid length")
 	}
 
 	var keyArr [33]byte
@@ -49,7 +48,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 
 	masterB58, err := addresscodec.EncodeNodePublicKey(masterKey[:])
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("encode master key: %v", err))
+		return nil, rpcInternalError("validator_info: master key encoding failed", err)
 	}
 	resp := validatorInfoResponse{MasterKey: masterB58}
 
@@ -61,7 +60,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 	if masterKey != keyArr {
 		ephB58, err := addresscodec.EncodeNodePublicKey(keyArr[:])
 		if err != nil {
-			return nil, types.RpcErrorInternal(fmt.Sprintf("encode ephemeral key: %v", err))
+			return nil, rpcInternalError("validator_info: ephemeral key encoding failed", err)
 		}
 		resp.EphemeralKey = ephB58
 

@@ -141,13 +141,15 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 	}{
 		{RpcErrorUnknown("x"), "unknown", RpcUNKNOWN},
 		{RpcErrorInvalidParams("x"), "invalidParams", 31},
-		{RpcErrorMethodNotFound("m"), "unknownCmd", 32},
+		{RpcErrorMethodNotFound(), "unknownCmd", 32},
 		{RpcErrorLgrNotFound("x"), "lgrNotFound", 21},
 		{RpcErrorActNotFound("x"), "actNotFound", 19},
 		{RpcErrorActMalformed("x"), "actMalformed", 35},
 		{RpcErrorTxnNotFound("x"), "txnNotFound", 29},
 		{RpcErrorInvalidHotWallet(), "invalidHotWallet", 30},
-		{RpcErrorInternal("x"), "internal", 73},
+		{RpcErrorInternal(), "internal", 73},
+		{RpcErrorTransactionSubmission(), "internal", 73},
+		{RpcErrorDBDeserialization(), "dbDeserialization", 77},
 		{RpcErrorNoPermission("m"), "noPermission", 6},
 		{RpcErrorForbidden("m"), "forbidden", 3},
 		{RpcErrorTooBusy(), "tooBusy", 9},
@@ -193,6 +195,19 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 	}
 }
 
+func TestRpcErrorMethodNotFoundMessage(t *testing.T) {
+	if got := RpcErrorMethodNotFound().Message; got != "Unknown method." {
+		t.Fatalf("message = %q, want %q", got, "Unknown method.")
+	}
+}
+
+func TestRpcErrorDBDeserialization(t *testing.T) {
+	err := RpcErrorDBDeserialization()
+	if err.Message != "Database deserialization error." {
+		t.Fatalf("message = %q, want %q", err.Message, "Database deserialization error.")
+	}
+}
+
 // Bare-token errors mirror rippled handlers that set jvResult[jss::error]
 // directly (e.g. VaultInfo.cpp:101, LedgerEntry.cpp:1044,
 // TransactionEntry.cpp:71): only `error` is wired, never error_code or
@@ -216,7 +231,7 @@ func TestBareTokenErrors(t *testing.T) {
 	notBare := []*RpcError{
 		RpcErrorTxnNotFound("x"),
 		RpcErrorLgrNotFound("x"),
-		RpcErrorInternal("x"),
+		RpcErrorInternal(),
 		RpcErrorActNotFound("x"),
 	}
 	for _, e := range notBare {
@@ -245,7 +260,7 @@ func TestInvalidApiVersionError(t *testing.T) {
 		t.Errorf("error_message = %q, want empty (rippled omits it)", e.Message)
 	}
 	// Only the invalid-version error carries the transport marker.
-	if RpcErrorInternal("x").IsInvalidApiVersion() {
+	if RpcErrorInternal().IsInvalidApiVersion() {
 		t.Error("unrelated error must not report IsInvalidApiVersion")
 	}
 }

@@ -58,7 +58,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 	walker, ok := ctx.Services.Ledger.(types.OwnerDirectoryReader)
 	if !ok {
-		return nil, types.RpcErrorInternal("owner_info: ledger service cannot walk owner directories")
+		return nil, rpcInternalInvariantError("owner_info: ledger service cannot walk owner directories")
 	}
 
 	accepted, rpcErr := ownerInfoSection(ctx, walker, strIdent, "closed")
@@ -83,7 +83,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *types.RpcError) {
 	result, err := walker.GetOwnerInfo(ctx.Context, account, ledgerIndex)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
+		return nil, rpcInternalError("owner_info: ledger query failed", err)
 	}
 
 	section := make(map[string]any)

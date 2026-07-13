@@ -47,19 +47,17 @@ func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
 	}
 }
 
-// Strict-greater semantics for the generic gate mirror
-// rippled RPCHandler.cpp:135 (maxJobQueueClients = 500).
 func TestRequireNotBusyClient_Strictness(t *testing.T) {
 	s := types.NewClientLoadShedder()
-	loadInFlight(s, types.MaxJobQueueClients)
+	loadInFlight(s, types.MaxJobQueueClients-1)
 
 	if rpcErr := RequireNotBusyClient(gatedCtx(s)); rpcErr != nil {
-		t.Fatalf("count==500 should not shed, got %v", rpcErr)
+		t.Fatalf("count==499 should not shed, got %v", rpcErr)
 	}
 	s.Begin()
 	rpcErr := RequireNotBusyClient(gatedCtx(s))
 	if rpcErr == nil {
-		t.Fatal("count==501 should shed")
+		t.Fatal("count==500 should shed")
 	}
 	if rpcErr.Code != types.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
 		t.Errorf("got code=%d errorString=%q, want %d/%q", rpcErr.Code, rpcErr.ErrorString, types.RpcTOO_BUSY, "tooBusy")

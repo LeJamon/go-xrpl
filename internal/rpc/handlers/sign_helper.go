@@ -157,7 +157,7 @@ type signResult struct {
 func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
 	}
 
 	// Parse credentials and derive keypair using the shared helper
@@ -176,7 +176,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	// Derive address from public key
 	address, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive address: %v", err))
+		return nil, rpcInternalError("sign: account address derivation failed", err)
 	}
 
 	// Parse the transaction JSON
@@ -209,7 +209,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			if errors.Is(err, svcerr.ErrAccountNotFound) {
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to read source account: %v", err))
+			return nil, rpcInternalError("sign: source account lookup failed", err)
 		}
 
 		// Auto-fill Sequence from the open ledger / TxQ; a present
@@ -221,7 +221,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 				if errors.Is(err, svcerr.ErrAccountNotFound) {
 					return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 				}
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", err))
+				return nil, rpcInternalError("sign: sequence autofill failed", err)
 			}
 			txMap["Sequence"] = seq
 		}
@@ -254,7 +254,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			}
 			probe, mErr := json.Marshal(txMap)
 			if mErr != nil {
-				return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
+				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
 			fee, feeErr := services.Ledger.GetAutofillFee(probe, unlimited, feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {
@@ -262,7 +262,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 				if errors.As(feeErr, &hfe) {
 					return nil, types.RpcErrorHighFee(hfe.Error())
 				}
-				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
+				return nil, rpcInternalError("sign: fee autofill failed", feeErr)
 			}
 			txMap["Fee"] = formatUint64AsString(fee)
 		}
@@ -282,7 +282,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 
 	txBytes, err := json.Marshal(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to marshal transaction: %v", err))
+		return nil, rpcInternalError("sign: transaction marshaling failed", err)
 	}
 
 	transaction, err := tx.ParseJSON(txBytes)
@@ -295,14 +295,14 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 
 	signature, err := sign.SignTransaction(transaction, privateKey)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
+		return nil, rpcInternalError("sign: transaction signing failed", err)
 	}
 
 	txMap["TxnSignature"] = signature
 
 	txBlob, err := binarycodec.Encode(txMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
+		return nil, rpcInternalError("sign: transaction encoding failed", err)
 	}
 
 	txHash := CalculateTxHash(txBlob)

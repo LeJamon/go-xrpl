@@ -240,9 +240,10 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
+		return nil, rpcInternalError("book_offers: ledger query failed", err)
 	}
 
+	setLoadMedium(ctx)
 	response := map[string]any{
 		"offers": result.Offers,
 	}

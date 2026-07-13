@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -52,7 +51,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
+		return nil, rpcInternalError("account_currencies: ledger query failed", err)
 	}
 
 	// Build response

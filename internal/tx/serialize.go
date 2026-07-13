@@ -3,11 +3,126 @@ package tx
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"math"
 	"sort"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
+
+// CanonicalizeSerializedTransaction validates and returns the codec-decoded
+// representation of a serialized transaction.
+func CanonicalizeSerializedTransaction(fields map[string]any) (map[string]any, error) {
+	encoded, err := serializedObjectBytes(fields)
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := ParseFromBinary(encoded)
+	if err != nil {
+		return nil, err
+	}
+	common := parsed.GetCommon()
+	if common.TransactionType == "" {
+		return nil, errors.New("transaction is missing TransactionType")
+	}
+	txType, ok := TypeFromName(common.TransactionType)
+	if !ok {
+		return nil, fmt.Errorf("unknown transaction type %q", common.TransactionType)
+	}
+
+	if err := checkRequiredFields(commonFields, common.PresentFields); err != nil {
+		return nil, err
+	}
+	if err := checkRequiredFields(txTemplates[txType], common.PresentFields); err != nil {
+		return nil, err
+	}
+	return binarycodec.DecodeBytes(encoded)
+}
+
+// CanonicalizeSerializedMetadata validates and returns the codec-decoded
+// representation of transaction metadata.
+func CanonicalizeSerializedMetadata(fields map[string]any) (map[string]any, error) {
+	canonical, err := CanonicalizeSerializedObject(fields)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range []string{"TransactionResult", "TransactionIndex", "AffectedNodes"} {
+		if _, ok := canonical[name]; !ok {
+			return nil, fmt.Errorf("metadata is missing %s", name)
+		}
+	}
+	return canonical, nil
+}
+
+// CanonicalizeSerializedObject validates codec field types and returns the
+// decoded canonical object without applying a higher-level object template.
+func CanonicalizeSerializedObject(fields map[string]any) (map[string]any, error) {
+	encoded, err := serializedObjectBytes(fields)
+	if err != nil {
+		return nil, err
+	}
+	return binarycodec.DecodeBytes(encoded)
+}
+
+func serializedObjectBytes(fields map[string]any) ([]byte, error) {
+	if err := validateSerializedJSONNumbers(fields); err != nil {
+		return nil, err
+	}
+	return binarycodec.EncodeBytes(fields)
+}
+
+func validateSerializedJSONNumbers(value any) error {
+	switch value := value.(type) {
+	case map[string]any:
+		defs := definitions.Get()
+		for name, fieldValue := range value {
+			if number, ok := fieldValue.(float64); ok {
+				field, err := defs.GetFieldInstanceByFieldName(name)
+				if err == nil {
+					var max float64
+					switch field.Type {
+					case "UInt8":
+						max = 1<<8 - 1
+					case "UInt16":
+						max = 1<<16 - 1
+					case "UInt32":
+						max = 1<<32 - 1
+					}
+					if max != 0 && (number < 0 || number > max || math.Trunc(number) != number) {
+						return fmt.Errorf("field %q is not a valid %s", name, field.Type)
+					}
+				}
+			}
+			if err := validateSerializedJSONNumbers(fieldValue); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, element := range value {
+			if err := validateSerializedJSONNumbers(element); err != nil {
+				return err
+			}
+		}
+	case []map[string]any:
+		for _, element := range value {
+			if err := validateSerializedJSONNumbers(element); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func checkRequiredFields(template map[string]fieldStyle, present map[string]bool) error {
+	for name, style := range template {
+		if style == soeREQUIRED && !present[name] {
+			return fmt.Errorf("transaction is missing required field %q", name)
+		}
+	}
+	return nil
+}
 
 var (
 	// ErrLengthPrefixTooLong is returned when the length exceeds 918744 bytes
@@ -66,22 +181,19 @@ func MetadataToMap(meta *Metadata) map[string]any {
 	result["TransactionIndex"] = meta.TransactionIndex
 
 	// AffectedNodes - sort by LedgerIndex to match rippled's ordering
-	if len(meta.AffectedNodes) > 0 {
-		// Sort nodes by LedgerIndex (ascending)
-		sortedNodes := make([]AffectedNode, len(meta.AffectedNodes))
-		copy(sortedNodes, meta.AffectedNodes)
-		sort.Slice(sortedNodes, func(i, j int) bool {
-			return sortedNodes[i].LedgerIndex < sortedNodes[j].LedgerIndex
-		})
+	sortedNodes := make([]AffectedNode, len(meta.AffectedNodes))
+	copy(sortedNodes, meta.AffectedNodes)
+	sort.Slice(sortedNodes, func(i, j int) bool {
+		return sortedNodes[i].LedgerIndex < sortedNodes[j].LedgerIndex
+	})
 
-		nodes := make([]map[string]any, len(sortedNodes))
-		for i, node := range sortedNodes {
-			nodes[i] = map[string]any{
-				node.NodeType: buildAffectedNodeInner(node),
-			}
+	nodes := make([]map[string]any, len(sortedNodes))
+	for i, node := range sortedNodes {
+		nodes[i] = map[string]any{
+			node.NodeType: buildAffectedNodeInner(node),
 		}
-		result["AffectedNodes"] = nodes
 	}
+	result["AffectedNodes"] = nodes
 
 	// DeliveredAmount (optional). The BINARY metadata field is sfDeliveredAmount
 	// (codec/definitions name "DeliveredAmount", type Amount). The snake_case
@@ -187,6 +299,5 @@ func SplitTxWithMetaBlob(blob []byte) (txData []byte, metaData []byte, err error
 	if err != nil {
 		return nil, nil, err
 	}
-
 	return txData, metaData, nil
 }

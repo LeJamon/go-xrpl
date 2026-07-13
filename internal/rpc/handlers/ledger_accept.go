@@ -46,7 +46,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	closedSeq, err := ctx.Services.Ledger.AcceptLedgerAt(ctx.Context, closeTime)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to accept ledger: %v", err))
+		return nil, rpcInternalError("ledger_accept: accepting ledger failed", err)
 	}
 
 	response := map[string]any{

@@ -12,8 +12,9 @@ func TestGossip_ExportFiltersBelowMinimum(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	tr := newWithClock(func() time.Time { return now })
 
-	// chatty client: 1 heavy (3000) is above MinimumGossipBalance(1000)
-	tr.Charge("loud", LoadHeavy)
+	for range 11 {
+		tr.Charge("loud", LoadHeavy)
+	}
 	// quiet client: 1 reference (20) is below
 	tr.Charge("quiet", LoadReference)
 
@@ -118,8 +119,9 @@ func TestGossip_RoundTrip(t *testing.T) {
 	a := newWithClock(func() time.Time { return now })
 	b := newWithClock(func() time.Time { return now })
 
-	// Node A sees a chatty client.
-	a.Charge("loud", LoadHeavy) // 3000
+	for range 11 {
+		a.Charge("loud", LoadHeavy)
+	}
 
 	g := a.Export()
 	if len(g.Items) == 0 {

@@ -30,7 +30,7 @@ type PrintMethod struct{ AdminHandler }
 
 func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("print: ledger service unavailable")
 	}
 
 	out := map[string]any{}
@@ -161,7 +161,7 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 	stored, err := store.SetCanDelete(seq)
 	if err != nil {
-		return nil, types.RpcErrorInternal("failed to persist can_delete: " + err.Error())
+		return nil, rpcInternalError("can_delete: persisting boundary failed", err)
 	}
 	return map[string]any{"can_delete": stored}, nil
 }
@@ -275,7 +275,7 @@ func uptimeText(d time.Duration) string {
 
 func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("get_counts: ledger service unavailable")
 	}
 
 	result := map[string]any{

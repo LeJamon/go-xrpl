@@ -577,7 +577,7 @@ func TestServerInfoServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestServerInfoServiceNilLedger tests behavior when ledger service is nil
@@ -595,7 +595,7 @@ func TestServerInfoServiceNilLedger(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // Method Metadata Tests
@@ -917,7 +917,7 @@ func TestServerStateServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // Integration-like Tests

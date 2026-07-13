@@ -66,7 +66,7 @@ func (m *PeerReservationsAddMethod) Handle(ctx *types.RpcContext, params json.Ra
 	if ctx.Services != nil && ctx.Services.PeerReservationAdd != nil {
 		prevDesc, replaced, err := ctx.Services.PeerReservationAdd(key, desc)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to persist peer reservation: " + err.Error())
+			return nil, rpcInternalError("peer_reservations_add: persisting reservation failed", err)
 		}
 		if replaced {
 			result["previous"] = reservationJSON(key, prevDesc)
@@ -100,7 +100,7 @@ func (m *PeerReservationsDelMethod) Handle(ctx *types.RpcContext, params json.Ra
 	if ctx.Services != nil && ctx.Services.PeerReservationDel != nil {
 		prevDesc, existed, err := ctx.Services.PeerReservationDel(key)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to persist peer reservation: " + err.Error())
+			return nil, rpcInternalError("peer_reservations_del: persisting reservation failed", err)
 		}
 		if existed {
 			result["previous"] = reservationJSON(key, prevDesc)

@@ -189,7 +189,7 @@ func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	return ws
 }
 
-func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) types.WebSocketResponse {
+func wsRawRoundTrip(t *testing.T, ws *WebSocketServer, request string) []byte {
 	t.Helper()
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
 	defer httpSrv.Close()
@@ -209,7 +209,22 @@ func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) types.WebSoc
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	var resp types.WebSocketResponse
+	return raw
+}
+
+type apiVersionWSResponse struct {
+	Status       string `json:"status"`
+	Result       any    `json:"result,omitempty"`
+	ApiVersion   int    `json:"api_version,omitempty"`
+	Error        string `json:"error,omitempty"`
+	ErrorCode    int    `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) apiVersionWSResponse {
+	t.Helper()
+	raw := wsRawRoundTrip(t, ws, request)
+	var resp apiVersionWSResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("unmarshal response: %v\nraw: %s", err, string(raw))
 	}
@@ -250,15 +265,42 @@ func TestApiVersion_WS_V3GatedByBeta(t *testing.T) {
 	})
 }
 
-// TestApiVersion_WS_UnspecifiedDefaultsToV1 verifies a WS command without
-// api_version resolves to v1.
 func TestApiVersion_WS_UnspecifiedDefaultsToV1(t *testing.T) {
 	ws := versionEchoWSServer(t, false)
 	resp := wsRoundTrip(t, ws, `{"command":"ping"}`)
 	if resp.Status != "success" {
 		t.Fatalf("WS ping status = %q, want success", resp.Status)
 	}
-	if resp.ApiVersion != types.ApiVersion1 {
-		t.Fatalf("WS unspecified api_version resolved to %d, want %d", resp.ApiVersion, types.ApiVersion1)
+	if resp.ApiVersion != 0 {
+		t.Fatalf("WS response added unspecified api_version %d", resp.ApiVersion)
+	}
+	result, ok := resp.Result.(map[string]any)
+	if !ok || result["api_version"] != float64(types.ApiVersion1) {
+		t.Fatalf("WS handler context did not resolve unspecified version to v1: %v", resp.Result)
+	}
+}
+
+func TestApiVersion_WSRequiresJSONInteger(t *testing.T) {
+	ws := versionEchoWSServer(t, false)
+	for _, rawVersion := range []string{`"2"`, `1.5`, `1.0`, `1e0`} {
+		t.Run(rawVersion, func(t *testing.T) {
+			raw := wsRawRoundTrip(t, ws, `{"command":"ping","api_version":`+rawVersion+`}`)
+			var resp map[string]any
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v\nraw: %s", err, string(raw))
+			}
+			if resp["error"] != "invalid_API_version" {
+				t.Fatalf("error = %q, want invalid_API_version", resp["error"])
+			}
+		})
+	}
+}
+
+func TestApiVersion_WSInvalidVersionPrecedesCommandValidation(t *testing.T) {
+	ws := versionEchoWSServer(t, false)
+	raw := wsRawRoundTrip(t, ws, `{"command":7,"api_version":1e0,"id":7}`)
+	const want = `{"api_version":1,"error":"invalid_API_version","id":7,"request":{"api_version":1,"command":7,"id":7},"status":"error","type":"response"}`
+	if got := string(raw); got != want {
+		t.Fatalf("response = %s, want %s", got, want)
 	}
 }

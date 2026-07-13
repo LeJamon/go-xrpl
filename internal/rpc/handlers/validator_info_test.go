@@ -248,5 +248,5 @@ func TestValidatorInfo_InvalidPublicKeyLength(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "internal", rpcErr.ErrorString)
-	assert.Contains(t, rpcErr.Message, "invalid length")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }

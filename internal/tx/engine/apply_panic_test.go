@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -76,6 +77,10 @@ func (t *stagedStateApplyTx) Apply(ctx *txcore.ApplyContext) ter.Result {
 type failingAtomicPseudoView struct {
 	*ledger.Ledger
 	candidate *ledger.Ledger
+}
+
+func (v *failingAtomicPseudoView) ApplyAtomically(apply func(ledger.Writer) error) error {
+	return v.Ledger.ApplyAtomically(apply)
 }
 
 func (v *failingAtomicPseudoView) AdoptState(candidate *ledger.Ledger) error {
@@ -357,7 +362,7 @@ func newApplyPanicLedger() *ledger.Ledger {
 	)
 }
 
-func pseudoRecoveryEngine(view txcore.LedgerView, ledgerSequence uint32) *Engine {
+func pseudoRecoveryEngine(view applystate.AtomicLedgerView, ledgerSequence uint32) *Engine {
 	return NewEngine(view, txcore.EngineConfig{
 		LedgerSequence: ledgerSequence,
 		Rules:          amendment.AllSupportedRules(),

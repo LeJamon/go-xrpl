@@ -98,7 +98,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 			}
 			return nil, types.RpcErrorBadCredentials(detail)
 		}
-		return nil, types.RpcErrorInternal(err.Error())
+		return nil, rpcInternalError("deposit_authorized: ledger query failed", err)
 	}
 
 	// Build response

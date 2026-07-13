@@ -67,7 +67,7 @@ func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) 
 
 	handler, ok := e.registry.Get(method)
 	if !ok {
-		return nil, types.RpcErrorMethodNotFound(method)
+		return nil, types.RpcErrorMethodNotFound()
 	}
 
 	var raw json.RawMessage

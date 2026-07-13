@@ -47,34 +47,34 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	algo := secp256k1.SECP256K1()
 	privHex, pubHex, err := algo.DeriveKeypair(seed, true)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to derive validator keypair: %v", err))
+		return nil, rpcInternalError("validation_create: validator keypair derivation failed", err)
 	}
 
 	pubBytes, err := hex.DecodeString(pubHex)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode public key: %v", err))
+		return nil, rpcInternalError("validation_create: public key decoding failed", err)
 	}
 	validationPublicKey, err := addresscodec.EncodeNodePublicKey(pubBytes)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode validation public key: %v", err))
+		return nil, rpcInternalError("validation_create: validation public key encoding failed", err)
 	}
 
 	// DeriveKeypair returns the private key as "00"+64 hex; the NodePrivate
 	// token encodes the raw 32-byte key, so drop the leading "00".
 	privBytes, err := hex.DecodeString(privHex[2:])
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to decode private key: %v", err))
+		return nil, rpcInternalError("validation_create: private key decoding failed", err)
 	}
 	validationPrivateKey := addresscodec.Base58CheckEncode(privBytes, addresscodec.NodePrivateKeyPrefix)
 
 	encodedSeed, err := addresscodec.EncodeSeed(seed, algo)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode seed: %v", err))
+		return nil, rpcInternalError("validation_create: seed encoding failed", err)
 	}
 
 	validationKey, err := rfc1751.SeedToEnglish(seed)
 	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode RFC-1751 key: %v", err))
+		return nil, rpcInternalError("validation_create: RFC-1751 key encoding failed", err)
 	}
 
 	return map[string]any{

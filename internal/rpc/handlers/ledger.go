@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -25,17 +25,24 @@ type LedgerMethod struct{ BaseHandler }
 func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
-		Accounts     bool `json:"accounts,omitempty"`
-		Full         bool `json:"full,omitempty"`
-		Transactions bool `json:"transactions,omitempty"`
-		Expand       bool `json:"expand,omitempty"`
-		OwnerFunds   bool `json:"owner_funds,omitempty"`
-		Binary       bool `json:"binary,omitempty"`
-		Queue        bool `json:"queue,omitempty"`
+		Accounts     bool            `json:"accounts,omitempty"`
+		Full         bool            `json:"full,omitempty"`
+		Transactions bool            `json:"transactions,omitempty"`
+		Expand       bool            `json:"expand,omitempty"`
+		OwnerFunds   bool            `json:"owner_funds,omitempty"`
+		Binary       bool            `json:"binary,omitempty"`
+		Queue        bool            `json:"queue,omitempty"`
+		Type         json.RawMessage `json:"type,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
+	}
+	var rawRequest map[string]json.RawMessage
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &rawRequest); err != nil {
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -46,10 +53,25 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	// unlimited (admin / identified) role else rpcNO_PERMISSION
 	// (LedgerHandler.cpp:66-72). full also implies expand + transactions +
 	// accounts (LedgerToJson.cpp isFull/isExpanded).
-	if request.Full || request.Accounts {
-		if !ctx.Unlimited {
-			return nil, types.RpcErrorNoPermission("ledger")
+	_, hasLedgerHash := rawRequest["ledger_hash"]
+	_, hasLedgerIndex := rawRequest["ledger_index"]
+	_, hasLegacyLedger := rawRequest["ledger"]
+	hasLedgerSelector := hasLedgerHash || hasLedgerIndex || hasLegacyLedger
+	if !hasLedgerSelector {
+		closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+		if err != nil || closed == nil {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
+		open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+		if err != nil || open == nil {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		response := map[string]any{
+			"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
+			"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
+		}
+		addLedgerTypeWarning(response, len(request.Type) > 0)
+		return response, nil
 	}
 	if request.Full {
 		request.Transactions = true
@@ -65,10 +87,22 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	if lerr != nil {
 		return nil, lerr
 	}
+	if request.Full || request.Accounts {
+		if !ctx.Unlimited {
+			return nil, types.RpcErrorNoPermission("ledger")
+		}
+		if request.Binary {
+			setLoadMedium(ctx)
+		} else {
+			setLoadHeavy(ctx)
+		}
+	}
+	if request.Queue && targetLedger.IsClosed() {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
 
-	// Build ledger info (shared with ledger_request).
-	ledgerInfo := ledgerInfoJSON(targetLedger)
-	ledgerHash := ledgerInfo["ledger_hash"].(string)
+	ledgerInfo := ledgerRPCInfoJSON(targetLedger, request.Binary, request.Full, ctx.ApiVersion)
+	ledgerHash := FormatLedgerHash(targetLedger.Hash())
 
 	closeTimeSec := targetLedger.CloseTime()
 	closeTimeISO := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second).UTC().Format(time.RFC3339)
@@ -122,22 +156,88 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 	}
 
 	response := map[string]any{
-		"ledger":       ledgerInfo,
-		"ledger_hash":  ledgerHash,
-		"ledger_index": targetLedger.Sequence(),
-		"validated":    validated,
+		"ledger":    ledgerInfo,
+		"validated": validated,
 	}
-
-	response["reserve_base_drops"] = fmt.Sprintf("%d", reserveBase)
-	response["reserve_inc_drops"] = fmt.Sprintf("%d", reserveInc)
+	if targetLedger.IsClosed() {
+		response["ledger_hash"] = ledgerHash
+		response["ledger_index"] = targetLedger.Sequence()
+	} else {
+		response["ledger_current_index"] = targetLedger.Sequence()
+	}
 
 	if request.Queue {
 		if queueData := buildLedgerQueueData(ctx, request.Binary, request.Expand); len(queueData) > 0 {
 			response["queue_data"] = queueData
 		}
 	}
+	addLedgerTypeWarning(response, len(request.Type) > 0)
 
 	return response, nil
+}
+
+func ledgerRPCInfoJSON(l types.LedgerReader, binary, full bool, apiVersion int) map[string]any {
+	if binary {
+		result := map[string]any{"closed": l.IsClosed()}
+		if l.IsClosed() {
+			result["ledger_data"] = strings.ToUpper(formatLedgerHeaderBinary(&types.LedgerHeaderInfo{
+				AccountHash:         l.StateMapHash(),
+				CloseFlags:          l.CloseFlags(),
+				CloseTime:           l.CloseTime(),
+				CloseTimeResolution: l.CloseTimeResolution(),
+				LedgerIndex:         l.Sequence(),
+				ParentCloseTime:     l.ParentCloseTime(),
+				ParentHash:          l.ParentHash(),
+				TotalCoins:          l.TotalDrops(),
+				TransactionHash:     l.TxMapHash(),
+			}))
+		}
+		return result
+	}
+
+	ledgerIndex := any(strconv.FormatUint(uint64(l.Sequence()), 10))
+	if apiVersion > 1 {
+		ledgerIndex = l.Sequence()
+	}
+	result := map[string]any{
+		"parent_hash":  FormatLedgerHash(l.ParentHash()),
+		"ledger_index": ledgerIndex,
+	}
+	if l.IsClosed() {
+		result["closed"] = true
+	} else if !full {
+		result["closed"] = false
+		return result
+	}
+
+	result["ledger_hash"] = FormatLedgerHash(l.Hash())
+	result["transaction_hash"] = FormatLedgerHash(l.TxMapHash())
+	result["account_hash"] = FormatLedgerHash(l.StateMapHash())
+	result["total_coins"] = strconv.FormatUint(l.TotalDrops(), 10)
+	result["close_flags"] = l.CloseFlags()
+	result["parent_close_time"] = l.ParentCloseTime()
+	result["close_time"] = l.CloseTime()
+	result["close_time_resolution"] = l.CloseTimeResolution()
+	if l.CloseTime() != 0 {
+		closeTime := rippleEpochTime.Add(time.Duration(l.CloseTime()) * time.Second).UTC()
+		result["close_time_human"] = closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC")
+		result["close_time_iso"] = closeTime.Format(time.RFC3339)
+		if l.CloseFlags()&ledgerheader.LCFNoConsensusTime != 0 {
+			result["close_time_estimated"] = true
+		}
+	}
+	return result
+}
+
+func addLedgerTypeWarning(response map[string]any, typePresent bool) {
+	if !typePresent {
+		return
+	}
+	response["warnings"] = []map[string]any{{
+		"id": 2004,
+		"message": "Some fields from your request are deprecated. Please check the documentation at " +
+			"https://xrpl.org/docs/references/http-websocket-apis/ and update your request. Field `type` is deprecated.",
+	}}
 }
 
 // ownerFundsLedgerView resolves the state view for the target ledger so

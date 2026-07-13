@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -25,6 +24,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
+	setLoadMedium(ctx)
 
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
@@ -35,7 +35,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, types.RpcErrorNotEnabled("")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
+		return nil, rpcInternalError("tx_history: transaction query failed", err)
 	}
 
 	// Build transactions array with deserialized JSON

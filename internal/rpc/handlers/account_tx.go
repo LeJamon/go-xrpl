@@ -68,23 +68,6 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("invalidParams")
 	}
 
-	// When a single ledger is named via ledger_hash/ledger_index and no
-	// ledger_index_min/max range was given, the query is constrained to that one
-	// ledger: resolve it and collapse the range to [seq, seq] instead of scanning
-	// the whole validated range (AccountTx.cpp parseLedgerArgs:52-130).
-	if !hasMinMax && hasLedgerSpec {
-		targetLedger, _, lerr := LookupLedger(ctx, types.LedgerSpecifier{
-			LedgerHash:  request.LedgerHash,
-			LedgerIndex: types.LedgerIndex(request.LedgerIndex),
-		})
-		if lerr != nil {
-			return nil, lerr
-		}
-		seq := int32(targetLedger.Sequence())
-		ledgerIndexMin = seq
-		ledgerIndexMax = seq
-	}
-
 	// Parse marker if provided
 	var marker *types.AccountTxMarker
 	if request.Marker != nil {
@@ -123,6 +106,19 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
+	setLoadMedium(ctx)
+	if !hasMinMax && hasLedgerSpec {
+		targetLedger, _, lerr := LookupLedger(ctx, types.LedgerSpecifier{
+			LedgerHash:  request.LedgerHash,
+			LedgerIndex: types.LedgerIndex(request.LedgerIndex),
+		})
+		if lerr != nil {
+			return nil, lerr
+		}
+		seq := int32(targetLedger.Sequence())
+		ledgerIndexMin = seq
+		ledgerIndexMax = seq
+	}
 	result, err := ctx.Services.Ledger.GetAccountTransactions(
 		ctx.Context,
 		request.Account,
@@ -139,7 +135,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
+		return nil, rpcInternalError("account_tx: transaction query failed", err)
 	}
 
 	// Cache for ledger lookups by sequence, to avoid repeated lookups

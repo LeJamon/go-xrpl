@@ -112,7 +112,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
+		return nil, rpcInternalError("account_info: ledger query failed", err)
 	}
 
 	// Build account_data by decoding the full SLE binary via binarycodec,

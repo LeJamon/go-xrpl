@@ -12,6 +12,7 @@ import (
 type SignMethod struct{}
 
 func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadHeavy(ctx)
 	var request struct {
 		TxJson     json.RawMessage `json:"tx_json"`
 		Secret     string          `json:"secret,omitempty"`

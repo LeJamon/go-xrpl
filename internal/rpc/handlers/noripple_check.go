@@ -85,7 +85,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RpcErrorInternal(err.Error())
+		return nil, rpcInternalError("noripple_check: ledger query failed", err)
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format

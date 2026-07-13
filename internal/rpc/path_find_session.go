@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"encoding/json"
-	"fmt"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -56,7 +55,7 @@ type pathFindCreateRequest struct {
 func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpctypes.RpcError) {
 	var request pathFindCreateRequest
 	if err := json.Unmarshal(params, &request); err != nil {
-		return nil, rpctypes.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		return nil, rpctypes.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Validate required fields

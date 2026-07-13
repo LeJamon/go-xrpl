@@ -21,8 +21,7 @@ func TestNewServerWiresClientLoadShedder(t *testing.T) {
 	}
 }
 
-// 503 status mapping matches rippled ErrorCodes.cpp:114 (rpcTOO_BUSY row).
-func TestRpcTooBusyReturnsHTTP503(t *testing.T) {
+func TestRpcTooBusyUsesLegacyHTTP200(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	srv := NewServer(time.Second, services)
 	srv.registry.Register("book_offers", &handlers.BookOffersMethod{})
@@ -41,8 +40,8 @@ func TestRpcTooBusyReturnsHTTP503(t *testing.T) {
 
 	srv.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected HTTP 503, got %d\nbody: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
 
 	var env map[string]any
