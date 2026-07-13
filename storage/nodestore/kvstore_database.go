@@ -197,6 +197,7 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 	}
 
 	batch := d.store.NewBatch()
+	wroteNode := false
 	for _, node := range nodes {
 		if node == nil {
 			continue
@@ -207,6 +208,7 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 		if err != nil {
 			return fmt.Errorf("store batch failed: %w", err)
 		}
+		wroteNode = true
 	}
 	d.pruneMu.RLock()
 	err := batch.Write()
@@ -214,7 +216,7 @@ func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 	if err != nil {
 		return fmt.Errorf("store batch commit failed: %w", err)
 	}
-	if d.negativeCache != nil {
+	if d.negativeCache != nil && wroteNode {
 		d.storeGeneration.Add(1)
 		for _, node := range nodes {
 			if node != nil {

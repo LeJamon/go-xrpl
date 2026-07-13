@@ -94,3 +94,30 @@ func TestFetchDoesNotCacheMissAcrossStore(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreBatchWithoutNodesDoesNotAdvanceGeneration(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []*Node
+	}{
+		{name: "empty"},
+		{name: "nil node", nodes: []*Node{nil}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db := NewKVDatabaseWithConfig(memorydb.New(), "test", &DatabaseConfig{
+				NegativeCacheTTL:     time.Hour,
+				NegativeCacheMaxSize: 10,
+			})
+			t.Cleanup(func() { _ = db.Close() })
+
+			if err := db.StoreBatch(context.Background(), tt.nodes); err != nil {
+				t.Fatalf("StoreBatch: %v", err)
+			}
+			if got := db.storeGeneration.Load(); got != 0 {
+				t.Fatalf("store generation = %d, want 0", got)
+			}
+		})
+	}
+}
