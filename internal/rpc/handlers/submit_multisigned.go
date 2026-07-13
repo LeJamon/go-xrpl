@@ -16,6 +16,7 @@ import (
 type SubmitMultisignedMethod struct{}
 
 func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadHeavy(ctx)
 	var request struct {
 		TxJson   json.RawMessage `json:"tx_json"`
 		FailHard bool            `json:"fail_hard,omitempty"`
@@ -212,7 +213,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
 	}
 	if submitErr != nil {
-		return nil, rpcInternalError("submit_multisigned: transaction submission failed", submitErr)
+		return nil, rpcTransactionSubmissionError("submit_multisigned: transaction submission failed", submitErr)
 	}
 
 	txMap["hash"] = txHash

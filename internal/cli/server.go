@@ -31,6 +31,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
@@ -742,8 +743,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 		)
 	}
 
+	transportLoad := loadtrack.New()
+
 	// Create HTTP JSON-RPC server with 30 second timeout
-	httpServer := rpc.NewServer(30*time.Second, services)
+	httpServer := rpc.NewServerWithLoadTracker(30*time.Second, services, transportLoad)
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		httpServer.SetPeerSource(consensusComponents.Overlay)
 	}
@@ -751,7 +754,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	services.SetDispatcher(httpServer)
 
 	// Create WebSocket server for real-time subscriptions
-	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
+	wsServer = rpc.NewWebSocketServerWithLoadTracker(30*time.Second, services, transportLoad)
 	if globalConfig.WebsocketPingFrequency > 0 {
 		wsServer.SetPingInterval(time.Duration(globalConfig.WebsocketPingFrequency) * time.Second)
 	}

@@ -35,7 +35,7 @@ func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (
 
 	validationPK := ctx.Services.ValidatorPublicKey
 	if len(validationPK) != 33 {
-		return nil, types.RpcErrorInternal("validator public key has invalid length")
+		return nil, rpcInternalInvariantError("validator_info: validator public key has invalid length")
 	}
 
 	var keyArr [33]byte

@@ -92,5 +92,6 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }

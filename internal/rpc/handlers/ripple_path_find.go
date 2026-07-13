@@ -52,6 +52,7 @@ type pathAlternativeJSON struct {
 type RipplePathFindMethod struct{}
 
 func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadHeavy(ctx)
 	release, rpcErr := AcquirePathfind(ctx)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -167,7 +168,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	pr := pathfinder.NewPathRequest(srcAccount, dstAccount, dstAmount, sendMax, srcCurrencies, convertAll)
 	result := pr.Execute(view)
 	if result.SourceCurrencyOverflow {
-		return nil, types.RpcErrorInternal("Internal error.")
+		return nil, rpcInternalInvariantError("ripple_path_find: source currency limit exceeded")
 	}
 
 	response := ripplePathFindResponse{
@@ -220,11 +221,11 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	// `result.data`, which no XRPL client understands.
 	encoded, mErr := json.Marshal(response)
 	if mErr != nil {
-		return nil, types.RpcErrorInternal("Internal error.")
+		return nil, rpcInternalError("ripple_path_find: response marshaling failed", mErr)
 	}
 	var flat map[string]any
 	if uErr := json.Unmarshal(encoded, &flat); uErr != nil {
-		return nil, types.RpcErrorInternal("Internal error.")
+		return nil, rpcInternalError("ripple_path_find: response normalization failed", uErr)
 	}
 	return flat, nil
 }

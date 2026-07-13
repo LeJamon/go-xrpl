@@ -17,6 +17,7 @@ import (
 type SubmitMethod struct{}
 
 func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadMedium(ctx)
 	var request struct {
 		TxBlob     string          `json:"tx_blob,omitempty"`
 		TxJson     json.RawMessage `json:"tx_json,omitempty"`
@@ -61,7 +62,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		// Marshal back to JSON for submission
 		txJSON, err = json.Marshal(decoded)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal decoded tx_blob")
+			return nil, rpcInternalError("submit: decoded transaction marshaling failed", err)
 		}
 	} else if hasSigningCreds {
 		// Sign-and-submit path: sign the transaction first, then submit the blob.
@@ -84,7 +85,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		var err error
 		txJSON, err = json.Marshal(txJsonMap)
 		if err != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal signed transaction")
+			return nil, rpcInternalError("submit: signed transaction marshaling failed", err)
 		}
 	} else {
 		// Submit using tx_json directly (no signing)
@@ -123,7 +124,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
 	}
 	if submitErr != nil {
-		return nil, rpcInternalError("submit: transaction submission failed", submitErr)
+		return nil, rpcTransactionSubmissionError("submit: transaction submission failed", submitErr)
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 
@@ -140,6 +141,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 				Meta: map[string]any{
 					"TransactionResult": result.EngineResult,
 					"TransactionIndex":  0,
+					"AffectedNodes":     []any{},
 				},
 			}
 			storedData, mErr := json.Marshal(storedTx)

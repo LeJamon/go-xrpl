@@ -230,6 +230,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }
 

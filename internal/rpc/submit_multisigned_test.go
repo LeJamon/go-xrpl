@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -378,6 +379,29 @@ func TestSubmitMultisigned_HappyPath(t *testing.T) {
 	respTxJSON, ok := resp["tx_json"].(map[string]any)
 	require.True(t, ok)
 	assert.NotEmpty(t, respTxJSON["hash"])
+}
+
+func TestSubmitMultisigned_SubmissionErrorUsesFixedMessage(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	mock.submitError = errors.New("backend submission detail")
+	services := newSubmitTestServices(mock)
+
+	handler := &handlers.SubmitMultisignedMethod{}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion1, Services: services}
+
+	txJSON := validMultisignedTxJSON()
+	txJSON["Destination"] = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+	signer := txJSON["Signers"].([]any)[0].(map[string]any)["Signer"].(map[string]any)
+	signer["Account"] = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+
+	result, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
+
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, "internal", rpcErr.ErrorString)
+	assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Message, mock.submitError.Error())
 }
 
 // TestSubmitMultisigned_ValidationOrder_TxnSignatureBeforeFee verifies that

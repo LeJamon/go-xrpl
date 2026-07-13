@@ -251,8 +251,8 @@ func RpcErrorInvalidParams(message string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", message)
 }
 
-func RpcErrorMethodNotFound(method string) *RpcError {
-	return NewRpcError(RpcMETHOD_NOT_FOUND, "unknownCmd", "unknownCmd", "Unknown method: "+method)
+func RpcErrorMethodNotFound() *RpcError {
+	return NewRpcError(RpcMETHOD_NOT_FOUND, "unknownCmd", "unknownCmd", "Unknown method.")
 }
 
 func RpcErrorLgrNotFound(message string) *RpcError {
@@ -283,8 +283,16 @@ func RpcErrorInvalidHotWallet() *RpcError {
 	return NewRpcError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
 }
 
-func RpcErrorInternal(message string) *RpcError {
-	return NewRpcError(RpcINTERNAL, "internal", "internal", message)
+func RpcErrorInternal() *RpcError {
+	return NewRpcError(RpcINTERNAL, "internal", "internal", "Internal error.")
+}
+
+func RpcErrorTransactionSubmission() *RpcError {
+	return NewRpcError(RpcINTERNAL, "internal", "internal", "Exception occurred during transaction submission.")
+}
+
+func RpcErrorDBDeserialization() *RpcError {
+	return NewRpcError(RpcDB_DESERIALIZATION, "dbDeserialization", "dbDeserialization", "Database deserialization error.")
 }
 
 func RpcErrorNoPermission(method string) *RpcError {

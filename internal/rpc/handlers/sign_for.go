@@ -19,6 +19,7 @@ import (
 type SignForMethod struct{}
 
 func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadHeavy(ctx)
 	var request struct {
 		Account    string          `json:"account"`
 		TxJson     json.RawMessage `json:"tx_json"`

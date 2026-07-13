@@ -121,5 +121,6 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }

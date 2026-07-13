@@ -76,7 +76,6 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if (hasHash && hasIndex) || (!hasHash && !hasIndex) {
 		return nil, types.RpcErrorInvalidParams("Exactly one of ledger_hash and ledger_index can be set.")
 	}
-
 	var targetHash [32]byte
 	var targetSeq uint32
 

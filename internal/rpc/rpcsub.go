@@ -74,7 +74,16 @@ func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types
 	}
 	// Like rippled, a failing stream/account/book parse leaves the freshly
 	// created registry entry in place.
-	if rpcErr := r.ws.subscriptionManager.HandleSubscribe(sub.conn, request, true); rpcErr != nil {
+	if rpcErr := r.ws.subscriptionManager.HandleSubscribe(sub.conn, request.WithoutBooks(), true); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := applyURLSubscriptionBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		if rpcErr := r.ws.subscriptionManager.HandleSubscribe(sub.conn, bookRequest, true); rpcErr != nil {
+			return rpcErr
+		}
+		setSubscriptionLoadCost(ctx, bookRequest)
+		return nil
+	}); rpcErr != nil {
 		return nil, rpcErr
 	}
 	return r.ws.buildSubscribeAck(ctx, request), nil
@@ -90,11 +99,29 @@ func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request typ
 	if !ok {
 		return map[string]any{}, nil
 	}
-	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribe(sub.conn, request, true); rpcErr != nil {
+	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribe(sub.conn, request.WithoutBooks(), true); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := applyURLSubscriptionBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		return r.ws.subscriptionManager.HandleUnsubscribe(sub.conn, bookRequest, true)
+	}); rpcErr != nil {
 		return nil, rpcErr
 	}
 	r.tryRemove(request.URL)
 	return map[string]any{}, nil
+}
+
+func applyURLSubscriptionBooks(request types.SubscriptionRequest, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+	wire := request.WireArrays()
+	if wire.Present {
+		return applySubscriptionBooks(wire.Books, apply)
+	}
+	for _, book := range request.Books {
+		if rpcErr := apply(types.SubscriptionRequest{Books: []types.BookRequest{book}}); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	return nil
 }
 
 func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest) (*rpcSub, *types.RpcError) {
@@ -103,7 +130,8 @@ func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return nil, types.RpcErrorInternal("Internal error.")
+		wsLog().Error("rpcsub: subscription requested after registry closed")
+		return nil, types.RpcErrorInternal()
 	}
 	if sub, ok := r.subs[request.URL]; ok {
 		// Credentials on an existing url subscription are only updated via

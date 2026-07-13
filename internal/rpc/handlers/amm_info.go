@@ -113,8 +113,11 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		}
 
 		ammIDBytes, hexErr := hex.DecodeString(ammIDHex)
-		if hexErr != nil || len(ammIDBytes) != 32 {
-			return nil, types.RpcErrorInternal("Invalid AMMID in account")
+		if hexErr != nil {
+			return nil, rpcInternalError("amm_info: AMMID decoding failed", hexErr)
+		}
+		if len(ammIDBytes) != 32 {
+			return nil, rpcInternalInvariantError("amm_info: AMMID has invalid length")
 		}
 		copy(ammKey[:], ammIDBytes)
 		if ammKey == ([32]byte{}) {

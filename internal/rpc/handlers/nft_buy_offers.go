@@ -95,6 +95,7 @@ func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(c
 		return nil, rpcInternalError("nft_offers: ledger query failed", err)
 	}
 
+	setLoadMedium(ctx)
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -201,13 +202,15 @@ func TestCredentialsMaskedInErrorEnvelope(t *testing.T) {
 // TestHandlerPanicRecovered ensures a panicking handler returns an error
 // envelope to the client instead of crashing the server goroutine.
 func TestHandlerPanicRecovered(t *testing.T) {
+	const panicCause = "synthetic panic must stay private"
 	srv := newHardeningServer(t, time.Second, "panic", &stubHandler{
 		handle: func(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
-			panic("synthetic panic")
+			panic(panicCause)
 		},
 	})
+	srv.loadTracker = loadtrack.New()
 
-	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"panic","params":[{}]}`))
+	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"panic","params":[{"secret":"private seed"}]}`))
 	req.RemoteAddr = "203.0.113.5:1234"
 	rr := httptest.NewRecorder()
 
@@ -216,9 +219,44 @@ func TestHandlerPanicRecovered(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	result := decodeEnvelope(t, rr.Body.Bytes())
-	if result["error"] != "internal" {
-		t.Fatalf("expected error=internal after panic, got %v\nbody: %s", result["error"], rr.Body.String())
+	const want = "{\"result\":{\"error\":\"internal\",\"error_code\":73,\"error_message\":\"Internal error.\",\"request\":{\"command\":\"panic\",\"secret\":\"<masked>\"},\"status\":\"error\"}}\n\r\n"
+	if got := rr.Body.String(); got != want {
+		t.Fatalf("panic response = %s, want %s", got, want)
+	}
+	if strings.Contains(rr.Body.String(), panicCause) || strings.Contains(rr.Body.String(), "private seed") {
+		t.Fatalf("panic response leaked private details: %s", rr.Body.String())
+	}
+	if got, want := srv.loadTracker.Balance("203.0.113.5"), float64(loadtrack.ChargeException/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+		t.Fatalf("panic charged %v, want %v", got, want)
+	}
+}
+
+type failingReader struct {
+	err error
+}
+
+func (r failingReader) Read([]byte) (int, error) {
+	return 0, r.err
+}
+
+func TestRequestBodyReadErrorIsCanonical(t *testing.T) {
+	const privateCause = "private request body failure"
+	srv := newHardeningServer(t, time.Second, "ping", &stubHandler{})
+	req := httptest.NewRequest(http.MethodPost, "/", failingReader{err: errors.New(privateCause)})
+	req.RemoteAddr = "203.0.113.5:1234"
+	rr := httptest.NewRecorder()
+
+	srv.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	const want = "{\"result\":{\"error\":\"internal\",\"error_code\":73,\"error_message\":\"Internal error.\",\"status\":\"error\"}}\n\r\n"
+	if got := rr.Body.String(); got != want {
+		t.Fatalf("read-error response = %s, want %s", got, want)
+	}
+	if strings.Contains(rr.Body.String(), privateCause) {
+		t.Fatalf("read-error response leaked cause: %s", rr.Body.String())
 	}
 }
 
@@ -291,12 +329,12 @@ func TestSecureGatewayPromotesToIdentifiedWithUser(t *testing.T) {
 	}
 }
 
-// heavyStub is a stub MethodHandler that declares LoadHeavy via the
-// optional LoadCharger interface — used to exercise the per-IP load
-// budget rejection path.
 type heavyStub struct{ stubHandler }
 
-func (heavyStub) LoadKind() loadtrack.LoadKind { return loadtrack.LoadHeavy }
+func (s *heavyStub) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	ctx.LoadCost = loadtrack.ChargeHeavy
+	return s.stubHandler.Handle(ctx, params)
+}
 
 // Once the per-IP balance crosses DropThreshold, the overload-admission gate
 // (gateLoad) rejects with rippled's canonical HTTP 503 "Server is overloaded"
@@ -306,7 +344,7 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 	srv.loadTracker = loadtrack.New()
 
 	var lastBody string
-	for range 12 {
+	for range 400 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
 		req.RemoteAddr = "198.51.100.7:5555"
 		rr := httptest.NewRecorder()
@@ -323,7 +361,7 @@ func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("never received HTTP 503 after 12 heavy invocations; last body %s", lastBody)
+	t.Fatalf("never received HTTP 503 after 400 heavy invocations; last body %s", lastBody)
 }
 
 func TestLoadTracker_AdminBypassesCharge(t *testing.T) {

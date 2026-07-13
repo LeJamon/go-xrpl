@@ -163,7 +163,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
@@ -178,7 +178,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Closed ledger index is zero", func(t *testing.T) {

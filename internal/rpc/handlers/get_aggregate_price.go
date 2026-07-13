@@ -294,7 +294,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 			filtered = prices
 		}
 		if len(filtered) == 0 {
-			return nil, types.RpcErrorInternal("Internal error.")
+			return nil, rpcInternalInvariantError("get_aggregate_price: filtering removed all prices")
 		}
 		prices = filtered
 	}

@@ -233,6 +233,8 @@ type PathFindEvent struct {
 	DestinationAmount  json.RawMessage   `json:"destination_amount"`  // Amount to deliver
 	FullReply          bool              `json:"full_reply"`          // Whether this is a full reply
 	Alternatives       []PathAlternative `json:"alternatives"`        // Alternative paths found
+	Status             string            `json:"status,omitempty"`
+	Closed             bool              `json:"closed,omitempty"`
 }
 
 // PathAlternative represents a single path alternative

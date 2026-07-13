@@ -157,7 +157,7 @@ type signResult struct {
 func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("sign: ledger service unavailable")
 	}
 
 	// Parse credentials and derive keypair using the shared helper
@@ -254,7 +254,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 			}
 			probe, mErr := json.Marshal(txMap)
 			if mErr != nil {
-				return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
+				return nil, rpcInternalError("sign: fee probe marshaling failed", mErr)
 			}
 			fee, feeErr := services.Ledger.GetAutofillFee(probe, unlimited, feeOpts.Mult, feeOpts.Div)
 			if feeErr != nil {

@@ -512,8 +512,8 @@ func TestStopServiceUnavailable(t *testing.T) {
 	require.NotNil(t, rpcErr, "Expected RPC error when service unavailable")
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
-	assert.Contains(t, rpcErr.Message, "Shutdown function not available",
-		"Error message should indicate shutdown function not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message,
+		"internal error text must remain canonical")
 }
 
 // TestStopShutdownFuncNil tests behavior when ShutdownFunc is nil.
@@ -539,8 +539,8 @@ func TestStopShutdownFuncNil(t *testing.T) {
 	require.NotNil(t, rpcErr, "Expected RPC error when shutdown func nil")
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
-	assert.Contains(t, rpcErr.Message, "Shutdown function not available",
-		"Error message should indicate shutdown function not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message,
+		"internal error text must remain canonical")
 }
 
 // TestStopWithParams tests that providing params does not affect stop behavior.

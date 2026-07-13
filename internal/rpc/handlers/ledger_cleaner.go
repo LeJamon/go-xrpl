@@ -26,7 +26,7 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 
 func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure == nil {
-		return nil, types.RpcErrorInternal("Ledger cleaner service not available")
+		return nil, rpcInternalInvariantError("ledger_cleaner: service unavailable")
 	}
 
 	var req struct {

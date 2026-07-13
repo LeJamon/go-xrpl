@@ -243,6 +243,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, rpcInternalError("book_offers: ledger query failed", err)
 	}
 
+	setLoadMedium(ctx)
 	response := map[string]any{
 		"offers": result.Offers,
 	}

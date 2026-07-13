@@ -956,7 +956,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Ledger nil", func(t *testing.T) {
@@ -978,7 +978,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 

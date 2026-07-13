@@ -74,8 +74,8 @@ func TestHTTPAdminDenialChargesFeeMalformed(t *testing.T) {
 	// The malformed bucket is 100; the reference bucket is 20. Allow for a hair
 	// of decay between the charge and this read, but confirm it is the malformed
 	// charge, not a cheaper one.
-	if got := srv.loadTracker.Balance("198.51.100.7"); got <= float64(loadtrack.ChargeReference) {
-		t.Fatalf("forbidden admin denial charged %v, want feeMalformedRPC (~%d)", got, loadtrack.ChargeMalformed)
+	if got, want := srv.loadTracker.Balance("198.51.100.7"), float64(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+		t.Fatalf("forbidden admin denial charged %v, want %v", got, want)
 	}
 
 	// An admin caller is unlimited and accrues nothing.

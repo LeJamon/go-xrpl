@@ -30,6 +30,11 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
+	setLoadHeavy(ctx)
 
 	// Parse hotwallet parameter - can be a string or array of strings
 	var hotWallets []string
@@ -63,11 +68,6 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		}
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
-	if selErr != nil {
-		return nil, selErr
-	}
-
 	// Get gateway balances from the ledger service
 	result, err := ctx.Services.Ledger.GetGatewayBalances(
 		ctx.Context,
@@ -77,6 +77,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			setLoadReference(ctx)
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {

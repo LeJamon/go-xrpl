@@ -1,7 +1,7 @@
 // Package loadtrack implements a per-client-IP load tracker that
 // mirrors rippled's Resource::Manager / LoadFeeTrack approach: each
 // inbound RPC method is assigned a Charge (a numeric cost), the cost
-// accumulates against a per-IP balance, balances decay exponentially
+// accumulates against a per-IP balance, balances use an integer decaying sample
 // over time, and a balance crossing a warning / drop threshold causes
 // the next request to be slowed or rejected.
 //
@@ -20,7 +20,6 @@
 package loadtrack
 
 import (
-	"math"
 	"sync"
 	"time"
 )
@@ -32,6 +31,8 @@ const (
 	ChargeHeavy     uint32 = 3000
 	ChargeMalformed uint32 = 100
 	ChargeException uint32 = 100
+	ChargeWarning   uint32 = 4000
+	ChargeDrop      uint32 = 6000
 )
 
 // LoadKind names the cost bucket a handler falls into. The numeric
@@ -41,16 +42,13 @@ type LoadKind uint32
 const (
 	// LoadReference is the default — a lightweight RPC (ping, fee, server_info).
 	LoadReference LoadKind = LoadKind(ChargeReference)
-	// LoadMedium is a moderately expensive RPC that does ledger work
-	// (account_lines, gateway_balances, book_offers).
+	// LoadMedium is a moderately expensive RPC that does ledger work.
 	LoadMedium LoadKind = LoadKind(ChargeMedium)
-	// LoadHeavy is a very expensive RPC: pathfinding, account_tx scans,
-	// large ledger_data dumps.
+	// LoadHeavy is a very expensive RPC, such as pathfinding or signing.
 	LoadHeavy LoadKind = LoadKind(ChargeHeavy)
-	// LoadMalformed is charged for invalidParams / methodNotFound — bad
-	// input that should not be a cheap probe (rippled feeMalformedRPC).
+	// LoadMalformed is charged at malformed transport and authorization boundaries.
 	LoadMalformed LoadKind = LoadKind(ChargeMalformed)
-	// LoadException is charged when a handler returns rpcINTERNAL.
+	// LoadException is charged when dispatch recovers a handler panic.
 	// Numerically equal to LoadMalformed but reported as a distinct
 	// label, mirroring rippled's separate feeExceptionRPC charge
 	// (Fees.cpp).
@@ -61,8 +59,8 @@ const (
 const (
 	WarningThreshold = 5000
 	DropThreshold    = 25000
-	// DecayWindow is the exponential half-life window used to decay
-	// the per-IP balance toward zero.
+	// DecayWindow is the denominator and update interval used by the
+	// integer decaying sample.
 	DecayWindow = 32 * time.Second
 	// EntryExpiration is the LRU eviction deadline — entries that
 	// haven't been touched for this long are dropped from the map.
@@ -82,26 +80,26 @@ type Outcome int
 const (
 	// OutcomeOK means the request may proceed without warning.
 	OutcomeOK Outcome = iota
-	// OutcomeWarn means the request may proceed but the client has
-	// crossed the warning threshold — callers should attach a
-	// "warning" envelope to the response (rippled's feeWarning emit).
+	// OutcomeWarn means the request may proceed but the client is at the
+	// warning threshold. Call Warn to decide whether to notify the client.
 	OutcomeWarn
-	// OutcomeDrop means the request must be rejected with rpcSlowDown;
-	// the client has crossed the drop threshold.
+	// OutcomeDrop means the client is at the drop threshold. Admission
+	// paths should use Disconnect before dispatch instead of this outcome.
 	OutcomeDrop
 )
 
 type entry struct {
-	// balance is the locally accumulated, exponentially-decayed
-	// charge — mirrors rippled Entry.local_balance.
-	balance float64
+	// balance is the raw locally accumulated decaying sample. Thresholds
+	// use its normalized value, balance / decayWindowSeconds.
+	balance int64
 	// remoteBalance is the sum of imported gossip contributions for
 	// this key across all peer origins — mirrors
 	// rippled Entry.remote_balance. Not decayed; it changes only on
 	// import refresh / expiration.
-	remoteBalance int
-	updated       time.Time
-	lastSeen      time.Time
+	remoteBalance   int
+	updated         time.Time
+	lastSeen        time.Time
+	lastWarningTime time.Time
 }
 
 // Gossip is the snapshot exchanged with peers — see
@@ -132,13 +130,13 @@ type importRecord struct {
 	items       map[string]int
 }
 
-// Tracker is the per-IP load accountant. The zero value is ready to
-// use but callers should typically use New() so the clock can be set.
+// Tracker is the per-IP load accountant. Construct one with New.
 type Tracker struct {
-	mu      sync.Mutex
-	now     func() time.Time
-	entries map[string]*entry
-	imports map[string]*importRecord
+	mu          sync.Mutex
+	now         func() time.Time
+	clockOrigin time.Time
+	entries     map[string]*entry
+	imports     map[string]*importRecord
 
 	// lastSweep is updated by sweep() to amortise the cost of LRU
 	// eviction across Charge() calls.
@@ -147,51 +145,58 @@ type Tracker struct {
 
 // New returns a Tracker that reads the wall clock.
 func New() *Tracker {
+	now := time.Now
 	return &Tracker{
-		now:     time.Now,
-		entries: make(map[string]*entry),
-		imports: make(map[string]*importRecord),
+		now:         now,
+		clockOrigin: now(),
+		entries:     make(map[string]*entry),
+		imports:     make(map[string]*importRecord),
 	}
 }
 
 // newWithClock is used by tests to inject a fake clock.
 func newWithClock(now func() time.Time) *Tracker {
 	return &Tracker{
-		now:     now,
-		entries: make(map[string]*entry),
-		imports: make(map[string]*importRecord),
+		now:         now,
+		clockOrigin: now(),
+		entries:     make(map[string]*entry),
+		imports:     make(map[string]*importRecord),
 	}
 }
 
+func (t *Tracker) currentTime() time.Time {
+	return t.clockOrigin.Add(t.now().Sub(t.clockOrigin).Truncate(time.Second))
+}
+
 // Charge debits the configured charge against key (typically a client
-// IP) and returns the verdict. An empty key is treated as anonymous /
-// untracked and always returns OutcomeOK so unit-test fixtures that
-// supply no ClientIP keep working.
+// IP) and returns the resulting threshold state. An empty key is
+// untracked and always returns OutcomeOK.
 //
-// The threshold check uses local + remote balance, matching rippled
-// Entry.h:74's balance(now) = local_balance.value(now) + remote_balance.
+// The Outcome return is retained for compatibility. RPC transports should
+// call Disconnect before dispatch, call Charge after dispatch, and then call
+// Warn; those operations apply the additional drop and warning fees.
 func (t *Tracker) Charge(key string, kind LoadKind) Outcome {
 	if key == "" {
 		return OutcomeOK
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
 	e, ok := t.entries[key]
 	if !ok {
 		e = &entry{}
 		t.entries[key] = e
 	}
 	t.decayLocked(e, now)
-	e.balance += float64(kind)
+	e.balance += int64(kind)
 	e.updated = now
 	e.lastSeen = now
 	if now.Sub(t.lastSweep) >= EntryExpiration {
 		t.sweepLocked(now)
 		t.lastSweep = now
 	}
-	t.expireImportsLocked(now)
-	combined := e.balance + float64(e.remoteBalance)
+	combined := combinedBalance(e)
 	switch {
 	case combined >= DropThreshold:
 		return OutcomeDrop
@@ -202,17 +207,72 @@ func (t *Tracker) Charge(key string, kind LoadKind) Outcome {
 	}
 }
 
+// Warn reports whether a load warning should be sent for key. At most one
+// warning is returned for a given clock instant. Each emitted warning adds
+// ChargeWarning to the local balance. Callers responsible for unlimited
+// consumers must bypass this operation; an empty key is never limited.
+func (t *Tracker) Warn(key string) bool {
+	if key == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
+	e, ok := t.entries[key]
+	if !ok {
+		return false
+	}
+	t.decayLocked(e, now)
+	if combinedBalance(e) < WarningThreshold || now.Equal(e.lastWarningTime) {
+		return false
+	}
+	e.balance += int64(ChargeWarning)
+	e.updated = now
+	e.lastSeen = now
+	e.lastWarningTime = now
+	return true
+}
+
+// Disconnect reports whether key is at or above the drop threshold. Each
+// true result adds ChargeDrop to the local balance so a dropped consumer
+// cannot immediately reconnect. Callers responsible for unlimited consumers
+// must bypass this operation; an empty key is never limited.
+func (t *Tracker) Disconnect(key string) bool {
+	if key == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
+	e, ok := t.entries[key]
+	if !ok {
+		return false
+	}
+	t.decayLocked(e, now)
+	if combinedBalance(e) < DropThreshold {
+		return false
+	}
+	e.balance += int64(ChargeDrop)
+	e.updated = now
+	e.lastSeen = now
+	return true
+}
+
 // Balance reports the current combined (local + remote) balance for a
 // key. Returns 0 if the key is unknown.
 func (t *Tracker) Balance(key string) float64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
 	e, ok := t.entries[key]
 	if !ok {
 		return 0
 	}
-	t.decayLocked(e, t.now())
-	return e.balance + float64(e.remoteBalance)
+	t.decayLocked(e, now)
+	return float64(combinedBalance(e))
 }
 
 // LocalBalance reports just the locally-decayed component, ignoring
@@ -221,31 +281,33 @@ func (t *Tracker) Balance(key string) float64 {
 func (t *Tracker) LocalBalance(key string) float64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
 	e, ok := t.entries[key]
 	if !ok {
 		return 0
 	}
-	t.decayLocked(e, t.now())
-	return e.balance
+	t.decayLocked(e, now)
+	return float64(localBalance(e))
 }
 
-// OverDropThreshold reports whether the combined balance for key is
-// already at or above DropThreshold. Used by the pre-dispatch gate to
-// reject before the handler runs — mirrors rippled's
-// Resource::Consumer::disconnect() check at ServerHandler.cpp:735.
-// An empty key is treated as anonymous and is never over-threshold.
+// OverDropThreshold reports whether the combined balance for key is already
+// at or above DropThreshold without applying ChargeDrop. New admission paths
+// should use Disconnect. An empty key is never over-threshold.
 func (t *Tracker) OverDropThreshold(key string) bool {
 	if key == "" {
 		return false
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
 	e, ok := t.entries[key]
 	if !ok {
 		return false
 	}
-	t.decayLocked(e, t.now())
-	return e.balance+float64(e.remoteBalance) >= DropThreshold
+	t.decayLocked(e, now)
+	return combinedBalance(e) >= DropThreshold
 }
 
 // Reset removes a key from the tracker; used by tests.
@@ -274,15 +336,17 @@ func (t *Tracker) Reset(key string) {
 func (t *Tracker) Export() Gossip {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
 	g := Gossip{}
 	for k, e := range t.entries {
 		if k == "" {
 			continue
 		}
 		t.decayLocked(e, now)
-		if e.balance >= MinimumGossipBalance {
-			g.Items = append(g.Items, GossipItem{Key: k, Balance: int(e.balance)})
+		balance := localBalance(e)
+		if balance >= MinimumGossipBalance {
+			g.Items = append(g.Items, GossipItem{Key: k, Balance: int(balance)})
 		}
 	}
 	return g
@@ -304,7 +368,8 @@ func (t *Tracker) Import(origin string, gossip Gossip) {
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	now := t.now()
+	now := t.currentTime()
+	t.expireImportsLocked(now)
 
 	if prev, ok := t.imports[origin]; ok {
 		for k, bal := range prev.items {
@@ -332,7 +397,7 @@ func (t *Tracker) Import(origin string, gossip Gossip) {
 		}
 		e.remoteBalance += item.Balance
 		e.lastSeen = now
-		rec.items[item.Key] = item.Balance
+		rec.items[item.Key] += item.Balance
 	}
 	t.imports[origin] = rec
 }
@@ -358,9 +423,18 @@ func (t *Tracker) expireImportsLocked(now time.Time) {
 	}
 }
 
-// decayLocked applies an exponential decay with half-life DecayWindow
-// to e.balance based on the elapsed time since e.updated. Caller must
-// hold t.mu.
+const decayWindowSeconds int64 = int64(DecayWindow / time.Second)
+
+func localBalance(e *entry) int64 {
+	return e.balance / decayWindowSeconds
+}
+
+func combinedBalance(e *entry) int64 {
+	return localBalance(e) + int64(e.remoteBalance)
+}
+
+// decayLocked applies the integer decaying-sample update used by rippled.
+// Caller must hold t.mu.
 func (t *Tracker) decayLocked(e *entry, now time.Time) {
 	if e.updated.IsZero() || e.balance == 0 {
 		e.updated = now
@@ -370,11 +444,16 @@ func (t *Tracker) decayLocked(e *entry, now time.Time) {
 	if dt <= 0 {
 		return
 	}
-	// Exponential decay with half-life = DecayWindow.
-	factor := math.Pow(0.5, dt.Seconds()/DecayWindow.Seconds())
-	e.balance *= factor
-	if e.balance < 1 {
+	elapsed := int64(dt / time.Second)
+	if elapsed > 4*decayWindowSeconds {
 		e.balance = 0
+	} else {
+		for range elapsed {
+			e.balance -= (e.balance + decayWindowSeconds - 1) / decayWindowSeconds
+			if e.balance == 0 {
+				break
+			}
+		}
 	}
 	e.updated = now
 }

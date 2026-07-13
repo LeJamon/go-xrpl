@@ -1807,6 +1807,7 @@ func TestWebSocketSnapshot_Single(t *testing.T) {
 		types.Amount{Currency: "XRP"},
 		types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		"",
+		"",
 	)
 	require.NoError(t, err)
 	require.Len(t, offers, 2)
@@ -1829,9 +1830,9 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 	ws := &WebSocketServer{services: services}
 	ctx := &types.RpcContext{Context: context.Background(), Services: services}
 
-	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "")
+	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "", "")
 	require.NoError(t, err)
-	asks, err := ws.snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "")
+	asks, err := ws.snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "", "")
 	require.NoError(t, err)
 	require.Len(t, mock.calls, 2, "both:true snapshot must issue one GetBookOffers per side")
 	require.Equal(t, "rBid", bids[0].Account)

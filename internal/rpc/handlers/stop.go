@@ -13,7 +13,7 @@ type StopMethod struct{ AdminHandler }
 
 func (m *StopMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.ShutdownFunc == nil {
-		return nil, types.RpcErrorInternal("Shutdown function not available")
+		return nil, rpcInternalInvariantError("stop: shutdown function unavailable")
 	}
 
 	// Trigger shutdown asynchronously so the response can be sent first

@@ -22,6 +22,7 @@ import (
 type SimulateMethod struct{}
 
 func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadMedium(ctx)
 	var rawParams map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawParams); err != nil {
@@ -59,7 +60,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("simulate: ledger service unavailable")
 	}
 
 	var txJsonMap map[string]any
@@ -106,7 +107,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if _, hasFee := txJsonMap["Fee"]; !hasFee {
 		probe, marshalErr := json.Marshal(txJsonMap)
 		if marshalErr != nil {
-			return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
+			return nil, rpcInternalError("simulate: fee probe marshaling failed", marshalErr)
 		}
 		// rippled's simulate autofill uses the default fee_mult_max /
 		// fee_div_max (getCurrentNetworkFee default arguments).
@@ -215,7 +216,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// Marshal tx_json for parse + service call.
 	txJSON, err := json.Marshal(txJsonMap)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to marshal tx_json")
+		return nil, rpcInternalError("simulate: transaction marshaling failed", err)
 	}
 
 	// STTx ctor parity — rippled Simulate.cpp:332-343. A parse failure or

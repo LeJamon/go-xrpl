@@ -87,9 +87,9 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 	if err != nil {
 		return nil, types.RpcErrorTxnNotFound("Transaction not found")
 	}
-	storedTx, err := decodeTxBlob(txInfo.TxData)
+	storedTx, err := decodeTxBlobForTx(txInfo.TxData)
 	if err != nil {
-		return nil, types.RpcErrorInternal("Failed to decode transaction data")
+		return nil, rpcDBDeserializationError("tx: transaction deserialization failed", err)
 	}
 
 	// Resolve close time from the containing ledger
@@ -259,23 +259,20 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	closeTimeSec := ledger.CloseTime()
 	ledgerHashStr := fmt.Sprintf("%X", ledger.Hash())
 
-	storedTx, decodeErr := decodeTxBlob(foundData)
+	storedTx, decodeErr := decodeTxBlobForTx(foundData)
+	if decodeErr != nil {
+		return nil, rpcDBDeserializationError("tx: CTID transaction deserialization failed", decodeErr)
+	}
 
-	return m.ctidResponse(ctx, storedTx, decodeErr, foundData, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
+	return m.ctidResponse(ctx, storedTx, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
 }
 
-// ctidResponse shapes a CTID-lookup response by reusing buildResponse and then
-// applying the CTID-specific deltas: the root "ctid" (v1) / in-tx_json "ctid"
-// (v2) is grafted by buildResponse already; here we keep the root ledger fields
-// unconditionally present (a fetched closed ledger is always available even if
-// not yet validated), drop the v1 binary "inLedger"/"date" that the CTID format
-// omits, and preserve the raw-hex tx_blob fallback used when the stored blob
-// cannot be decoded.
+// ctidResponse shapes a CTID lookup by reusing buildResponse, then keeping the
+// containing ledger fields unconditionally present and removing v1 fields that
+// the CTID format omits.
 func (m *TxMethod) ctidResponse(
 	ctx *types.RpcContext,
 	storedTx StoredTransaction,
-	decodeErr error,
-	foundData []byte,
 	hashStr string,
 	ledgerSeq uint32,
 	txIndex uint16,
@@ -291,12 +288,8 @@ func (m *TxMethod) ctidResponse(
 		TxIndex:     uint32(txIndex),
 	}
 
-	tx := storedTx
-	if decodeErr != nil {
-		tx = StoredTransaction{}
-	}
 	networkID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
-	response := m.buildResponse(ctx, tx, txInfo, hashStr, closeTimeSec, binary)
+	response := m.buildResponse(ctx, storedTx, txInfo, hashStr, closeTimeSec, binary)
 
 	// The CTID format reports the containing ledger unconditionally, whereas
 	// buildResponseV2 gates these on validated. ledger_hash is always set by
@@ -309,23 +302,14 @@ func (m *TxMethod) ctidResponse(
 	}
 
 	if binary {
-		// buildResponseV1's "inLedger"/"date" and an empty Encode(nil) tx_blob
-		// have no CTID equivalent; on a decode failure CTID emits the raw blob.
+		// buildResponseV1's "inLedger" and "date" fields have no CTID
+		// equivalent.
 		delete(response, "inLedger")
 		delete(response, "date")
-		if decodeErr != nil {
-			response["tx_blob"] = strings.ToUpper(hex.EncodeToString(foundData))
-		}
 		return response
 	}
 
 	if ctx.ApiVersion > 1 {
-		if decodeErr != nil {
-			// On a decode failure the CTID format emits no tx_json at all,
-			// whereas buildResponseV2 always wraps one.
-			delete(response, "tx_json")
-			return response
-		}
 		if txJSON, ok := response["tx_json"].(map[string]any); ok {
 			// buildResponseV2 omits the ctid for ledger 0; the CTID lookup
 			// still reports it.

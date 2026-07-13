@@ -29,7 +29,7 @@ func (m *JsonMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 	}
 
 	if ctx.Services == nil || ctx.Services.Dispatcher == nil {
-		return nil, types.RpcErrorInternal("Method dispatcher not available")
+		return nil, rpcInternalInvariantError("json: method dispatcher unavailable")
 	}
 
 	// The params field in the json method can be either:

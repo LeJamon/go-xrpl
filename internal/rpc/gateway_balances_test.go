@@ -732,7 +732,7 @@ func TestGatewayBalancesServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestGatewayBalancesMethodMetadata tests the method's metadata functions

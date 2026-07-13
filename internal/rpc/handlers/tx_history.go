@@ -24,6 +24,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
+	setLoadMedium(ctx)
 
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"testing"
 
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -287,6 +288,29 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 
 			tc.validateResp(t, respMap)
 		})
+	}
+}
+
+func TestSubmitMethodStoredMetadataIncludesAffectedNodes(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newSubmitTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{"tx_json": validStoredPaymentTransaction()})
+	require.NoError(t, err)
+
+	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	require.Len(t, mock.storedTxs, 1)
+	for _, storedData := range mock.storedTxs {
+		var stored handlers.StoredTransaction
+		require.NoError(t, json.Unmarshal(storedData, &stored))
+		nodes, ok := stored.Meta["AffectedNodes"].([]any)
+		require.True(t, ok)
+		assert.Empty(t, nodes)
 	}
 }
 
@@ -687,7 +711,7 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestSubmitMethodServiceNilLedger tests behavior when ledger service is nil
@@ -716,7 +740,7 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestSubmitMethodSubmitError tests handling of ledger service errors
@@ -770,10 +794,45 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
 			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-			assert.Equal(t, "Internal error.", rpcErr.Message)
+			assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
 			assert.NotContains(t, rpcErr.Message, tc.submitError.Error())
 		})
 	}
+}
+
+func TestSubmitMethodTxBlobSubmitErrorIsSanitized(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	submitErr := errors.New("private ledger backend failure")
+	mock.submitError = submitErr
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newSubmitTestServices(mock),
+	}
+	txBlob, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        1,
+		"SigningPubKey":   "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
+		"TxnSignature":    "30440220143759437C04F7B61F012563AFE90D8DAFC46E86035E1D965A9CED282C97D4CE02204CFD241E86F17E011298FC1A39B63386C74306A5DE047E213B0F29EFA4571C2C",
+	})
+	require.NoError(t, err)
+	params, err := json.Marshal(map[string]any{"tx_blob": txBlob})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, "internal", rpcErr.ErrorString)
+	assert.Equal(t, "internal", rpcErr.Type)
+	assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Message, submitErr.Error())
 }
 
 // TestSubmitMethodMetadata tests the method's metadata functions

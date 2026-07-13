@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -228,6 +229,51 @@ func TestRPCSub_URLValidation(t *testing.T) {
 			assert.Equal(t, tc.message, rpcErr.Message)
 		})
 	}
+}
+
+func TestRPCSubBooksApplyInWireOrder(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	ctx := adminCtx(services)
+	method := &handlers.SubscribeMethod{}
+	params := `{"url":"` + sink.srv.URL + `","books":[` +
+		`{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":"USD","issuer":"` + account + `"},"snapshot":true},` +
+		`{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":"XRP"}}]}`
+
+	_, rpcErr := method.Handle(ctx, json.RawMessage(params))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, uint32(loadtrack.LoadMedium), ctx.LoadCost)
+
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[sink.srv.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+	assert.Len(t, sub.conn.Subscriptions[types.SubBook].Books, 1)
+}
+
+func TestRPCSubBookUnsubscribeAppliesInWireOrder(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	ws, services := newRPCSubTestServer(t)
+	sink := newRPCSubSink(t)
+	urlParam := `"url":"` + sink.srv.URL + `"`
+	first := `{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":"USD","issuer":"` + account + `"}}`
+	second := `{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":"EUR","issuer":"` + account + `"}}`
+
+	_, rpcErr := subscribeURL(t, services, `{`+urlParam+`,"books":[`+first+`,`+second+`]}`)
+	require.Nil(t, rpcErr)
+	_, rpcErr = unsubscribeURL(t, services, `{`+urlParam+`,"books":[`+first+`,{"taker_pays":{"currency":"XRP"},"taker_gets":{"currency":"XRP"}}]}`)
+	require.NotNil(t, rpcErr)
+
+	ws.urlSubs.mu.Lock()
+	sub := ws.urlSubs.subs[sink.srv.URL]
+	ws.urlSubs.mu.Unlock()
+	require.NotNil(t, sub)
+	books := sub.conn.Subscriptions[types.SubBook].Books
+	require.Len(t, books, 1)
+	encoded, err := json.Marshal(books[0])
+	require.NoError(t, err)
+	assert.JSONEq(t, second, string(encoded))
 }
 
 // TestRPCSub_EmptyHostAcceptedAtSubscribe mirrors rippled's parseUrl host
