@@ -71,6 +71,7 @@ func TestPseudoPreflight_AccountMustBeZero(t *testing.T) {
 	result := engine.ApplyPseudo(tx)
 	require.False(t, result.Applied)
 	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
+	require.Nil(t, result.Metadata)
 }
 
 // TestPseudoPreflight_AcceptsEmptyAccount confirms an empty Account passes the
@@ -194,6 +195,7 @@ func TestSetFee_PreclaimXRPFeesEnabled_RequiresModernFields(t *testing.T) {
 	result := engine.ApplyPseudo(setFee)
 	require.False(t, result.Applied)
 	require.Equal(t, "temMALFORMED", result.Result.String())
+	require.Nil(t, result.Metadata)
 }
 
 // TestSetFee_PreclaimXRPFeesEnabled_ForbidsLegacyFields rejects a SetFee

@@ -299,14 +299,18 @@ func (e *Engine) invokeApply(st *applyState) ter.Result {
 // invokeApplySafely is the shared panic boundary for normal and pseudo Apply.
 // A recovered panic becomes tefEXCEPTION, so tracked changes are not committed.
 func (e *Engine) invokeApplySafely(txHash [32]byte, apply func() ter.Result) (result ter.Result) {
+	completed := false
+	result = ter.TefEXCEPTION
 	defer func() {
-		if r := recover(); r != nil {
+		recovered := recover()
+		if !completed {
 			e.logger.Error("transaction Apply() panic recovered, returning tefEXCEPTION",
-				"txHash", fmt.Sprintf("%x", txHash), "panic", r)
-			result = ter.TefEXCEPTION
+				"txHash", fmt.Sprintf("%x", txHash), "panic", recovered)
 		}
 	}()
-	return apply()
+	result = apply()
+	completed = true
+	return result
 }
 
 // invokeApplyInner is the body of invokeApply, separated so the panic-recovery
@@ -332,7 +336,7 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 	if appliable, ok := st.tx.(txcore.Appliable); ok {
 		return appliable.Apply(ctx)
 	}
-	return ter.TesSUCCESS
+	return ter.TefINTERNAL
 }
 
 // isReapplyOnRetryTec reports whether a tec returned from doApply must still be

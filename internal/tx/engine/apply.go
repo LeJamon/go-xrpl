@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
@@ -216,11 +217,39 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 //
 // Equivalent to ApplyPseudoWithContext(context.Background(), tx).
 func (e *Engine) ApplyPseudo(tx txcore.Transaction) txcore.ApplyResult {
-	return e.applyPseudoTransaction(context.Background(), tx)
+	return e.ApplyPseudoWithContext(context.Background(), tx)
 }
 
 func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx txcore.Transaction) txcore.ApplyResult {
-	return e.applyPseudoTransaction(ctx, tx)
+	return e.applyPseudoSafely(func() txcore.ApplyResult {
+		return e.applyPseudoTransaction(ctx, tx)
+	})
+}
+
+type atomicPseudoView interface {
+	txcore.LedgerView
+	MutableSnapshot() (*ledger.Ledger, error)
+	AdoptState(*ledger.Ledger) error
+}
+
+func (e *Engine) applyPseudoSafely(apply func() txcore.ApplyResult) (result txcore.ApplyResult) {
+	completed := false
+	result = txcore.ApplyResult{
+		Result:  ter.TefEXCEPTION,
+		Applied: false,
+		Message: ter.TefEXCEPTION.Message(),
+	}
+	defer func() {
+		recovered := recover()
+		if !completed {
+			e.logger.Error("pseudo-transaction apply panic recovered, returning tefEXCEPTION",
+				"panic", recovered)
+		}
+	}()
+
+	result = apply()
+	completed = true
+	return result
 }
 
 // applyPseudoTransaction handles pseudo-transactions (Amendment, SetFee, UNLModify).
@@ -240,11 +269,10 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	// result rather than a serialization-induced tefINTERNAL.
 	if gate := e.pseudoPreflight(tx, rules); !gate.IsSuccess() {
 		return txcore.ApplyResult{
-			Result:   gate,
-			Applied:  false,
-			Fee:      0,
-			Metadata: &txcore.Metadata{TransactionResult: gate},
-			Message:  gate.Message(),
+			Result:  gate,
+			Applied: false,
+			Fee:     0,
+			Message: gate.Message(),
 		}
 	}
 
@@ -253,11 +281,10 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	// gating (e.g. XRPFees) runs through the PseudoPreclaim interface.
 	if gate := e.pseudoPreclaim(tx, rules); !gate.IsSuccess() {
 		return txcore.ApplyResult{
-			Result:   gate,
-			Applied:  false,
-			Fee:      0,
-			Metadata: &txcore.Metadata{TransactionResult: gate},
-			Message:  gate.Message(),
+			Result:  gate,
+			Applied: false,
+			Fee:     0,
+			Message: gate.Message(),
 		}
 	}
 
@@ -274,11 +301,27 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	// A zero transaction id is never valid (rippled preflight0, Transactor.cpp).
 	if txHash == ([32]byte{}) {
 		return txcore.ApplyResult{
-			Result:   ter.TemINVALID,
-			Applied:  false,
-			Fee:      0,
-			Metadata: &txcore.Metadata{TransactionResult: ter.TemINVALID},
-			Message:  "transaction id may not be zero",
+			Result:  ter.TemINVALID,
+			Applied: false,
+			Fee:     0,
+			Message: "transaction id may not be zero",
+		}
+	}
+
+	base, ok := e.view.(atomicPseudoView)
+	if !ok {
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
+			Applied: false,
+			Message: "pseudo-transaction application requires an atomic ledger view",
+		}
+	}
+	snapshot, err := base.MutableSnapshot()
+	if err != nil {
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
+			Applied: false,
+			Message: fmt.Sprintf("failed to create ledger snapshot: %v", err),
 		}
 	}
 
@@ -289,7 +332,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	}
 
 	// Create ApplyStateTable to track changes
-	table := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, rules)
+	table := applystate.NewApplyStateTable(snapshot, txHash, e.config.LedgerSequence, rules)
 
 	// Create a minimal ApplyContext for pseudo-transactions
 	ctx := &txcore.ApplyContext{
@@ -310,7 +353,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 			return appliable.Apply(ctx)
 		})
 	} else {
-		result = ter.TesSUCCESS
+		result = ter.TefINTERNAL
 	}
 
 	metadata.TransactionResult = result
@@ -320,10 +363,9 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 		generatedMeta, err := table.Apply()
 		if err != nil {
 			return txcore.ApplyResult{
-				Result:   ter.TefINTERNAL,
-				Applied:  false,
-				Metadata: metadata,
-				Message:  fmt.Sprintf("failed to apply state changes: %v", err),
+				Result:  ter.TefINTERNAL,
+				Applied: false,
+				Message: fmt.Sprintf("failed to apply state changes: %v", err),
 			}
 		}
 		metadata.AffectedNodes = generatedMeta.AffectedNodes
@@ -332,7 +374,15 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	// Assign TransactionIndex for applied pseudo-transactions
 	applied := result.IsApplied()
 	if applied {
-		metadata.TransactionIndex = e.txCount.Add(1) - 1
+		metadata.TransactionIndex = e.txCount.Load()
+		if err := base.AdoptState(snapshot); err != nil {
+			return txcore.ApplyResult{
+				Result:  ter.TefINTERNAL,
+				Applied: false,
+				Message: fmt.Sprintf("failed to commit ledger snapshot: %v", err),
+			}
+		}
+		e.txCount.Add(1)
 	} else {
 		metadata = nil
 	}
