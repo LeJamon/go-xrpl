@@ -332,16 +332,21 @@ func TestAcceptedLedgerView_Populated(t *testing.T) {
 // TestNodeStoreCacheParams guards the node_db cache_size / cache_age
 // wiring into the node-object cache.
 func TestNodeStoreCacheParams(t *testing.T) {
-	size, age := nodeStoreCacheParams(config.NodeDBConfig{})
+	size, age := nodeStoreCacheParams(config.NodeDBConfig{}, "")
 	if size != defaultNodeCacheSize || age != defaultNodeCacheAge {
 		t.Errorf("defaults = (%d, %v), want (%d, %v)", size, age, defaultNodeCacheSize, defaultNodeCacheAge)
 	}
 
-	size, age = nodeStoreCacheParams(config.NodeDBConfig{CacheSize: 16384, CacheAge: 5})
+	size, age = nodeStoreCacheParams(config.NodeDBConfig{CacheSize: 16384, CacheAge: 5}, "tiny")
 	if size != 16384 {
 		t.Errorf("cache size = %d, want 16384", size)
 	}
 	if age != 5*time.Minute {
 		t.Errorf("cache age = %v, want 5m", age)
+	}
+
+	size, age = nodeStoreCacheParams(config.NodeDBConfig{}, "huge")
+	if size != 8_388_608 || age != 900*time.Minute {
+		t.Errorf("huge profile = (%d, %v)", size, age)
 	}
 }

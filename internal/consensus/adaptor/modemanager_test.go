@@ -76,8 +76,7 @@ func TestModeManager_OnEvent_LeavingWrongLedgerBumpsToTracking(t *testing.T) {
 
 // TestModeManager_OnEvent_BypassedStateMachine pins the issue #401
 // behavior: in production, OperatingMode is promoted to Full by direct
-// SetOperatingMode calls in router.go and adaptor.AdoptLedgerFromHeader,
-// NOT through ModeManager. So m.mode can lag while
+// SetOperatingMode calls in router paths, not through ModeManager. So m.mode can lag while
 // adaptor.GetOperatingMode() returns Full. When a
 // ModeChangedEvent{wrongLedger} fires, OnEvent MUST consult the adaptor's
 // actual opMode and trigger Full → Syncing — otherwise the engine drops

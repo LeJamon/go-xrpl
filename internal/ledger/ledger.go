@@ -134,6 +134,8 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		Drops:               parent.header.Drops,
 		// Hash, TxHash, AccountHash will be set when closed
 	}
+	stateMap.SetLedgerSeq(newLedgerSeq)
+	txMap.SetLedgerSeq(newLedgerSeq)
 
 	return &Ledger{
 		stateMap:       stateMap,
@@ -152,6 +154,8 @@ func FromGenesis(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) *Ledger {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
@@ -169,6 +173,8 @@ func NewFromHeader(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) *Ledger {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
@@ -186,12 +192,20 @@ func NewOpenWithHeader(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) *Ledger {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
 		header:   hdr,
 		fees:     fees,
 		state:    StateOpen,
+	}
+}
+
+func setMapLedgerSeq(sm *shamap.SHAMap, seq uint32) {
+	if sm != nil {
+		sm.SetLedgerSeq(seq)
 	}
 }
 
@@ -768,12 +782,42 @@ func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
 	return l.txMap.SnapshotMutable()
 }
 
-// SetStateMapFamily sets the Family on the state map, enabling backed mode
-// with lazy loading and efficient snapshots.
+func (l *Ledger) StoreStateDirty(store func([]shamap.FlushEntry) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap == nil {
+		return nil
+	}
+	return l.stateMap.StoreDirty(store)
+}
+
+func (l *Ledger) StoreTransactionDirty(store func([]shamap.FlushEntry) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.txMap == nil {
+		return nil
+	}
+	return l.txMap.StoreDirty(store)
+}
+
+// SetSHAMapFamily backs both ledger maps with the same node family.
+func (l *Ledger) SetSHAMapFamily(family shamap.Family) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap != nil {
+		l.stateMap.SetFamily(family)
+	}
+	if l.txMap != nil {
+		l.txMap.SetFamily(family)
+	}
+}
+
 func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.stateMap.SetFamily(family)
+	if l.stateMap != nil {
+		l.stateMap.SetFamily(family)
+	}
 }
 
 func (l *Ledger) SerializeHeader() []byte {

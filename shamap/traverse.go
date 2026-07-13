@@ -243,16 +243,130 @@ func (sm *SHAMap) boundBelow(node Node, ascending bool) (LeafNode, error) {
 	return nil, nil
 }
 
-// walkSubtreeForMissing is the BFS-over-one-subtree primitive used by
-// WalkMap, WalkMapParallel, GetMissingNodes and the sync completeness
-// checks. It walks the subtree rooted at start and invokes report for
-// every non-empty branch whose child node is neither in memory nor
-// recoverable from sm's family.
+// walkFullBelow is the full-below-aware DFS behind WalkMap, WalkMapParallel,
+// GetMissingNodes and the sync completeness checks. It walks the subtree
+// rooted at node, invoking report for every non-empty branch whose child is
+// neither in memory nor recoverable from sm's family, and marking each
+// subtree it proves complete full-below at generation gen so a later walk
+// prunes it in O(1) instead of re-descending it. Mirrors rippled's
+// SHAMap::gmn_ProcessNodes (xrpld/shamap/detail/SHAMapSync.cpp).
 //
-// On a transient family fetch failure: strict=false reports the branch
+// Returns:
+//   - fullBelow: every descendant of node is resident AND the walk covered
+//     them all. Only then is node marked; an ancestor is marked only once
+//     all of its children come back fullBelow. A missing child, a filtered
+//     child, a report-driven stop, or a strict error all leave fullBelow
+//     false so a node is never marked while a descendant is absent.
+//   - stopped: report asked to stop (the maxMissing cap). The caller must
+//     unwind without marking anything above.
+//   - err: a transient family error in strict mode.
+//
+// On a transient family fetch failure: strict=false treats the branch as
 // missing (rippled's getMissingNodes collapse, self-correcting via the
-// wire); strict=true aborts with the error so FinishSync/IsComplete never
-// fabricate a missing node or conclude complete over a skipped subtree.
+// wire); strict=true aborts so FinishSync/IsComplete never fabricate a
+// missing node or conclude complete over a skipped subtree.
+func walkFullBelow(
+	sm *SHAMap,
+	node *innerNode,
+	nodeID NodeID,
+	nodeHash [32]byte,
+	depth int,
+	gen uint32,
+	filter SyncFilter,
+	strict bool,
+	cache *FullBelowCache,
+	report func(MissingNode) bool,
+) (fullBelow, stopped bool, err error) {
+	if node == nil {
+		return true, false, nil
+	}
+	// Proven complete this generation — prune the whole subtree.
+	if node.isFullBelow(gen) {
+		return true, false, nil
+	}
+
+	backed := sm != nil && sm.backed && cache != nil
+	fullBelow = true
+
+	for branch := range BranchFactor {
+		child, childHash, isSet := node.LoadChild(branch)
+		if !isSet {
+			continue
+		}
+		childNodeID, cerr := nodeID.ChildNodeID(uint8(branch))
+		if cerr != nil {
+			continue
+		}
+
+		// Backed short-circuit: a released (hash-only) child proven
+		// full-below in the family cache needs neither a store fetch nor a
+		// re-descent of its subtree.
+		if child == nil && backed && cache.Has(gen, childHash) {
+			continue
+		}
+
+		if child == nil {
+			loaded, lerr := loadFromStore(sm, node, branch)
+			if lerr != nil {
+				if strict {
+					return false, false, lerr
+				}
+				// lenient: treat as missing below
+			}
+			if loaded != nil {
+				child = loaded
+			}
+		}
+
+		if child == nil {
+			fullBelow = false
+			if !filter.ShouldFetch(childHash) {
+				continue
+			}
+			if report(MissingNode{
+				Hash:       childHash,
+				Depth:      depth + 1,
+				ParentHash: nodeHash,
+				Branch:     branch,
+				NodeID:     childNodeID,
+			}) {
+				return false, true, nil
+			}
+			continue
+		}
+
+		inner, ok := child.(*innerNode)
+		if !ok {
+			// Leaf: resident, contributes to full-below.
+			continue
+		}
+
+		childFull, childStopped, cerr2 := walkFullBelow(
+			sm, inner, childNodeID, childHash, depth+1, gen, filter, strict, cache, report,
+		)
+		if cerr2 != nil {
+			return false, false, cerr2
+		}
+		if childStopped {
+			return false, true, nil
+		}
+		if !childFull {
+			fullBelow = false
+		}
+	}
+
+	if fullBelow {
+		node.setFullBelowGen(gen)
+	}
+	return fullBelow, false, nil
+}
+
+// walkSubtreeForMissing walks the subtree rooted at start, reporting every
+// non-empty branch whose child node is neither in memory nor recoverable
+// from sm's family, and pruning/marking completed subtrees via the map's
+// full-below cache. It returns (stopped, err) — stopped reports whether
+// report asked to stop. Callers that need the subtree's full-below result
+// (to mark the parent) call walkFullBelow directly.
 func walkSubtreeForMissing(
 	sm *SHAMap,
 	start *innerNode,
@@ -263,79 +377,22 @@ func walkSubtreeForMissing(
 	strict bool,
 	report func(MissingNode) bool,
 ) (bool, error) {
-	type workItem struct {
-		node     *innerNode
-		nodeID   NodeID
-		nodeHash [32]byte
-		depth    int
+	gen, cache, done := fullBelowContext(sm)
+	defer done()
+	_, stopped, err := walkFullBelow(sm, start, startID, startHash, startDepth, gen, filter, strict, cache, report)
+	return stopped, err
+}
+
+// fullBelowContext returns the generation and cache a walk over sm should
+// use. Every constructed SHAMap installs a cache, but defend against a
+// zero-value map by falling back to generation 0 (which no node ever
+// matches, disabling the prune) and a nil cache.
+func fullBelowContext(sm *SHAMap) (uint32, *FullBelowCache, func()) {
+	if sm == nil || sm.fullBelow == nil {
+		return 0, nil, func() {}
 	}
-
-	queue := make([]workItem, 0, 64)
-	queue = append(queue, workItem{
-		node:     start,
-		nodeID:   startID,
-		nodeHash: startHash,
-		depth:    startDepth,
-	})
-
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
-
-		if item.node == nil {
-			continue
-		}
-
-		for branch := range BranchFactor {
-			child, childHash, isSet := item.node.LoadChild(branch)
-			if !isSet {
-				continue
-			}
-
-			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
-			if err != nil {
-				continue
-			}
-
-			if child == nil {
-				loaded, lerr := loadFromStore(sm, item.node, branch)
-				if lerr != nil && strict {
-					return false, lerr
-				}
-				if loaded != nil {
-					child = loaded
-				}
-			}
-
-			if child == nil {
-				if !filter.ShouldFetch(childHash) {
-					continue
-				}
-				if report(MissingNode{
-					Hash:       childHash,
-					Depth:      item.depth + 1,
-					ParentHash: item.nodeHash,
-					Branch:     branch,
-					NodeID:     childNodeID,
-				}) {
-					return true, nil
-				}
-				continue
-			}
-
-			inner, ok := child.(*innerNode)
-			if !ok {
-				continue
-			}
-			queue = append(queue, workItem{
-				node:     inner,
-				nodeID:   childNodeID,
-				nodeHash: childHash,
-				depth:    item.depth + 1,
-			})
-		}
-	}
-	return false, nil
+	gen, done := sm.fullBelow.Begin()
+	return gen, sm.fullBelow, done
 }
 
 // loadFromStore lazy-fetches a hash-only branch from the backing store and
