@@ -154,9 +154,12 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.Nil(t, rpcErr)
 		resp := resultToMap(t, result)
 		assert.Contains(t, resp, "closed")
-		warnings := resp["warnings"].([]types.WarningObject)
+		warnings, ok := resp["warnings"].([]any)
+		require.True(t, ok)
 		require.Len(t, warnings, 1)
-		assert.Equal(t, 2004, warnings[0].ID)
+		warning, ok := warnings[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, float64(2004), warning["id"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {

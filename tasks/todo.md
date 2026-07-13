@@ -320,6 +320,11 @@ ledger-selection or response-decoding fixtures and were aligned with rippled
 3.2.0. Strict lint, repository lint, build, vet, and whitespace checks pass on
 this second remediation tree.
 
+A third core pass reached previously masked ledger fixtures. Ledger-data limit,
+marker, selected-header, warning JSON, and ledger-entry hash expectations were
+aligned with rippled 3.2.0 without changing production behavior. All permitted
+local gates pass again; exact test verification remains CI-only.
+
 # Issue #1303 — trust-layer visibility and forward compatibility
 
 Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`
