@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -54,11 +55,17 @@ type RotationConfig struct {
 // blocks the consensus / ledger-accept path; an in-flight rotation coalesces
 // further notifications to the newest validated sequence.
 type Rotator struct {
-	store  *Store
-	nodes  NodePruner
-	rel    RelationalPruner
-	cfg    RotationConfig
-	logger xrpllog.Logger
+	store      *Store
+	nodes      NodePruner
+	rel        RelationalPruner
+	cfg        RotationConfig
+	logger     xrpllog.Logger
+	refresh    func(context.Context, uint32) error
+	advance    func(uint32)
+	beginPrune func() func()
+	healthMu   sync.RWMutex
+	healthy    func() bool
+	recovery   time.Duration
 
 	notifyCh chan uint32
 	stopCh   chan struct{}
@@ -69,6 +76,31 @@ type Rotator struct {
 	// full. Acquisition / fetch-pack serving must not reach below it. Zero
 	// until the first rotation.
 	minimumOnline atomic.Uint32
+}
+
+// SetHealthCheck gates rotation on the node being fully synchronized.
+func (r *Rotator) SetHealthCheck(healthy func() bool, recoveryWait time.Duration) {
+	if r == nil {
+		return
+	}
+	if recoveryWait <= 0 {
+		recoveryWait = 5 * time.Second
+	}
+	r.healthMu.Lock()
+	r.healthy = healthy
+	r.recovery = recoveryWait
+	r.healthMu.Unlock()
+}
+
+// SetStateRefresh installs the live-state refresh, acquisition-floor advance,
+// and exclusive cache guard required around node-store pruning.
+func (r *Rotator) SetStateRefresh(refresh func(context.Context, uint32) error, advance func(uint32), beginPrune func() func()) {
+	if r == nil {
+		return
+	}
+	r.refresh = refresh
+	r.advance = advance
+	r.beginPrune = beginPrune
 }
 
 // NewRotator constructs a Rotator. store and nodes are required; rel may be nil
@@ -96,7 +128,7 @@ func NewRotator(store *Store, nodes NodePruner, rel RelationalPruner, cfg Rotati
 		stopCh:   make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
-	r.minimumOnline.Store(store.GetLastRotated())
+	r.minimumOnline.Store(store.GetMinimumOnline())
 	return r
 }
 
@@ -148,6 +180,24 @@ func (r *Rotator) MinimumOnline() uint32 {
 	return r.minimumOnline.Load()
 }
 
+// SetMinimumOnlineFloor durably advances the retained-ledger floor. It is used
+// at startup to migrate older state from the relational ledger range and before
+// each destructive rotation so a crash cannot reopen below deleted data.
+func (r *Rotator) SetMinimumOnlineFloor(seq uint32) error {
+	if r == nil || seq == 0 {
+		return nil
+	}
+	if err := r.store.SetMinimumOnline(seq); err != nil {
+		return err
+	}
+	for {
+		current := r.minimumOnline.Load()
+		if seq <= current || r.minimumOnline.CompareAndSwap(current, seq) {
+			return nil
+		}
+	}
+}
+
 func (r *Rotator) run() {
 	defer close(r.doneCh)
 
@@ -180,7 +230,6 @@ func (r *Rotator) maybeRotate(ctx context.Context, validatedSeq uint32) {
 			r.logger.Warn("online delete: failed to persist initial lastRotated", "seq", validatedSeq, "err", err)
 			return
 		}
-		r.minimumOnline.Store(validatedSeq)
 		return
 	}
 
@@ -196,8 +245,33 @@ func (r *Rotator) maybeRotate(ctx context.Context, validatedSeq uint32) {
 	if r.store.AdvisoryDelete() && r.store.GetCanDelete() < lastRotated-1 {
 		return
 	}
+	if !r.waitHealthy(ctx) {
+		return
+	}
 
 	r.rotate(ctx, validatedSeq, lastRotated)
+}
+
+func (r *Rotator) waitHealthy(ctx context.Context) bool {
+	for {
+		r.healthMu.RLock()
+		healthy := r.healthy
+		wait := r.recovery
+		r.healthMu.RUnlock()
+		if healthy == nil || healthy() {
+			return true
+		}
+		if wait <= 0 {
+			wait = 5 * time.Second
+		}
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+	}
 }
 
 // rotate deletes everything below lastRotated, then advances the boundary to
@@ -210,9 +284,27 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		"validatedSeq", validatedSeq, "lastRotated", lastRotated,
 		"deleteInterval", r.cfg.DeleteInterval)
 
-	// Refuse to re-acquire or serve ledgers about to be deleted before any
-	// deletion begins (rippled clearPrior: minimumOnline_ = lastRotated + 1).
-	r.minimumOnline.Store(lastRotated + 1)
+	if r.refresh == nil {
+		r.logger.Warn("online delete: live-state refresh is not configured")
+		return
+	}
+	if err := r.refresh(ctx, validatedSeq); err != nil {
+		if ctx.Err() == nil {
+			r.logger.Warn("online delete: live-state refresh failed", "seq", validatedSeq, "err", err)
+		}
+		return
+	}
+	if !r.waitHealthy(ctx) {
+		return
+	}
+	minimumOnline := lastRotated + 1
+	if err := r.SetMinimumOnlineFloor(minimumOnline); err != nil {
+		r.logger.Warn("online delete: failed to persist minimum online ledger", "seq", minimumOnline, "err", err)
+		return
+	}
+	if r.advance != nil {
+		r.advance(minimumOnline)
+	}
 
 	if r.rel != nil {
 		if err := r.rel.DeleteLedgersBefore(ctx, lastRotated); err != nil {
@@ -222,8 +314,17 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 			r.logger.Warn("online delete: relational prune failed", "boundary", lastRotated, "err", err)
 		}
 	}
+	if !r.waitHealthy(ctx) {
+		return
+	}
 
-	deleted, err := r.nodes.DeleteBefore(ctx, lastRotated, r.cfg.DeleteBatch)
+	deleted, err := func() (uint64, error) {
+		if r.beginPrune != nil {
+			unlock := r.beginPrune()
+			defer unlock()
+		}
+		return r.nodes.DeleteBefore(ctx, lastRotated, r.cfg.DeleteBatch)
+	}()
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -231,12 +332,11 @@ func (r *Rotator) rotate(ctx context.Context, validatedSeq, lastRotated uint32) 
 		r.logger.Warn("online delete: nodestore prune failed", "boundary", lastRotated, "deleted", deleted, "err", err)
 		return
 	}
-
-	if err := r.store.SetLastRotated(validatedSeq); err != nil {
+	if err := r.store.SetRotation(validatedSeq, minimumOnline); err != nil {
 		r.logger.Warn("online delete: failed to persist lastRotated", "seq", validatedSeq, "err", err)
 		return
 	}
 
 	r.logger.Info("online delete: rotation finished",
-		"validatedSeq", validatedSeq, "nodesDeleted", deleted, "minimumOnline", lastRotated+1)
+		"validatedSeq", validatedSeq, "nodesDeleted", deleted, "minimumOnline", minimumOnline)
 }

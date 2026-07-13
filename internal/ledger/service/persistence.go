@@ -4,73 +4,44 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sort"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// persistLedger writes the ledger state to storage backends. The
-// caller-supplied ctx is forwarded to every storage backend call so
-// shutdown / request cancellation propagates through the persistence
-// layer.
-//
-// Caller contract: chain-advance call sites must log and discard the
-// returned error, mirroring rippled's LedgerMaster::setFullLedger ->
-// pendSaveValidated which discards the bool return
-// (rippled/src/xrpld/app/ledger/detail/LedgerMaster.cpp:831,972).
-// Treating persistence failure as fatal would diverge from rippled
-// and risk forks on transient storage issues.
-//
-// Both backends are best-effort at the rippled-equivalent boundary:
-//
-//   - NodeStore failures are logged and swallowed inside
-//     persistToNodeStore, mirroring rippled's
-//     NodeStore::Database::store / ::sync void returns
-//     (rippled/src/xrpld/nodestore/detail/DatabaseNodeImp.h:109-124).
-//     A nodestore failure must NOT short-circuit the relational
-//     persist — rippled's saveValidatedLedger calls store(...) and
-//     unconditionally proceeds to the SQL writes
-//     (rippled/src/xrpld/app/rdb/backend/detail/Node.cpp:228-229).
-//   - Relational failures bubble up so the call site can log them,
-//     but the call site discards the error (chain advance continues).
-//
-// Atomicity boundaries:
-//
-//   - NodeStore is the durable ledger store; relational DB is a
-//     supplementary index. NodeStore is persisted (and synced) FIRST,
-//     so a relational failure leaves the canonical ledger durable and
-//     the index can be rebuilt.
-//   - Within NodeStore, state nodes are written before the header.
-//     A mid-write failure leaves orphaned (unreferenced) state nodes
-//     rather than a header pointing at missing state — readers see
-//     the ledger as ABSENT, not CORRUPT.
-//   - The per-tx relational writes (SaveTransaction +
-//     SaveAccountTransaction) run inside a single WithTransaction
-//     call, matching rippled's soci::transaction over the per-tx
-//     INSERT loop in
-//     rippled/src/xrpld/app/rdb/backend/detail/Node.cpp:272-349.
-//     Caveat: on SQLite, SaveValidatedLedger writes the ledger row
-//     on a separate ledger DB connection that is non-transactional
-//     (see storage/relationaldb/sqlite/transaction_context.go), so
-//     a tx-loop rollback can leave an already-written ledger row in
-//     place. This split mirrors rippled's two-DB layout
-//     (Node.cpp:264 uses ldgDB outside the txnDB transaction) and is
-//     a backend limitation, not introduced here.
+var validatedTipKey = nodestore.Hash256(sha512half.Sum([]byte("go-xrpl validated ledger tip")))
+
+// persistLedger stores SHAMap deltas and the ledger header before updating the
+// relational index. Callers log failures without stopping chain advancement.
 func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
+	return s.persistValidatedLedger(ctx, l, true)
+}
+
+func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, updateTip bool) error {
 	seq := l.Sequence()
 
 	if s.nodeStore != nil {
-		s.persistToNodeStore(ctx, l, seq)
+		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
+			return err
+		}
 	}
 
 	if s.relationalDB != nil {
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
 			return err
+		}
+		if updateTip && s.nodeStore != nil {
+			if err := s.persistValidatedTip(ctx, l); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -81,119 +52,130 @@ func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 // barrier (nil ledger + done) that flushes the FIFO queue for callers that
 // need persistence to be observable (tests, shutdown paths).
 type persistJob struct {
-	l    *ledger.Ledger
-	done chan struct{}
+	l          *ledger.Ledger
+	done       chan struct{}
+	validated  bool
+	updatesTip bool
 }
 
-// enqueuePersist hands a closed/adopted ledger to the persistence worker.
-// Persistence walks the ENTIRE state map (seconds at 15k tx/ledger); running it
-// inline under s.mu froze consensus ticks, RPC, and inbound dispatch. rippled
-// runs the equivalent pendSaveValidated on its job queue. Best-effort: a full
-// queue drops with a loud log and the chain advances (the ledger stays servable
-// from the in-memory history window).
-//
-// Callers hold s.mu, so the persistStopped read is race-free against Stop
-// (which sets it under s.mu).
 func (s *Service) enqueuePersist(l *ledger.Ledger) {
+	s.enqueueLedgerPersist(l, true, true)
+}
+
+func (s *Service) enqueueValidatedHistoryPersist(l *ledger.Ledger) {
+	s.enqueueLedgerPersist(l, true, false)
+}
+
+func (s *Service) enqueueNodePersist(l *ledger.Ledger) {
+	s.enqueueLedgerPersist(l, false, false)
+}
+
+func (s *Service) enqueueLedgerPersist(l *ledger.Ledger, validated, updatesTip bool) {
 	if l == nil {
 		return
 	}
-	if s.persistCh == nil {
-		// Not started: persist inline.
-		if err := s.persistLedger(context.Background(), l); err != nil {
+	s.persistMu.Lock()
+	if !s.persistStarted {
+		s.persistMu.Unlock()
+		if err := s.persistLedgerJob(context.Background(), l, validated, updatesTip); err != nil {
 			s.logger.Error("failed to persist ledger inline", "seq", l.Sequence(), "err", err)
 		}
 		return
 	}
-	if s.persistStopped {
-		// Shutdown in progress: the worker is draining/joined. Dropping is safe
-		// only because Stop runs after consensus quiesces, so no validated
-		// ledger closes past this point in practice.
+	if s.persistStopping {
+		s.persistMu.Unlock()
 		s.logger.Warn("persist skipped: service stopping", "seq", l.Sequence())
 		return
 	}
+	s.persistQueue = append(s.persistQueue, persistJob{l: l, validated: validated, updatesTip: updatesTip})
+	s.signalPersistLocked()
+	s.persistMu.Unlock()
+}
+
+func (s *Service) signalPersistLocked() {
 	select {
-	case s.persistCh <- persistJob{l: l}:
+	case s.persistWake <- struct{}{}:
 	default:
-		s.logger.Error("persist queue full — dropping ledger persist; chain advance continues",
-			"seq", l.Sequence(), "depth", cap(s.persistCh))
 	}
 }
 
-// FlushPersists blocks until every ledger enqueued before the call has been
-// persisted. No-op when the worker isn't running or has stopped. It gives up if
-// Stop closes persistQuit while it waits, so it never parks past shutdown.
 func (s *Service) FlushPersists() {
-	s.mu.RLock()
-	ch, quit, stopped := s.persistCh, s.persistQuit, s.persistStopped
-	s.mu.RUnlock()
-	if ch == nil || stopped {
-		return
-	}
+	_ = s.flushPersists(context.Background())
+}
+
+func (s *Service) flushPersists(ctx context.Context) error {
 	done := make(chan struct{})
-	select {
-	case ch <- persistJob{done: done}:
-	case <-quit:
-		return
+	s.persistMu.Lock()
+	if !s.persistStarted || s.persistStopping {
+		s.persistMu.Unlock()
+		return nil
 	}
+	s.persistQueue = append(s.persistQueue, persistJob{done: done})
+	s.signalPersistLocked()
+	s.persistMu.Unlock()
 	select {
 	case <-done:
-	case <-quit:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
 // Stop drains the persistence queue and joins the worker, guaranteeing every
-// validated-ledger persist enqueued before Stop is durable before the caller
+// ledger persist enqueued before Stop is durable before the caller
 // closes the underlying node/relational stores. Idempotent and safe on a
 // never-started Service. Must be called before those stores are closed.
 func (s *Service) Stop() {
-	s.mu.Lock()
-	if s.persistCh == nil || s.persistStopped {
-		s.mu.Unlock()
-		return
+	s.persistMu.Lock()
+	persistWasStarted := s.persistStarted
+	waitPersist := s.persistStarted && !s.persistStopping
+	if waitPersist {
+		s.persistStopping = true
+		s.signalPersistLocked()
 	}
-	s.persistStopped = true
-	quit := s.persistQuit
-	eventQuit := s.ledgerEventQuit
+	s.persistMu.Unlock()
+
+	s.mu.Lock()
+	var eventQuit chan struct{}
+	if !s.ledgerEventStopped {
+		s.ledgerEventStopped = true
+		eventQuit = s.ledgerEventQuit
+	}
 	s.mu.Unlock()
 
-	// Signal the workers to drain their queues and exit, then wait for them. The
-	// channels are never closed, so the drains can complete without racing a
-	// concurrent send.
-	close(quit)
 	if eventQuit != nil {
 		close(eventQuit)
 	}
-	s.persistWG.Wait()
+	if persistWasStarted {
+		s.persistWG.Wait()
+	}
 	s.ledgerEventWG.Wait()
 }
 
-// runPersistWorker drains the persist queue in FIFO order, keeping
-// nodestore/relational writes ordered by enqueue. It runs until Stop closes
-// persistQuit, at which point it drains everything already queued before
-// exiting so a shutdown doesn't drop validated-ledger persists.
 func (s *Service) runPersistWorker() {
 	defer s.persistWG.Done()
 	for {
-		select {
-		case job := <-s.persistCh:
+		s.persistMu.Lock()
+		if len(s.persistQueue) > 0 {
+			job := s.persistQueue[0]
+			s.persistQueue[0] = persistJob{}
+			s.persistQueue = s.persistQueue[1:]
+			s.persistMu.Unlock()
 			s.runPersistJob(job)
-		case <-s.persistQuit:
-			for {
-				select {
-				case job := <-s.persistCh:
-					s.runPersistJob(job)
-				default:
-					return
-				}
-			}
+			continue
 		}
+		stopping := s.persistStopping
+		s.persistMu.Unlock()
+		if stopping {
+			return
+		}
+		<-s.persistWake
 	}
 }
 
 func (s *Service) runPersistJob(job persistJob) {
 	if job.l != nil {
-		if err := s.persistLedger(context.Background(), job.l); err != nil {
+		if err := s.persistLedgerJob(context.Background(), job.l, job.validated, job.updatesTip); err != nil {
 			s.logger.Error("failed to persist ledger; chain advance continues",
 				"seq", job.l.Sequence(), "err", err)
 		}
@@ -203,39 +185,48 @@ func (s *Service) runPersistJob(job persistJob) {
 	}
 }
 
-// persistToNodeStore writes ledger state to the nodestore.
-//
-// Mirrors rippled's NodeStore::Database::store and ::sync, which
-// return void: backend errors are logged and swallowed, never
-// propagated to the chain-advance code
-// (rippled/src/xrpld/nodestore/detail/DatabaseNodeImp.h:109-124).
-// Returning errors here would diverge from rippled and risk forks if
-// any caller forgot to log-and-discard.
-func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) {
-	var nodes []*nodestore.Node
+func (s *Service) persistLedgerJob(ctx context.Context, l *ledger.Ledger, validated, updatesTip bool) error {
+	if validated {
+		return s.persistValidatedLedger(ctx, l, updatesTip)
+	}
+	if s.nodeStore == nil {
+		return nil
+	}
+	return s.persistToNodeStore(ctx, l, l.Sequence())
+}
 
-	iterErr := l.ForEach(func(key [32]byte, data []byte) bool {
-		node := &nodestore.Node{
-			Type:      nodestore.NodeAccount,
-			Hash:      nodestore.Hash256(key),
-			Data:      data,
-			LedgerSeq: seq,
+// persistToNodeStore writes state and transaction deltas before the header.
+func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq uint32) error {
+	store := func(nodeType nodestore.NodeType) func([]shamap.FlushEntry) error {
+		return func(entries []shamap.FlushEntry) error {
+			if family, ok := s.shamapFamily.(*shamap.NodeStoreFamily); ok {
+				return family.StoreBatch(ctx, entries)
+			}
+			const batchSize = 4096
+			for start := 0; start < len(entries); start += batchSize {
+				end := min(start+batchSize, len(entries))
+				nodes := make([]*nodestore.Node, end-start)
+				for i, entry := range entries[start:end] {
+					nodes[i] = &nodestore.Node{
+						Type:      nodeType,
+						Hash:      nodestore.Hash256(entry.Hash),
+						Data:      entry.Data,
+						LedgerSeq: entry.LedgerSeq,
+					}
+				}
+				if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
-		nodes = append(nodes, node)
-		return true
-	})
-	if iterErr != nil {
-		s.logger.Error("nodestore persist: state map iteration failed; ledger state not written",
-			"seq", seq, "err", iterErr)
-		return
 	}
 
-	if len(nodes) > 0 {
-		if err := s.nodeStore.StoreBatch(ctx, nodes); err != nil {
-			s.logger.Error("nodestore persist: StoreBatch failed; chain advance continues",
-				"seq", seq, "nodes", len(nodes), "err", err)
-			return
-		}
+	if err := l.StoreStateDirty(store(nodestore.NodeAccount)); err != nil {
+		return fmt.Errorf("store state delta for ledger %d: %w", seq, err)
+	}
+	if err := l.StoreTransactionDirty(store(nodestore.NodeTransaction)); err != nil {
+		return fmt.Errorf("store transaction delta for ledger %d: %w", seq, err)
 	}
 
 	headerData := l.SerializeHeader()
@@ -246,18 +237,104 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 		LedgerSeq: seq,
 	}
 	if err := s.nodeStore.Store(ctx, headerNode); err != nil {
-		s.logger.Error("nodestore persist: header Store failed; chain advance continues",
-			"seq", seq, "err", err)
-		return
+		return fmt.Errorf("store ledger %d header: %w", seq, err)
 	}
 
 	// Single fsync once both state nodes and header are durable.
 	// Sync is uninterruptible at the backend; ctx cancellation only
 	// unblocks the caller (see KVDatabaseImpl.Sync).
 	if err := s.nodeStore.Sync(ctx); err != nil {
-		s.logger.Error("nodestore persist: Sync failed; chain advance continues",
-			"seq", seq, "err", err)
+		return fmt.Errorf("sync ledger %d: %w", seq, err)
 	}
+	return nil
+}
+
+func (s *Service) persistValidatedTip(ctx context.Context, l *ledger.Ledger) error {
+	s.validatedTipMu.Lock()
+	defer s.validatedTipMu.Unlock()
+	hash := l.Hash()
+	current, err := s.nodeStore.Fetch(ctx, validatedTipKey)
+	if err != nil {
+		return fmt.Errorf("fetch validated ledger tip: %w", err)
+	}
+	if current != nil && current.Type == nodestore.NodeLedger && len(current.Data) == 32 {
+		switch {
+		case current.LedgerSeq > l.Sequence():
+			return nil
+		case current.LedgerSeq == l.Sequence():
+			if bytes.Equal(current.Data, hash[:]) {
+				return nil
+			}
+			return fmt.Errorf("validated ledger tip %d conflicts with persisted hash", l.Sequence())
+		}
+	}
+	if err := s.nodeStore.Store(ctx, &nodestore.Node{
+		Type:      nodestore.NodeLedger,
+		Hash:      validatedTipKey,
+		Data:      append([]byte(nil), hash[:]...),
+		LedgerSeq: l.Sequence(),
+	}); err != nil {
+		return fmt.Errorf("store validated ledger tip %d: %w", l.Sequence(), err)
+	}
+	if err := s.nodeStore.Sync(ctx); err != nil {
+		return fmt.Errorf("sync validated ledger tip %d: %w", l.Sequence(), err)
+	}
+	return nil
+}
+
+// RefreshValidatedState re-stamps the complete live state tree before online
+// deletion removes older node-store records.
+func (s *Service) RefreshValidatedState(ctx context.Context, minimumSeq uint32) error {
+	if err := s.flushPersists(ctx); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	validated := s.validatedLedger
+	s.mu.RUnlock()
+	if validated == nil || validated.Sequence() < minimumSeq {
+		return fmt.Errorf("validated ledger is behind rotation target %d", minimumSeq)
+	}
+	seq := validated.Sequence()
+	root, err := validated.StateMapHash()
+	if err != nil {
+		return err
+	}
+
+	const batchSize = 4096
+	batch := make([]*nodestore.Node, 0, batchSize)
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		if err := s.nodeStore.StoreBatch(ctx, batch); err != nil {
+			return err
+		}
+		batch = batch[:0]
+		return nil
+	}
+
+	err = s.walkStoredSHAMap(ctx, root, shamap.TypeState, func(hash [32]byte, node *nodestore.Node) error {
+		batch = append(batch, &nodestore.Node{
+			Type:      nodestore.NodeAccount,
+			Hash:      nodestore.Hash256(hash),
+			Data:      node.Data,
+			LedgerSeq: seq,
+		})
+		if len(batch) == batchSize {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	return s.nodeStore.Sync(ctx)
 }
 
 // persistToRelationalDB writes ledger metadata and transactions to the

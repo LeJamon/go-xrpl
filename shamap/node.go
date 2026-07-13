@@ -48,6 +48,13 @@ type NodeReader interface {
 	Type() NodeType
 }
 
+// InnerNodeReader exposes the child hashes of a serialized inner node.
+type InnerNodeReader interface {
+	NodeReader
+	ChildHash(index int) ([32]byte, error)
+	IsEmptyBranch(index int) bool
+}
+
 // Node defines the interface all tree nodes must implement.
 // Concrete nodes are either *innerNode or a LeafNode; callers
 // discriminate with a type switch.

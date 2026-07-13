@@ -4,6 +4,51 @@ import (
 	"fmt"
 )
 
+// StoreDirty serializes dirty nodes and marks them clean only after store
+// succeeds.
+func (sm *SHAMap) StoreDirty(store func([]FlushEntry) error) error {
+	if store == nil {
+		return fmt.Errorf("shamap: nil dirty-node store")
+	}
+
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if sm.root == nil || sm.root.IsEmpty() {
+		return nil
+	}
+
+	batch := &NodeBatch{}
+	var nodes []Node
+	if err := sm.collectDirtyNode(sm.root, batch, &nodes); err != nil {
+		return fmt.Errorf("failed to flush: %w", err)
+	}
+	if len(batch.Entries) == 0 {
+		return nil
+	}
+	var (
+		gen  uint32
+		done = func() {}
+	)
+	if sm.backed && sm.fullBelow != nil {
+		gen, done = sm.fullBelow.Begin()
+	}
+	defer done()
+	if err := store(batch.Entries); err != nil {
+		return err
+	}
+	if sm.backed && sm.fullBelow != nil {
+		for _, node := range nodes {
+			if _, ok := node.(*innerNode); ok {
+				sm.fullBelow.Insert(gen, node.Hash())
+			}
+		}
+	}
+	for _, node := range nodes {
+		node.SetDirty(false)
+	}
+	return nil
+}
+
 // FlushDirty serializes every dirty node into the returned NodeBatch and marks
 // them clean, retaining all in-memory child pointers.
 func (sm *SHAMap) FlushDirty() (*NodeBatch, error) {
@@ -24,21 +69,28 @@ func (sm *SHAMap) flushDirty(releaseChildren bool) (*NodeBatch, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	if sm.root == nil {
+	if sm.root == nil || sm.root.IsEmpty() {
 		return &NodeBatch{}, nil
 	}
 
 	batch := &NodeBatch{}
-
-	if err := sm.flushNode(sm.root, releaseChildren, batch); err != nil {
+	var nodes []Node
+	if err := sm.collectDirtyNode(sm.root, batch, &nodes); err != nil {
 		return nil, fmt.Errorf("failed to flush: %w", err)
+	}
+	for _, node := range nodes {
+		node.SetDirty(false)
+		if releaseChildren {
+			if inner, ok := node.(*innerNode); ok {
+				inner.ReleaseChildren()
+			}
+		}
 	}
 
 	return batch, nil
 }
 
-// flushNode recursively flushes a dirty node and its dirty children (post-order).
-func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) error {
+func (sm *SHAMap) collectDirtyNode(node Node, batch *NodeBatch, nodes *[]Node) error {
 	if node == nil || !node.IsDirty() {
 		return nil
 	}
@@ -48,7 +100,7 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 		for i := range BranchFactor {
 			child, _, _ := inner.LoadChild(i)
 			if child != nil && child.IsDirty() {
-				if err := sm.flushNode(child, releaseChildren, batch); err != nil {
+				if err := sm.collectDirtyNode(child, batch, nodes); err != nil {
 					return err
 				}
 			}
@@ -71,19 +123,12 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 
 	hash := node.Hash()
 	batch.Entries = append(batch.Entries, FlushEntry{
-		Hash: hash,
-		Data: data,
+		Hash:      hash,
+		Data:      data,
+		LedgerSeq: sm.ledgerSeq,
+		MapType:   sm.mapType,
 	})
-
-	// Mark clean
-	node.SetDirty(false)
-
-	// Release children pointers for inner nodes (retain hashes for lazy reload).
-	if releaseChildren {
-		if inner, ok := node.(*innerNode); ok {
-			inner.ReleaseChildren()
-		}
-	}
+	*nodes = append(*nodes, node)
 
 	return nil
 }

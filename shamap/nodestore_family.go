@@ -2,12 +2,18 @@ package shamap
 
 import (
 	"context"
+	"errors"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
+
+// ErrStoreBelowMinimum reports a write rejected by the online-delete floor.
+var ErrStoreBelowMinimum = errors.New("shamap: ledger is below the minimum online sequence")
 
 // NodeStoreFamily implements the Family interface by delegating to a nodestore.Database.
 // This is the production-quality Family implementation, matching rippled's NodeFamily
@@ -20,13 +26,22 @@ import (
 // For tests: use NewMemoryNodeStoreFamily() — in-memory, zero disk I/O.
 // For production: use NewPebbleNodeStoreFamily() with a persistent path.
 type NodeStoreFamily struct {
-	db nodestore.Database
+	db        nodestore.Database
+	fullBelow *FullBelowCache
+	storeMu   sync.RWMutex
+	minimum   atomic.Uint32
 }
 
 // NewNodeStoreFamily creates a Family backed by the given nodestore.Database.
 // The Database should already be opened and configured with caching.
 func NewNodeStoreFamily(db nodestore.Database) *NodeStoreFamily {
-	return &NodeStoreFamily{db: db}
+	return &NodeStoreFamily{db: db, fullBelow: NewFullBelowCache()}
+}
+
+// FullBelowCache returns the cache shared by every SHAMap backed by this
+// family.
+func (f *NodeStoreFamily) FullBelowCache() *FullBelowCache {
+	return f.fullBelow
 }
 
 // NewMemoryNodeStoreFamily creates a Family backed by an in-memory kvstore.
@@ -83,16 +98,37 @@ func (f *NodeStoreFamily) StoreBatch(ctx context.Context, entries []FlushEntry) 
 	if len(entries) == 0 {
 		return nil
 	}
+	f.storeMu.RLock()
+	defer f.storeMu.RUnlock()
+	floor := f.minimum.Load()
 
-	nodes := make([]*nodestore.Node, len(entries))
-	for i, e := range entries {
-		nodes[i] = &nodestore.Node{
-			Hash: nodestore.Hash256(e.Hash),
-			Data: e.Data,
-			Type: nodestore.NodeAccount, // NodeStore treats data as opaque; type is for categorization only
+	nodes := make([]*nodestore.Node, 0, len(entries))
+	for _, e := range entries {
+		if floor != 0 && e.LedgerSeq < floor {
+			return ErrStoreBelowMinimum
 		}
+		nodeType := nodestore.NodeAccount
+		if e.MapType == TypeTransaction {
+			nodeType = nodestore.NodeTransaction
+		}
+		nodes = append(nodes, &nodestore.Node{
+			Hash:      nodestore.Hash256(e.Hash),
+			Data:      e.Data,
+			Type:      nodeType,
+			LedgerSeq: e.LedgerSeq,
+		})
 	}
 	return f.db.StoreBatch(ctx, nodes)
+}
+
+// SetMinimumLedgerSeq waits for older family writes to finish, then rejects
+// new writes below the online-delete boundary.
+func (f *NodeStoreFamily) SetMinimumLedgerSeq(seq uint32) {
+	f.storeMu.Lock()
+	if seq > f.minimum.Load() {
+		f.minimum.Store(seq)
+	}
+	f.storeMu.Unlock()
 }
 
 // Sweep removes expired entries from the nodestore's caches.
@@ -100,6 +136,18 @@ func (f *NodeStoreFamily) StoreBatch(ctx context.Context, entries []FlushEntry) 
 // This matches rippled's pattern of calling sweep() on NodeFamily.
 func (f *NodeStoreFamily) Sweep() error {
 	return f.db.Sweep()
+}
+
+// ResetFullBelow invalidates completeness marks after the backing store is
+// rotated or otherwise replaces its node set.
+func (f *NodeStoreFamily) ResetFullBelow() {
+	f.fullBelow.Bump()
+}
+
+// BeginPrune invalidates full-below marks and blocks missing-node walks until
+// the returned function is called after the backing-store mutation.
+func (f *NodeStoreFamily) BeginPrune() func() {
+	return f.fullBelow.invalidateAndLock()
 }
 
 // Close gracefully shuts down the underlying nodestore, flushing any pending
