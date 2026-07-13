@@ -37,8 +37,8 @@ func TestRoleForRequest_WithAdminNets_NoMatch(t *testing.T) {
 
 func TestRoleForRequest_NilPortCtx_Localhost(t *testing.T) {
 	role := roleForRequest("127.0.0.1", "", nil)
-	if role != types.RoleAdmin {
-		t.Fatalf("expected RoleAdmin for localhost with nil portCtx, got %v", role)
+	if role != types.RoleGuest {
+		t.Fatalf("expected RoleGuest for localhost with nil portCtx, got %v", role)
 	}
 }
 
@@ -49,11 +49,19 @@ func TestRoleForRequest_NilPortCtx_NonLocal(t *testing.T) {
 	}
 }
 
-func TestRoleForRequest_EmptyAdminNets_FallsBackToLocalhost(t *testing.T) {
+func TestRoleForRequest_EmptyAdminNets_LocalhostIsGuest(t *testing.T) {
 	pc := &PortContext{AdminNets: nil}
 	role := roleForRequest("127.0.0.1", "", pc)
+	if role != types.RoleGuest {
+		t.Fatalf("expected RoleGuest for localhost with empty AdminNets, got %v", role)
+	}
+}
+
+func TestRoleForRequest_ExplicitLoopbackAdmin(t *testing.T) {
+	pc := &PortContext{AdminNets: []net.IPNet{mustParseCIDR("127.0.0.0/8")}}
+	role := roleForRequest("127.0.0.1", "", pc)
 	if role != types.RoleAdmin {
-		t.Fatalf("expected RoleAdmin for localhost with empty AdminNets, got %v", role)
+		t.Fatalf("expected RoleAdmin for localhost in AdminNets, got %v", role)
 	}
 }
 

@@ -276,7 +276,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	user := userHeader(r)
 	// Role is derived from the socket-level peer, not header-supplied IPs,
 	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
-	// can't elevate to admin via the localhost fallback. Matches rippled's
+	// can't elevate the caller to admin. Matches rippled's
 	// requestRole, which uses the connection's remote endpoint. The role and
 	// client IP come from the connection, not request content, so they are
 	// shared across every element of a batch.
@@ -1146,13 +1146,6 @@ func (s *Server) ExecuteMethod(ctx *types.RPCContext, method string, params []by
 	return s.executeMethod(method, json.RawMessage(params), ctx)
 }
 
-// isLocalhost returns true if the IP address is a loopback address.
-// In standalone mode, connections from localhost are treated as Admin.
-// This is a simplified version of rippled's admin detection (see Role.cpp:isAdmin).
-func isLocalhost(ip string) bool {
-	return ip == "127.0.0.1" || ip == "::1"
-}
-
 // roleForRequest mirrors rippled's requestRole (Role.cpp:94-119):
 //   - peer ∈ AdminNets → RoleAdmin
 //   - peer ∈ SecureGatewayNets + non-empty user → RoleIdentified
@@ -1161,15 +1154,8 @@ func isLocalhost(ip string) bool {
 //
 // peerIP must be the actual TCP peer (from RemoteAddr), never a header-
 // supplied IP. user is the X-User header value if present.
-//
-// Fallback: when no AdminNets are configured (typically in unit tests or
-// standalone mode), localhost is treated as Admin so the legacy
-// single-process flows keep working.
 func roleForRequest(peerIP string, user string, portCtx *PortContext) types.Role {
-	if portCtx == nil || (len(portCtx.AdminNets) == 0 && len(portCtx.SecureGatewayNets) == 0) {
-		if isLocalhost(peerIP) {
-			return types.RoleAdmin
-		}
+	if portCtx == nil {
 		return types.RoleGuest
 	}
 	ip := net.ParseIP(peerIP)

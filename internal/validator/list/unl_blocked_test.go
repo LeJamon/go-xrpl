@@ -1,8 +1,11 @@
 package list
 
 import (
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // TestAggregator_IsUNLBlocked drives the sticky UNL-blocked flag through the
@@ -20,6 +23,7 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 			state:      map[PublisherKey]*PublisherState{},
 			threshold:  1,
 			clock:      func() time.Time { return *now },
+			logger:     slog.Default(),
 		}
 		for _, p := range pubs {
 			a.publishers[p] = struct{}{}
@@ -104,6 +108,76 @@ func TestAggregator_IsUNLBlocked(t *testing.T) {
 		a.Tick()
 		if !a.IsUNLBlocked() {
 			t.Fatal("block must stay latched while any publisher is non-available")
+		}
+	})
+
+	t.Run("quorum availability transition emits when trusted union is unchanged", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		a := newAgg(&now, pk1, pk2)
+		for _, p := range []PublisherKey{pk1, pk2} {
+			s := a.state[p]
+			s.Status = StatusAvailable
+			s.Validators = val
+			s.Expiration = now.Add(2 * time.Hour)
+		}
+
+		changes := 0
+		a.OnChange(func([]consensus.NodeID, [][33]byte) { changes++ })
+		a.Tick()
+		if changes != 1 {
+			t.Fatalf("initial change callbacks = %d, want 1", changes)
+		}
+
+		a.state[pk2].Expiration = now.Add(time.Hour)
+		now = now.Add(90 * time.Minute)
+		a.Tick()
+		if changes != 2 {
+			t.Fatalf("unavailable transition callbacks = %d, want 2", changes)
+		}
+		if !a.IsQuorumUnavailable() {
+			t.Fatal("expired publisher did not disable quorum")
+		}
+
+		s := a.state[pk2]
+		s.Status = StatusAvailable
+		s.Validators = val
+		s.Expiration = now.Add(time.Hour)
+		a.Tick()
+		if changes != 3 {
+			t.Fatalf("recovery transition callbacks = %d, want 3", changes)
+		}
+		if a.IsQuorumUnavailable() {
+			t.Fatal("publisher recovery did not restore quorum")
+		}
+	})
+
+	t.Run("quorum cutoff follows publisher threshold", func(t *testing.T) {
+		now := time.Unix(1000, 0)
+		publishers := []PublisherKey{{1}, {2}, {3}, {4}, {5}}
+		a := newAgg(&now, publishers...)
+		a.threshold = 3
+		for _, p := range publishers {
+			s := a.state[p]
+			s.Status = StatusAvailable
+			s.Validators = val
+			s.Expiration = now.Add(time.Hour)
+		}
+		a.Tick()
+		if a.IsQuorumUnavailable() {
+			t.Fatal("healthy publisher set disabled quorum")
+		}
+
+		a.state[publishers[0]].Status = StatusUnavailable
+		a.Tick()
+		if a.IsQuorumUnavailable() {
+			t.Fatal("one unavailable publisher disabled a three-of-five quorum")
+		}
+
+		a.state[publishers[1]].Status = StatusUnavailable
+		a.state[publishers[2]].Status = StatusUnavailable
+		a.Tick()
+		if !a.IsQuorumUnavailable() {
+			t.Fatal("three unavailable publishers did not disable a three-of-five quorum")
 		}
 	})
 

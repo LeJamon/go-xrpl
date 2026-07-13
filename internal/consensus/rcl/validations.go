@@ -267,6 +267,19 @@ func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
+	vt.setTrustedLocked(nodes)
+}
+
+// SetTrustedAndQuorum updates the trusted set and its quorum atomically.
+func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quorum int) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+
+	vt.setTrustedLocked(nodes)
+	vt.quorum = quorum
+}
+
+func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
 	vt.trusted = make(map[consensus.NodeID]bool)
 	for _, node := range nodes {
 		vt.trusted[node] = true

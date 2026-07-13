@@ -285,6 +285,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	peer.bufReader = bufReader
 	peer.capabilities = caps
 	peer.protocolVersion = protocol
+	peer.handshakeCfg = hsCfg
 	peer.mu.Unlock()
 
 	// Decide admission before sending the 101 upgrade, mirroring rippled's
@@ -304,7 +305,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		return errInboundRejected
 	}
 
-	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol) //nolint:bodyclose // locally-built response serialized via Write; nothing to close
+	resp := BuildHandshakeResponse(req, o.identity, sharedValue, hsCfg, protocol) //nolint:bodyclose // locally-built response serialized via Write; nothing to close
 	addAddressHeaders(resp.Header, hsCfg, peerRemote)
 	if err := resp.Write(tlsConn); err != nil {
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)

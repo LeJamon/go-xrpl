@@ -137,6 +137,10 @@ type Adaptor struct {
 	// (atomic) so the consensus bow-out can poll it while holding the engine
 	// lock without an agg-mu -> e.mu ABBA against onTrustChanged.
 	unlBlocked func() bool
+	// quorumUnavailable reports whether publisher availability makes a safe
+	// validation quorum unachievable. It is distinct from the consensus
+	// participation lock-down when multiple publishers are configured.
+	quorumUnavailable func() bool
 
 	// refreshUNL re-evaluates the aggregator's trust view against the live
 	// clock (promote rotations, latch/clear the lock-down flag). Wired to

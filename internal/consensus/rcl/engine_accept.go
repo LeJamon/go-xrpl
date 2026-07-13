@@ -246,8 +246,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// neg-UNL can mutate the UNL across boundaries), and advance the minSeq
 	// floor so far-stale validations are rejected at Add() not every pass.
 	if e.validationTracker != nil {
-		e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
-		e.validationTracker.SetQuorum(e.adaptor.GetQuorum())
+		e.validationTracker.SetTrustedAndQuorum(e.adaptor.GetTrustedValidators(), e.adaptor.GetQuorum())
 		// Pull the negative-UNL from the accepted ledger so disabled
 		// validators are excluded from quorum.
 		e.validationTracker.SetNegativeUNL(e.adaptor.GetNegativeUNL())

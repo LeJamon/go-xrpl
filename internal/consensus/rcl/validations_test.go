@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -49,6 +50,28 @@ func TestValidationTracker_Add(t *testing.T) {
 	// Adding same validation should return false
 	if vt.Add(v1) {
 		t.Error("Duplicate validation should not be added")
+	}
+}
+
+func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
+	nodes := []consensus.NodeID{{1}, {2}}
+	vt := NewValidationTracker(math.MaxInt, 5*time.Minute)
+	vt.SetTrusted(nodes)
+
+	fired := false
+	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired = true })
+	for _, node := range nodes {
+		vt.Add(&consensus.Validation{
+			LedgerID:  consensus.LedgerID{1},
+			LedgerSeq: 1,
+			NodeID:    node,
+			SignTime:  time.Now(),
+			Full:      true,
+		})
+	}
+
+	if fired {
+		t.Fatal("unreachable quorum finalized a ledger")
 	}
 }
 

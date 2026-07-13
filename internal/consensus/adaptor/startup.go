@@ -418,6 +418,7 @@ func NewFromConfig(
 		}
 		router.SetValidatorListAggregator(vlAgg)
 		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
+		adaptor.SetQuorumUnavailableFunc(vlAgg.IsQuorumUnavailable)
 		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
 		// Listed-but-untrusted signers (published below the trust
 		// threshold) get their validations stored by the engine so a later
@@ -498,15 +499,25 @@ func NewFromConfig(
 	// (held under c.staticMu, refreshed by SIGHUP). Capturing the boot
 	// values directly here would let a SIGHUP removal be silently undone
 	// by the next publisher event.
-	if vlAgg != nil {
-		vlAgg.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
-			staticV, staticM := c.snapshotStatic()
-			merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
-			adaptor.SetTrustedValidators(merged, mergedMasters)
-		})
-	}
+	wireValidatorListTrust(c)
 
 	return c, nil
+}
+
+func wireValidatorListTrust(c *Components) {
+	if c.ValidatorList == nil {
+		return
+	}
+	c.ValidatorList.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
+		staticV, staticM := c.snapshotStatic()
+		merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
+		c.Adaptor.SetTrustedValidators(merged, mergedMasters)
+	})
+	c.ValidatorList.Tick()
+	publisherNodes, publisherMasters := c.ValidatorList.TrustedValidators()
+	staticV, staticM := c.snapshotStatic()
+	merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
+	c.Adaptor.SetTrustedValidators(merged, mergedMasters)
 }
 
 // consensusServerState maps the operating mode and consensus role to the
@@ -629,8 +640,11 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 
 	// Listen address from peer port config
-	if _, peerPort, hasPeer := appCfg.PeerPort(); hasPeer {
+	_, peerPort, hasPeerPort := appCfg.PeerPort()
+	if hasPeerPort {
 		opts = append(opts, peermanagement.WithListenAddr(peerPort.BindAddress()))
+	} else {
+		opts = append(opts, peermanagement.WithListenAddr(""))
 	}
 
 	// Bootstrap peers (convert "host port" → "host:port")
@@ -644,13 +658,19 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 
 	// Max peers
-	if appCfg.PeersMax > 0 {
-		opts = append(opts, peermanagement.WithMaxPeers(appCfg.PeersMax))
-	}
+	maxPeers, maxInbound, maxOutbound := peerLimits(appCfg.PeersMax, hasPeerPort && appCfg.PeerPrivate == 0)
+	opts = append(opts,
+		peermanagement.WithMaxPeers(maxPeers),
+		peermanagement.WithMaxInbound(maxInbound),
+		peermanagement.WithMaxOutbound(maxOutbound),
+	)
 
 	// Private mode
 	if appCfg.PeerPrivate > 0 {
 		opts = append(opts, peermanagement.WithPrivateMode(true))
+	}
+	if appCfg.DatabasePath != "" {
+		opts = append(opts, peermanagement.WithDataDir(filepath.Join(appCfg.DatabasePath, "peers")))
 	}
 
 	// Compression
@@ -697,6 +717,25 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 
 	return opts
+}
+
+const (
+	defaultMaxPeers     = 21
+	minOutboundPeers    = 10
+	outboundPeerPercent = 15
+)
+
+func peerLimits(maxPeers int, wantIncoming bool) (int, int, int) {
+	if maxPeers == 0 {
+		maxPeers = defaultMaxPeers
+	}
+	maxPeers = max(maxPeers, minOutboundPeers)
+	if !wantIncoming {
+		return maxPeers, 0, maxPeers
+	}
+
+	maxOutbound := max((maxPeers*outboundPeerPercent+50)/100, minOutboundPeers)
+	return maxPeers, maxPeers - maxOutbound, maxOutbound
 }
 
 // feeVoteFromConfig maps the operator's [voting] stanza onto the

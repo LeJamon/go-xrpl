@@ -162,6 +162,10 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 // every call to account for negative-UNL changes:
 // max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
+	if a.isQuorumUnavailable() {
+		return math.MaxInt
+	}
+
 	// GetNegativeUNL takes its own lock, so resolve it before locking a.mu.
 	negUNL := a.GetNegativeUNL()
 
@@ -179,6 +183,15 @@ func (a *Adaptor) GetQuorum() int {
 	}
 	a.mu.Unlock()
 	return computeQuorum(trusted, disabled)
+}
+
+// SetQuorumUnavailableFunc wires the publisher-availability quorum gate.
+func (a *Adaptor) SetQuorumUnavailableFunc(fn func() bool) {
+	a.quorumUnavailable = fn
+}
+
+func (a *Adaptor) isQuorumUnavailable() bool {
+	return a.quorumUnavailable != nil && a.quorumUnavailable()
 }
 
 // computeQuorum is the pure arithmetic behind GetQuorum: the minimum trusted,

@@ -119,6 +119,14 @@ func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig
 	req.Header.Set(HeaderCrawl, crawlValue(cfg.CrawlPublic))
 
 	addHandshakeHeaders(req.Header, id, sharedValue, cfg)
+	if ctl := MakeFeaturesRequestHeader(
+		cfg.EnableCompression,
+		cfg.EnableLedgerReplay,
+		cfg.EnableTxReduceRelay,
+		cfg.EnableVPReduceRelay,
+	); ctl != "" {
+		req.Header.Set(HeaderProtocolCtl, ctl)
+	}
 
 	return req, nil
 }
@@ -156,10 +164,11 @@ func WriteRawHandshakeRequest(w io.Writer, req *http.Request) error {
 }
 
 // BuildHandshakeResponse builds the 101 Switching Protocols response
-// for an inbound handshake. `negotiated` is the version returned by
-// NegotiateProtocolVersion against the inbound request; an empty value
-// falls back to the highest supported version (test convenience).
-func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfig, negotiated string) *http.Response {
+// for an inbound handshake. request is the request being accepted; its
+// X-Protocol-Ctl offer determines which locally-enabled features the response
+// confirms. `negotiated` is the version returned by NegotiateProtocolVersion;
+// an empty value falls back to the highest supported version (test convenience).
+func BuildHandshakeResponse(request *http.Request, id *Identity, sharedValue []byte, cfg HandshakeConfig, negotiated string) *http.Response {
 	if negotiated == "" {
 		negotiated = supportedProtocols[len(supportedProtocols)-1].String()
 	}
@@ -182,6 +191,15 @@ func BuildHandshakeResponse(id *Identity, sharedValue []byte, cfg HandshakeConfi
 	}
 
 	addHandshakeHeaders(resp.Header, id, sharedValue, cfg)
+	if ctl := MakeFeaturesResponseHeader(
+		request.Header,
+		cfg.EnableCompression,
+		cfg.EnableLedgerReplay,
+		cfg.EnableTxReduceRelay,
+		cfg.EnableVPReduceRelay,
+	); ctl != "" {
+		resp.Header.Set(HeaderProtocolCtl, ctl)
+	}
 
 	return resp
 }
@@ -264,15 +282,6 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 			"t", "Handshake", "err", err)
 	} else {
 		h.Set(HeaderSessionSignature, base64.StdEncoding.EncodeToString(sig))
-	}
-
-	if ctl := MakeFeaturesRequestHeader(
-		cfg.EnableCompression,
-		cfg.EnableLedgerReplay,
-		cfg.EnableTxReduceRelay,
-		cfg.EnableVPReduceRelay,
-	); ctl != "" {
-		h.Set(HeaderProtocolCtl, ctl)
 	}
 
 	h.Set(HeaderInstanceCookie, strconv.FormatUint(cfg.InstanceCookie, 10))

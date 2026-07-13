@@ -456,8 +456,7 @@ func (e *Engine) refreshTrustedSet() {
 	if vt == nil {
 		return
 	}
-	vt.SetTrusted(e.adaptor.GetTrustedValidators())
-	vt.SetQuorum(e.adaptor.GetQuorum())
+	vt.SetTrustedAndQuorum(e.adaptor.GetTrustedValidators(), e.adaptor.GetQuorum())
 }
 
 func (e *Engine) Start(ctx context.Context) error {
@@ -475,8 +474,9 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	// Wire the validation tracker: trusted set + quorum from the adaptor;
 	// its callback flips the ledger service's validated_ledger pointer.
-	e.validationTracker = NewValidationTracker(e.adaptor.GetQuorum(), 5*time.Minute)
-	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
+	quorum := e.adaptor.GetQuorum()
+	e.validationTracker = NewValidationTracker(quorum, 5*time.Minute)
+	e.validationTracker.SetTrustedAndQuorum(e.adaptor.GetTrustedValidators(), quorum)
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
 		wired.SetValidationHistorian(e.validationTracker)
 	}

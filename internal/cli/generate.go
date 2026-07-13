@@ -3,9 +3,12 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
+
+const generatedValidatorsFilename = "validators.toml"
 
 var (
 	generateNetwork string
@@ -38,6 +41,16 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	content := generateConfigContent(networkID)
+	validatorsContent, hasValidators := generateValidatorsContent(networkID)
+	if hasValidators {
+		validatorsOutput := filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename)
+		if filepath.Clean(validatorsOutput) == filepath.Clean(generateOutput) {
+			return fmt.Errorf("output path must not be named %s", generatedValidatorsFilename)
+		}
+		if err := os.WriteFile(validatorsOutput, []byte(validatorsContent), 0644); err != nil { //nolint:gosec // G306: generated output, world-readable by intent
+			return fmt.Errorf("writing validators file: %w", err)
+		}
+	}
 
 	if err := os.WriteFile(generateOutput, []byte(content), 0644); err != nil { //nolint:gosec // G306: generated output, world-readable by intent
 		return fmt.Errorf("writing config file: %w", err)
@@ -46,10 +59,18 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "Configuration file generated: %s\n", generateOutput)
 	fmt.Fprintf(w, "  Network: %s\n", networkID)
+	if hasValidators {
+		fmt.Fprintf(w, "  Validators: %s\n", filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename))
+	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Next steps:")
 	fmt.Fprintln(w, "  1. Review and adjust the configuration values")
-	fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+	if networkID == "devnet" {
+		fmt.Fprintln(w, "  2. Configure trusted validators, or start in standalone mode:")
+		fmt.Fprintln(w, "     xrpld server --standalone --conf", generateOutput)
+	} else {
+		fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+	}
 	return nil
 }
 
@@ -70,6 +91,13 @@ func generateConfigContent(network string) string {
 ]`
 	case "devnet":
 		ips = `ips = []`
+	}
+
+	validatorsFile := `validators_file = "validators.toml"`
+	if network == "devnet" {
+		validatorsFile = `# Devnet has no public validator list. Configure trusted validators here,
+# or start the server with --standalone.
+# validators_file = "validators.toml"`
 	}
 
 	return fmt.Sprintf(`# go-xrpl configuration file
@@ -113,8 +141,8 @@ beta_rpc_api = 0
 # WebSocket keepalive ping cadence in seconds (optional — default 30)
 # websocket_ping_frequency = 30
 
-# Validators file (optional)
-# validators_file = "validators.toml"
+# Validators file
+%s
 
 # Genesis file (optional — omit to use built-in defaults)
 # genesis_file = "genesis.json"
@@ -209,5 +237,36 @@ normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
 minimum_last_ledger_buffer = 2
-`, network, ips, network)
+`, network, ips, network, validatorsFile)
+}
+
+func generateValidatorsContent(network string) (string, bool) {
+	switch network {
+	case "main":
+		return `validator_list_sites = [
+    "https://vl.ripple.com",
+    "https://unl.xrplf.org"
+]
+
+validator_list_keys = [
+    "ED2677ABFFD1B33AC6FBC3062B71F1E8397C1505E1C42C64D11AD1B28FF73F4734",
+    "ED42AEC58B701EEBB77356FFFEC26F83C1F0407263530F068C7C73D392C7E06FD1"
+]
+
+validator_list_threshold = 0
+`, true
+	case "testnet":
+		return `validator_list_sites = [
+    "https://vl.altnet.rippletest.net"
+]
+
+validator_list_keys = [
+    "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"
+]
+
+validator_list_threshold = 0
+`, true
+	default:
+		return "", false
+	}
 }

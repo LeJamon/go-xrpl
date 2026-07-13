@@ -850,8 +850,9 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 		return nil, err
 	}
 
-	// Try to save it (ignore errors if dataDir doesn't exist)
-	_ = id.Save(dataDir)
+	if err := id.Save(dataDir); err != nil {
+		return nil, fmt.Errorf("save identity: %w", err)
+	}
 
 	return id, nil
 }

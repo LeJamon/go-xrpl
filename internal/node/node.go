@@ -46,6 +46,10 @@ import (
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
 func Run(appConfig *config.Config, configPath string, standalone bool, rootLogger, serverLog xrpllog.Logger) error {
+	if err := validateTrustedValidatorConfig(appConfig, standalone); err != nil {
+		return err
+	}
+
 	var err error
 	// Pre-declared so the deferred shutdown can clean up whatever the
 	// init path managed to populate before any error return. doShutdown
@@ -959,6 +963,13 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	})
 
 	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents, configPath)
+}
+
+func validateTrustedValidatorConfig(appConfig *config.Config, standalone bool) error {
+	if standalone || len(appConfig.Validators.Validators) > 0 || len(appConfig.Validators.ValidatorListKeys) > 0 {
+		return nil
+	}
+	return errors.New("trusted validator configuration is empty: configure validators or validator_list_keys, or use --standalone")
 }
 
 // waitForShutdown blocks until a terminating event arrives: an OS signal, an

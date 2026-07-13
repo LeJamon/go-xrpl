@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewDiscovery(t *testing.T) {
@@ -512,6 +515,90 @@ func TestDiscoveryPruneOldPeers(t *testing.T) {
 	}
 }
 
+func TestDiscoveryPrunePreservesConfiguredPeers(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:       50,
+		MaxInbound:     25,
+		MaxOutbound:    25,
+		BootstrapPeers: []string{"bootstrap:51235"},
+		FixedPeers:     []string{"fixed:51235"},
+		Clock:          func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	for _, address := range []string{"bootstrap:51235", "fixed:51235", "gossip:51235"} {
+		d.AddPeer(address, 0, 0)
+		d.peers[address].LastSeen = now.Add(-2 * time.Hour)
+	}
+
+	d.prune()
+
+	if _, ok := d.peers["bootstrap:51235"]; !ok {
+		t.Error("configured bootstrap peer must survive age pruning")
+	}
+	if _, ok := d.peers["fixed:51235"]; !ok {
+		t.Error("configured fixed peer must survive age pruning")
+	}
+	if _, ok := d.peers["gossip:51235"]; ok {
+		t.Error("stale gossip peer should be pruned")
+	}
+}
+
+func TestDiscoveryConnectAttemptReservationAndCooldown(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	address := "gossip:51235"
+	d.AddPeer(address, 0, 0)
+
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	assert.Empty(t, d.SelectPeersToConnect(1), "an in-flight address must not be selected twice")
+
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	assert.Empty(t, d.SelectPeersToConnect(1), "ordinary failed attempts are suppressed for one minute")
+
+	now = now.Add(recentConnectAttempt)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "candidate becomes eligible at the deadline")
+	d.finishConnectAttempt(address, connectAttemptSucceeded)
+}
+
+func TestDiscoveryFixedPeerBackoff(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	address := "fixed:51235"
+	cfg := &Config{
+		MaxPeers:    50,
+		MaxInbound:  25,
+		MaxOutbound: 25,
+		FixedPeers:  []string{address},
+		Clock:       func() time.Time { return now },
+	}
+	d := NewDiscovery(cfg, make(chan Event, 1))
+	d.AddPeer(address, 0, 0)
+
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "first failure waits one minute")
+
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	now = now.Add(time.Minute)
+	assert.Empty(t, d.SelectPeersToConnect(1), "second failure advances to two minutes")
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	d.finishConnectAttempt(address, connectAttemptSucceeded)
+
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1))
+	d.finishConnectAttempt(address, connectAttemptFailed)
+	now = now.Add(time.Minute)
+	require.Equal(t, []string{address}, d.SelectPeersToConnect(1), "success resets fixed-peer backoff")
+}
+
 // TestBootCacheFailedLastTime tests that LastFailed time is recorded
 func TestBootCacheFailedLastTime(t *testing.T) {
 	bc := NewBootCache("")
@@ -704,16 +791,17 @@ func TestDiscoverySyncConnectedHosts_SkipsMalformedAddress(t *testing.T) {
 
 // TestAddPeerCapEvictsOldest pins issue #1170: once d.peers reaches
 // MaxDiscoveredPeers, a new gossiped address evicts the least-recently-seen
-// non-connected, non-fixed entry instead of growing the map without bound.
-// The live connection and the fixed peer sit at the stale end of the
+// non-connected, non-configured entry instead of growing the map without bound.
+// The live connection and configured peers sit at the stale end of the
 // recency order and must survive the eviction; a re-announced gossip entry
 // is refreshed to the recent end and must survive too.
 func TestAddPeerCapEvictsOldest(t *testing.T) {
 	cfg := &Config{
-		MaxPeers:    50,
-		MaxInbound:  25,
-		MaxOutbound: 25,
-		FixedPeers:  []string{"fixed:51235"},
+		MaxPeers:       50,
+		MaxInbound:     25,
+		MaxOutbound:    25,
+		FixedPeers:     []string{"fixed:51235"},
+		BootstrapPeers: []string{"bootstrap:51235"},
 	}
 	d := NewDiscovery(cfg, make(chan Event, 1))
 
@@ -721,6 +809,7 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 	// naive eviction would pick them.
 	d.MarkConnected("connected:51235", PeerID(1))
 	d.AddPeer("fixed:51235", 1, PeerID(2))
+	d.AddPeer("bootstrap:51235", 1, PeerID(2))
 
 	// Fill the map exactly to the ceiling with non-connected gossip entries.
 	for i := 0; len(d.peers) < MaxDiscoveredPeers; i++ {
@@ -760,6 +849,9 @@ func TestAddPeerCapEvictsOldest(t *testing.T) {
 	}
 	if _, ok := d.peers["fixed:51235"]; !ok {
 		t.Error("fixed peer must never be evicted")
+	}
+	if _, ok := d.peers["bootstrap:51235"]; !ok {
+		t.Error("bootstrap peer must never be evicted")
 	}
 }
 

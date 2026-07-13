@@ -401,8 +401,8 @@ func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
 
 	for i := range 50 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
-		// 127.0.0.1 with no AdminNets → roleForRequest fallback → RoleAdmin → Unlimited.
 		req.RemoteAddr = "127.0.0.1:5555"
+		req = withLoopbackAdmin(req)
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 		result := decodeEnvelope(t, rr.Body.Bytes())

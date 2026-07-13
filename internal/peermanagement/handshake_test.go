@@ -17,6 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func emptyHandshakeRequest() *http.Request {
+	return &http.Request{Header: make(http.Header)}
+}
+
 // TestBuildHandshakeRequest tests building an HTTP upgrade request
 // Reference: rippled Handshake.cpp makeRequest
 func TestBuildHandshakeRequest(t *testing.T) {
@@ -98,7 +102,7 @@ func TestBuildHandshakeResponse(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 	cfg.CrawlPublic = true
 
-	resp := BuildHandshakeResponse(id, sharedValue, cfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), id, sharedValue, cfg, "")
 	require.NotNil(t, resp)
 
 	// Status should be 101 Switching Protocols
@@ -117,6 +121,67 @@ func TestBuildHandshakeResponse(t *testing.T) {
 	// Server header — rippled's makeResponse (Handshake.cpp:408) sets
 	// it to BuildInfo::getFullVersionString(); we emit cfg.UserAgent.
 	assert.Equal(t, cfg.UserAgent, resp.Header.Get(HeaderServer))
+}
+
+func TestBuildHandshakeResponseNegotiatesFeatures(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		offer         string
+		compression   bool
+		ledgerReplay  bool
+		txReduceRelay bool
+		vpReduceRelay bool
+		wantCtl       string
+	}{
+		{
+			name:          "mutual",
+			offer:         "compr=lz4;ledgerreplay=1;txrr=1;vprr=1",
+			compression:   true,
+			ledgerReplay:  true,
+			txReduceRelay: true,
+			vpReduceRelay: true,
+			wantCtl:       "compr=lz4;ledgerreplay=1;txrr=1;vprr=1",
+		},
+		{
+			name:          "local_only",
+			compression:   true,
+			ledgerReplay:  true,
+			txReduceRelay: true,
+			vpReduceRelay: true,
+		},
+		{
+			name:  "peer_only",
+			offer: "compr=lz4;ledgerreplay=1;txrr=1;vprr=1",
+		},
+		{
+			name:          "partial_and_wrong_compression_algorithm",
+			offer:         "compr=gzip;ledgerreplay=1;txrr=1",
+			compression:   true,
+			ledgerReplay:  true,
+			vpReduceRelay: true,
+			wantCtl:       "ledgerreplay=1",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			request := emptyHandshakeRequest()
+			if tc.offer != "" {
+				request.Header.Set(HeaderProtocolCtl, tc.offer)
+			}
+			cfg := DefaultHandshakeConfig()
+			cfg.EnableCompression = tc.compression
+			cfg.EnableLedgerReplay = tc.ledgerReplay
+			cfg.EnableTxReduceRelay = tc.txReduceRelay
+			cfg.EnableVPReduceRelay = tc.vpReduceRelay
+
+			resp := BuildHandshakeResponse(request, id, make([]byte, 32), cfg, "")
+			assert.Equal(t, tc.wantCtl, resp.Header.Get(HeaderProtocolCtl))
+		})
+	}
 }
 
 // TestVerifyPeerHandshake tests handshake verification
@@ -138,7 +203,7 @@ func TestVerifyPeerHandshake(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 
 	// Create response headers from remote
-	resp := BuildHandshakeResponse(remoteId, sharedValue, cfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, cfg, "")
 
 	// Verify the handshake
 	pubKey, err := VerifyPeerHandshake(
@@ -214,7 +279,7 @@ func TestVerifyPeerHandshake_SelfConnection(t *testing.T) {
 	sharedValue := make([]byte, 32)
 
 	cfg := DefaultHandshakeConfig()
-	resp := BuildHandshakeResponse(id, sharedValue, cfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), id, sharedValue, cfg, "")
 
 	// Try to verify with same identity (self-connection)
 	_, err := VerifyPeerHandshake(
@@ -237,7 +302,7 @@ func TestVerifyPeerHandshake_NetworkMismatch(t *testing.T) {
 	// Remote uses network ID 1
 	remoteCfg := DefaultHandshakeConfig()
 	remoteCfg.NetworkID = 1
-	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, remoteCfg, "")
 
 	// Local expects network ID 2
 	localCfg := DefaultHandshakeConfig()
@@ -265,7 +330,7 @@ func TestVerifyPeerHandshake_MainnetAcceptsNonzeroNetworkIDFromPeer(t *testing.T
 
 	remoteCfg := DefaultHandshakeConfig()
 	remoteCfg.NetworkID = 1
-	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, remoteCfg, "")
 
 	localCfg := DefaultHandshakeConfig() // NetworkID=0
 	_, err := VerifyPeerHandshake(
@@ -289,7 +354,7 @@ func TestVerifyPeerHandshake_NonDefaultAcceptsMissingNetworkID(t *testing.T) {
 
 	// Remote omits NetworkID by using the default (0).
 	remoteCfg := DefaultHandshakeConfig()
-	resp := BuildHandshakeResponse(remoteId, sharedValue, remoteCfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue, remoteCfg, "")
 
 	// Local is on a non-default network.
 	localCfg := DefaultHandshakeConfig()
@@ -317,7 +382,7 @@ func TestVerifyPeerHandshake_InvalidSignature(t *testing.T) {
 	cfg := DefaultHandshakeConfig()
 
 	// Create response with sharedValue1
-	resp := BuildHandshakeResponse(remoteId, sharedValue1, cfg, "")
+	resp := BuildHandshakeResponse(emptyHandshakeRequest(), remoteId, sharedValue1, cfg, "")
 
 	// Try to verify with different shared value
 	_, err := VerifyPeerHandshake(
@@ -1369,7 +1434,7 @@ func TestHandshake_AllHeaders_RoundTrip(t *testing.T) {
 
 	t.Run("response_path", func(t *testing.T) {
 		sharedValue := make([]byte, 32)
-		resp := BuildHandshakeResponse(id, sharedValue, senderCfg, "")
+		resp := BuildHandshakeResponse(emptyHandshakeRequest(), id, sharedValue, senderCfg, "")
 		// Sender (now the responder) sees peer (now the requester) at
 		// pB and emits its own Local-IP = pA.
 		addAddressHeaders(resp.Header, senderCfg, pBSock)

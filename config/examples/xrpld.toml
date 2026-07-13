@@ -52,8 +52,8 @@ beta_rpc_api = 0
 # WebSocket keepalive ping cadence in seconds (optional — default 30)
 # websocket_ping_frequency = 30
 
-# Validators file (optional — path to validators.toml or validators.txt)
-# validators_file = "validators.toml"
+# Validators file (path to validators.toml or validators.txt)
+validators_file = "validators.toml"
 
 # Genesis file (optional — omit to use built-in defaults)
 # genesis_file = "genesis.json"
