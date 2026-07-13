@@ -794,12 +794,6 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		}
 	}
 
-	// pubProposedTransaction → transactions_proposed / accounts_proposed
-	// (NetworkOPs.cpp:1535-1544 → 3054-3090 → 3550-3611). The service
-	// only fires this callback for applied submissions and supplies the
-	// full mentioned-accounts set, so the fan-out matches rippled's
-	// pubProposedAccountTransaction which iterates every account
-	// referenced by the tx (source, destination, regular key, signers).
 	ledgerService.SetSubmittedTxCallback(func(ev service.SubmittedTxEvent) {
 		publisher.PublishProposedTransaction(
 			buildProposedTxEvent(ev),
@@ -824,7 +818,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// callback fires from both the standalone accept path and the
 		// consensus SetValidatedLedger path, so the rotator sees every
 		// validated sequence. Notify never blocks.
-		rotator.Notify(event.LedgerInfo.Sequence)
+		if rotator != nil {
+			rotator.Notify(event.LedgerInfo.Sequence)
+		}
 
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
@@ -844,24 +840,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		ledgerHashStr := upperHex(event.LedgerInfo.Hash[:])
-
 		for _, txResult := range event.TransactionResults {
-			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
-			engineResult := metaTransactionResult(metaJSON)
-
-			txEvent := &rpc.TransactionEvent{
-				Type:                "transaction",
-				EngineResult:        engineResult,
-				EngineResultCode:    0,
-				EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
-				LedgerIndex:         txResult.LedgerIndex,
-				LedgerHash:          ledgerHashStr,
-				Transaction:         txJSON,
-				Meta:                metaJSON,
-				Hash:                upperHex(txResult.TxHash[:]),
-				Validated:           txResult.Validated,
-			}
+			txEvent, engineResult := buildValidatedTransactionEvent(txResult, event, uint32(networkID))
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 
 			// Per-book delivery is tesSUCCESS-only — rippled gates
@@ -876,19 +856,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			if len(pairs) == 0 {
 				continue
 			}
-			for _, pair := range pairs {
-				ev := &rpc.OrderBookChangeEvent{
-					Type:        "transaction",
-					Status:      "closed",
-					LedgerIndex: txResult.LedgerIndex,
-					LedgerHash:  ledgerHashStr,
-					LedgerTime:  ledgerTime,
-					Transaction: txJSON,
-					Meta:        metaJSON,
-					Validated:   txResult.Validated,
-				}
-				publisher.PublishOrderBookChange(ev, pair.takerGets, pair.takerPays)
-			}
+			publisher.PublishOrderBookChange(txEvent, pairs)
 		}
 
 		// pubBookChanges → book_changes aggregate stream

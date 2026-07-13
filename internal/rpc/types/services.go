@@ -715,6 +715,23 @@ type TxTablesProvider interface {
 	UseTxTables() bool
 }
 
+// TxSearchResult reports how completely a requested ledger range was searched
+// when a transaction hash is absent.
+type TxSearchResult int
+
+const (
+	TxSearchUnknown TxSearchResult = iota
+	TxSearchSome
+	TxSearchAll
+)
+
+// RangedTransactionLookup is the optional transaction-table lookup used by the
+// tx RPC when both ledger range bounds are present. Keeping it separate from
+// TransactionSubmitter lets lightweight ledger mocks omit relational search.
+type RangedTransactionLookup interface {
+	GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionInfo, TxSearchResult, error)
+}
+
 // TransactionSubmitter handles transaction submission and retrieval.
 // FailHardSubmitter is the optional rippled-faithful surface for
 // submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
@@ -775,7 +792,7 @@ type AccountQuerier interface {
 	GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*AccountChannelsResult, error)
 	GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error)
 	GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error)
-	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
+	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error)
 }
 
 // LedgerService is the full interface for ledger operations.
@@ -873,6 +890,16 @@ type LedgerReader interface {
 	TxMapHash() [32]byte    // Transaction tree root hash
 	StateMapHash() [32]byte // Account state tree root hash
 	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
+}
+
+// LedgerTransactionSource is implemented by ledger readers that can query the
+// transaction tree of that exact ledger.
+type LedgerTransactionSource interface {
+	GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error)
+}
+
+type LedgerAmendmentRulesSource interface {
+	LedgerAmendmentRules() *amendment.Rules
 }
 
 // LedgerServerInfo contains server status information from the ledger service
@@ -987,6 +1014,8 @@ type SubmitResult struct {
 
 	// CurrentLedger is the current open ledger sequence
 	CurrentLedger uint32
+	// CurrentLedgerCloseTime is the open-ledger close time in Ripple-epoch seconds.
+	CurrentLedgerCloseTime int64
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
@@ -1055,6 +1084,9 @@ type TrustLine struct {
 	PeerAuthorized bool   `json:"peer_authorized,omitempty"`
 	Freeze         bool   `json:"freeze,omitempty"`
 	FreezePeer     bool   `json:"freeze_peer,omitempty"`
+	DeepFreeze     bool   `json:"deep_freeze,omitempty"`
+	DeepFreezePeer bool   `json:"deep_freeze_peer,omitempty"`
+	HasReserve     bool   `json:"-"`
 }
 
 // AccountLinesResult contains the result of account_lines RPC

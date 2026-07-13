@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -229,8 +230,7 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	// Persistence runs on the async worker; barrier before asserting.
 	svc.FlushPersists()
 
-	// Both adopted transactions must now be retrievable from the DB.
-	for _, wantID := range [][32]byte{id1, id2} {
+	for wantID, wantTxnIndex := range map[[32]byte]uint32{id1: 0, id2: 1} {
 		var dbHash relationaldb.Hash
 		copy(dbHash[:], wantID[:])
 		got, search, err := rm.Transaction().GetTransaction(ctx, dbHash, nil)
@@ -240,6 +240,9 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 		require.NotNil(t, got, "adopted tx row must not be nil")
 		assert.Equal(t, relationaldb.LedgerIndex(hdr.LedgerIndex), got.LedgerSeq,
 			"adopted tx must be filed under the adopted ledger's seq")
+		gotTxnIndex, ok := tx.TransactionIndexFromMetadata(got.TxnMeta)
+		require.True(t, ok, "persisted metadata must contain TransactionIndex")
+		assert.Equal(t, wantTxnIndex, gotTxnIndex)
 	}
 
 	// And the adopted ledger row itself must be persisted.
@@ -295,4 +298,50 @@ func TestAdoptLedgerWithState_PopulatesTxIndex(t *testing.T) {
 	}
 	assert.Len(t, svc.txIndex, 3,
 		"txIndex must contain exactly the adopted txs, nothing more")
+}
+
+func TestAdoptLedgerWithState_UsesMetadataTransactionIndex(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	txMap := shamap.New(shamap.TypeTransaction)
+	blob1, id1 := makeTxMetaBlobForTest(t, []byte("metadata-index-A-padding-padding"), 41)
+	blob2, id2 := makeTxMetaBlobForTest(t, []byte("metadata-index-B-padding-padding"), 7)
+	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
+	require.NoError(t, txMap.PutWithNodeType(id2, blob2, shamap.NodeTypeTransactionWithMeta))
+
+	wantIndex := map[[32]byte]uint32{id1: 41, id2: 7}
+	var traversal [][32]byte
+	require.NoError(t, txMap.ForEach(func(item *shamap.Item) bool {
+		traversal = append(traversal, item.Key())
+		return true
+	}))
+	require.Len(t, traversal, 2)
+	for ordinal, hash := range traversal {
+		require.NotEqual(t, uint32(ordinal), wantIndex[hash])
+	}
+
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+
+	var adoptedHash [32]byte
+	adoptedHash[0] = 0xF3
+	hdr := &header.LedgerHeader{
+		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
+		Hash:        adoptedHash,
+		TxHash:      txRoot,
+		AccountHash: stateRoot,
+	}
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+
+	for hash, want := range wantIndex {
+		assert.Equal(t, want, svc.txPositionIndex[hash])
+		result, err := svc.GetTransaction(hash)
+		require.NoError(t, err)
+		assert.Equal(t, want, result.TxIndex)
+	}
 }

@@ -234,6 +234,119 @@ Verification:
 - The staged merge has no unmerged paths, conflict markers, or whitespace
   errors.
 
+# Issue #1306 — shared synthetic transaction metadata
+
+## Plan
+
+- [x] Trace every transaction-bearing RPC and stream response through the shared
+      JSON rendering path on `v3.0.0`.
+- [x] Compare NFT, offer, and MPT synthetic metadata behavior with the exact local
+      rippled `3.2.0` tag.
+- [x] Move synthetic-field injection to the narrowest shared renderer and remove
+      handler-specific duplication.
+- [x] Add focused regression tests for the shared renderer and affected RPC
+      surfaces.
+- [x] Run formatting, focused RPC tests, race coverage, vet, lint, and build.
+- [x] Review the final diff for endpoint coverage, mutation safety, and rippled
+      parity.
+
+## Review
+
+Implemented one shared JSON metadata enricher for `tx`, `account_tx`, simulate,
+and validated transaction/account/book streams. Expanded ledger transactions
+receive the MPT issuance ID but not NFT synthetic fields. `transaction_entry`
+now leaves metadata untouched; despite the issue text, that is the exact rippled
+3.2.0 behavior. API v2 `account_tx` also derives `delivered_amount` from the
+unmodified transaction so `DeliverMax` response projection cannot erase the
+Payment `Amount` fallback.
+
+Oracle: clean local rippled tag `3.2.0` at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+Verification:
+
+- Focused API v1/v2 synthetic-field and endpoint tests pass.
+- `go test ./internal/rpc/... ./internal/node/...` passes.
+- `go test -race ./internal/rpc/... ./internal/node/...` passes.
+- `just fmt`, `just vet`, `just lint`, `just build-all`, and `just test-core`
+  pass; lint reports 0 issues.
+- Independent final Go and rippled-conformance reviews found no defects.
+
+## PR #1316 finalization remediation
+
+- [x] Pin the exact PR head, base, clean worktree, and clean local rippled 3.2.0 oracle.
+- [x] Review the full diff for Go correctness and protocol-surface conformance.
+- [x] Close every confirmed RPC projection, stream, CTID, binary-shape, and historical delivered-amount gap.
+- [x] Re-review the completed behavior diff and pass build, vet, and lint.
+- [x] Reconcile the advanced `v3.0.0` base and reverify the combined tree.
+- [x] Commit and push the behavior fix; require green CI at the exact remote head.
+- [x] Run the separate AI-comment cleanup phase, then verify the final remote head and CI.
+
+### Finalization review
+
+Behavior remediation is complete against the pinned PR head and clean local
+rippled 3.2.0 oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+The review covered all changed RPC and subscription surfaces, ledger-local and
+historical transaction lookup, binary parsing, CTID handling, pathfinding, and
+synthetic metadata projection. Independent Go and exact-rippled reviews are
+clean, including the final zero-`uint256` parsing and ranged-lookup error
+propagation edge cases.
+
+Verification on the stable behavior tree: `just build`, `just vet`, and
+`just lint` pass; lint reports zero issues. Per the finalization workflow, local
+test execution is intentionally deferred to CI. The local audit trail remains
+outside the repository until the final remote head and CI result are known.
+
+The advanced bases at `26d0211ed971c98fe919cb28ed5fed90dd962b67` and
+`be0e448e95d8e705a19f9d826c352e2f34cd7872` were merged after GitHub reported
+successive conflicts. The only textual conflicts were in the task log;
+both issue histories were retained. The combined persistence, node wiring, and
+RPC behavior tree preserves relational indexing after node-store failures and
+guards online-delete notification when rotation is disabled. It passes the same
+build, vet, lint, and whitespace gates.
+
+Exact-head CI then exposed stale strict-lint helpers and regression fixtures plus
+three parser/runtime defects. Dead helpers were removed, exported keylets now
+have required API documentation, account RPC mocks/assertions follow rippled's
+lookup and error semantics, XChain vectors and persisted transaction-index
+checks use the canonical encodings, and aggregate-price/path-find validation was
+corrected. Strict CI lint, repository lint, build, vet, and whitespace checks
+pass on the remediation tree; the fixes await a new exact-head CI run.
+
+The next core run exposed failures previously masked by package panics. A stored
+transaction projection omitted its API v1 hash and was fixed; the remaining
+account, book, deposit-authorized, WebSocket, and simulate failures were stale
+ledger-selection or response-decoding fixtures and were aligned with rippled
+3.2.0. Strict lint, repository lint, build, vet, and whitespace checks pass on
+this second remediation tree.
+
+A third core pass reached previously masked ledger fixtures. Ledger-data limit,
+marker, selected-header, warning JSON, and ledger-entry hash expectations were
+aligned with rippled 3.2.0 without changing production behavior. All permitted
+local gates pass again; exact test verification remains CI-only.
+
+A fourth core pass exposed the remaining shared RPC fixture assumptions. The
+ledger, NFT offer, no-ripple, transaction-entry, tx, simulate, and vault fixtures
+now model their real lookup and binary contracts. Two production adapters were
+also corrected against rippled 3.2.0: simulate restores the JSON transaction type
+after STObject validation, and tx emits only the root CTID derived from metadata,
+the server network, and rippled's exclusive bounds. A shared partial ledger hash
+was restored instead of changing the contract for unrelated suites. Strict lint,
+repository lint, build, vet, formatting, and whitespace gates pass; no local
+tests were run.
+
+The next core run had one remaining failure: the historical delivered-amount
+fixture had been applied to the neighboring MPT projection test. The resolved
+modern ledger and sequence now belong to `TestTxProjectsDeliverMax`, while the
+unrelated test is restored. Strict lint, repository lint, build, vet, formatting,
+and whitespace gates pass; exact test verification remains CI-only.
+
+Exact-head CI passed completely on behavior head `6db8603a`. The separate
+comment-only cleanup removed 28 lines of redundant narration and docstrings in
+commit `9180fe4c`; strict lint, repository lint, build, vet, formatting, and
+whitespace gates passed, followed by a fully green final CI matrix. PR #1316 is
+mergeable against unchanged base `be0e448e`.
+
 # Issue #1303 — trust-layer visibility and forward compatibility
 
 Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`

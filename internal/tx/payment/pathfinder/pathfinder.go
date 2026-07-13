@@ -68,6 +68,7 @@ type flowCalculationSettings struct {
 	fixAMMv1_2          bool
 	fixAMMOverflowOffer bool
 	openLedger          bool
+	domainID            *[32]byte
 }
 
 func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) flowCalculationSettings {
@@ -85,11 +86,20 @@ func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) fl
 }
 
 func (s flowCalculationSettings) options() []payment.RippleCalculateOption {
-	return []payment.RippleCalculateOption{
+	options := []payment.RippleCalculateOption{
 		payment.WithAmendments(s.parentCloseTime, s.fixReducedOffersV2),
 		payment.WithAMMAmendments(s.fixAMMv1_1, s.fixAMMv1_2, s.fixAMMOverflowOffer),
 		payment.WithOpenLedger(s.openLedger),
 	}
+	if s.domainID != nil {
+		options = append(options, payment.WithDomainID(s.domainID))
+	}
+	return options
+}
+
+func (pf *Pathfinder) setDomainID(domainID *[32]byte) {
+	pf.books = newBookIndexForDomain(pf.ledger, domainID)
+	pf.calculation.domainID = domainID
 }
 
 // NewPathfinder creates a new pathfinder for the given payment parameters.

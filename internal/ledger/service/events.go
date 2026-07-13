@@ -2,15 +2,25 @@ package service
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"sort"
 	"time"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
+
+const invalidTransactionIndex = ^uint32(0)
 
 // LedgerAcceptedEvent contains information about an accepted ledger and its transactions
 type LedgerAcceptedEvent struct {
 	LedgerInfo         *LedgerInfo
+	Ledger             *ledger.Ledger
 	TransactionResults []TransactionResultEvent
 }
 
@@ -35,13 +45,11 @@ type EventCallback func(event *LedgerAcceptedEvent)
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
 // publisher needs from a SubmitTransaction call.
 type SubmittedTxEvent struct {
-	RawBlob []byte
-	TxHash  [32]byte
-	// AffectedAccounts is the full mentioned-accounts set so accounts_proposed
-	// fans out to every party referenced by the tx (source, destination,
-	// regular key, signers, ...).
+	RawBlob          []byte
+	TxHash           [32]byte
 	AffectedAccounts []string
 	CurrentLedger    uint32
+	OwnerFunds       string
 	Result           Result
 }
 
@@ -187,9 +195,9 @@ func (s *Service) fireLedgerClosedHooksLocked(
 	if s.hooks.OnLedgerClosed != nil {
 		txCount := len(txResults)
 		hooks := s.hooks
-		capturedInfo := info
+		capturedInfo := *info
 		capturedRange := validatedLedgers
-		go hooks.OnLedgerClosed(capturedInfo, txCount, capturedRange)
+		go hooks.OnLedgerClosed(&capturedInfo, txCount, capturedRange)
 	}
 
 	if s.hooks.OnTransaction != nil {
@@ -203,10 +211,14 @@ func (s *Service) fireLedgerClosedHooksLocked(
 				TxBlob:           txResult.TxData,
 				AffectedAccounts: txResult.AffectedAccounts,
 			}
+			txIndex, ok := s.txPositionIndex[txResult.TxHash]
+			if !ok {
+				txIndex = invalidTransactionIndex
+			}
 			result := TxResult{
 				Applied:  txResult.Validated,
 				Metadata: txResult.MetaData,
-				TxIndex:  s.txPositionIndex[txResult.TxHash],
+				TxIndex:  txIndex,
 			}
 			go hooks.OnTransaction(txInfo, result, ledgerSeq, ledgerHash, closeTimeVal)
 		}
@@ -214,12 +226,11 @@ func (s *Service) fireLedgerClosedHooksLocked(
 }
 
 // collectTransactionResults gathers per-tx results from the closed ledger and
-// populates s.txIndex/s.txPositionIndex (hash -> seq, position). Idempotent with
+// populates s.txIndex/s.txPositionIndex (hash -> seq, metadata index). Idempotent with
 // the Apply-time write; the sole index site for the Apply-less peer-adopt path.
 func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, ledgerHash [32]byte) []TransactionResultEvent {
 	var results []TransactionResultEvent
 
-	var txIndex uint32
 	l.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
 		result := TransactionResultEvent{
 			TxHash:      txHash,
@@ -231,8 +242,11 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 		result.AffectedAccounts = extractAffectedAccounts(txData)
 
 		s.txIndex[txHash] = ledgerSeq
-		s.txPositionIndex[txHash] = txIndex
-		txIndex++
+		if txIndex, ok := txcore.TransactionIndexFromTxWithMetaBlob(txData); ok {
+			s.txPositionIndex[txHash] = txIndex
+		} else {
+			delete(s.txPositionIndex, txHash)
+		}
 
 		results = append(results, result)
 		return true
@@ -241,36 +255,176 @@ func (s *Service) collectTransactionResults(l *ledger.Ledger, ledgerSeq uint32, 
 	return results
 }
 
-// extractAffectedAccounts parses the tx blob and returns the account-typed
-// fields it mentions (Account, Destination, ...).
-func extractAffectedAccounts(txData []byte) []string {
-	if len(txData) == 0 {
+// extractAffectedAccounts returns the accounts named by the final state of each
+// affected ledger node.
+func extractAffectedAccounts(txWithMeta []byte) []string {
+	if len(txWithMeta) == 0 {
 		return nil
 	}
 
-	txJSON, err := binarycodec.Decode(hex.EncodeToString(txData))
+	_, metaData, err := txcore.SplitTxWithMetaBlob(txWithMeta)
+	if err != nil || len(metaData) == 0 {
+		return nil
+	}
+	metaJSON, err := binarycodec.Decode(hex.EncodeToString(metaData))
 	if err != nil {
 		return nil
 	}
 
 	seen := make(map[string]struct{})
-	add := func(key string) {
-		if v, ok := txJSON[key].(string); ok && v != "" {
-			seen[v] = struct{}{}
+	add := func(account string) {
+		if account != "" {
+			seen[account] = struct{}{}
 		}
 	}
 
-	add("Account")
-	add("Destination")
-	add("Authorize")
-	add("Unauthorize")
-	add("RegularKey")
-	add("Owner")
-	add("Issuer")
+	nodes, _ := metaJSON["AffectedNodes"].([]any)
+	for _, rawNode := range nodes {
+		node, _ := rawNode.(map[string]any)
+		var fields map[string]any
+		if created, ok := node["CreatedNode"].(map[string]any); ok {
+			fields, _ = created["NewFields"].(map[string]any)
+		} else if modified, ok := node["ModifiedNode"].(map[string]any); ok {
+			fields, _ = modified["FinalFields"].(map[string]any)
+		} else if deleted, ok := node["DeletedNode"].(map[string]any); ok {
+			fields, _ = deleted["FinalFields"].(map[string]any)
+		}
+		for name, value := range fields {
+			field, fieldErr := definitions.Get().FieldInstanceByName(name)
+			if fieldErr == nil && field.Type == "AccountID" {
+				account, _ := value.(string)
+				add(account)
+				continue
+			}
+			switch name {
+			case "LowLimit", "HighLimit", "TakerPays", "TakerGets":
+				amount, ok := value.(map[string]any)
+				if !ok {
+					continue
+				}
+				if idText, _ := amount["mpt_issuance_id"].(string); idText != "" {
+					if id, decodeErr := mptutil.DecodeID(idText); decodeErr == nil {
+						add(state.EncodeAccountIDSafe(mptutil.Issuer(id)))
+					}
+					continue
+				}
+				issuer, _ := amount["issuer"].(string)
+				if issuer == "" {
+					issuer, _ = amount["Issuer"].(string)
+				}
+				add(issuer)
+			case "MPTokenIssuanceID":
+				idText, _ := value.(string)
+				id, decodeErr := mptutil.DecodeID(idText)
+				if decodeErr == nil {
+					add(state.EncodeAccountIDSafe(mptutil.Issuer(id)))
+				}
+			}
+		}
+	}
 
 	accounts := make([]string, 0, len(seen))
 	for acc := range seen {
 		accounts = append(accounts, acc)
 	}
+	sort.Strings(accounts)
 	return accounts
+}
+
+func extractMentionedAccounts(rawSTTx []byte) []string {
+	if len(rawSTTx) == 0 {
+		return nil
+	}
+	txJSON, err := binarycodec.Decode(hex.EncodeToString(rawSTTx))
+	if err != nil {
+		return nil
+	}
+
+	seen := make(map[string]struct{})
+	add := func(account string) {
+		if account != "" {
+			seen[account] = struct{}{}
+		}
+	}
+	for name, value := range txJSON {
+		field, fieldErr := definitions.Get().FieldInstanceByName(name)
+		if fieldErr != nil {
+			continue
+		}
+		switch field.Type {
+		case "AccountID":
+			account, _ := value.(string)
+			add(account)
+		case "Amount":
+			amount, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			issuer, _ := amount["issuer"].(string)
+			if issuer == "" {
+				issuer, _ = amount["Issuer"].(string)
+			}
+			if issuer != "" {
+				add(issuer)
+				continue
+			}
+			issuanceID, _ := amount["mpt_issuance_id"].(string)
+			if issuanceID == "" {
+				issuanceID, _ = amount["MPTokenIssuanceID"].(string)
+			}
+			if id, decodeErr := mptutil.DecodeID(issuanceID); decodeErr == nil {
+				add(state.EncodeAccountIDSafe(mptutil.Issuer(id)))
+			}
+		}
+	}
+
+	accounts := make([]string, 0, len(seen))
+	for account := range seen {
+		accounts = append(accounts, account)
+	}
+	sort.Strings(accounts)
+	return accounts
+}
+
+func proposedOwnerFunds(rawSTTx []byte, view *ledger.Ledger) string {
+	if len(rawSTTx) == 0 || view == nil {
+		return ""
+	}
+	txJSON, err := binarycodec.Decode(hex.EncodeToString(rawSTTx))
+	if err != nil || txJSON["TransactionType"] != "OfferCreate" {
+		return ""
+	}
+	account, _ := txJSON["Account"].(string)
+	if account == "" {
+		return ""
+	}
+	encodedAmount, err := json.Marshal(txJSON["TakerGets"])
+	if err != nil {
+		return ""
+	}
+	amount, err := state.AmountFromJSON(encodedAmount)
+	if err != nil {
+		return ""
+	}
+
+	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil || len(accountBytes) != 20 {
+		return ""
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountBytes)
+
+	if amount.IsMPT() {
+		id, decodeErr := mptutil.DecodeID(amount.MPTIssuanceID())
+		if decodeErr != nil || accountID == mptutil.Issuer(id) {
+			return ""
+		}
+		funds, _ := mptutil.Funds(view, id, accountID, false)
+		return state.NewMPTAmountWithIssuanceID(funds, "", amount.MPTIssuanceID()).Value()
+	}
+	if !amount.IsNative() && amount.Issuer == account {
+		return ""
+	}
+	_, reserveBase, reserveInc := readFeesFromLedger(view)
+	return txcore.AccountFunds(view, accountID, amount, false, reserveBase, reserveInc).Value()
 }

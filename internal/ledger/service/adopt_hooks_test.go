@@ -249,8 +249,14 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 		"drained event must carry the adopted ledger's seq")
 	assert.Equal(t, adoptedHash, lastEvent.LedgerInfo.Hash,
 		"drained event must carry the adopted ledger's hash")
+	assert.True(t, lastEvent.LedgerInfo.Validated,
+		"drained event must reflect the validation transition")
+	require.NotNil(t, lastEvent.Ledger)
+	assert.True(t, lastEvent.Ledger.IsValidated())
 	assert.Len(t, lastEvent.TransactionResults, 1,
 		"drained event must carry the adopted tx results")
+	assert.True(t, lastEvent.TransactionResults[0].Validated,
+		"drained transaction results must reflect the validation transition")
 
 	// The stash must be empty after drain.
 	svc.mu.RLock()

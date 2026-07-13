@@ -15,54 +15,75 @@ import (
 type AccountChannelsMethod struct{ BaseHandler }
 
 func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		DestinationAccount string `json:"destination_account,omitempty"`
-		types.PaginationParams
+	fields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	accountRaw, ok := fields["account"]
+	if !ok {
+		return nil, types.RPCErrorMissingField("account")
 	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	// Validate destination_account parameter if provided (rippled: rpcACT_MALFORMED)
-	if request.DestinationAccount != "" {
-		if !types.IsValidXRPLAddress(request.DestinationAccount) {
-			return nil, types.RPCErrorActMalformed("Destination account malformed.")
-		}
+	account, ok := rawJSONString(accountRaw)
+	if !ok {
+		return nil, types.RPCErrorInvalidField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	markerStr, mErr := markerString(request.Marker)
-	if mErr != nil {
-		return nil, mErr
+	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
+	}
+	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
+		return nil, accountErr
+	}
+	destinationAccount := ""
+	if destinationRaw, ok := fields["destination_account"]; ok {
+		var valid bool
+		destinationAccount, valid = rawJSONString(destinationRaw)
+		if !valid {
+			return nil, types.RPCErrorInvalidField("destination_account")
+		}
+	}
+	if destinationAccount != "" && !types.IsValidClassicAddress(destinationAccount) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
 
-	// Get account channels from the ledger service
 	limit, limitErr := ReadLimitField(params, LimitAccountChannels, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
+	marker := ""
+	if markerRaw, ok := fields["marker"]; ok {
+		var valid bool
+		marker, valid = rawJSONString(markerRaw)
+		if !valid {
+			return nil, types.RPCErrorExpectedField("marker", "string")
+		}
+		if marker == "" {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
+
 	result, err := ctx.Services.Ledger.GetAccountChannels(
 		ctx.Context,
-		request.Account,
-		request.DestinationAccount,
+		account,
+		destinationAccount,
 		ledgerIndex,
 		limit,
-		markerStr,
+		marker,
 	)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
@@ -72,7 +93,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}
@@ -113,11 +134,9 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 	}
 
 	// Build response
-	response := map[string]any{
-		"account":  result.Account,
-		"channels": channels,
-	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	response := ledgerEntryResponseFields(ledger, validated)
+	response["account"] = result.Account
+	response["channels"] = channels
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

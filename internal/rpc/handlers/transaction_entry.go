@@ -4,9 +4,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // TransactionEntryMethod handles the transaction_entry RPC method.
@@ -19,49 +21,76 @@ type TransactionEntryMethod struct{ BaseHandler }
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
 func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		TxHash string `json:"tx_hash"`
-		types.LedgerSpecifier
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if request.TxHash == "" {
-		return nil, types.RPCErrorFieldNotFoundTransaction()
-	}
-
-	// Resolve the target ledger through the shared lookup (rippled
-	// RPC::lookupLedger). transaction_entry does not search the open ledger, so
-	// an open (current) target is refused with notYetImplemented before the tx
-	// is looked up (TransactionEntry.cpp:50-56, "We don't work on ledger
-	// current").
-	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	targetLedger, validated, lerr := LookupLedger(ctx, parsedLedgerSpec)
 	if lerr != nil {
 		return nil, lerr
 	}
+	fields := make(map[string]json.RawMessage)
+	if len(params) != 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
+	lookupExtra := make(map[string]any)
+	if targetLedger.IsClosed() {
+		lookupExtra["ledger_hash"] = FormatLedgerHash(targetLedger.Hash())
+		lookupExtra["ledger_index"] = targetLedger.Sequence()
+	} else {
+		lookupExtra["ledger_current_index"] = targetLedger.Sequence()
+	}
+	lookupExtra["validated"] = validated
+	txHashRaw, hasTxHash := fields["tx_hash"]
+	if !hasTxHash {
+		return nil, types.RPCErrorFieldNotFoundTransaction().WithExtra(lookupExtra)
+	}
 	if !targetLedger.IsClosed() {
-		return nil, types.RPCErrorNotYetImplemented()
+		return nil, types.RPCErrorNotYetImplemented().WithExtra(lookupExtra)
 	}
 
-	// Parse the transaction hash
-	txHashBytes, err := hex.DecodeString(request.TxHash)
-	if err != nil || len(txHashBytes) != 32 {
-		return nil, types.RPCErrorInvalidParams("Invalid tx_hash")
-	}
-
+	var txHashString string
+	_ = json.Unmarshal(txHashRaw, &txHashString)
 	var txHash [32]byte
-	copy(txHash[:], txHashBytes)
+	if txHashString != "0" {
+		txHashBytes, err := hex.DecodeString(txHashString)
+		if err != nil || len(txHashBytes) != 32 {
+			return nil, types.RPCErrorMalformedRequestBare().WithExtra(lookupExtra)
+		}
+		copy(txHash[:], txHashBytes)
+	}
 
-	// Look up the transaction and verify it is in the requested ledger.
-	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
-	if err != nil || txInfo == nil {
-		return nil, types.RPCErrorTransactionNotFound("Transaction not found.")
+	var txInfo *types.TransactionInfo
+	var lookupErr error
+	if source, ok := targetLedger.(types.LedgerTransactionSource); ok {
+		txData, found, readErr := source.GetLedgerTransaction(txHash)
+		if readErr != nil {
+			return nil, types.RPCErrorInternal("Failed to read transaction data")
+		}
+		if found {
+			txIndex, hasIndex := txcore.TransactionIndexFromTxWithMetaBlob(txData)
+			if !hasIndex {
+				txIndex = ^uint32(0)
+			}
+			txInfo = &types.TransactionInfo{
+				TxData:      txData,
+				LedgerIndex: targetLedger.Sequence(),
+				LedgerHash:  FormatLedgerHash(targetLedger.Hash()),
+				Validated:   validated,
+				TxIndex:     txIndex,
+			}
+		}
+	} else {
+		txInfo, lookupErr = ctx.Services.Ledger.GetTransaction(txHash)
+	}
+	if lookupErr != nil || txInfo == nil {
+		return nil, types.RPCErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)
 	}
 	targetSeq := targetLedger.Sequence()
 	if txInfo.LedgerIndex != targetSeq {
-		return nil, types.RPCErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq))
+		return nil, types.RPCErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
 	}
 
 	// Parse the stored transaction data (VL-encoded binary or JSON)
@@ -70,20 +99,10 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 		return nil, types.RPCErrorInternal("Failed to parse transaction data")
 	}
 
-	ledgerHash := txInfo.LedgerHash
-	if ledgerHash == "" {
-		h := targetLedger.Hash()
-		ledgerHash = fmt.Sprintf("%X", h)
-	}
+	ledgerHash := FormatLedgerHash(targetLedger.Hash())
 
-	// Inject DeliveredAmount for Payment transactions
-	if storedTx.Meta != nil {
-		InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
-	}
-
-	response := map[string]any{
-		"tx_json": storedTx.TxJSON,
-	}
+	response := maps.Clone(lookupExtra)
+	response["tx_json"] = projectTransactionJSON(storedTx.TxJSON, strings.ToUpper(txHashString), ctx.ApiVersion)
 
 	// Metadata key: "meta" for v2+, "metadata" for v1
 	if ctx.ApiVersion > 1 {
@@ -94,13 +113,13 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 
 	if ctx.ApiVersion > 1 {
 		// v2: hash at root, conditional ledger_hash/ledger_index/close_time_iso
-		response["hash"] = strings.ToUpper(request.TxHash)
-		response["validated"] = txInfo.Validated
+		response["hash"] = strings.ToUpper(txHashString)
+		response["validated"] = validated
 
 		if ledgerHash != "" {
 			response["ledger_hash"] = ledgerHash
 		}
-		if txInfo.Validated {
+		if validated {
 			response["ledger_index"] = txInfo.LedgerIndex
 			closeTimeSec := targetLedger.CloseTime()
 			if closeTimeSec > 0 {

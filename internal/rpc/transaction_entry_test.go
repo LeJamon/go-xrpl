@@ -129,6 +129,10 @@ func newTransactionEntryTestServices(mock *mockLedgerServiceTE) *types.ServiceCo
 // Based on rippled TransactionEntry_test.cpp testBadInput (no params case).
 func TestTransactionEntryMissingTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
+	current := newMockLedgerReaderTE(mock.currentLedgerIndex)
+	current.closed = false
+	current.validated = false
+	mock.addLedger(current)
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
@@ -150,12 +154,6 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 		{
 			name:   "nil params",
 			params: nil,
-		},
-		{
-			name: "tx_hash is empty string",
-			params: map[string]any{
-				"tx_hash": "",
-			},
 		},
 	}
 
@@ -187,6 +185,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp (DEADBEEF case and too-short/too-long cases).
 func TestTransactionEntryInvalidTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
+	mock.addLedger(newMockLedgerReaderTE(mock.validatedLedgerIndex))
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
@@ -201,6 +200,10 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 		name   string
 		txHash string
 	}{
+		{
+			name:   "empty string",
+			txHash: "",
+		},
 		{
 			name:   "too short - DEADBEEF",
 			txHash: "DEADBEEF",
@@ -236,6 +239,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid tx_hash")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid tx_hash: %s", tc.txHash)
+			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
 		})
 	}
 }
@@ -398,23 +402,29 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 		Services:   services,
 	}
 
-	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
-	params := map[string]any{
-		"tx_hash":      txHashStr,
-		"ledger_index": "validated",
+	for _, txHash := range []string{
+		"E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05",
+		"0",
+	} {
+		t.Run(txHash, func(t *testing.T) {
+			params := map[string]any{
+				"tx_hash":      txHash,
+				"ledger_index": "validated",
+			}
+			paramsJSON, _ := json.Marshal(params)
+
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+
+			assert.Nil(t, result, "Expected nil result when tx is not found")
+			require.NotNil(t, rpcErr, "Expected RPC error when tx is not found")
+			assert.Contains(t, rpcErr.Message, "not found")
+			// rippled TransactionEntry.cpp:71 emits a bare "transactionNotFound" token
+			// (distinct from the `tx` command's "txnNotFound"=29) with no numeric code.
+			assert.Equal(t, "transactionNotFound", rpcErr.ErrorString)
+			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
+			assert.True(t, rpcErr.IsBareToken())
+		})
 	}
-	paramsJSON, _ := json.Marshal(params)
-
-	result, rpcErr := method.Handle(ctx, paramsJSON)
-
-	assert.Nil(t, result, "Expected nil result when tx is not found")
-	require.NotNil(t, rpcErr, "Expected RPC error when tx is not found")
-	assert.Contains(t, rpcErr.Message, "not found")
-	// rippled TransactionEntry.cpp:71 emits a bare "transactionNotFound" token
-	// (distinct from the `tx` command's "txnNotFound"=29) with no numeric code.
-	assert.Equal(t, "transactionNotFound", rpcErr.ErrorString)
-	assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
-	assert.True(t, rpcErr.IsBareToken())
 }
 
 // TestTransactionEntryTxNotInRequestedLedger tests that a transaction found in a different

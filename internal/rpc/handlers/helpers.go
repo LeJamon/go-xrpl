@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -111,10 +112,115 @@ func ParseParams(params json.RawMessage, dest any) *types.RPCError {
 	if params == nil {
 		return nil
 	}
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return rpcErr
+	}
+	if _, ok := dest.(interface{ UsesLedgerSpecifier() }); ok {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(params, &fields); err == nil {
+			delete(fields, "ledger")
+			delete(fields, "ledger_hash")
+			delete(fields, "ledger_index")
+			if stripped, err := json.Marshal(fields); err == nil {
+				params = stripped
+			}
+		}
+	}
 	if err := json.Unmarshal(params, dest); err != nil {
 		return types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return nil
+}
+
+func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, *types.RPCError) {
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return types.LedgerSpecifier{}, false, rpcErr
+	}
+	hasSelector, rpcErr := ledgerRequestHasSelector(params)
+	if rpcErr != nil {
+		return types.LedgerSpecifier{}, false, rpcErr
+	}
+	if !hasSelector {
+		return types.LedgerSpecifier{}, false, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		return types.LedgerSpecifier{}, false, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	var spec types.LedgerSpecifier
+	if raw, ok := fields["ledger_hash"]; ok {
+		_ = json.Unmarshal(raw, &spec.LedgerHash)
+		return spec, true, nil
+	}
+	name := "ledger_index"
+	raw, ok := fields[name]
+	if !ok {
+		name = "ledger"
+		raw = fields[name]
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		value = strings.TrimSpace(string(raw))
+		if value == "-0" {
+			value = "0"
+		}
+	}
+	if name == "ledger" {
+		spec.Ledger = types.LedgerIndex(value)
+	} else {
+		spec.LedgerIndex = types.LedgerIndex(value)
+	}
+	return spec, true, nil
+}
+
+func validateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
+	if params == nil {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(params))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	var invalid bool
+	var walk func(any)
+	walk = func(current any) {
+		if invalid {
+			return
+		}
+		switch typed := current.(type) {
+		case json.Number:
+			raw := typed.String()
+			if strings.ContainsAny(raw, ".eE") {
+				return
+			}
+			if strings.HasPrefix(raw, "-") {
+				_, err := strconv.ParseInt(raw, 10, 32)
+				invalid = err != nil
+				return
+			}
+			_, err := strconv.ParseUint(raw, 10, 32)
+			invalid = err != nil
+		case map[string]any:
+			for _, child := range typed {
+				walk(child)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	if invalid {
+		return types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	return nil
+}
+
+func ValidateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
+	return validateJsonCppIntegerRange(params)
 }
 
 // RequireAccount checks that the account parameter is non-empty.
@@ -137,73 +243,104 @@ func ValidateAccount(account string) *types.RPCError {
 	return nil
 }
 
-// normalizeLedgerSpecifier folds rippled's legacy combined `ledger` field into
-// LedgerHash/LedgerIndex (RPCHelpers.cpp:367-374): a string longer than 12
-// characters becomes a ledger_hash, anything else a ledger_index. When present,
-// the legacy field overwrites the matching slot even if an explicit ledger_hash
-// or ledger_index was also supplied, leaving the other slot untouched; the
-// hash-before-index resolution that follows then gives a long legacy `ledger`
-// priority over an explicit ledger_index, matching rippled.
-func normalizeLedgerSpecifier(spec types.LedgerSpecifier) types.LedgerSpecifier {
+// normalizeLedgerSpecifier folds the legacy ledger field into the selector used
+// by the service. Exactly 64 characters denote a hash; all other strings denote
+// an index.
+func normalizeLedgerSpecifier(spec types.LedgerSpecifier) (types.LedgerSpecifier, string, string) {
+	hashField := "ledger_hash"
+	indexField := "ledger_index"
 	if spec.Ledger != "" {
-		if legacy := spec.Ledger.String(); len(legacy) > 12 {
+		if legacy := spec.Ledger.String(); len(legacy) == 64 {
 			spec.LedgerHash = legacy
+			hashField = "ledger"
 		} else {
 			spec.LedgerIndex = spec.Ledger
+			indexField = "ledger"
 		}
 		spec.Ledger = ""
 	}
-	return spec
+	return spec, hashField, indexField
+}
+
+func validateLedgerSpecifierConflict(spec types.LedgerSpecifier) *types.RPCError {
+	count := 0
+	for _, present := range []bool{spec.Ledger != "", spec.LedgerHash != "", spec.LedgerIndex != ""} {
+		if present {
+			count++
+		}
+	}
+	if count <= 1 {
+		return nil
+	}
+	if spec.Ledger != "" {
+		return types.RPCErrorInvalidParams("Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.")
+	}
+	return types.RPCErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
+}
+
+func parseLedgerIndex(index string) (uint64, error) {
+	if strings.HasPrefix(index, "+") && len(index) > 1 {
+		index = index[1:]
+	}
+	return strconv.ParseUint(index, 10, 32)
 }
 
 // resolveLedgerSelector returns the string ledger selector the service query
-// path expects, mirroring rippled's ledgerFromRequest (RPCHelpers.cpp:367-402).
-// ledger_hash takes precedence over ledger_index when both are supplied, and the
-// hash is threaded through verbatim so the service resolves the specific named
-// ledger (its 64-char-hex branch) rather than collapsing to the latest validated
-// one. A malformed hash maps to rpcINVALID_PARAMS, matching rippled's
-// ledgerHashMalformed. With neither field set the request falls back to the open
-// "current" ledger.
+// path expects. Multiple selector fields are rejected, hashes are threaded
+// through verbatim, and an absent selector defaults to the current ledger.
 func resolveLedgerSelector(spec types.LedgerSpecifier) (string, *types.RPCError) {
-	spec = normalizeLedgerSpecifier(spec)
+	if err := validateLedgerSpecifierConflict(spec); err != nil {
+		return "", err
+	}
+	var hashField, indexField string
+	spec, hashField, indexField = normalizeLedgerSpecifier(spec)
 	if spec.LedgerHash != "" {
 		if len(spec.LedgerHash) != 64 {
-			return "", types.RPCErrorInvalidParams("ledgerHashMalformed")
+			return "", types.RPCErrorExpectedField(hashField, "hex string")
 		}
 		if _, err := hex.DecodeString(spec.LedgerHash); err != nil {
-			return "", types.RPCErrorInvalidParams("ledgerHashMalformed")
+			return "", types.RPCErrorExpectedField(hashField, "hex string")
 		}
 		return spec.LedgerHash, nil
 	}
 	if spec.LedgerIndex != "" {
-		return spec.LedgerIndex.String(), nil
+		index := spec.LedgerIndex.String()
+		switch index {
+		case "current", "validated", "closed":
+			return index, nil
+		}
+		sequence, err := parseLedgerIndex(index)
+		if err != nil {
+			return "", types.RPCErrorExpectedField(indexField, "string or number")
+		}
+		return strconv.FormatUint(sequence, 10), nil
 	}
 	return "current", nil
 }
 
 // LookupLedger resolves the ledger a request targets and returns the reader plus
-// whether that ledger is validated, mirroring rippled's RPC::lookupLedger /
-// ledgerFromRequest (RPCHelpers.cpp:355-402). ledger_hash takes precedence over
-// ledger_index; with neither supplied it defaults to the open (current) ledger.
-// Errors use rippled's tokens: ledgerHashMalformed / ledgerIndexMalformed
-// (rpcINVALID_PARAMS) for bad selectors and ledgerNotFound (rpcLGR_NOT_FOUND)
-// for an absent ledger. It is the single resolution point the direct-ledger
-// handlers share in place of hand-rolled validated/current/closed/numeric
-// switches.
+// whether that ledger is validated. Multiple selector fields are rejected and
+// an absent selector defaults to the current ledger. Invalid selectors use
+// field-specific rpcINVALID_PARAMS messages; absent ledgers use
+// ledgerNotFound (rpcLGR_NOT_FOUND).
 func LookupLedger(ctx *types.RPCContext, spec types.LedgerSpecifier) (types.LedgerReader, bool, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, false, err
 	}
 	svc := ctx.Services.Ledger
-	spec = normalizeLedgerSpecifier(spec)
+	if err := validateLedgerSpecifierConflict(spec); err != nil {
+		return nil, false, err
+	}
+	var hashField, indexField string
+	spec, hashField, indexField = normalizeLedgerSpecifier(spec)
 
 	if spec.LedgerHash != "" {
 		if len(spec.LedgerHash) != 64 {
-			return nil, false, types.RPCErrorInvalidParams("ledgerHashMalformed")
+			return nil, false, types.RPCErrorExpectedField(hashField, "hex string")
 		}
 		hashBytes, err := hex.DecodeString(spec.LedgerHash)
 		if err != nil {
-			return nil, false, types.RPCErrorInvalidParams("ledgerHashMalformed")
+			return nil, false, types.RPCErrorExpectedField(hashField, "hex string")
 		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
@@ -238,9 +375,9 @@ func LookupLedger(ctx *types.RPCContext, spec types.LedgerSpecifier) (types.Ledg
 		}
 		return l, l.IsValidated(), nil
 	default:
-		seq, perr := strconv.ParseUint(idx, 10, 32)
+		seq, perr := parseLedgerIndex(idx)
 		if perr != nil {
-			return nil, false, types.RPCErrorInvalidParams("ledgerIndexMalformed")
+			return nil, false, types.RPCErrorExpectedField(indexField, "string or number")
 		}
 		l, err := svc.GetLedgerBySequence(uint32(seq))
 		if err != nil || l == nil {
@@ -295,21 +432,6 @@ func FormatLedgerHash(hash [32]byte) string {
 // closed ledgers.
 func isOpenLedgerSelector(selector string) bool {
 	return selector == "current" || selector == ""
-}
-
-// fillLedgerFields writes the ledger-identity fields of an RPC response,
-// mirroring rippled's RPC::lookupLedger. For the open ledger it emits only
-// ledger_current_index (rippled withholds the interim hash and index); for a
-// closed ledger it emits ledger_hash and ledger_index. The validated flag is
-// always emitted. ledgerHash must already be the formatted uppercase-hex hash.
-func fillLedgerFields(response map[string]any, selector string, ledgerHash string, ledgerSeq uint32, validated bool) {
-	if isOpenLedgerSelector(selector) {
-		response["ledger_current_index"] = ledgerSeq
-	} else {
-		response["ledger_hash"] = ledgerHash
-		response["ledger_index"] = ledgerSeq
-	}
-	response["validated"] = validated
 }
 
 // FormatHash formats arbitrary bytes as uppercase hex string.
@@ -471,17 +593,21 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	return st, nil
 }
 
+const (
+	deliveredAmountLedgerCutoff    uint32 = 4_594_095
+	deliveredAmountCloseTimeCutoff int64  = 446_000_000
+)
+
+// SyntheticMetadataContext identifies the ledger that produced transaction
+// metadata. CloseTime is expressed in Ripple-epoch seconds.
+type SyntheticMetadataContext struct {
+	LedgerSequence uint32
+	CloseTime      int64
+}
+
 // InjectDeliveredAmount adds the synthetic snake_case "delivered_amount" field
-// to a transaction's metadata, matching rippled's RPC::insertDeliveredAmount.
-// It is emitted only for a successful Payment, CheckCash, or AccountDelete
-// (rippled's canHaveDeliveredAmount: those three types plus tesSUCCESS; CheckCash
-// also requires fix1623, which is enabled on every ledger go-xrpl serves). The
-// value is the real serialized sfDeliveredAmount metadata field when present,
-// otherwise the transaction's Amount (rippled's ledger-index / close-time gate
-// always holds for served ledgers), otherwise the literal "unavailable". The
-// real PascalCase "DeliveredAmount" metadata field is left untouched — only the
-// synthetic snake_case field is written. nil meta is a no-op.
-func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
+// to metadata for an eligible successful transaction.
+func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any, ctx SyntheticMetadataContext) {
 	if meta == nil {
 		return
 	}
@@ -504,7 +630,8 @@ func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
 
 	if da, ok := meta["DeliveredAmount"]; ok {
 		meta["delivered_amount"] = da
-	} else if amount, ok := txJSON["Amount"]; ok {
+	} else if amount, ok := txJSON["Amount"]; ok &&
+		(ctx.LedgerSequence >= deliveredAmountLedgerCutoff || ctx.CloseTime > deliveredAmountCloseTimeCutoff) {
 		meta["delivered_amount"] = amount
 	} else {
 		meta["delivered_amount"] = "unavailable"

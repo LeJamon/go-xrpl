@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/bits"
 
@@ -40,6 +41,8 @@ type SubmitResult struct {
 
 	// CurrentLedger is the current open ledger sequence
 	CurrentLedger uint32
+	// CurrentLedgerCloseTime is the open-ledger close time in Ripple-epoch seconds.
+	CurrentLedgerCloseTime int64
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
@@ -172,20 +175,15 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
-	// Fan out to the WebSocket transactions_proposed / accounts_proposed
-	// publisher. Mirrors rippled NetworkOPs::processTransaction
-	// (NetworkOPs.cpp:1535-1544) which calls pubProposedTransaction only
-	// when the tx applied — tem/ter/tel failures that never touched the
-	// open ledger are not announced. Mentioned accounts come from the
-	// decoded blob so accounts_proposed fans to source, destination,
-	// regular key, signers (mirrors STTx::getMentionedAccounts via the
-	// existing extractor used on the validated transactions stream).
-	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && outcome.Applied {
+	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && outcome.Applied &&
+		mayPublishProposedTransaction(ptx.Parsed.GetCommon().GetFlags()) {
+		current := s.openLedgerView.Current()
 		ev := SubmittedTxEvent{
 			RawBlob:          append([]byte(nil), rawBlob...),
 			TxHash:           ptx.Hash,
-			AffectedAccounts: extractAffectedAccounts(rawBlob),
+			AffectedAccounts: extractMentionedAccounts(rawBlob),
 			CurrentLedger:    currentSeq,
+			OwnerFunds:       proposedOwnerFunds(rawBlob, current),
 			Result: Result{
 				Code:    int(outcome.Result),
 				Name:    outcome.Result.String(),
@@ -200,6 +198,10 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	}
 
 	return result, nil
+}
+
+func mayPublishProposedTransaction(flags uint32) bool {
+	return flags&tx.TfInnerBatchTxn == 0
 }
 
 // readFeesFromLedger reads fee settings from the FeeSettings SLE in the given
@@ -230,6 +232,12 @@ func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncremen
 	}
 
 	return feeSettings.GetBaseFee(), feeSettings.GetReserveBase(), feeSettings.GetReserveIncrement()
+}
+
+// FeesFromLedger returns the fee and reserve settings carried by a specific
+// ledger, falling back to the protocol defaults when its FeeSettings entry is unavailable.
+func FeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
+	return readFeesFromLedger(l)
 }
 
 // GetCurrentFees returns the current fee settings read from the FeeSettings
@@ -484,14 +492,85 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	if !found {
 		return nil, fmt.Errorf("%w: not found in ledger", svcerr.ErrTxnNotFound)
 	}
+	txIndex, ok := tx.TransactionIndexFromTxWithMetaBlob(txData)
+	if !ok {
+		txIndex = invalidTransactionIndex
+	}
 
 	return &TransactionResult{
 		TxData:      txData,
 		LedgerIndex: ledgerSeq,
 		LedgerHash:  l.Hash(),
 		Validated:   l.IsValidated(),
-		TxIndex:     s.txPositionIndex[txHash],
+		TxIndex:     txIndex,
 	}, nil
+}
+
+// GetTransactionWithRange preserves the in-memory lookup fast path, then uses
+// the relational transaction table to report rippled-compatible searched-all
+// semantics when the hash is absent. The hash lookup itself is deliberately
+// unrestricted by the supplied range.
+func (s *Service) GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionResult, relationaldb.TxSearchResult, error) {
+	result, cacheErr := s.GetTransaction(txHash)
+	if cacheErr == nil {
+		return result, relationaldb.TxSearchAll, nil
+	}
+	if !errors.Is(cacheErr, svcerr.ErrTxnNotFound) {
+		return nil, relationaldb.TxSearchUnknown, cacheErr
+	}
+	if s.relationalDB == nil || s.relationalDB.Transaction() == nil {
+		return nil, relationaldb.TxSearchUnknown, cacheErr
+	}
+
+	dbResult, searched, err := s.relationalDB.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), &relationaldb.LedgerRange{
+		Min: relationaldb.LedgerIndex(minLedger),
+		Max: relationaldb.LedgerIndex(maxLedger),
+	})
+	if err != nil {
+		return nil, searched, err
+	}
+	if dbResult == nil {
+		return nil, searched, svcerr.ErrTxnNotFound
+	}
+
+	vlTx, err := tx.EncodeWithVL(dbResult.RawTxn)
+	if err != nil {
+		return nil, searched, fmt.Errorf("encode transaction length: %w", err)
+	}
+	vlMeta, err := tx.EncodeWithVL(dbResult.TxnMeta)
+	if err != nil {
+		return nil, searched, fmt.Errorf("encode transaction metadata length: %w", err)
+	}
+	txData := make([]byte, 0, len(vlTx)+len(vlMeta))
+	txData = append(txData, vlTx...)
+	txData = append(txData, vlMeta...)
+
+	txIndex, ok := tx.TransactionIndexFromMetadata(dbResult.TxnMeta)
+	if !ok {
+		txIndex = invalidTransactionIndex
+	}
+
+	var ledgerHash [32]byte
+	validated := false
+	if ledgerRepo := s.relationalDB.Ledger(); ledgerRepo != nil && dbResult.LedgerSeq != 0 {
+		ledgerInfo, ledgerErr := ledgerRepo.GetLedgerInfoBySeq(ctx, dbResult.LedgerSeq)
+		if ledgerErr != nil {
+			return nil, searched, fmt.Errorf("get transaction ledger: %w", ledgerErr)
+		}
+		if ledgerInfo == nil {
+			return nil, searched, errors.New("get transaction ledger: missing ledger header")
+		}
+		ledgerHash = [32]byte(ledgerInfo.Hash)
+		validated = dbResult.Status == "validated"
+	}
+
+	return &TransactionResult{
+		TxData:      txData,
+		LedgerIndex: uint32(dbResult.LedgerSeq),
+		LedgerHash:  ledgerHash,
+		Validated:   validated,
+		TxIndex:     txIndex,
+	}, searched, nil
 }
 
 // StoreTransaction stores a transaction in the current open ledger
@@ -558,13 +637,14 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	applyResult := engine.Apply(transaction)
 
 	result := &SubmitResult{
-		Result:          applyResult.Result,
-		Applied:         applyResult.Applied,
-		Fee:             applyResult.Fee,
-		Metadata:        applyResult.Metadata,
-		Message:         applyResult.Message,
-		CurrentLedger:   s.openLedger.Sequence(),
-		ValidatedLedger: 0,
+		Result:                 applyResult.Result,
+		Applied:                applyResult.Applied,
+		Fee:                    applyResult.Fee,
+		Metadata:               applyResult.Metadata,
+		Message:                applyResult.Message,
+		CurrentLedger:          s.openLedger.Sequence(),
+		CurrentLedgerCloseTime: rippleEpochSeconds(s.openLedger.CloseTime()),
+		ValidatedLedger:        0,
 	}
 
 	if s.validatedLedger != nil {
@@ -630,7 +710,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 	copy(accountID[:], accountIDBytes)
 
 	// Set defaults
-	if limit == 0 || limit > 400 {
+	if limit == 0 {
 		limit = 200
 	}
 
