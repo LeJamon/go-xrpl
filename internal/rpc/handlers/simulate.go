@@ -232,21 +232,20 @@ func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (
 	// STTx ctor parity — rippled Simulate.cpp:332-343. A parse failure or
 	// missing-required-field surface as
 	// `error: "invalidTransaction"` + `error_exception: <reason>`
-	// instead of flowing into the engine as a TER. The duplicate
-	// Validate() vs the engine's own Validate is intentional: it
-	// guarantees the error envelope shape matches rippled even when the
-	// underlying message text differs.
+	// instead of flowing into the engine as a TER. This early structural
+	// validation guarantees the error envelope shape matches rippled even
+	// when type-specific engine preflight is rules-aware.
 	parsedTx, parseErr := tx.ParseJSON(txJSON)
 	if parseErr != nil {
 		return nil, types.RPCErrorInvalidTransaction(parseErr.Error())
 	}
 	var validateErr error
-	if validator, ok := parsedTx.(tx.RulesAwareValidator); ok {
+	if preflighter, ok := parsedTx.(tx.RulesAwarePreflighter); ok {
 		var rules *amendment.Rules
 		if source, ok := ctx.Services.Ledger.(types.TransactionRulesSource); ok {
 			rules = source.TransactionRules()
 		}
-		validateErr = validator.ValidateRules(rules)
+		validateErr = preflighter.PreflightWithRules(rules)
 	} else {
 		validateErr = parsedTx.Validate()
 	}

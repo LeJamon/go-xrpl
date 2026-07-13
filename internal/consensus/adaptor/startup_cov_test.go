@@ -472,7 +472,7 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	ad := newTestAdaptor(t)
 	mm := NewModeManager(ad)
 
-	overlay, err := peermanagement.New()
+	overlay, err := peermanagement.New(peermanagement.WithListenAddr("127.0.0.1:0"))
 	require.NoError(t, err)
 
 	eng := &mockEngine{}

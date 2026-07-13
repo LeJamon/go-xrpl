@@ -40,29 +40,32 @@ func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
 // XRP it compares against the liquid balance; for IOU it compares held funds
 // (issuers have unlimited supply).
 // Reference: rippled AMMCreate.cpp line 153-163
-func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amount, xrpLiquid int64) bool {
+func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amount, xrpLiquid int64) (bool, ter.Result) {
 	if amount.IsNative() {
-		return xrpLiquid < amount.Drops()
+		return xrpLiquid < amount.Drops(), ter.TesSUCCESS
 	}
 	if amount.IsMPT() {
 		requested, ok := amount.MPTRaw()
 		if !ok {
-			return true
+			return false, ter.TefINTERNAL
 		}
 		held, result := mptFunds(view, accountID, amount, true)
-		return result != ter.TesSUCCESS || held < requested
+		if result == ter.TefINTERNAL {
+			return false, result
+		}
+		return result != ter.TesSUCCESS || held < requested, ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return true
+		return true, ter.TesSUCCESS
 	}
 	if accountID == issuerID {
-		return false
+		return false, ter.TesSUCCESS
 	}
 
 	held := tx.AccountFunds(view, accountID, amount, true, 0, 0)
-	return held.Compare(amount) < 0
+	return held.Compare(amount) < 0, ter.TesSUCCESS
 }
 
 // isLPToken reports whether the amount is issued by an AMM pseudo-account.

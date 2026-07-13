@@ -71,6 +71,59 @@ resolved by validations-first precedence.
 Remaining known gap: 15k sustained smoothness is paced by build latency on
 single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
 
+# Issue #1280 — FlagsMasker completion audit
+
+- [x] Inventory all 75 registered transaction types
+- [x] Compare all 23 rippled 3.2.0 `getFlagsMask` overrides and the base mask
+- [x] Check for invalid-bit masks left solely in `Validate`
+- [x] Fix the residual MPTokensV2-dependent Payment mask
+- [x] Pin exact masks and bad-fee precedence
+- [x] Run transaction tests, vet, and build
+
+## Finalization fixes
+
+- [x] Match the mask predicate to the MPT Amount, not the legacy issuance field
+- [x] Preserve rippled's ordered MPTokensV1/V2 Payment preflight semantics
+- [x] Route MPTokensV2 Payments through the MPT-capable flow engine
+- [x] Port valid-fee flag, path, SendMax, disabled-gate, and routing regressions
+- [x] Remove the legacy standalone Payment issuance field and builder plumbing
+- [x] Reject malformed MPT JSON, noAccount paths, and invalid MPT offer images
+- [x] Preserve internal storage errors through MPT authorization and funding paths
+- [x] Run focused tests, full transaction/integration coverage, build, vet, lint,
+      and final rippled 3.2.0 review
+- [x] Resolve the uncached CI goimports alignment failure and re-run lint
+- [x] Fix the terminal resource-manager Start/Stop race exposed by core CI
+- [x] Run focused race tests, strict lint, and the core package suite
+
+## Review
+
+Finalized PR #1308 against local rippled v3.2.0. Payment now uses the MPT Amount
+as the authoritative asset identity, preserves rippled's V1/V2 preflight order
+and TER precedence, and routes MPTokensV2 through Flow while retaining the V1
+direct-transfer path. The standalone Go-only issuance field was removed.
+
+The final review also fixed MPT wire/path serialization, cross-asset and
+MPT-to-MPT offer crossing, destination checks, noAccount rejection, MPT offer
+invariant parsing, pseudo-account authorization gating, canonical integral MPT
+JSON parsing, and propagation of ledger storage/parse errors through shared MPT,
+Offer, Check, AMM, and FlowCross code.
+
+Verification:
+
+- Focused state, payment, engine, invariant, mptutil, offer, check, AMM, MPT,
+  deposit-preauth, and delegate suites pass uncached.
+- `just build-all`, `just build-nocgo`, `just vet`, and `just lint` pass.
+- The CI-only goimports finding in `strand.go` was corrected and reproduced
+  locally with the formatter check before repushing.
+- The core CI race exposed a pre-existing terminal lifecycle gap in the resource
+  manager. Start/Stop are now serialized against late startup, and the exact
+  core `-race` shard plus repeated manager/Components lifecycle tests pass.
+- The full module test run passes outside the established out-of-scope
+  conformance failures.
+- Final conformance: 941 pass / 117 fail overall, 879 pass / 0 fail in scope;
+  the 117 failures remain the out-of-scope Batch, Vault, XChain, and XChainSim
+  suites.
+
 # Issue #1287 — MPTokensV2 amendment-on engine support
 
 ## Plan
@@ -153,3 +206,30 @@ Verification:
   conformance suites. `just conformance --failing` reports 941 pass / 117 fail
   overall, with 879 pass / 0 fail in scope; the 117 failures remain confined to
   Batch, Vault, XChain, and XChainSim.
+
+## PR #1309 base conflict resolution
+
+- [x] Fetch the current `v3.0.0` base and inventory every conflicting hunk.
+- [x] Resolve conflicts without regressing the rippled v3.2.0 behavior fixes.
+- [x] Review the merged diff and run CI-pinned lint, vet, and build verification.
+- [x] Commit and push the merge resolution; confirm GitHub reports the PR
+      mergeable.
+
+### Conflict-resolution review
+
+- Merged the current `v3.0.0` base at
+  `e4017e7e49e4e4d111e52343050d347ba0b85ddf`; the base and remote head were
+  re-fetched and unchanged immediately before commit.
+- Resolved the five conflicts in Payment preflight/apply code, the engine
+  dispatch seam, transaction interfaces, and MPTokensV2 regression coverage.
+  The combined result uses one `RulesAwarePreflighter` path for standalone,
+  Batch-inner, and simulate validation; MPTokensV1 stays on direct transfer and
+  MPTokensV2 routes through Flow.
+- Rechecked the conflict decisions against rippled v3.2.0 `Payment.cpp` and
+  retained both the base branch's broader MPT safety coverage and PR #1309's
+  unique destination/Flow-routing regressions.
+- `go test ./internal/tx/payment/...` and `go test ./internal/tx/engine/...`
+  pass on the resolved tree.
+- `just build`, `just vet`, and `just lint` pass; lint reports 0 issues.
+- The staged merge has no unmerged paths, conflict markers, or whitespace
+  errors.

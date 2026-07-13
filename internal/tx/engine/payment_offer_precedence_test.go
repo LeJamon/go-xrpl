@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
@@ -109,6 +110,36 @@ func TestPaymentPrecedence_MPTMaskBeforeZeroAmount(t *testing.T) {
 	if got := e.preflight(p); got != ter.TemINVALID_FLAG {
 		t.Fatalf("preflight = %v, want TemINVALID_FLAG", got)
 	}
+}
+
+func TestPaymentPrecedence_MPTokensV2MaskBeforeFee(t *testing.T) {
+	amount := state.NewMPTAmountWithIssuanceID(100, precedenceGenesisAddr, mptIDA)
+
+	t.Run("MPTokensV1 rejects limit quality before bad fee", func(t *testing.T) {
+		rules := amendment.NewRulesBuilder().
+			FromPreset(amendment.PresetAllSupported).
+			Disable(amendment.FeatureMPTokensV2).
+			Build()
+		p := preflightPayment(precedenceGenesisAddr, amount)
+		p.Fee = "-10"
+		p.SetFlags(payment.PaymentFlagLimitQuality)
+		if got := preflightEngine(rules).preflight(p); got != ter.TemINVALID_FLAG {
+			t.Fatalf("preflight = %v, want TemINVALID_FLAG", got)
+		}
+	})
+
+	t.Run("MPTokensV2 allows limit quality so bad fee wins", func(t *testing.T) {
+		rules := amendment.NewRulesBuilder().
+			FromPreset(amendment.PresetAllSupported).
+			Enable(amendment.FeatureMPTokensV2).
+			Build()
+		p := preflightPayment(precedenceGenesisAddr, amount)
+		p.Fee = "-10"
+		p.SetFlags(payment.PaymentFlagLimitQuality)
+		if got := preflightEngine(rules).preflight(p); got != ter.TemBAD_FEE {
+			t.Fatalf("preflight = %v, want TemBAD_FEE", got)
+		}
+	})
 }
 
 // P7: the MPT+Paths temMALFORMED check precedes the zero-amount temBAD_AMOUNT

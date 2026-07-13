@@ -302,6 +302,9 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Re
 					return ter.TefINTERNAL
 				}
 				funds, result := mptFunds(view, accountID, *amt, false)
+				if result == ter.TefINTERNAL {
+					return result
+				}
 				if result != ter.TesSUCCESS || funds < requested {
 					return TecUNFUNDED_AMM
 				}
@@ -889,6 +892,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 			funds, result := mptFunds(ctx.View, accountID, depositAmount1, false)
+			if result == ter.TefINTERNAL {
+				return result
+			}
 			if result != ter.TesSUCCESS || funds < requested {
 				return TecUNFUNDED_AMM
 			}
@@ -910,6 +916,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 			funds, result := mptFunds(ctx.View, accountID, depositAmount2, false)
+			if result == ter.TefINTERNAL {
+				return result
+			}
 			if result != ter.TesSUCCESS || funds < requested {
 				return TecUNFUNDED_AMM
 			}
@@ -995,7 +1004,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 			if err != nil {
 				return ter.TefINTERNAL
 			}
-			// Skip if depositor IS the issuer.
 			if accountID != issuerID {
 				if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View); err != nil {
 					return TecUNFUNDED_AMM

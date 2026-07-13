@@ -16,13 +16,7 @@ import (
 // applyMPTPayment applies an MPT direct payment.
 // Reference: rippled Payment.cpp doApply() mptDirect path + View.cpp rippleSendMPT/rippleCreditMPT
 func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
-	// Get the MPT issuance ID: prefer the legacy field, fall back to Amount's embedded ID
-	mptIDHex := p.MPTokenIssuanceID
-	if mptIDHex == "" {
-		mptIDHex = p.Amount.MPTIssuanceID()
-	}
-
-	// Parse MPTokenIssuanceID
+	mptIDHex := p.Amount.MPTIssuanceID()
 	issuanceIDBytes, err := hex.DecodeString(mptIDHex)
 	if err != nil || len(issuanceIDBytes) != 24 {
 		return ter.TecOBJECT_NOT_FOUND

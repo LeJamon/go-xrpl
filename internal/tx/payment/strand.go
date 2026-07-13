@@ -6,6 +6,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
+var noAccountID = [20]byte{19: 1}
+
 // StrandContext tracks state during strand building for loop detection.
 // Reference: rippled Steps.h StrandContext
 type StrandContext struct {
@@ -137,8 +139,7 @@ const (
 	PathTypeCurrency uint8 = 0x10
 	// PathTypeIssuer indicates path element has issuer
 	PathTypeIssuer uint8 = 0x20
-	// PathTypeMPT indicates path element has an MPTokenIssuanceID.
-	PathTypeMPT uint8 = 0x40
+	PathTypeMPT    uint8 = 0x40
 )
 
 // ToStrands converts payment paths to executable strands
@@ -164,21 +165,13 @@ func ToStrands(
 	offerCrossing bool,
 	parentCloseTime ...uint32,
 ) ([]Strand, ter.Result) {
-	// Validate source and destination are not XRP pseudo-accounts
-	// Reference: rippled PaySteps.cpp:148-150
-	var xrpAccount [20]byte
-	if src == xrpAccount || dst == xrpAccount {
-		return nil, ter.TemBAD_PATH
-	}
-
 	dstIssue := GetIssue(dstAmt)
 	// If dstIssue has zero issuer for non-XRP currency, default to dst.
 	// RippleState balances store zero issuer; the destination account is the implied issuer.
-	// Reference: rippled treats noAccount() issuer as the destination for deliver amounts.
 	if !dstIssue.IsXRP() && !dstIssue.IsMPT && dstIssue.Issuer == [20]byte{} {
 		dstIssue.Issuer = dst
 	}
-	if !dstIssue.IsConsistent() {
+	if dstIssue.Issuer == noAccountID || !dstIssue.IsConsistent() {
 		return nil, ter.TemBAD_PATH
 	}
 
@@ -189,10 +182,13 @@ func ToStrands(
 		if !issue.IsXRP() && !issue.IsMPT && issue.Issuer == [20]byte{} {
 			issue.Issuer = src
 		}
-		if !issue.IsConsistent() {
+		if issue.Issuer == noAccountID || !issue.IsConsistent() {
 			return nil, ter.TemBAD_PATH
 		}
 		srcIssue = &issue
+	}
+	if result := validateStrandEndpoints(src, dst, dstIssue, srcIssue); result != ter.TesSUCCESS {
+		return nil, result
 	}
 
 	var strands []Strand
@@ -332,6 +328,9 @@ func ToStrandWithContext(
 	path []PathStep,
 	isDefaultPath bool,
 ) (Strand, ter.Result) {
+	if result := validateStrandEndpoints(src, dst, dstIssue, srcIssue); result != ter.TesSUCCESS {
+		return nil, result
+	}
 	// Path-element shape validation runs here, at strand-construction time (during
 	// doApply), not in Payment preflight — mirroring rippled toStrand. This lets
 	// preclaim codes (tecNO_DST, tecDST_TAG_NEEDED, …) win over a malformed path,
@@ -344,6 +343,20 @@ func ToStrandWithContext(
 		return nil, ter.TemBAD_PATH
 	}
 	return ctx.buildStrandSteps(src, dst, dstIssue, srcIssue, normPath)
+}
+
+func validateStrandEndpoints(src, dst [20]byte, dstIssue Issue, srcIssue *Issue) ter.Result {
+	var xrpAccount [20]byte
+	if src == xrpAccount || dst == xrpAccount || src == noAccountID || dst == noAccountID {
+		return ter.TemBAD_PATH
+	}
+	if dstIssue.Issuer == noAccountID || !dstIssue.IsConsistent() {
+		return ter.TemBAD_PATH
+	}
+	if srcIssue != nil && (srcIssue.Issuer == noAccountID || !srcIssue.IsConsistent()) {
+		return ter.TemBAD_PATH
+	}
+	return ter.TesSUCCESS
 }
 
 // validatePathElementShapes rejects malformed path elements with temBAD_PATH,
@@ -374,6 +387,18 @@ func validatePathElementShapes(path []PathStep) ter.Result {
 		}
 		if hasAccount && elem.Account == xrpPseudoAccount {
 			return ter.TemBAD_PATH
+		}
+		if hasIssuer {
+			issuer, err := state.DecodeAccountID(elem.Issuer)
+			if err == nil && issuer == noAccountID {
+				return ter.TemBAD_PATH
+			}
+		}
+		if hasAccount {
+			account, err := state.DecodeAccountID(elem.Account)
+			if err == nil && account == noAccountID {
+				return ter.TemBAD_PATH
+			}
 		}
 		if hasCurrency && hasIssuer {
 			isXRPCurrency := elem.Currency == "XRP"

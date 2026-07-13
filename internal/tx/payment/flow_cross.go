@@ -123,7 +123,10 @@ func FlowCross(
 	// 3. Limit to available balance
 	//
 	// sendMax = min(takerGets * transferRate, balance)
-	inStartBalance := accountFundsForCross(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
+	inStartBalance, fundsResult := accountFundsForCross(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
+	if fundsResult != ter.TesSUCCESS {
+		return FlowCrossResult{Result: fundsResult, Sandbox: sandbox}
+	}
 
 	sendMax := ToEitherAmount(takerGets)
 
@@ -435,36 +438,39 @@ func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
 // AccountFundsInSandbox returns account funds with BalanceHook applied.
 // Matches rippled's accountFunds(psb, ...) in CreateOffer.cpp line 432.
 // BalanceHook subtracts DeferredCredits so self-crossing round-trips report zero.
-func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+func AccountFundsInSandbox(sb *PaymentSandbox, accountID [20]byte, amount tx.Amount, fhZeroIfFrozen bool, reserveBase, reserveIncrement uint64) (tx.Amount, ter.Result) {
 	if amount.IsMPT() {
 		return accountFundsForCross(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 	}
 	rawBalance := tx.AccountFunds(sb, accountID, amount, fhZeroIfFrozen, reserveBase, reserveIncrement)
 
 	if amount.IsNative() {
-		return sb.BalanceHook(accountID, [20]byte{}, rawBalance)
+		return sb.BalanceHook(accountID, [20]byte{}, rawBalance), ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return rawBalance
+		return rawBalance, ter.TesSUCCESS
 	}
-	return sb.BalanceHook(accountID, issuerID, rawBalance)
+	return sb.BalanceHook(accountID, issuerID, rawBalance), ter.TesSUCCESS
 }
 
-func accountFundsForCross(view tx.LedgerView, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, reserveBase, reserveIncrement uint64) tx.Amount {
+func accountFundsForCross(view tx.LedgerView, accountID [20]byte, amount tx.Amount, zeroIfFrozen bool, reserveBase, reserveIncrement uint64) (tx.Amount, ter.Result) {
 	if !amount.IsMPT() {
-		return tx.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement)
+		return tx.AccountFunds(view, accountID, amount, zeroIfFrozen, reserveBase, reserveIncrement), ter.TesSUCCESS
 	}
 	id, ok := decodeMPTID(amount.MPTIssuanceID())
 	if !ok {
-		return state.NewMPTAmountWithIssuanceID(0, amount.Issuer, amount.MPTIssuanceID())
+		return state.NewMPTAmountWithIssuanceID(0, amount.Issuer, amount.MPTIssuanceID()), ter.TefINTERNAL
 	}
 	funds, result := mptutil.Funds(view, id, accountID, zeroIfFrozen)
+	if result == ter.TefINTERNAL {
+		return tx.Amount{}, result
+	}
 	if result != ter.TesSUCCESS {
 		funds = 0
 	}
-	return state.NewMPTAmountWithIssuanceID(funds, amount.Issuer, amount.MPTIssuanceID())
+	return state.NewMPTAmountWithIssuanceID(funds, amount.Issuer, amount.MPTIssuanceID()), ter.TesSUCCESS
 }
 
 // rateAsAmount converts a uint32 transfer rate to an Amount, matching rippled's

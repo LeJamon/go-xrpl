@@ -28,7 +28,6 @@ type PaymentBuilder struct {
 	flags         uint32
 	memos         []tx.MemoWrapper
 	credentialIDs []string
-	mptIssuanceID string
 	domainID      *string
 }
 
@@ -185,12 +184,6 @@ func (b *PaymentBuilder) CredentialIDs(ids []string) *PaymentBuilder {
 	return b
 }
 
-// MPTIssuanceID sets the MPT issuance ID for MPT direct payments.
-func (b *PaymentBuilder) MPTIssuanceID(id string) *PaymentBuilder {
-	b.mptIssuanceID = id
-	return b
-}
-
 // DomainID sets the permissioned domain ID for this payment.
 // The domainIDHex should be a 64-character hex string.
 func (b *PaymentBuilder) DomainID(domainIDHex string) *PaymentBuilder {
@@ -251,9 +244,6 @@ func (b *PaymentBuilder) Build() tx.Transaction {
 	}
 	if b.credentialIDs != nil {
 		payment.CredentialIDs = b.credentialIDs
-	}
-	if b.mptIssuanceID != "" {
-		payment.MPTokenIssuanceID = b.mptIssuanceID
 	}
 	if b.domainID != nil {
 		payment.DomainID = b.domainID

@@ -158,8 +158,18 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	}
 	reserveNeeded := accountReserve(config, account.OwnerCount+1)
 	xrpLiquid := int64(account.Balance) - int64(reserveNeeded)
-	if insufficientBalance(view, accountID, a.Amount, xrpLiquid) ||
-		insufficientBalance(view, accountID, a.Amount2, xrpLiquid) {
+	insufficient, result := insufficientBalance(view, accountID, a.Amount, xrpLiquid)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if insufficient {
+		return TecUNFUNDED_AMM
+	}
+	insufficient, result = insufficientBalance(view, accountID, a.Amount2, xrpLiquid)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if insufficient {
 		return TecUNFUNDED_AMM
 	}
 

@@ -287,6 +287,10 @@ func flattenAsset(a Asset) map[string]any {
 	}
 }
 
+func flattenMemos(memos []MemoWrapper) []map[string]any {
+	return flattenStructSlice(reflect.ValueOf(memos))
+}
+
 // flattenStructSlice converts a slice of structs to []map[string]any for STArray serialization.
 // This is needed because the binary codec expects arrays to contain maps, not Go structs.
 // It uses JSON tags to determine field names in the map.

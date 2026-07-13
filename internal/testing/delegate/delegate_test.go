@@ -268,7 +268,6 @@ func TestDelegate_PaymentMPT(t *testing.T) {
 
 	// gw mints MPT to alice on behalf via bob.
 	mint := paymenttx.NewPayment(gw.Address, alice.Address, m.MPTAmount(50))
-	mint.MPTokenIssuanceID = m.IssuanceID()
 	mint.GetCommon().Delegate = bob.Address
 	require.Equal(t, "tesSUCCESS", env.SubmitSignedWith(mint, bob).Code)
 }

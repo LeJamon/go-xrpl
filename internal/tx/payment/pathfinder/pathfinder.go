@@ -111,7 +111,6 @@ func NewPathfinder(
 	)
 }
 
-// NewPathfinderForIssue creates a pathfinder whose source asset may be an MPT.
 func NewPathfinderForIssue(
 	ledger tx.LedgerView,
 	cache *RippleLineCache,

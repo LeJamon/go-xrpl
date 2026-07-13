@@ -203,7 +203,7 @@ func checkMPTokenAmounts(data []byte) *InvariantViolation {
 	return nil
 }
 
-// offerForInvariant preserves the sign of both XRP and IOU legs so NoBadOffers
+// offerForInvariant preserves the sign of XRP, IOU, and MPT legs so NoBadOffers
 // can flag a negative amount, mirroring rippled's STAmount comparison.
 type offerForInvariant struct {
 	takerPaysIsXRP    bool
@@ -225,9 +225,24 @@ func parseOfferForInvariant(data []byte) (*offerForInvariant, error) {
 		if len(f.Value) == 0 {
 			return fmt.Errorf("offer truncated at Amount value")
 		}
-		// Bit 63 is the not-XRP flag (clear for XRP) and bit 62 is the sign
-		// (set for positive). For IOU the not-XRP bit is set and the sign is
-		// decoded from the 48-byte value.
+		// Bit 63 is the IOU flag, bit 62 is the sign, and bit 61 marks MPT.
+		// MPT and XRP both have bit 63 clear, so distinguish MPT first.
+		if f.Value[0]&0x80 == 0 && f.Value[0]&0x20 != 0 {
+			amt, err := state.ParseMPTAmountBinary(f.Value)
+			if err != nil {
+				return fmt.Errorf("parse MPT amount: %w", err)
+			}
+			negative := amt.Signum() < 0
+			switch f.FieldCode {
+			case 4:
+				result.takerPaysNegative = negative
+			case 5:
+				result.takerGetsNegative = negative
+			}
+			return nil
+		}
+		// For IOU the not-XRP bit is set and the sign is decoded from the
+		// 48-byte value.
 		isXRP := (f.Value[0] & 0x80) == 0
 		if isXRP {
 			if len(f.Value) < 8 {

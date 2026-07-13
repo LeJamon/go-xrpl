@@ -61,12 +61,10 @@ type RulesPreflighter interface {
 	PreflightRules(rules *amendment.Rules) error
 }
 
-// RulesAwareValidator is implemented by transaction types whose preflight body
-// interleaves rules-dependent and rules-independent checks. The engine invokes
-// ValidateRules in place of Validate followed by PreflightRules, preserving the
-// transactor's exact check order without storing ledger rules on the transaction.
-type RulesAwareValidator interface {
-	ValidateRules(rules *amendment.Rules) error
+// RulesAwarePreflighter is implemented by transaction types whose complete
+// type-specific preflight body must interleave amendment-dependent checks.
+type RulesAwarePreflighter interface {
+	PreflightWithRules(rules *amendment.Rules) error
 }
 
 // ExtraFeaturesChecker is implemented by transaction types with an amendment
@@ -479,7 +477,7 @@ func (c *Common) ToMap() map[string]any {
 		m["LastLedgerSequence"] = *c.LastLedgerSequence
 	}
 	if len(c.Memos) > 0 {
-		m["Memos"] = c.Memos
+		m["Memos"] = flattenMemos(c.Memos)
 	}
 	if c.NetworkID != nil {
 		m["NetworkID"] = *c.NetworkID

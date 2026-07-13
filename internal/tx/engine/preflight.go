@@ -87,7 +87,7 @@ func (e *Engine) preflight(tx txcore.Transaction) (result ter.Result) {
 
 // preflightStructure runs the ledger-state-independent preflight checks in
 // rippled's invokePreflight order: the amendment gate and T::checkExtraFeatures,
-// then preflight1 (which invokes preflight0), then the per-type Validate body,
+// then preflight1 (which invokes preflight0), then the per-type preflight body,
 // then the preflight2 structural (multi-sign) checks. Signature verification
 // itself runs separately in verifySignatures. This is a pure function of the
 // transaction fields and the active rules, which is what makes its verdict safe
@@ -123,9 +123,8 @@ func (e *Engine) preflightStructure(tx txcore.Transaction, common *txcore.Common
 		return ter.TemBAD_AMOUNT
 	}
 
-	// T::preflight — the tx-type-specific body. Most types use Validate followed
-	// by RulesPreflighter; types with interleaved checks use RulesAwareValidator.
-	if result := validatePreflightBody(tx, rules); result != ter.TesSUCCESS {
+	// T::preflight — the tx-type-specific body.
+	if result := runTypePreflight(tx, rules); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -233,17 +232,17 @@ func checkPreflightRules(tx txcore.Transaction, rules *amendment.Rules) ter.Resu
 	return ter.TesSUCCESS
 }
 
-func validatePreflightBody(transaction txcore.Transaction, rules *amendment.Rules) ter.Result {
-	if validator, ok := transaction.(txcore.RulesAwareValidator); ok {
-		if err := validator.ValidateRules(rules); err != nil {
+func runTypePreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
+	if rp, ok := tx.(txcore.RulesAwarePreflighter); ok {
+		if err := rp.PreflightWithRules(rules); err != nil {
 			return parseValidationError(err)
 		}
 		return ter.TesSUCCESS
 	}
-	if err := transaction.Validate(); err != nil {
+	if err := tx.Validate(); err != nil {
 		return parseValidationError(err)
 	}
-	return checkPreflightRules(transaction, rules)
+	return checkPreflightRules(tx, rules)
 }
 
 // BatchOuter is implemented by transaction types whose inner transactions
@@ -259,11 +258,11 @@ type BatchOuter interface {
 // preflight(stx, tapBATCH)): the amendment gate, checkExtraFeatures, preflight0's
 // flags mask, and the full T::preflight body all run — tapBATCH only makes
 // preflight1/preflight2 skip the fee and signature checks. So this must run every
-// per-type preflight seam (FlagsMasker, CheckExtraFeatures, RulesPreflighter), not
-// just Validate(): a type that carries part of its preflight body in PreflightRules
-// (e.g. Clawback, MPTokenIssuanceSet) would otherwise have that half silently
-// skipped for an inner tx, letting a malformed inner apply. Any failure collapses
-// to temINVALID_INNER_BATCH at the call site, so the intra-order here is immaterial.
+// per-type preflight seam (FlagsMasker, CheckExtraFeatures, RulesPreflighter,
+// RulesAwarePreflighter), not just Validate(): a type that carries part of its
+// preflight body in another seam would otherwise have that validation silently
+// skipped for an inner tx. Any failure collapses to temINVALID_INNER_BATCH at the
+// call site, so the intra-order here is immaterial.
 // Fee/signature/multi-sign/inner-flag rejections stay skipped (inner txs carry
 // Fee=0, no signature, no multi-signers, tfInnerBatchTxn set — all validated by
 // Batch.Validate()).
@@ -278,11 +277,6 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 			return ter.TemDISABLED
 		}
 	}
-	// The per-type seams (checkExtraFeatures, flags mask, PreflightRules) run for
-	// inner transactions exactly as they do on the outer path, mirroring rippled
-	// which preflights each inner via the full invokePreflight<T>. Without them an
-	// inner tx that adopts a seam would skip that validation, since inner txs
-	// reach Apply directly and never run preclaim.
 	if result := checkExtraFeatures(innerTx, rules); result != ter.TesSUCCESS {
 		return result
 	}
@@ -298,7 +292,7 @@ func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := checkDelegate(common, rules); result != ter.TesSUCCESS {
 		return result
 	}
-	return validatePreflightBody(innerTx, rules)
+	return runTypePreflight(innerTx, rules)
 }
 
 // preflightInnerBatchFlag rejects a transaction reaching the outer preflight

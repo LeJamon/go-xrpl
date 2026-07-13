@@ -585,57 +585,11 @@ func (a Amount) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements custom JSON unmarshaling
 func (a *Amount) UnmarshalJSON(data []byte) error {
-	// Try as string first (XRP drops)
-	var strVal string
-	if err := json.Unmarshal(data, &strVal); err == nil {
-		drops, err := strconv.ParseInt(strVal, 10, 64)
-		if err != nil {
-			return fmt.Errorf("invalid XRP drops value: %w", err)
-		}
-		a.xrp = XRPAmount{drops: drops}
-		a.Native = true
-		return nil
-	}
-
-	// Try as object (issued currency or MPT amount)
-	var objVal struct {
-		Value         string `json:"value"`
-		Currency      string `json:"currency"`
-		Issuer        string `json:"issuer"`
-		MPTIssuanceID string `json:"mpt_issuance_id"`
-	}
-	if err := json.Unmarshal(data, &objVal); err != nil {
-		return err
-	}
-
-	// MPT amounts have mpt_issuance_id instead of currency/issuer
-	if objVal.MPTIssuanceID != "" {
-		// Parse value as integer for MPT (whole number amounts)
-		raw, err := strconv.ParseInt(objVal.Value, 10, 64)
-		if err != nil {
-			// Fallback to IOU parsing if not a plain integer
-			iou, perr := parseIOUValueFromString(objVal.Value)
-			if perr != nil {
-				return perr
-			}
-			a.iou = iou
-		} else {
-			a.iou = NewIOUAmountValue(raw, 0) // normalized for binary codec
-			a.mptRaw = &raw
-		}
-		a.mptIssuanceID = strings.ToUpper(objVal.MPTIssuanceID)
-		a.Native = false
-		return nil
-	}
-
-	iou, err := parseIOUValueFromString(objVal.Value)
+	parsed, err := AmountFromJSON(data)
 	if err != nil {
 		return err
 	}
-	a.iou = iou
-	a.Currency = objVal.Currency
-	a.Issuer = objVal.Issuer
-	a.Native = false
+	*a = parsed
 	return nil
 }
 

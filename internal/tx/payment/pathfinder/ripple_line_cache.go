@@ -65,7 +65,6 @@ type PathFindTrustLine struct {
 	Currency string
 }
 
-// PathFindMPT describes an account's relationship to an MPT issuance.
 type PathFindMPT struct {
 	ID          [24]byte
 	ZeroBalance bool
@@ -159,7 +158,6 @@ func (c *RippleLineCache) GetRippleLines(account [20]byte, direction LineDirecti
 	return lines
 }
 
-// GetMPTs returns the MPT issuances and holdings owned by account.
 func (c *RippleLineCache) GetMPTs(account [20]byte) []PathFindMPT {
 	c.mu.RLock()
 	cached, ok := c.mpts[account]

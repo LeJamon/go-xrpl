@@ -120,7 +120,11 @@ func (o *OfferCreate) takerCross(
 	// saTakerGets) at the top of flowCross. Reference: rippled CreateOffer.cpp
 	// flowCross lines 329-335.
 	disallowUnfunded := offerDisallowUnfunded(saTakerGets, ctx.AccountID)
-	if disallowUnfunded && isAmountZeroOrNegative(payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)) {
+	startingFunds, fundsResult := payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+	if fundsResult != ter.TesSUCCESS {
+		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}
+	}
+	if disallowUnfunded && isAmountZeroOrNegative(startingFunds) {
 		return crossOutcome{terminated: true, result: ter.TecUNFUNDED_OFFER, applyMain: false}
 	}
 
@@ -243,9 +247,12 @@ func (o *OfferCreate) takerCross(
 	// on-ledger balance is non-zero.
 	var takerInBalance tx.Amount
 	if crossResult.Sandbox != nil {
-		takerInBalance = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(crossResult.Sandbox, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 	} else {
-		takerInBalance = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+		takerInBalance, fundsResult = payment.AccountFundsInSandbox(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+	}
+	if fundsResult != ter.TesSUCCESS {
+		return crossOutcome{terminated: true, result: fundsResult, applyMain: false}
 	}
 
 	// Apply FlowCross sandbox changes (crossing plus the removable-offer

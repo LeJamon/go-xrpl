@@ -16,8 +16,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// offerSLE encodes an Offer ledger entry. takerPays and takerGets are either a
-// drops string (XRP) or a {currency,issuer,value} map (IOU).
 func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
 	t.Helper()
 	hexStr, err := binarycodec.Encode(map[string]any{
@@ -43,6 +41,13 @@ func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
 
 func usdAmount(value string) map[string]any {
 	return map[string]any{"currency": "USD", "issuer": addrIssuer, "value": value}
+}
+
+func mptOfferAmount(value string) map[string]any {
+	return map[string]any{
+		"mpt_issuance_id": "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+		"value":           value,
+	}
 }
 
 // TestNoBadOffers_ZeroAmountsAccepted: rippled's isBad accepts zero amounts; an
@@ -109,6 +114,21 @@ func TestNoBadOffers_XRPForXRP(t *testing.T) {
 	}}
 	if v := checkNoBadOffers(entries); v == nil {
 		t.Fatal("expected NoBadOffers violation for XRP-for-XRP offer")
+	}
+}
+
+func TestNoBadOffers_MPTIsNotXRP(t *testing.T) {
+	entries := []InvariantEntry{{
+		EntryType: "Offer",
+		After:     offerSLE(t, "1000000", mptOfferAmount("5")),
+	}}
+	if v := checkNoBadOffers(entries); v != nil {
+		t.Fatalf("positive XRP/MPT offer must be accepted, got violation %v", v)
+	}
+
+	entries[0].After = offerSLE(t, "1000000", mptOfferAmount("-5"))
+	if v := checkNoBadOffers(entries); v == nil {
+		t.Fatal("expected NoBadOffers violation for negative MPT TakerGets")
 	}
 }
 

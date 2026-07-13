@@ -290,3 +290,24 @@ func TestAMMWithdrawCreatesMPTWithWaivedTransferFee(t *testing.T) {
 	require.Zero(t, destinationHolding.Flags)
 	require.Equal(t, uint32(3), ctx.Account.OwnerCount)
 }
+
+func TestAMMInsufficientBalancePropagatesCorruptMPTHolding(t *testing.T) {
+	view := newAMMMPTView()
+	var issuerID, holderID [20]byte
+	copy(issuerID[:], []byte("amm-mpt-issuer-00001"))
+	copy(holderID[:], []byte("amm-mpt-holder-00001"))
+	insertAMMMPTAccount(t, view, issuerID, 100_000_000, 0)
+	insertAMMMPTAccount(t, view, holderID, 100_000_000, 0)
+	id := ammMPTID(7, issuerID)
+	insertAMMMPTIssuance(t, view, id, entry.LsfMPTCanTrade|entry.LsfMPTCanTransfer, 0)
+	view.data[keylet.MPTokenByID(id, holderID).Key] = []byte{1}
+	amount := state.NewMPTAmountWithIssuanceID(
+		1,
+		state.EncodeAccountIDSafe(issuerID),
+		mptutil.EncodeID(id),
+	)
+
+	insufficient, result := insufficientBalance(view, holderID, amount, 0)
+	require.False(t, insufficient)
+	require.Equal(t, ter.TefINTERNAL, result)
+}

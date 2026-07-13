@@ -224,7 +224,10 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 			return ter.TefINTERNAL
 		}
 		if accountID != mptutil.Issuer(id) {
-			funds, _ := mptutil.Funds(view, id, accountID, true)
+			funds, result := mptutil.Funds(view, id, accountID, true)
+			if result == ter.TefINTERNAL {
+				return result
+			}
 			if funds <= 0 {
 				return ter.TecUNFUNDED_OFFER
 			}

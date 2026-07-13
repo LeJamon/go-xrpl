@@ -233,6 +233,27 @@ func TestAmountFromJSON_MPT(t *testing.T) {
 	}
 }
 
+func TestAmountUnmarshalJSONUsesCanonicalMPTParser(t *testing.T) {
+	decode := func(value string) (Amount, error) {
+		var amount Amount
+		err := json.Unmarshal([]byte(
+			`{"mpt_issuance_id":"`+testMPTID+`","value":"`+value+`"}`,
+		), &amount)
+		return amount, err
+	}
+
+	if _, err := decode("1.5"); err == nil {
+		t.Fatal("fractional MPT value must be rejected")
+	}
+	amount, err := decode("922337203685477580e1")
+	if err != nil {
+		t.Fatalf("integral scientific MPT value: %v", err)
+	}
+	if raw, ok := amount.MPTRaw(); !ok || raw != 9223372036854775800 {
+		t.Fatalf("MPTRaw = %d/%v, want 9223372036854775800/true", raw, ok)
+	}
+}
+
 // GHSA-xv89-94jf-8vx2: scaling the mantissa by a positive exponent must not
 // wrap uint64 and slip past the range guard. maxMPTAmount (math.MaxInt64,
 // ~9.22e18) sits above the uint64 wrap threshold (2^64/10 ~ 1.84e18), so a

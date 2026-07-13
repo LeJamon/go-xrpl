@@ -25,7 +25,8 @@ func (p *Payment) checkFlowDestPreamble(ctx *tx.ApplyContext, senderID, destID [
 	return ter.TesSUCCESS
 }
 
-// applyFlowPayment applies a payment that uses the flow engine.
+// applyFlowPayment applies payments routed through Flow, including IOU,
+// cross-currency, and MPTokensV2 payments.
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp
 func (p *Payment) applyFlowPayment(ctx *tx.ApplyContext) ter.Result {
 	// Validate the amount
@@ -49,6 +50,12 @@ func (p *Payment) applyFlowPayment(ctx *tx.ApplyContext) ter.Result {
 
 	if p.Amount.IsNative() {
 		return p.applyRipplePayment(ctx, senderAccountID, destAccountID)
+	}
+
+	if !p.Amount.IsMPT() {
+		if _, err := state.DecodeAccountID(p.Amount.Issuer); err != nil {
+			return ter.TemBAD_ISSUER
+		}
 	}
 
 	// Check destination exists (needed for DepositAuth check and destination flags)

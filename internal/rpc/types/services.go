@@ -1026,7 +1026,6 @@ type Amount struct {
 	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
 }
 
-// IsNative returns true if this is an XRP amount.
 func (a Amount) IsNative() bool {
 	return a.MPTIssuanceID == "" && a.Currency == "" && a.Issuer == ""
 }
