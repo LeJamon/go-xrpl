@@ -5,7 +5,9 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -222,8 +224,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				if ownerErr != nil {
 					continue
 				}
-				if offer.TakerGets.IsZero() ||
-					s.isDeepFrozen(sb, offerOwner, s.book.In.Currency, s.book.In.Issuer) {
+				if offer.TakerGets.IsZero() || s.isDeepFrozenIssue(sb, offerOwner, s.book.In) {
 					ofrsToRm[offerKey] = true
 					s.recordPermRm(offerKey)
 					continue
@@ -303,8 +304,7 @@ func (s *BookStep) firstCrossableTipQuality(sb *PaymentSandbox, ofrsToRm, visite
 				if derr != nil {
 					continue
 				}
-				if offer.TakerGets.IsZero() ||
-					s.isDeepFrozen(sb, offerOwner, s.book.In.Currency, s.book.In.Issuer) {
+				if offer.TakerGets.IsZero() || s.isDeepFrozenIssue(sb, offerOwner, s.book.In) {
 					continue
 				}
 				funds := s.getOfferFundedAmount(sb, offer)
@@ -474,7 +474,8 @@ func (s *BookStep) eraseDanglingOffer(view *PaymentSandbox, pageKey keylet.Keyle
 	}
 	page.Indexes = newIndexes
 
-	isBookDir := page.TakerPaysCurrency != [20]byte{} || page.TakerGetsCurrency != [20]byte{}
+	isBookDir := page.TakerPaysCurrency != [20]byte{} || page.TakerGetsCurrency != [20]byte{} ||
+		page.TakerPaysMPT != nil || page.TakerGetsMPT != nil
 	data, err := state.SerializeDirectoryNode(page, isBookDir)
 	if err != nil {
 		return
@@ -628,6 +629,13 @@ func (s *BookStep) isDeepFrozen(sb *PaymentSandbox, account [20]byte, currency s
 	return (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0
 }
 
+func (s *BookStep) isDeepFrozenIssue(sb *PaymentSandbox, account [20]byte, issue Issue) bool {
+	if issue.IsMPT {
+		return mptutil.IsFrozen(sb, issue.MPTID, account)
+	}
+	return s.isDeepFrozen(sb, account, issue.Currency, issue.Issuer)
+}
+
 // getOfferFundedAmount returns the actual amount an offer can deliver based on owner's balance.
 // This matches rippled's calculation of funded amounts for offers.
 // For IOU output, returns zero if the owner's trust line is frozen (matching fhZERO_IF_FROZEN).
@@ -679,6 +687,20 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 		// handles the actual cap — capping here breaks ownerPaysTransferFee cases
 		// where ownerGives > offerTakerGets.
 		return NewXRPEitherAmount(available)
+	}
+
+	if s.book.Out.IsMPT {
+		var funds int64
+		var result ter.Result
+		if offerOwner == s.book.Out.Issuer {
+			funds, result = mptutil.IssuerFundsToSelfIssue(sb, s.book.Out.MPTID)
+		} else {
+			funds, result = mptutil.Funds(sb, s.book.Out.MPTID, offerOwner, true)
+		}
+		if result != ter.TesSUCCESS || funds <= 0 {
+			return ZeroMPTEitherAmount(s.book.Out.MPTID)
+		}
+		return NewMPTEitherAmount(funds, s.book.Out.MPTID)
 	}
 
 	// For IOU TakerGets: check owner's trustline balance with issuer
@@ -790,7 +812,7 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 
 	// For IOU/IOU: only check if TakerPays < TakerGets
 	if !inIsXRP && !outIsXRP {
-		if ofrIn.Compare(ofrOut) >= 0 {
+		if toNumberAmount(ofrIn).Compare(toNumberAmount(ofrOut)) >= 0 {
 			return false
 		}
 	}
@@ -823,6 +845,10 @@ func (s *BookStep) shouldRmSmallIncreasedQOffer(sb *PaymentSandbox, offer *state
 	if inIsXRP {
 		// XRP: minPositiveAmount = 1 drop
 		if effectiveIn.XRP > 1 {
+			return false
+		}
+	} else if s.book.In.IsMPT {
+		if effectiveIn.MPT > 1 {
 			return false
 		}
 	} else {

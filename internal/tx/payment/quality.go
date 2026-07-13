@@ -52,17 +52,8 @@ func QualityFromAmounts(in, out EitherAmount) Quality {
 	// Convert both amounts to IOU-style for precise integer division.
 	// Reference: rippled's getRate() calls divide() which normalizes XRP amounts
 	// to [10^15, 10^16) mantissa range before performing the division.
-	var inAmt, outAmt tx.Amount
-	if in.IsNative {
-		inAmt = state.NewIssuedAmountFromValue(in.XRP, 0, "", "")
-	} else {
-		inAmt = in.IOU
-	}
-	if out.IsNative {
-		outAmt = state.NewIssuedAmountFromValue(out.XRP, 0, "", "")
-	} else {
-		outAmt = out.IOU
-	}
+	inAmt := toNumberAmount(in)
+	outAmt := toNumberAmount(out)
 
 	if outAmt.IsZero() {
 		return Quality{Value: 0}
@@ -218,14 +209,13 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 	qRate := q.Rate()
 
 	var limitAmt tx.Amount
-	if limit.IsNative {
-		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
-	} else {
-		limitAmt = limit.IOU
+	limitAmt = toNumberAmount(limit)
+	if limit.IsMPT {
+		limitAmt = FromEitherAmount(limit)
 	}
 
 	var inCurrency, inIssuer string
-	if amtIn.IsNative {
+	if amtIn.IsNative || amtIn.IsMPT {
 		inCurrency = ""
 		inIssuer = ""
 	} else {
@@ -242,6 +232,9 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 		// product to a 16-digit mantissa and discards any sub-drop remainder, so
 		// the subsequent drops canonicalize has nothing left to round up.
 		resultInEither = NewXRPEitherAmount(state.MulRoundNativeStrict(limitAmt, qRate, roundUp))
+	} else if amtIn.IsMPT {
+		value := state.MulRoundMPTStrict(limitAmt, qRate, roundUp)
+		resultInEither = NewMPTEitherAmount(value, amtIn.MPTID)
 	} else {
 		resultIn := state.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
 		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
@@ -268,14 +261,13 @@ func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherA
 	qRate := q.Rate()
 
 	var limitAmt tx.Amount
-	if limit.IsNative {
-		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
-	} else {
-		limitAmt = limit.IOU
+	limitAmt = toNumberAmount(limit)
+	if limit.IsMPT {
+		limitAmt = FromEitherAmount(limit)
 	}
 
 	var outCurrency, outIssuer string
-	if amtOut.IsNative {
+	if amtOut.IsNative || amtOut.IsMPT {
 		outCurrency = ""
 		outIssuer = ""
 	} else {
@@ -291,6 +283,9 @@ func (q Quality) CeilIn(amtIn, amtOut EitherAmount, limit EitherAmount) (EitherA
 		// uses different rounding than the native path and causes off-by-one errors.
 		// Reference: rippled STAmount.cpp divRoundImpl + canonicalizeRound(native=true)
 		resultOutEither = NewXRPEitherAmount(state.DivRoundNative(limitAmt, qRate, true))
+	} else if amtOut.IsMPT {
+		value := state.DivRoundMPT(limitAmt, qRate, true)
+		resultOutEither = NewMPTEitherAmount(value, amtOut.MPTID)
 	} else {
 		// Non-strict: divRound with roundUp=true (matching rippled's ceil_in which uses divRound)
 		resultOut := state.DivRound(limitAmt, qRate, outCurrency, outIssuer, true)
@@ -318,14 +313,13 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 	qRate := q.Rate()
 
 	var limitAmt tx.Amount
-	if limit.IsNative {
-		limitAmt = state.NewIssuedAmountFromValue(limit.XRP, 0, "", "")
-	} else {
-		limitAmt = limit.IOU
+	limitAmt = toNumberAmount(limit)
+	if limit.IsMPT {
+		limitAmt = FromEitherAmount(limit)
 	}
 
 	var outCurrency, outIssuer string
-	if amtOut.IsNative {
+	if amtOut.IsNative || amtOut.IsMPT {
 		outCurrency = ""
 		outIssuer = ""
 	} else {
@@ -341,6 +335,9 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 		// the IOU DivRoundStrict first collapses the product to a 16-digit mantissa
 		// and discards any sub-drop remainder before the drops canonicalize.
 		resultOutEither = NewXRPEitherAmount(state.DivRoundNativeStrict(limitAmt, qRate, roundUp))
+	} else if amtOut.IsMPT {
+		value := state.DivRoundMPTStrict(limitAmt, qRate, roundUp)
+		resultOutEither = NewMPTEitherAmount(value, amtOut.MPTID)
 	} else {
 		resultOut := state.DivRoundStrict(limitAmt, qRate, outCurrency, outIssuer, roundUp)
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(

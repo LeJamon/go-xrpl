@@ -2,6 +2,7 @@ package amm
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -11,6 +12,16 @@ import (
 // asset paired with a non-zero issuer is temBAD_ISSUER, and — when a pair is
 // supplied — an asset matching neither member is temBAD_AMM_TOKENS.
 func invalidAMMAsset(asset tx.Asset, pair *[2]tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil || mptutil.Issuer(id) == ([20]byte{}) {
+			return ter.TemBAD_MPT
+		}
+		if pair != nil && !matchesAssetByIssue(asset, pair[0]) && !matchesAssetByIssue(asset, pair[1]) {
+			return ter.TemBAD_AMM_TOKENS
+		}
+		return ter.TesSUCCESS
+	}
 	if keylet.CurrencyBytes(asset.Currency) == keylet.BadCurrency() {
 		return ter.TemBAD_CURRENCY
 	}
@@ -26,7 +37,7 @@ func invalidAMMAsset(asset tx.Asset, pair *[2]tx.Asset) ter.Result {
 
 // amountAsset returns the issue (currency + issuer) of an amount.
 func amountAsset(amt tx.Amount) tx.Asset {
-	return tx.Asset{Currency: amt.Currency, Issuer: amt.Issuer}
+	return tx.Asset{Currency: amt.Currency, Issuer: amt.Issuer, MPTIssuanceID: amt.MPTIssuanceID()}
 }
 
 // validateAMMAmount mirrors rippled invalidAMMAmount() with no pair: asset

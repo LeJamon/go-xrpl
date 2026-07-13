@@ -31,6 +31,27 @@ func newPaymentMockLedgerView() *paymentMockLedgerView {
 	}
 }
 
+func TestFlowCrossPropagatesMPTFundsCorruption(t *testing.T) {
+	view := newPaymentMockLedgerView()
+	var issuer, taker [20]byte
+	issuer[19] = 1
+	taker[19] = 2
+	id := keylet.MakeMPTID(1, issuer)
+	putMPTIssuance(t, view, id, 1, 0)
+	view.data[keylet.MPTokenByID(id, taker).Key] = []byte{1}
+
+	result := FlowCross(
+		view,
+		taker,
+		newMPTAmount(1, id),
+		tx.NewXRPAmount(1),
+		[32]byte{},
+		1,
+		FlowCrossParams{},
+	)
+	require.Equal(t, ter.TefINTERNAL, result.Result)
+}
+
 func (m *paymentMockLedgerView) Read(key keylet.Keylet) ([]byte, error) {
 	return m.data[key.Key], nil
 }

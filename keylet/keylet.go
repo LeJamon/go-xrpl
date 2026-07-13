@@ -560,20 +560,46 @@ func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
 // std::minmax feeding indexHash in
 // rippled/src/libxrpl/protocol/Indexes.cpp:446-456 amm().
 func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Keylet {
-	var minIssuer, minCurrency, maxIssuer, maxCurrency [20]byte
+	return AMMAsset(
+		IssueSide(issue1Currency, issue1Issuer),
+		IssueSide(issue2Currency, issue2Issuer),
+	)
+}
 
-	if issue1LessEqualIssue2(issue1Currency, issue1Issuer, issue2Currency, issue2Issuer) {
-		minIssuer, minCurrency = issue1Issuer, issue1Currency
-		maxIssuer, maxCurrency = issue2Issuer, issue2Currency
-	} else {
-		minIssuer, minCurrency = issue2Issuer, issue2Currency
-		maxIssuer, maxCurrency = issue1Issuer, issue1Currency
+// AMMAsset returns the AMM keylet for two Issue or MPT assets. Asset ordering
+// matches rippled's Asset comparison: MPT assets sort before Issue assets;
+// assets of the same kind retain their native Issue/MPT ordering.
+func AMMAsset(asset1, asset2 BookSide) Keylet {
+	minAsset, maxAsset := asset1, asset2
+	if !bookSideLessEqual(asset1, asset2) {
+		minAsset, maxAsset = asset2, asset1
 	}
 
-	return Keylet{
-		Type: entry.TypeAMM,
-		Key:  indexHash(spaceAMM, minIssuer[:], minCurrency[:], maxIssuer[:], maxCurrency[:]),
+	var key [32]byte
+	switch {
+	case minAsset.IsMPT && maxAsset.IsMPT:
+		key = indexHash(spaceAMM, minAsset.MPTID[:], maxAsset.MPTID[:])
+	case minAsset.IsMPT:
+		key = indexHash(spaceAMM, minAsset.MPTID[:], maxAsset.Issuer[:], maxAsset.Currency[:])
+	default:
+		key = indexHash(
+			spaceAMM,
+			minAsset.Issuer[:], minAsset.Currency[:],
+			maxAsset.Issuer[:], maxAsset.Currency[:],
+		)
 	}
+
+	return Keylet{Type: entry.TypeAMM, Key: key}
+}
+
+func bookSideLessEqual(lhs, rhs BookSide) bool {
+	if lhs.IsMPT != rhs.IsMPT {
+		return lhs.IsMPT
+	}
+	if lhs.IsMPT {
+		return bytes.Compare(lhs.MPTID[:], rhs.MPTID[:]) <= 0
+	}
+	return issue1LessEqualIssue2(lhs.Currency, lhs.Issuer, rhs.Currency, rhs.Issuer)
 }
 
 // IssueLessEqual reports whether issue1 sorts at-or-before issue2 under

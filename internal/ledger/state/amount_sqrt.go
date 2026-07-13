@@ -6,12 +6,18 @@ func (a Amount) Mantissa() int64 {
 	if a.IsNative() {
 		return a.Drops()
 	}
+	if a.mptRaw != nil {
+		return *a.mptRaw
+	}
 	return a.iou.Mantissa()
 }
 
 // Exponent returns the exponent of the Amount (for IOU) or 0 (for XRP).
 func (a Amount) Exponent() int {
 	if a.IsNative() {
+		return 0
+	}
+	if a.mptRaw != nil {
 		return 0
 	}
 	return a.iou.Exponent()

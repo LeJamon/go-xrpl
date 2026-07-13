@@ -12,9 +12,11 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -429,17 +431,13 @@ func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account str
 
 // GetBookOffers retrieves offers from an order book
 func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*types.BookOffersResult, error) {
-	// Convert RPC types.Amount to tx.Amount
-	var txTakerGets, txTakerPays tx.Amount
-	if takerGets.Currency == "" || takerGets.Currency == "XRP" {
-		txTakerGets = tx.NewXRPAmount(0) // Placeholder - book offers query uses currency/issuer only
-	} else {
-		txTakerGets = tx.NewIssuedAmountFromFloat64(0, takerGets.Currency, takerGets.Issuer)
+	txTakerGets, err := rpcBookAmount(takerGets)
+	if err != nil {
+		return nil, err
 	}
-	if takerPays.Currency == "" || takerPays.Currency == "XRP" {
-		txTakerPays = tx.NewXRPAmount(0)
-	} else {
-		txTakerPays = tx.NewIssuedAmountFromFloat64(0, takerPays.Currency, takerPays.Issuer)
+	txTakerPays, err := rpcBookAmount(takerPays)
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit, marker, withProofs)
@@ -480,6 +478,21 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		Validated:   result.Validated,
 		Marker:      result.Marker,
 	}, nil
+}
+
+func rpcBookAmount(amount types.Amount) (tx.Amount, error) {
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID)
+		if err != nil {
+			return tx.Amount{}, fmt.Errorf("invalid mpt issuance id: %w", err)
+		}
+		issuer := state.EncodeAccountIDSafe(mptutil.Issuer(id))
+		return state.NewMPTAmountWithIssuanceID(0, issuer, mptutil.EncodeID(id)), nil
+	}
+	if amount.Currency == "" || amount.Currency == "XRP" {
+		return tx.NewXRPAmount(0), nil
+	}
+	return tx.NewIssuedAmountFromFloat64(0, amount.Currency, amount.Issuer), nil
 }
 
 // UseTxTables implements types.TxTablesProvider.

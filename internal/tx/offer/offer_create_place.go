@@ -1,9 +1,12 @@
 package offer
 
 import (
+	"errors"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -27,21 +30,9 @@ func (o *OfferCreate) placeRemainingOffer(
 	offerSequence := o.GetCommon().SeqProxy()
 	offerKey := keylet.Offer(ctx.AccountID, offerSequence)
 
-	// Calculate book directory fields first (needed for both owner and book directories
-	// when SortedDirectories is not enabled)
-	// Reference: lines 857-887
-	takerPaysCurrency := keylet.CurrencyBytes(saTakerPays.Currency)
-	takerPaysIssuer := state.GetIssuerBytes(saTakerPays.Issuer)
-	takerGetsCurrency := keylet.CurrencyBytes(saTakerGets.Currency)
-	takerGetsIssuer := state.GetIssuerBytes(saTakerGets.Issuer)
-
-	// Domain offers go in a separate domain-keyed book directory.
-	// Reference: rippled Indexes.cpp getBookBase() includes domain in hash when set
-	var bookBase keylet.Keylet
-	if o.DomainID != nil {
-		bookBase = keylet.BookDirWithDomain(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer, *o.DomainID)
-	} else {
-		bookBase = keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
+	bookBase, err := offerBookBase(saTakerPays, saTakerGets, o.DomainID)
+	if err != nil {
+		return ter.TefINTERNAL, false
 	}
 	bookDirKey := keylet.Quality(bookBase, uRate)
 
@@ -59,12 +50,11 @@ func (o *OfferCreate) placeRemainingOffer(
 
 	// Reference: lines 884-893
 	bookDirResult, err := state.DirInsert(sb, bookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
-		dir.TakerPaysCurrency = takerPaysCurrency
-		dir.TakerPaysIssuer = takerPaysIssuer
-		dir.TakerGetsCurrency = takerGetsCurrency
-		dir.TakerGetsIssuer = takerGetsIssuer
+		_ = setBookDirectoryAssets(dir, saTakerPays, saTakerGets)
 		dir.ExchangeRate = uRate
-		// Note: DomainID is stored on the offer itself, not the directory
+		if o.DomainID != nil {
+			dir.DomainID = *o.DomainID
+		}
 	})
 	if err != nil {
 		return ter.TefINTERNAL, false
@@ -127,4 +117,59 @@ func (o *OfferCreate) placeRemainingOffer(
 	}
 
 	return ter.TesSUCCESS, true // Apply main sandbox
+}
+
+func offerBookBase(takerPays, takerGets tx.Amount, domainID *[32]byte) (keylet.Keylet, error) {
+	pays, err := amountBookSide(takerPays)
+	if err != nil {
+		return keylet.Keylet{}, err
+	}
+	gets, err := amountBookSide(takerGets)
+	if err != nil {
+		return keylet.Keylet{}, err
+	}
+	return keylet.BookBase(pays, gets, domainID), nil
+}
+
+func amountBookSide(amount tx.Amount) (keylet.BookSide, error) {
+	if amount.IsMPT() {
+		id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+		if err != nil {
+			return keylet.BookSide{}, err
+		}
+		return keylet.MPTSide(id), nil
+	}
+	if !amount.IsNative() && amount.Currency == "" {
+		return keylet.BookSide{}, errors.New("issued amount has no currency")
+	}
+	return keylet.IssueSide(
+		keylet.CurrencyBytes(amount.Currency),
+		state.GetIssuerBytes(amount.Issuer),
+	), nil
+}
+
+func setBookDirectoryAssets(dir *state.DirectoryNode, takerPays, takerGets tx.Amount) error {
+	pays, err := amountBookSide(takerPays)
+	if err != nil {
+		return err
+	}
+	gets, err := amountBookSide(takerGets)
+	if err != nil {
+		return err
+	}
+	if pays.IsMPT {
+		id := pays.MPTID
+		dir.TakerPaysMPT = &id
+	} else {
+		dir.TakerPaysCurrency = pays.Currency
+		dir.TakerPaysIssuer = pays.Issuer
+	}
+	if gets.IsMPT {
+		id := gets.MPTID
+		dir.TakerGetsMPT = &id
+	} else {
+		dir.TakerGetsCurrency = gets.Currency
+		dir.TakerGetsIssuer = gets.Issuer
+	}
+	return nil
 }

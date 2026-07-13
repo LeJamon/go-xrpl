@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -68,9 +69,13 @@ func (c *CheckCreate) Validate() error {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 
+	if badMPTAsset(c.SendMax) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "invalid MPT issuance")
+	}
+
 	// Cannot use bad currency (XRP as IOU or null currency)
 	// Reference: CreateCheck.cpp L63-67
-	if !c.SendMax.IsNative() {
+	if !c.SendMax.IsNative() && !c.SendMax.IsMPT() {
 		if c.SendMax.Currency == "XRP" || c.SendMax.Currency == "\x00\x00\x00" || c.SendMax.Currency == "" {
 			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
 		}
@@ -83,6 +88,14 @@ func (c *CheckCreate) Validate() error {
 	}
 
 	return nil
+}
+
+func badMPTAsset(amount tx.Amount) bool {
+	if !amount.IsMPT() {
+		return false
+	}
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	return err != nil || mptutil.Issuer(id) == ([20]byte{})
 }
 
 func (c *CheckCreate) Flatten() (map[string]any, error) {
@@ -132,9 +145,24 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDST_TAG_NEEDED
 	}
 
-	// IOU-specific checks
-	// Reference: CreateCheck.cpp L116-161
-	if !c.SendMax.IsNative() {
+	if c.SendMax.IsMPT() {
+		mptID, err := mptutil.DecodeID(c.SendMax.MPTIssuanceID())
+		if err != nil {
+			return ter.TecOBJECT_NOT_FOUND
+		}
+		accountID := ctx.AccountID
+		issuerID := mptutil.Issuer(mptID)
+
+		if mptutil.IsGlobalFrozen(ctx.View, mptID) ||
+			(accountID != issuerID && mptutil.IsFrozen(ctx.View, mptID, accountID)) ||
+			(destID != issuerID && mptutil.IsFrozen(ctx.View, mptID, destID)) {
+			return ter.TecLOCKED
+		}
+		if result := mptutil.CanTransfer(ctx.View, mptID, accountID, destID); result != ter.TesSUCCESS {
+			return result
+		}
+	} else if !c.SendMax.IsNative() {
+		// Reference: CreateCheck.cpp L116-161
 		issuerID, err := state.DecodeAccountID(c.SendMax.Issuer)
 		if err != nil {
 			return ter.TefINTERNAL

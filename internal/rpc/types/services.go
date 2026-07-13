@@ -1011,17 +1011,19 @@ type TransactionInfo struct {
 	TxIndex uint32
 }
 
-// Amount represents a currency amount (XRP or IOU)
+// Amount identifies an XRP, issued-currency, or MPT amount.
 type Amount struct {
-	Value    string `json:"value,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
+	Value         string `json:"value,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
 }
 
-// IsNative returns true if this is an XRP amount (not an IOU)
 func (a Amount) IsNative() bool {
-	return a.Currency == "" && a.Issuer == ""
+	return a.MPTIssuanceID == "" && a.Currency == "" && a.Issuer == ""
 }
+
+func (a Amount) IsMPT() bool { return a.MPTIssuanceID != "" }
 
 // TrustLine represents a trust line from account_lines RPC
 type TrustLine struct {

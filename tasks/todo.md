@@ -70,3 +70,99 @@ rewind) fixed; 2 refuted-but-real hardenings applied; iter27-trap concern
 resolved by validations-first precedence.
 Remaining known gap: 15k sustained smoothness is paced by build latency on
 single-host soaks; prewarm (2dd0b6a8) is the current lever, measured by iter4.
+
+# Issue #1280 — FlagsMasker completion audit
+
+- [x] Inventory all 75 registered transaction types
+- [x] Compare all 23 rippled 3.2.0 `getFlagsMask` overrides and the base mask
+- [x] Check for invalid-bit masks left solely in `Validate`
+- [x] Fix the residual MPTokensV2-dependent Payment mask
+- [x] Pin exact masks and bad-fee precedence
+- [x] Run transaction tests, vet, and build
+
+## Finalization fixes
+
+- [x] Match the mask predicate to the MPT Amount, not the legacy issuance field
+- [x] Preserve rippled's ordered MPTokensV1/V2 Payment preflight semantics
+- [x] Route MPTokensV2 Payments through the MPT-capable flow engine
+- [x] Port valid-fee flag, path, SendMax, disabled-gate, and routing regressions
+- [x] Remove the legacy standalone Payment issuance field and builder plumbing
+- [x] Reject malformed MPT JSON, noAccount paths, and invalid MPT offer images
+- [x] Preserve internal storage errors through MPT authorization and funding paths
+- [x] Run focused tests, full transaction/integration coverage, build, vet, lint,
+      and final rippled 3.2.0 review
+- [x] Resolve the uncached CI goimports alignment failure and re-run lint
+- [x] Fix the terminal resource-manager Start/Stop race exposed by core CI
+- [x] Run focused race tests, strict lint, and the core package suite
+
+## Review
+
+Finalized PR #1308 against local rippled v3.2.0. Payment now uses the MPT Amount
+as the authoritative asset identity, preserves rippled's V1/V2 preflight order
+and TER precedence, and routes MPTokensV2 through Flow while retaining the V1
+direct-transfer path. The standalone Go-only issuance field was removed.
+
+The final review also fixed MPT wire/path serialization, cross-asset and
+MPT-to-MPT offer crossing, destination checks, noAccount rejection, MPT offer
+invariant parsing, pseudo-account authorization gating, canonical integral MPT
+JSON parsing, and propagation of ledger storage/parse errors through shared MPT,
+Offer, Check, AMM, and FlowCross code.
+
+Verification:
+
+- Focused state, payment, engine, invariant, mptutil, offer, check, AMM, MPT,
+  deposit-preauth, and delegate suites pass uncached.
+- `just build-all`, `just build-nocgo`, `just vet`, and `just lint` pass.
+- The CI-only goimports finding in `strand.go` was corrected and reproduced
+  locally with the formatter check before repushing.
+- The core CI race exposed a pre-existing terminal lifecycle gap in the resource
+  manager. Start/Stop are now serialized against late startup, and the exact
+  core `-race` shard plus repeated manager/Components lifecycle tests pass.
+- The full module test run passes outside the established out-of-scope
+  conformance failures.
+- Final conformance: 941 pass / 117 fail overall, 879 pass / 0 fail in scope;
+  the 117 failures remain the out-of-scope Batch, Vault, XChain, and XChainSim
+  suites.
+
+# Issue #1287 — MPTokensV2 amendment-on engine support
+
+## Plan
+
+- [x] Map PR #1286's nine roadmap points to the v3 Go implementation and the
+      rippled 3.2.0 tag, including all reachable call sites and parity tests.
+- [x] Extend payment primitives (`EitherAmount`, `Issue`, `Book`, path nodes)
+      with a coherent MPT arm and add reusable sandbox-aware MPT credit/funding.
+- [x] Implement and wire `MPTEndpointStep`, including strand construction,
+      reverse/forward liquidity, transfer fees, authorization, locks, and clawback.
+- [x] Implement MPT order books end to end: book keys/directories, offer funding,
+      crossing, transfer, rate/auth checks, and offer placement fields.
+- [x] Implement amendment-on MPT apply behavior for AMM and Check transactions,
+      including `lsfMPTAMM` ledger marking.
+- [x] Thread `mpt_issuance_id` through book/path RPC request and response surfaces.
+- [x] Port focused rippled parity cases and add Go unit/integration coverage for
+      the new type arms, endpoint, book, AMM, Check, and RPC behavior.
+- [x] Run formatting, focused tests incrementally, relevant integration suites,
+      `just vet`, and `just build`; inspect the final diff for wiring and parity.
+
+## Review
+
+Implemented the coordinated MPT amount, sandbox, endpoint, book, offer, AMM,
+Check, and RPC path. The protocol-bearing diff was checked against the local
+rippled 3.2.0 implementations and their MPT, AMM-MPT, and Check-MPT test cases.
+The rippled C++ tests were used as the parity oracle but were not executed.
+
+Review findings fixed before handoff include zero-issuer asset rejection,
+MPT endpoint check ordering, exact transfer-fee rounding and overflow handling,
+owner-directory type discrimination, and preservation of issuer-agnostic IOU
+rippling while MPT path matching remains issuance-specific.
+
+Verification:
+
+- Focused state, ledger service, payment, pathfinder, offer, AMM, Check, vault,
+  RPC, and integration tests pass.
+- `just vet`, `just build`, and `just lint` pass (`golangci-lint`: 0 issues).
+- Feature and clean-base `just conformance --failing` results are identical:
+  941 pass / 117 fail overall, 879 pass / 0 fail in scope. The 117 failures are
+  the existing out-of-scope Batch, Vault, XChain, and XChainSim suites.
+- The full module test run passes outside those same out-of-scope conformance
+  failures.

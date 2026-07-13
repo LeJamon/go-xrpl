@@ -186,7 +186,7 @@ type VaultInfo struct {
 }
 
 // ReadVaultInfo reads the vault at vaultKey, returning (nil, nil) when absent.
-func ReadVaultInfo(view tx.LedgerView, vaultKey keylet.Keylet) (*VaultInfo, error) {
+func ReadVaultInfo(view AssetReadView, vaultKey keylet.Keylet) (*VaultInfo, error) {
 	vd, err := readVault(view, vaultKey)
 	if err != nil || vd == nil {
 		return nil, err

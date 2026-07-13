@@ -1,6 +1,8 @@
 package amm
 
 import (
+	"bytes"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -39,13 +41,13 @@ func (a *AMMCreate) TxType() tx.Type {
 // GetAmountAsset returns the issue (currency + issuer) of the first asset (Amount field).
 // Implements ammCreateIssueProvider for the ValidAMM invariant checker.
 func (a *AMMCreate) GetAmountAsset() tx.Asset {
-	return tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
+	return amountAsset(a.Amount)
 }
 
 // GetAmount2Asset returns the issue (currency + issuer) of the second asset (Amount2 field).
 // Implements ammCreateIssueProvider for the ValidAMM invariant checker.
 func (a *AMMCreate) GetAmount2Asset() tx.Asset {
-	return tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+	return amountAsset(a.Amount2)
 }
 
 // Reference: rippled AMMCreate.cpp preflight
@@ -61,7 +63,7 @@ func (a *AMMCreate) Validate() error {
 	}
 
 	// Reference: rippled AMMCreate.cpp line 52-57
-	if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
+	if matchesAssetByIssue(amountAsset(a.Amount), amountAsset(a.Amount2)) {
 		return ter.Errorf(ter.TemBAD_AMM_TOKENS, "tokens can not have the same currency/issuer")
 	}
 
@@ -118,8 +120,8 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 		return result
 	}
 
-	asset1 := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
-	asset2 := tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+	asset1 := amountAsset(a.Amount)
+	asset2 := amountAsset(a.Amount2)
 
 	// Reference: rippled AMMCreate.cpp line 95-100
 	ammKey := computeAMMKeylet(asset1, asset2)
@@ -128,16 +130,19 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	}
 
 	// Reference: rippled AMMCreate.cpp line 102-116
-	if result := tx.RequireAuth(view, asset1, accountID); result != ter.TesSUCCESS {
+	if result := requireAssetAuth(view, asset1, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := tx.RequireAuth(view, asset2, accountID); result != ter.TesSUCCESS {
+	if result := requireAssetAuth(view, asset2, accountID, true, config.ParentCloseTime); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Reference: rippled AMMCreate.cpp line 119-124
-	if tx.IsFrozen(view, accountID, asset1) || tx.IsFrozen(view, accountID, asset2) {
-		return ter.TecFROZEN
+	if assetFrozen(view, accountID, asset1) {
+		return frozenAssetResult(asset1)
+	}
+	if assetFrozen(view, accountID, asset2) {
+		return frozenAssetResult(asset2)
 	}
 
 	// Reference: rippled AMMCreate.cpp line 126-142
@@ -153,8 +158,18 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 	}
 	reserveNeeded := accountReserve(config, account.OwnerCount+1)
 	xrpLiquid := int64(account.Balance) - int64(reserveNeeded)
-	if insufficientBalance(view, accountID, a.Amount, xrpLiquid) ||
-		insufficientBalance(view, accountID, a.Amount2, xrpLiquid) {
+	insufficient, result := insufficientBalance(view, accountID, a.Amount, xrpLiquid)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if insufficient {
+		return TecUNFUNDED_AMM
+	}
+	insufficient, result = insufficientBalance(view, accountID, a.Amount2, xrpLiquid)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if insufficient {
 		return TecUNFUNDED_AMM
 	}
 
@@ -172,6 +187,13 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Res
 		if tx.PseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
 			return ter.TerADDRESS_COLLISION
 		}
+	}
+
+	if result := canMPTTradeAndTransfer(view, asset1, accountID, accountID); result != ter.TesSUCCESS {
+		return result
+	}
+	if result := canMPTTradeAndTransfer(view, asset2, accountID, accountID); result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Check clawback - if featureAMMClawback is not enabled, reject clawback-enabled issuers.
@@ -199,8 +221,8 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 
 	accountID := ctx.AccountID
 
-	asset1 := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
-	asset2 := tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
+	asset1 := amountAsset(a.Amount)
+	asset2 := amountAsset(a.Amount2)
 
 	ammKey := computeAMMKeylet(asset1, asset2)
 
@@ -217,7 +239,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled AMMCreate.cpp line 262-264
 	sortedAsset1, sortedAsset2, sortedAmount1, sortedAmount2 := sortAssets(asset1, asset2, a.Amount, a.Amount2)
 
-	lptCurrency := GenerateAMMLPTCurrency(sortedAsset1.Currency, sortedAsset2.Currency)
+	lptCurrency := GenerateAMMLPTCurrencyForAssets(sortedAsset1, sortedAsset2)
 
 	// Reference: rippled AMMCreate.cpp line 241-247
 	lptIssuerID := ammAccountID
@@ -245,10 +267,10 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// holds (one per non-XRP asset): each is created with the reserve charged
 	// to the AMM side. The AMM ledger object and any XRP side are not counted.
 	ammOwnerCount := uint32(0)
-	if !isXRPAsset(sortedAsset1) {
+	if !isXRPAsset(sortedAsset1) && !sortedAsset1.IsMPT() {
 		ammOwnerCount++
 	}
-	if !isXRPAsset(sortedAsset2) {
+	if !isXRPAsset(sortedAsset2) && !sortedAsset2.IsMPT() {
 		ammOwnerCount++
 	}
 	ammAccount.OwnerCount = ammOwnerCount
@@ -333,6 +355,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		drops := uint64(sortedAmount1.Drops())
 		ctx.Account.Balance -= drops
 		ammAccount.Balance += drops
+	} else if sortedAsset1.IsMPT() {
+		if result := requireAssetAuth(ctx.View, sortedAsset1, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := ensureAMMMPTHolding(ctx.View, sortedAsset1, ammAccountID); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := sendMPT(ctx.View, accountID, ammAccountID, sortedAmount1, true); result != ter.TesSUCCESS {
+			return result
+		}
 	} else {
 		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View); err != nil {
 			return TecNO_LINE
@@ -361,6 +393,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		drops := uint64(sortedAmount2.Drops())
 		ctx.Account.Balance -= drops
 		ammAccount.Balance += drops
+	} else if sortedAsset2.IsMPT() {
+		if result := requireAssetAuth(ctx.View, sortedAsset2, ammAccountID, false, ctx.Config.ParentCloseTime); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := ensureAMMMPTHolding(ctx.View, sortedAsset2, ammAccountID); result != ter.TesSUCCESS {
+			return result
+		}
+		if result := sendMPT(ctx.View, accountID, ammAccountID, sortedAmount2, true); result != ter.TesSUCCESS {
+			return result
+		}
 	} else {
 		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View); err != nil {
 			return TecNO_LINE
@@ -433,6 +475,14 @@ func sortAssets(asset1, asset2 tx.Asset, amount1, amount2 tx.Amount) (tx.Asset, 
 // than their string representations (base58 r-addresses and ISO-vs-hex currency
 // codes do not sort the same as their decoded bytes).
 func assetLessEqual(a, b tx.Asset) bool {
+	if a.IsMPT() != b.IsMPT() {
+		return a.IsMPT()
+	}
+	if a.IsMPT() {
+		aID, _ := decodeMPTAsset(a)
+		bID, _ := decodeMPTAsset(b)
+		return bytes.Compare(aID[:], bID[:]) <= 0
+	}
 	return keylet.IssueLessEqual(
 		keylet.CurrencyBytes(a.Currency), getIssuerBytes(a.Issuer),
 		keylet.CurrencyBytes(b.Currency), getIssuerBytes(b.Issuer),

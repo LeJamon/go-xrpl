@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -196,8 +197,9 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				return ter.TecINTERNAL
 			}
 
-			// Skip the AMM SLE that coexists with the trust lines in this dir.
-			if entry.Type(entryType) == entry.TypeAMM {
+			// MPToken holdings are removed only after every trust line is gone,
+			// so an interrupted cleanup can still reinitialize the empty AMM.
+			if entry.Type(entryType) == entry.TypeAMM || entry.Type(entryType) == entry.TypeMPToken {
 				i++
 				continue
 			}
@@ -257,6 +259,22 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 	return ter.TesSUCCESS
 }
 
+func deleteAMMMPTokens(view tx.LedgerView, ammAccountID [20]byte, assets ...tx.Asset) ter.Result {
+	for _, asset := range assets {
+		if !asset.IsMPT() {
+			continue
+		}
+		id, result := decodeMPTAsset(asset)
+		if result != ter.TesSUCCESS {
+			return ter.TecINTERNAL
+		}
+		if result := mptutil.RemoveHolding(view, id, ammAccountID, false); result != ter.TesSUCCESS {
+			return ter.TecINTERNAL
+		}
+	}
+	return ter.TesSUCCESS
+}
+
 // DeleteAMMAccount performs full cleanup of an AMM account:
 // 1. Deletes trust lines from the AMM's owner directory (bounded)
 // 2. Removes AMM SLE from owner directory
@@ -286,20 +304,30 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) ter.Result {
 	if result := deleteAMMTrustLines(view, ammAccountID, maxDeletableAMMTrustLines); result != ter.TesSUCCESS {
 		return result
 	}
+	if result := deleteAMMMPTokens(view, ammAccountID, asset, asset2); result != ter.TesSUCCESS {
+		return result
+	}
 
 	// Reference: rippled AMMUtils.cpp deleteAMMAccount line 315-323
 	ownerDirKey := keylet.OwnerDir(ammAccountID)
-	state.DirRemove(view, ownerDirKey, amm.OwnerNode, ammKey.Key, false)
+	removed, err := state.DirRemove(view, ownerDirKey, amm.OwnerNode, ammKey.Key, false)
+	if err != nil || !removed.Success {
+		return ter.TecINTERNAL
+	}
 
 	// Delete the owner directory if it is now empty.
 	// Reference: rippled AMMUtils.cpp deleteAMMAccount line 324-331
 	if exists, _ := view.Exists(ownerDirKey); exists {
 		rootData, err := view.Read(ownerDirKey)
-		if err == nil && rootData != nil {
-			rootNode, err := state.ParseDirectoryNode(rootData)
-			if err == nil && len(rootNode.Indexes) == 0 && rootNode.IndexNext == 0 {
-				view.Erase(ownerDirKey)
-			}
+		if err != nil || rootData == nil {
+			return ter.TecINTERNAL
+		}
+		rootNode, err := state.ParseDirectoryNode(rootData)
+		if err != nil || len(rootNode.Indexes) != 0 || rootNode.IndexNext != 0 {
+			return ter.TecINTERNAL
+		}
+		if err := view.Erase(ownerDirKey); err != nil {
+			return ter.TecINTERNAL
 		}
 	}
 

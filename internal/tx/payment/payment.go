@@ -41,10 +41,6 @@ type Payment struct {
 	// Reference: rippled sfCredentialIDs
 	CredentialIDs []string `json:"CredentialIDs,omitempty" xrpl:"CredentialIDs,omitempty"`
 
-	// MPTokenIssuanceID is the issuance ID for MPT direct payments (optional).
-	// When set, the payment follows the MPT direct path instead of IOU trust line path.
-	MPTokenIssuanceID string `json:"MPTokenIssuanceID,omitempty" xrpl:"MPTokenIssuanceID,omitempty"`
-
 	// DomainID is the permissioned domain for this payment (optional).
 	// When set, only offers within the specified domain are consumed on the payment path.
 	// Both sender and destination must be members of the domain.
@@ -55,11 +51,12 @@ type Payment struct {
 
 // PathStep represents a single step in a payment path
 type PathStep struct {
-	Account  string `json:"account,omitempty"`
-	Currency string `json:"currency,omitempty"`
-	Issuer   string `json:"issuer,omitempty"`
-	Type     int    `json:"type,omitempty"`
-	TypeHex  string `json:"type_hex,omitempty"`
+	Account       string `json:"account,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	Issuer        string `json:"issuer,omitempty"`
+	MPTIssuanceID string `json:"mpt_issuance_id,omitempty"`
+	Type          int    `json:"type,omitempty"`
+	TypeHex       string `json:"type_hex,omitempty"`
 }
 
 // Payment flags
@@ -119,7 +116,7 @@ func (p *Payment) GetDomainID() (*[32]byte, bool) {
 // mirror rippled's checkExtraFeatures gates (sfCredentialIDs → featureCredentials,
 // sfDomainID → featurePermissionedDEX), which the engine evaluates before the
 // flags mask. The MPT gate is NOT here: rippled evaluates it inside the preflight
-// body, AFTER the mask, so it lives in PreflightRules.
+// body, AFTER the mask, so it lives in PreflightWithRules.
 func (p *Payment) RequiredAmendments() [][32]byte {
 	var amendments [][32]byte
 	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
@@ -132,85 +129,60 @@ func (p *Payment) RequiredAmendments() [][32]byte {
 }
 
 // GetFlagsMask returns the invalid-flags mask enforced by the engine at the
-// preflight0 position, mirroring rippled Payment::getFlagsMask: an MPT-denominated
-// Amount uses tfMPTPaymentMask, everything else tfPaymentMask.
-func (p *Payment) GetFlagsMask(*amendment.Rules) uint32 {
-	if p.isMPTDirect() {
+// preflight0 position. An MPT-denominated Amount uses the restricted MPTokensV1
+// mask until MPTokensV2 enables the regular payment flag surface.
+func (p *Payment) GetFlagsMask(rules *amendment.Rules) uint32 {
+	if p.Amount.IsMPT() && !rules.MPTokensV2Enabled() {
 		return tfMPTPaymentMask
 	}
 	return tfPaymentMask
 }
 
-// PreflightRules carries the amendment-gated tem* checks that rippled evaluates
-// inside Payment::preflight (after the flags mask). The MPT-amount temDISABLED
-// gate must run after the mask so an MPT payment carrying a mask-invalid flag
-// surfaces temINVALID_FLAG, not temDISABLED.
-func (p *Payment) PreflightRules(rules *amendment.Rules) error {
-	if p.isMPTDirect() && !rules.Enabled(amendment.FeatureMPTokensV1) {
-		return ter.Errorf(ter.TemDISABLED, "MPT payment requires MPTokensV1 amendment")
-	}
-	// A zero DomainID is invalid: keylet::permissionedDomain uses the DomainID
-	// as the ledger key, so a zero DomainID can never name a domain entry.
-	if p.DomainID != nil && rules.FixCleanup3_2_0Enabled() {
-		if id, err := permissioneddomain.ParseDomainID(*p.DomainID); err == nil && id == ([32]byte{}) {
-			return ter.Errorf(ter.TemMALFORMED, "DomainID cannot be zero")
-		}
-	}
-	return nil
-}
-
-// isMPTDirect returns true if this payment is an MPT direct payment.
-// Checks both the legacy MPTokenIssuanceID field and the Amount's embedded mpt_issuance_id.
-// Reference: rippled Payment.cpp: bool const mptDirect = dstAmount.holds<MPTIssue>();
-func (p *Payment) isMPTDirect() bool {
-	return p.MPTokenIssuanceID != "" || p.Amount.IsMPT()
-}
-
-// Validate runs the rules-free structural preflight checks of Payment::preflight
-// in rippled's exact order. The flags mask (GetFlagsMask) is enforced by the
-// engine at the preflight0 position, before this body; the MPT amendment gate is
-// in PreflightRules, after the mask. Path-element shape validation is NOT done
-// here — rippled surfaces it at doApply (toStrand), so it lives in the strand
-// builder, letting preclaim codes (tecNO_DST, …) win as rippled intends.
 func (p *Payment) Validate() error {
+	return p.validate(nil)
+}
+
+func (p *Payment) PreflightWithRules(rules *amendment.Rules) error {
+	return p.validate(rules)
+}
+
+func (p *Payment) validate(rules *amendment.Rules) error {
 	if err := p.BaseTx.Validate(); err != nil {
 		return err
 	}
 
-	mptDirect := p.isMPTDirect()
-	flags := p.GetFlags()
-	hasPaths := len(p.Paths) > 0
-
-	// MPT payments cannot carry paths.
-	if mptDirect && hasPaths {
+	isDstMPT := p.Amount.IsMPT()
+	rulesAware := rules != nil
+	mpTokensV2 := rulesAware && rules.MPTokensV2Enabled()
+	hasPaths := len(p.Paths) > 0 || p.HasField("Paths")
+	if rulesAware && isDstMPT && !rules.Enabled(amendment.FeatureMPTokensV1) {
+		return ter.Errorf(ter.TemDISABLED, "MPT payment requires MPTokensV1 amendment")
+	}
+	if rulesAware && !mpTokensV2 && isDstMPT && hasPaths {
 		return ter.Errorf(ter.TemMALFORMED, "Paths not allowed for MPT payment")
 	}
+	if rulesAware && p.DomainID != nil && rules.FixCleanup3_2_0Enabled() {
+		if id, err := permissioneddomain.ParseDomainID(*p.DomainID); err == nil && id == ([32]byte{}) {
+			return ter.Errorf(ter.TemMALFORMED, "DomainID cannot be zero")
+		}
+	}
 
-	// maxSourceAmount is SendMax when present, else the delivered Amount. The
-	// inconsistent-issues check rejects an MPT Amount whose source asset differs,
-	// and an MPT SendMax paired with a non-MPT Amount.
+	flags := p.GetFlags()
 	srcAmount := p.Amount
 	if p.SendMax != nil {
 		srcAmount = *p.SendMax
 	}
-	if p.Amount.IsMPT() {
-		if p.SendMax != nil && (!p.SendMax.IsMPT() ||
-			p.SendMax.MPTIssuanceID() != p.Amount.MPTIssuanceID()) {
-			return ter.Errorf(ter.TemMALFORMED, "Inconsistent MPT issues in Amount and SendMax")
-		}
-	} else if !mptDirect && srcAmount.IsMPT() {
-		return ter.Errorf(ter.TemMALFORMED, "MPT SendMax not allowed for non-MPT payment")
+	if rulesAware && !mpTokensV2 && ((isDstMPT && !sameAsset(p.Amount, srcAmount)) ||
+		(!isDstMPT && srcAmount.IsMPT())) {
+		return ter.Errorf(ter.TemMALFORMED, "Inconsistent MPT issues in Amount and SendMax")
 	}
 
 	xrpDirect := srcAmount.IsNative() && p.Amount.IsNative()
 
-	// isLegalNet(dstAmount) / isLegalNet(maxSourceAmount) — native magnitude cap.
 	if !isLegalNet(p.Amount) || !isLegalNet(srcAmount) {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "amount exceeds native limit")
 	}
 
-	// temDST_NEEDED fires for a missing Destination field and for the zero
-	// AccountID (rippled `if (!dstAccountID)`), which is wire-valid and signable.
 	if p.Destination == "" {
 		return ter.Errorf(ter.TemDST_NEEDED, "Destination is required")
 	}
@@ -218,7 +190,6 @@ func (p *Payment) Validate() error {
 		return ter.Errorf(ter.TemDST_NEEDED, "Destination is required")
 	}
 
-	// maxSourceAmount and dstAmount must be strictly positive.
 	if p.SendMax != nil && (p.SendMax.IsZero() || p.SendMax.IsNegative()) {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "SendMax must be positive")
 	}
@@ -226,16 +197,11 @@ func (p *Payment) Validate() error {
 		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
-	// Reject "XRP" used as a non-native (IOU) currency code on either the source
-	// asset (SendMax if present, else Amount) or the destination asset.
-	if (!srcAmount.IsNative() && !srcAmount.IsMPT() && srcAmount.Currency == tx.BadCurrency) ||
-		(!p.Amount.IsNative() && !p.Amount.IsMPT() && p.Amount.Currency == tx.BadCurrency) {
-		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
+	if badPaymentAsset(srcAmount, mpTokensV2) || badPaymentAsset(p.Amount, mpTokensV2) {
+		return ter.Errorf(ter.TemBAD_CURRENCY, "invalid payment asset")
 	}
 
-	// Redundant self-payment: same account, same token, no paths. equalTokens
-	// compares the token (currency for IOU, issuance for MPT), NOT the issuer.
-	if p.Account == p.Destination && equalTokens(srcAmount, p.Amount, mptDirect) && !hasPaths {
+	if p.Account == p.Destination && equalTokens(srcAmount, p.Amount) && !hasPaths {
 		return ter.Errorf(ter.TemREDUNDANT, "cannot send to self without path")
 	}
 
@@ -246,22 +212,20 @@ func (p *Payment) Validate() error {
 	if xrpDirect && p.SendMax != nil {
 		return ter.Errorf(ter.TemBAD_SEND_XRP_MAX, "SendMax specified for XRP to XRP")
 	}
-	if (xrpDirect || mptDirect) && hasPaths {
+	legacyMPTDirect := rulesAware && !mpTokensV2 && isDstMPT
+	if (xrpDirect || legacyMPTDirect) && hasPaths {
 		return ter.Errorf(ter.TemBAD_SEND_XRP_PATHS, "Paths specified for XRP to XRP or MPT to MPT")
 	}
 	if xrpDirect && partialPaymentAllowed {
 		return ter.Errorf(ter.TemBAD_SEND_XRP_PARTIAL, "Partial payment specified for XRP to XRP")
 	}
-	if (xrpDirect || mptDirect) && limitQuality {
+	if (xrpDirect || legacyMPTDirect) && limitQuality {
 		return ter.Errorf(ter.TemBAD_SEND_XRP_LIMIT, "Limit quality specified for XRP to XRP or MPT to MPT")
 	}
-	if (xrpDirect || mptDirect) && noRippleDirect {
+	if (xrpDirect || legacyMPTDirect) && noRippleDirect {
 		return ter.Errorf(ter.TemBAD_SEND_XRP_NO_DIRECT, "No ripple direct specified for XRP to XRP or MPT to MPT")
 	}
 
-	// DeliverMin: requires tfPartialPayment, must be legal/positive, must hold the
-	// same asset as Amount (rippled dMin.asset() != dstAmount.asset()), and must
-	// not exceed Amount.
 	if p.DeliverMin != nil {
 		if !partialPaymentAllowed {
 			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin requires tfPartialPayment flag")
@@ -277,32 +241,31 @@ func (p *Payment) Validate() error {
 		}
 	}
 
-	// Path count/length limits are NOT checked here. rippled enforces them in
-	// preclaim, gated on an open ledger, returning telBAD_PATH_COUNT — see
-	// Payment.Preclaim() below.
-
-	// Path-element shape validation lives in the strand builder (strand.go), at
-	// doApply, matching rippled toStrand — so preclaim codes win over a malformed
-	// path. The sole exception is a type-zero element (none of account/currency/
-	// issuer): go-xrpl cannot serialize it, so it can never reach the strand
-	// builder. Reject it here to surface rippled's temBAD_PATH rather than an
-	// internal serialization failure.
 	for _, path := range p.Paths {
 		for _, elem := range path {
-			if elem.Account == "" && elem.Currency == "" && elem.Issuer == "" {
-				return ter.Errorf(ter.TemBAD_PATH, "path element has no account, currency, or issuer")
+			if elem.Account == "" && elem.Currency == "" && elem.Issuer == "" && elem.MPTIssuanceID == "" {
+				return ter.Errorf(ter.TemBAD_PATH, "path element has no account, currency, issuer, or MPT issuance")
 			}
 		}
 	}
 
-	// Validate CredentialIDs field. HasField detects an empty array supplied on
-	// the wire, which omitempty would otherwise collapse to a nil slice.
 	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
 	if err := credential.CheckFields(p.CredentialIDs, present, "Duplicate credential ID"); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func badPaymentAsset(a tx.Amount, mpTokensV2 bool) bool {
+	if !a.IsNative() && !a.IsMPT() {
+		return a.Currency == tx.BadCurrency
+	}
+	if !mpTokensV2 || !a.IsMPT() {
+		return false
+	}
+	id, ok := decodeMPTID(a.MPTIssuanceID())
+	return !ok || mptIssuer(id) == ([20]byte{})
 }
 
 // isLegalNet mirrors rippled STAmount isLegalNet: a native amount's magnitude may
@@ -318,17 +281,12 @@ func isLegalNet(a tx.Amount) bool {
 	return uint64(d) <= maxNativeDrops
 }
 
-// equalTokens mirrors rippled equalTokens: two IOU tokens are equal iff their
-// currencies match (issuer ignored); two MPT tokens iff their issuances match;
-// two native amounts are always equal; any cross-kind pair is unequal. mptDirect
-// signals both sides are the same MPT issuance (the inconsistent-issues check
-// above already guaranteed it).
-func equalTokens(src, dst tx.Amount, mptDirect bool) bool {
+func equalTokens(src, dst tx.Amount) bool {
 	switch {
 	case src.IsNative() && dst.IsNative():
 		return true
-	case mptDirect:
-		return true
+	case src.IsMPT() && dst.IsMPT():
+		return src.MPTIssuanceID() == dst.MPTIssuanceID()
 	case !src.IsNative() && !src.IsMPT() && !dst.IsNative() && !dst.IsMPT():
 		return src.Currency == dst.Currency
 	default:
@@ -346,29 +304,20 @@ func equalTokens(src, dst tx.Amount, mptDirect bool) bool {
 // credential code.
 // Reference: rippled Payment.cpp:282-378
 func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
-	// Destination-existence branching for non-MPT payments. MPT direct
-	// payments resolve the destination inside Apply.
-	// Reference: rippled Payment.cpp:296-346
-	if !p.isMPTDirect() {
-		if destID, err := state.DecodeAccountID(p.Destination); err == nil {
-			destAccount, destExists := state.ReadAccountRoot(view, destID)
-			if !destExists {
-				// A non-native delivered amount cannot create the account.
-				if !p.Amount.IsNative() {
-					return ter.TecNO_DST
-				}
-				// A partial payment may not fund a new account on an open ledger.
-				if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
-					return ter.TelNO_DST_PARTIAL
-				}
-				// The delivered amount must cover the account reserve.
-				if uint64(p.Amount.Drops()) < config.ReserveBase {
-					return ter.TecNO_DST_INSUF_XRP
-				}
-			} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
-				// A newly-formed account is exempt — it has no way to set the flag.
-				return ter.TecDST_TAG_NEEDED
+	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
+		destAccount, destExists := state.ReadAccountRoot(view, destID)
+		if !destExists {
+			if !p.Amount.IsNative() {
+				return ter.TecNO_DST
 			}
+			if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
+				return ter.TelNO_DST_PARTIAL
+			}
+			if uint64(p.Amount.Drops()) < config.ReserveBase {
+				return ter.TecNO_DST_INSUF_XRP
+			}
+		} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+			return ter.TecDST_TAG_NEEDED
 		}
 	}
 
@@ -376,7 +325,7 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	// payments (those that use transitive balances).
 	// Reference: rippled Payment.cpp:348-360
 	if config.OpenLedger {
-		ripple := len(p.Paths) > 0 || p.SendMax != nil || !p.Amount.IsNative()
+		ripple := len(p.Paths) > 0 || p.HasField("Paths") || p.SendMax != nil || !p.Amount.IsNative()
 		if ripple {
 			if len(p.Paths) > MaxPathSize {
 				return ter.TelBAD_PATH_COUNT
@@ -453,6 +402,9 @@ func (p *Payment) Flatten() (map[string]any, error) {
 				if step.Issuer != "" {
 					stepMap["issuer"] = step.Issuer
 				}
+				if step.MPTIssuanceID != "" {
+					stepMap["mpt_issuance_id"] = step.MPTIssuanceID
+				}
 				pathSteps[j] = stepMap
 			}
 			pathSet[i] = pathSteps
@@ -476,7 +428,8 @@ func (p *Payment) SetNoDirectRipple() {
 }
 
 func (p *Payment) Apply(ctx *tx.ApplyContext) ter.Result {
-	mptDirect := p.isMPTDirect()
+	isDstMPT := p.Amount.IsMPT()
+	mpTokensV2 := ctx.Rules().MPTokensV2Enabled()
 
 	ctx.Log.Trace("payment apply",
 		"src", p.Account,
@@ -484,26 +437,18 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) ter.Result {
 		"amount", p.Amount,
 		"hasPaths", len(p.Paths) > 0,
 		"hasSendMax", p.SendMax != nil,
-		"mpt", mptDirect,
+		"mpt", isDstMPT,
 	)
 
-	// MPT direct payment
-	if mptDirect {
+	hasPaths := len(p.Paths) > 0 || p.HasField("Paths")
+	hasSendMax := p.SendMax != nil
+	ripple := (hasPaths || hasSendMax || !p.Amount.IsNative()) && (!isDstMPT || mpTokensV2)
+	if ripple {
+		return p.applyIOUPayment(ctx)
+	}
+	if isDstMPT {
 		return p.applyMPTPayment(ctx)
 	}
 
-	// Determine if this is a "ripple" payment (uses the flow engine).
-	// Reference: rippled Payment.cpp:435-436:
-	//   bool const ripple = (hasPaths || sendMax || !dstAmount.native()) && !mptDirect;
-	hasPaths := len(p.Paths) > 0
-	hasSendMax := p.SendMax != nil
-	ripple := (hasPaths || hasSendMax || !p.Amount.IsNative()) && !mptDirect
-
-	if !ripple {
-		// XRP-to-XRP direct payment (no paths, no SendMax, Amount is native)
-		return p.applyXRPPayment(ctx)
-	}
-
-	// IOU / cross-currency payment - uses the flow engine
-	return p.applyIOUPayment(ctx)
+	return p.applyXRPPayment(ctx)
 }

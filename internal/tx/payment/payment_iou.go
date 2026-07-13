@@ -26,8 +26,8 @@ func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [2
 	return ter.TesSUCCESS
 }
 
-// applyIOUPayment applies an IOU (issued currency) or cross-currency payment.
-// This is called for any payment with paths, SendMax, or non-native Amount.
+// applyIOUPayment applies payments routed through Flow, including IOU,
+// cross-currency, and MPTokensV2 payments.
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp
 func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 	// Validate the amount
@@ -57,9 +57,10 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return p.applyRipplePayment(ctx, senderAccountID, destAccountID)
 	}
 
-	issuerAccountID, err := state.DecodeAccountID(p.Amount.Issuer)
-	if err != nil {
-		return ter.TemBAD_ISSUER
+	if !p.Amount.IsMPT() {
+		if _, err := state.DecodeAccountID(p.Amount.Issuer); err != nil {
+			return ter.TemBAD_ISSUER
+		}
 	}
 
 	// Check destination exists (needed for DepositAuth check and destination flags)
@@ -101,7 +102,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	return p.applyIOUPaymentWithPaths(ctx, senderAccountID, destAccountID, issuerAccountID)
+	return p.applyIOUPaymentWithPaths(ctx, senderAccountID, destAccountID)
 }
 
 // applyRipplePayment handles cross-currency payments where Amount is XRP but
@@ -161,8 +162,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 
 		// A freshly created account carries no flags, so destination-tag and
 		// deposit-authorization checks do not apply.
-		var zeroID [20]byte
-		return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)
+		return p.applyIOUPaymentWithPaths(ctx, senderID, destID)
 	}
 
 	destData, err := ctx.View.Read(destKey)
@@ -188,15 +188,13 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		return ter.TefINTERNAL
 	}
 
-	// Use the flow engine (issuerID is unused for XRP amount, pass zero)
-	var zeroID [20]byte
-	return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)
+	return p.applyIOUPaymentWithPaths(ctx, senderID, destID)
 }
 
 // applyIOUPaymentWithPaths handles IOU payments that require path finding using the Flow Engine.
 // This is the main entry point for cross-currency payments and payments with explicit paths.
 // Reference: rippled/src/xrpld/app/paths/RippleCalc.cpp
-func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID, issuerID [20]byte) ter.Result {
+func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID [20]byte) ter.Result {
 	// Determine payment flags
 	flags := p.GetFlags()
 	partialPayment := (flags & PaymentFlagPartialPayment) != 0

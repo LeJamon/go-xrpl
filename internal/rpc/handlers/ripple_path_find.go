@@ -88,11 +88,8 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		return nil, types.RPCErrorDstActMalformed("Destination account is malformed.")
 	}
 
-	// MPT amounts parse (rippled accepts them at this layer too), but the
-	// pathfinder has no MPT support, so they are rejected as malformed
-	// rather than silently producing meaningless paths.
 	dstAmount, err := state.AmountFromJSON(rawDstAmount)
-	if err != nil || dstAmount.IsMPT() {
+	if err != nil || !pathfinder.IsValidAsset(dstAmount) {
 		return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
@@ -110,7 +107,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
 		amt, smErr := state.AmountFromJSON(rawSendMax)
-		if smErr != nil || amt.IsMPT() || (amt.Signum() <= 0 && amt.Value() != "-1") {
+		if smErr != nil || !pathfinder.IsValidAsset(amt) || (amt.Signum() <= 0 && amt.Value() != "-1") {
 			return nil, types.RPCErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
@@ -275,14 +272,9 @@ func parseSourceCurrencies(
 		return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
 	}
 
-	var sendMaxCurrency string
-	var sendMaxIssuer [20]byte
+	var sendMaxIssue payment.Issue
 	if sendMax != nil {
-		sendMaxCurrency = "XRP"
-		if !sendMax.IsNative() {
-			sendMaxCurrency = sendMax.Currency
-			sendMaxIssuer, _ = state.DecodeAccountID(sendMax.Issuer)
-		}
+		sendMaxIssue = payment.GetIssue(*sendMax)
 	}
 
 	var srcCurrencies []payment.Issue
@@ -295,20 +287,50 @@ func parseSourceCurrencies(
 	}
 
 	for _, raw := range entries {
-		var sc struct {
-			Currency *string         `json:"currency"`
-			Issuer   json.RawMessage `json:"issuer"`
-		}
-		if err := json.Unmarshal(raw, &sc); err != nil || sc.Currency == nil || !keylet.IsValidCurrencyCode(*sc.Currency) {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
 			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
 		}
-		currency := canonCurrency(*sc.Currency)
+		rawCurrency, hasCurrency := fields["currency"]
+		rawMPT, hasMPT := fields["mpt_issuance_id"]
+		if hasCurrency == hasMPT {
+			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+		}
+		if hasMPT {
+			if _, hasIssuer := fields["issuer"]; hasIssuer {
+				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+			}
+			var mptID string
+			if err := json.Unmarshal(rawMPT, &mptID); err != nil {
+				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+			}
+			id, ok := pathfinder.ParseSourceMPTID(mptID)
+			if !ok {
+				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+			}
+			issue := payment.NewMPTIssue(id)
+			if sendMax != nil {
+				if !issue.Equal(sendMaxIssue) {
+					continue
+				}
+				if sendMaxIssue.Issuer != srcAccount {
+					return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
+				}
+			}
+			add(issue)
+			continue
+		}
+		var currencyValue string
+		if err := json.Unmarshal(rawCurrency, &currencyValue); err != nil || !keylet.IsValidCurrencyCode(currencyValue) {
+			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+		}
+		currency := canonCurrency(currencyValue)
 		isXRPCur := currency == "XRP"
 
 		var issuerID [20]byte
-		if sc.Issuer != nil && !isJSONNull(sc.Issuer) {
+		if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
 			var issuerStr string
-			if err := json.Unmarshal(sc.Issuer, &issuerStr); err != nil {
+			if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
 				return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			id, err := state.DecodeAccountID(issuerStr)
@@ -328,20 +350,20 @@ func parseSourceCurrencies(
 
 		if sendMax != nil {
 			// If the currencies don't match, ignore the source currency.
-			if currency != canonCurrency(sendMaxCurrency) {
+			if sendMaxIssue.IsMPT || currency != canonCurrency(sendMaxIssue.Currency) {
 				continue
 			}
 			// If neither issuer is the source and they are not equal, the
 			// source issuer is illegal.
-			if issuerID != srcAccount && sendMaxIssuer != srcAccount && issuerID != sendMaxIssuer {
+			if issuerID != srcAccount && sendMaxIssue.Issuer != srcAccount && issuerID != sendMaxIssue.Issuer {
 				return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			// If both are the source, use the source; otherwise use the one
 			// that's not the source.
 			if issuerID != srcAccount {
 				add(payment.Issue{Currency: currency, Issuer: issuerID})
-			} else if sendMaxIssuer != srcAccount {
-				add(payment.Issue{Currency: currency, Issuer: sendMaxIssuer})
+			} else if sendMaxIssue.Issuer != srcAccount {
+				add(payment.Issue{Currency: currency, Issuer: sendMaxIssue.Issuer})
 			} else {
 				add(payment.Issue{Currency: currency, Issuer: srcAccount})
 			}
@@ -454,6 +476,12 @@ func resolvePathFindLedger(
 func formatAmountJSON(amt state.Amount) any {
 	if amt.IsNative() {
 		return amt.Value()
+	}
+	if amt.IsMPT() {
+		return map[string]string{
+			"mpt_issuance_id": amt.MPTIssuanceID(),
+			"value":           amt.Value(),
+		}
 	}
 	return map[string]string{
 		"currency": amt.Currency,

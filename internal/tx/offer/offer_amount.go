@@ -1,7 +1,9 @@
 package offer
 
 import (
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
 
 // maxNativeDrops is rippled STAmount::cMaxNativeN — the isLegalNet ceiling on a
@@ -37,6 +39,9 @@ func zeroAmount(amt tx.Amount) tx.Amount {
 	if amt.IsNative() {
 		return tx.NewXRPAmount(0)
 	}
+	if amt.IsMPT() {
+		return newMPTAmountLike(amt, 0)
+	}
 	return tx.NewIssuedAmount(0, -100, amt.Currency, amt.Issuer)
 }
 
@@ -45,20 +50,24 @@ func zeroAmount(amt tx.Amount) tx.Amount {
 func subtractAmounts(a, b tx.Amount) tx.Amount {
 	result, err := a.Sub(b)
 	if err != nil {
-		// Type mismatch - return zero amount of a's type
-		if a.IsNative() {
-			return tx.NewXRPAmount(0)
-		}
-		return tx.NewIssuedAmount(0, -100, a.Currency, a.Issuer)
+		return zeroAmount(a)
 	}
 
-	// Clamp negative results to zero
 	if result.IsNegative() {
-		if result.IsNative() {
-			return tx.NewXRPAmount(0)
-		}
-		return tx.NewIssuedAmount(0, -100, a.Currency, a.Issuer)
+		return zeroAmount(a)
 	}
 
 	return result
+}
+
+func newMPTAmountLike(amount tx.Amount, value int64) tx.Amount {
+	id, err := mptutil.DecodeID(amount.MPTIssuanceID())
+	if err != nil {
+		return tx.Amount{}
+	}
+	return state.NewMPTAmountWithIssuanceID(
+		value,
+		state.EncodeAccountIDSafe(mptutil.Issuer(id)),
+		mptutil.EncodeID(id),
+	)
 }

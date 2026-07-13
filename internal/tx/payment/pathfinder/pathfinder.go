@@ -6,7 +6,9 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -19,6 +21,7 @@ type Pathfinder struct {
 
 	srcCurrency string
 	srcIssuer   [20]byte
+	srcIssue    payment.Issue
 	dstAmount   tx.Amount
 	srcAmount   tx.Amount
 
@@ -52,6 +55,8 @@ type Pathfinder struct {
 
 	// pathsOutCount caches getPathsOut results per Issue.
 	pathsOutCount map[payment.Issue]int
+
+	parentCloseTime uint32
 }
 
 // NewPathfinder creates a new pathfinder for the given payment parameters.
@@ -65,33 +70,53 @@ func NewPathfinder(
 	srcCurrency string,
 	srcIssuer [20]byte,
 	convertAll bool,
+	parentCloseTime ...uint32,
+) *Pathfinder {
+	return NewPathfinderForIssue(
+		ledger, cache, srcAccount, dstAccount, dstAmount, srcAmount,
+		payment.Issue{Currency: srcCurrency, Issuer: srcIssuer}, convertAll, parentCloseTime...,
+	)
+}
+
+func NewPathfinderForIssue(
+	ledger tx.LedgerView,
+	cache *RippleLineCache,
+	srcAccount, dstAccount [20]byte,
+	dstAmount tx.Amount,
+	srcAmount tx.Amount,
+	srcIssue payment.Issue,
+	convertAll bool,
+	parentCloseTime ...uint32,
 ) *Pathfinder {
 	// Determine effective destination.
-	// If dstAmount is IOU and the issuer differs from dstAccount, the effective
+	// If dstAmount is non-XRP and the issuer differs from dstAccount, the effective
 	// destination is the issuer (gateway). Paths must reach the issuer.
 	effectiveDst := dstAccount
-	if !dstAmount.IsNative() {
-		issuerID, err := state.DecodeAccountID(dstAmount.Issuer)
-		if err == nil && issuerID != dstAccount {
-			effectiveDst = issuerID
-		}
+	dstIssue := payment.GetIssue(dstAmount)
+	if !dstIssue.IsXRP() && dstIssue.Issuer != dstAccount {
+		effectiveDst = dstIssue.Issuer
 	}
 
 	// Build source path element
 	source := payment.PathStep{
-		Account:  state.EncodeAccountIDSafe(srcAccount),
-		Currency: srcCurrency,
+		Account: state.EncodeAccountIDSafe(srcAccount),
 	}
-	if srcCurrency != "XRP" && srcCurrency != "" {
-		source.Issuer = state.EncodeAccountIDSafe(srcIssuer)
+	if srcIssue.IsMPT {
+		source.MPTIssuanceID = mptutil.EncodeID(srcIssue.MPTID)
+	} else {
+		source.Currency = srcIssue.Currency
+		if !srcIssue.IsXRP() {
+			source.Issuer = state.EncodeAccountIDSafe(srcIssue.Issuer)
+		}
 	}
 
-	return &Pathfinder{
+	pf := &Pathfinder{
 		srcAccount:       srcAccount,
 		dstAccount:       dstAccount,
 		effectiveDst:     effectiveDst,
-		srcCurrency:      srcCurrency,
-		srcIssuer:        srcIssuer,
+		srcCurrency:      srcIssue.Currency,
+		srcIssuer:        srcIssue.Issuer,
+		srcIssue:         srcIssue,
 		dstAmount:        dstAmount,
 		srcAmount:        srcAmount,
 		convertAll:       convertAll,
@@ -103,6 +128,10 @@ func NewPathfinder(
 		pathsOutCount:    make(map[payment.Issue]int),
 		completePathKeys: make(map[string]struct{}),
 	}
+	if len(parentCloseTime) > 0 {
+		pf.parentCloseTime = parentCloseTime[0]
+	}
+	return pf
 }
 
 // CompletePaths returns the discovered complete paths.
@@ -113,6 +142,23 @@ func (pf *Pathfinder) CompletePaths() [][]payment.PathStep {
 // PathRanks returns the ranked paths.
 func (pf *Pathfinder) PathRanks() []PathRank {
 	return pf.pathRanks
+}
+
+func (pf *Pathfinder) sourceIssue() payment.Issue {
+	if pf.srcIssue.IsMPT || pf.srcIssue.Currency != "" || pf.srcIssue.Issuer != [20]byte{} {
+		return pf.srcIssue
+	}
+	return payment.Issue{Currency: pf.srcCurrency, Issuer: pf.srcIssuer}
+}
+
+func samePathfindingAsset(a, b payment.Issue) bool {
+	if a.IsMPT || b.IsMPT {
+		return a.Equal(b)
+	}
+	if a.IsXRP() || b.IsXRP() {
+		return a.IsXRP() && b.IsXRP()
+	}
+	return a.Currency == b.Currency
 }
 
 // FindPaths runs the DFS path discovery algorithm at the given search level.
@@ -126,18 +172,15 @@ func (pf *Pathfinder) FindPaths(searchLevel int) bool {
 	}
 
 	// Same account, same currency — no path needed
-	dstCurrency := pf.dstAmount.Currency
-	if pf.dstAmount.IsNative() {
-		dstCurrency = "XRP"
-	}
+	dstIssue := payment.GetIssue(pf.dstAmount)
 	if pf.srcAccount == pf.dstAccount &&
 		pf.dstAccount == pf.effectiveDst &&
-		pf.srcCurrency == dstCurrency {
+		samePathfindingAsset(pf.sourceIssue(), dstIssue) {
 		return false
 	}
 
 	// Source IS the effective destination with same currency — default path
-	if pf.srcAccount == pf.effectiveDst && pf.srcCurrency == dstCurrency {
+	if pf.srcAccount == pf.effectiveDst && samePathfindingAsset(pf.sourceIssue(), dstIssue) {
 		return true
 	}
 
@@ -186,7 +229,8 @@ func (pf *Pathfinder) FindPaths(searchLevel int) bool {
 // classifyPayment determines the PaymentType based on source/destination currencies.
 // Reference: rippled Pathfinder::findPaths() payment type determination
 func (pf *Pathfinder) classifyPayment() PaymentType {
-	srcXRP := pf.srcCurrency == "XRP" || pf.srcCurrency == ""
+	srcIssue := pf.sourceIssue()
+	srcXRP := srcIssue.IsXRP()
 	dstXRP := pf.dstAmount.IsNative()
 
 	switch {
@@ -197,8 +241,12 @@ func (pf *Pathfinder) classifyPayment() PaymentType {
 	case !srcXRP && dstXRP:
 		return ptNonXRP_to_XRP
 	case !srcXRP && !dstXRP:
-		dstCurrency := pf.dstAmount.Currency
-		if pf.srcCurrency == dstCurrency {
+		dstIssue := payment.GetIssue(pf.dstAmount)
+		if srcIssue.IsMPT || dstIssue.IsMPT {
+			if srcIssue.Equal(dstIssue) {
+				return ptNonXRP_to_same
+			}
+		} else if srcIssue.Currency == dstIssue.Currency {
 			return ptNonXRP_to_same
 		}
 		return ptNonXRP_to_nonXRP
@@ -267,48 +315,49 @@ func (pf *Pathfinder) addLinks(parentPaths [][]payment.PathStep, addFlags uint32
 // addLink extends a single path by one hop.
 // Reference: rippled Pathfinder::addLink()
 func (pf *Pathfinder) addLink(currentPath []payment.PathStep, incompletePaths *[][]payment.PathStep, addFlags uint32) {
-	// Get current path endpoint
-	var endAccount [20]byte
-	var endCurrency string
-	var endIssuer [20]byte
-
-	if len(currentPath) == 0 {
-		// Path is empty — use source
-		endAccount = pf.srcAccount
-		endCurrency = pf.srcCurrency
-		endIssuer = pf.srcIssuer
-	} else {
-		last := currentPath[len(currentPath)-1]
-		if last.Account != "" {
-			endAccount, _ = state.DecodeAccountID(last.Account)
-		}
-		endCurrency = last.Currency
-		if endCurrency == "" {
-			endCurrency = pf.srcCurrency
-		}
-		if last.Issuer != "" {
-			endIssuer, _ = state.DecodeAccountID(last.Issuer)
-		} else if last.Account != "" {
-			endIssuer = endAccount
-		}
-	}
-
-	bOnXRP := endCurrency == "XRP" || endCurrency == ""
+	endAccount, endIssue := pf.pathEnd(currentPath)
+	bOnXRP := endIssue.IsXRP()
 	hasEffectiveDst := pf.effectiveDst != pf.dstAccount
-	dstCurrency := pf.dstAmount.Currency
-	if pf.dstAmount.IsNative() {
-		dstCurrency = "XRP"
-	}
+	dstIssue := payment.GetIssue(pf.dstAmount)
 
 	// Handle account paths (rippling through trust lines)
 	if addFlags&afADD_ACCOUNTS != 0 {
-		pf.addAccountLinks(currentPath, incompletePaths, addFlags, endAccount, endCurrency, endIssuer, bOnXRP, hasEffectiveDst, dstCurrency)
+		pf.addAccountLinks(currentPath, incompletePaths, addFlags, endAccount, endIssue, bOnXRP, hasEffectiveDst, dstIssue)
 	}
 
 	// Handle order book paths
 	if addFlags&afADD_BOOKS != 0 {
-		pf.addBookLinks(currentPath, incompletePaths, addFlags, endCurrency, endIssuer, bOnXRP, hasEffectiveDst, dstCurrency)
+		pf.addBookLinks(currentPath, incompletePaths, addFlags, endIssue, bOnXRP, hasEffectiveDst, dstIssue)
 	}
+}
+
+func (pf *Pathfinder) pathEnd(path []payment.PathStep) ([20]byte, payment.Issue) {
+	account := pf.srcAccount
+	issue := pf.sourceIssue()
+	for _, step := range path {
+		if step.Account != "" {
+			if decoded, err := state.DecodeAccountID(step.Account); err == nil {
+				account = decoded
+			}
+		}
+		if step.MPTIssuanceID != "" {
+			if id, err := mptutil.DecodeID(step.MPTIssuanceID); err == nil {
+				issue = payment.NewMPTIssue(id)
+			}
+			continue
+		}
+		if step.Currency != "" {
+			issue = payment.Issue{Currency: step.Currency}
+			if step.Issuer != "" {
+				issue.Issuer, _ = state.DecodeAccountID(step.Issuer)
+			} else if !issue.IsXRP() {
+				issue.Issuer = account
+			}
+		} else if step.Account != "" && !issue.IsMPT && !issue.IsXRP() {
+			issue.Issuer = account
+		}
+	}
+	return account, issue
 }
 
 // addAccountLinks extends a path through trust lines.
@@ -318,11 +367,10 @@ func (pf *Pathfinder) addAccountLinks(
 	incompletePaths *[][]payment.PathStep,
 	addFlags uint32,
 	endAccount [20]byte,
-	endCurrency string,
-	endIssuer [20]byte,
+	endIssue payment.Issue,
 	bOnXRP bool,
 	hasEffectiveDst bool,
-	dstCurrency string,
+	dstIssue payment.Issue,
 ) {
 	if bOnXRP {
 		// On XRP — if destination is XRP and path is non-empty, it's complete
@@ -343,7 +391,7 @@ func (pf *Pathfinder) addAccountLinks(
 	}
 
 	bRequireAuth := acctRoot.Flags&state.LsfRequireAuth != 0
-	bIsEndCurrency := endCurrency == dstCurrency
+	bIsEndCurrency := samePathfindingAsset(endIssue, dstIssue)
 	bIsNoRippleOut := pf.isNoRippleOut(currentPath)
 	bDestOnly := addFlags&afAC_LAST != 0
 
@@ -351,6 +399,10 @@ func (pf *Pathfinder) addAccountLinks(
 	lineDirection := LineDirectionOutgoing
 	if bIsNoRippleOut {
 		lineDirection = LineDirectionIncoming
+	}
+	if endIssue.IsMPT {
+		pf.addMPTAccountLinks(currentPath, incompletePaths, addFlags, endAccount, endIssue, hasEffectiveDst, dstIssue)
+		return
 	}
 	lines := pf.cache.GetRippleLines(endAccount, lineDirection)
 
@@ -379,12 +431,12 @@ func (pf *Pathfinder) addAccountLinks(
 		}
 
 		// Currency must match
-		if line.Currency != endCurrency {
+		if line.Currency != endIssue.Currency {
 			continue
 		}
 
 		// Check for path loops
-		if pathHasSeen(currentPath, peerAcct, endCurrency) {
+		if pathHasSeenIssue(currentPath, peerAcct, endIssue) {
 			continue
 		}
 
@@ -428,7 +480,7 @@ func (pf *Pathfinder) addAccountLinks(
 		} else {
 			// Regular candidate — score by paths out
 			out := pf.getPathsOut(
-				payment.Issue{Currency: endCurrency, Issuer: peerAcct},
+				payment.Issue{Currency: endIssue.Currency, Issuer: peerAcct},
 				peerDirection,
 				bIsEndCurrency,
 			)
@@ -465,12 +517,51 @@ func (pf *Pathfinder) addAccountLinks(
 		copy(newPath, currentPath)
 		newPath = append(newPath, payment.PathStep{
 			Account:  state.EncodeAccountIDSafe(c.Account),
-			Currency: endCurrency,
+			Currency: endIssue.Currency,
 			Issuer:   state.EncodeAccountIDSafe(c.Account),
 			Type:     0x01, // typeAccount
 		})
 		*incompletePaths = append(*incompletePaths, newPath)
 	}
+}
+
+func (pf *Pathfinder) addMPTAccountLinks(
+	currentPath []payment.PathStep,
+	incompletePaths *[][]payment.PathStep,
+	addFlags uint32,
+	endAccount [20]byte,
+	endIssue payment.Issue,
+	hasEffectiveDst bool,
+	dstIssue payment.Issue,
+) {
+	issuer := endIssue.Issuer
+	if hasEffectiveDst && issuer == pf.dstAccount {
+		return
+	}
+	toDestination := issuer == pf.effectiveDst
+	if addFlags&afAC_LAST != 0 && !toDestination {
+		return
+	}
+	if pathHasSeenIssue(currentPath, issuer, endIssue) {
+		return
+	}
+	funds, result := mptutil.Funds(pf.ledger, endIssue.MPTID, endAccount, true)
+	if result != ter.TesSUCCESS || funds <= 0 {
+		return
+	}
+	if toDestination && samePathfindingAsset(endIssue, dstIssue) {
+		if len(currentPath) > 0 {
+			pf.addUniquePath(currentPath)
+		}
+		return
+	}
+	newPath := make([]payment.PathStep, len(currentPath), len(currentPath)+1)
+	copy(newPath, currentPath)
+	newPath = append(newPath, payment.PathStep{
+		Account: state.EncodeAccountIDSafe(issuer),
+		Type:    0x01,
+	})
+	*incompletePaths = append(*incompletePaths, newPath)
 }
 
 // addBookLinks extends a path through order books.
@@ -479,14 +570,11 @@ func (pf *Pathfinder) addBookLinks(
 	currentPath []payment.PathStep,
 	incompletePaths *[][]payment.PathStep,
 	addFlags uint32,
-	endCurrency string,
-	endIssuer [20]byte,
+	endIssue payment.Issue,
 	bOnXRP bool,
 	hasEffectiveDst bool,
-	dstCurrency string,
+	dstIssue payment.Issue,
 ) {
-	endIssue := payment.Issue{Currency: endCurrency, Issuer: endIssuer}
-
 	if addFlags&afOB_XRP != 0 {
 		// XRP book only — add path through book to XRP
 		if !bOnXRP && pf.books.IsBookToXRP(endIssue) {
@@ -523,7 +611,7 @@ func (pf *Pathfinder) addBookLinks(
 		}
 
 		// If destination only, restrict to destination currency
-		if bDestOnly && bookOut.Currency != dstCurrency {
+		if bDestOnly && !samePathfindingAsset(bookOut, dstIssue) {
 			continue
 		}
 
@@ -544,11 +632,12 @@ func (pf *Pathfinder) addBookLinks(
 			}
 		} else {
 			// Check if we've already seen this issuer account with this currency
-			if pathHasSeen(currentPath, bookOut.Issuer, bookOut.Currency) {
+			if pathHasSeenIssue(currentPath, bookOut.Issuer, bookOut) {
 				continue
 			}
 
 			issuerStr := state.EncodeAccountIDSafe(bookOut.Issuer)
+			bookStep := pathStepForIssue(bookOut)
 
 			// Path compression: book -> account -> book
 			// If the last two steps are an offer followed by an account,
@@ -556,27 +645,18 @@ func (pf *Pathfinder) addBookLinks(
 			// Reference: rippled Pathfinder::addLink() book compression
 			if len(newPath) >= 2 &&
 				newPath[len(newPath)-1].Type == 0x01 && // typeAccount
-				(newPath[len(newPath)-2].Type == 0x10 || newPath[len(newPath)-2].Type == 0x30) { // typeCurrency or typeCurrency|typeIssuer
-				newPath[len(newPath)-1] = payment.PathStep{
-					Currency: bookOut.Currency,
-					Issuer:   issuerStr,
-					Type:     0x30, // typeCurrency | typeIssuer
-				}
+				isBookPathType(newPath[len(newPath)-2].Type) {
+				newPath[len(newPath)-1] = bookStep
 			} else {
-				// Add currency+issuer step
-				newPath = append(newPath, payment.PathStep{
-					Currency: bookOut.Currency,
-					Issuer:   issuerStr,
-					Type:     0x30, // typeCurrency | typeIssuer
-				})
+				newPath = append(newPath, bookStep)
 			}
 
-			if hasEffectiveDst && bookOut.Issuer == pf.dstAccount && bookOut.Currency == dstCurrency {
+			if hasEffectiveDst && bookOut.Issuer == pf.dstAccount && samePathfindingAsset(bookOut, dstIssue) {
 				// Would skip required issuer — skip this book
 				continue
 			}
 
-			if bookOut.Issuer == pf.effectiveDst && bookOut.Currency == dstCurrency {
+			if bookOut.Issuer == pf.effectiveDst && samePathfindingAsset(bookOut, dstIssue) {
 				// Complete!
 				pf.addUniquePath(newPath)
 			} else {
@@ -584,15 +664,32 @@ func (pf *Pathfinder) addBookLinks(
 				newPath2 := make([]payment.PathStep, len(newPath), len(newPath)+1)
 				copy(newPath2, newPath)
 				newPath2 = append(newPath2, payment.PathStep{
-					Account:  issuerStr,
-					Currency: bookOut.Currency,
-					Issuer:   issuerStr,
-					Type:     0x01, // typeAccount
+					Account: issuerStr,
+					Type:    0x01, // typeAccount
 				})
 				*incompletePaths = append(*incompletePaths, newPath2)
 			}
 		}
 	}
+}
+
+func pathStepForIssue(issue payment.Issue) payment.PathStep {
+	if issue.IsMPT {
+		return payment.PathStep{
+			MPTIssuanceID: mptutil.EncodeID(issue.MPTID),
+			Issuer:        state.EncodeAccountIDSafe(issue.Issuer),
+			Type:          0x60,
+		}
+	}
+	return payment.PathStep{
+		Currency: issue.Currency,
+		Issuer:   state.EncodeAccountIDSafe(issue.Issuer),
+		Type:     0x30,
+	}
+}
+
+func isBookPathType(pathType int) bool {
+	return pathType == 0x10 || pathType == 0x30 || pathType == 0x40 || pathType == 0x60
 }
 
 // getPathsOut returns the number of outgoing paths from the given issue.
@@ -602,6 +699,28 @@ func (pf *Pathfinder) addBookLinks(
 func (pf *Pathfinder) getPathsOut(issue payment.Issue, direction LineDirection, isDstCurrency bool) int {
 	if cached, ok := pf.pathsOutCount[issue]; ok {
 		return cached
+	}
+	if issue.IsMPT {
+		if mptutil.IsGlobalFrozen(pf.ledger, issue.MPTID) {
+			pf.pathsOutCount[issue] = 0
+			return 0
+		}
+		count := len(pf.books.GetBooksByTakerPays(issue))
+		for _, mpt := range pf.cache.GetMPTs(issue.Issuer) {
+			if mpt.ID != issue.MPTID || mpt.ZeroBalance || mpt.MaxedOut {
+				continue
+			}
+			if mptutil.RequireAuthAt(pf.ledger, issue.MPTID, issue.Issuer, false, pf.parentCloseTime) != ter.TesSUCCESS {
+				continue
+			}
+			if isDstCurrency && issue.Issuer == pf.effectiveDst {
+				count += highPriority
+			} else if !mptutil.IsIndividualFrozen(pf.ledger, issue.MPTID, issue.Issuer) {
+				count++
+			}
+		}
+		pf.pathsOutCount[issue] = count
+		return count
 	}
 
 	// Check if account exists and is not globally frozen
@@ -768,6 +887,8 @@ func pathKey(path []payment.PathStep) string {
 		b.WriteByte(0)
 		b.WriteString(step.Issuer)
 		b.WriteByte(0)
+		b.WriteString(step.MPTIssuanceID)
+		b.WriteByte(0)
 	}
 	return b.String()
 }
@@ -775,6 +896,10 @@ func pathKey(path []payment.PathStep) string {
 // issueMatchesOrigin returns true if the given issue matches the source currency/issuer.
 // Reference: rippled Pathfinder::issueMatchesOrigin()
 func (pf *Pathfinder) issueMatchesOrigin(issue payment.Issue) bool {
+	srcIssue := pf.sourceIssue()
+	if issue.IsMPT || srcIssue.IsMPT {
+		return issue.Equal(srcIssue)
+	}
 	matchingCurrency := issue.Currency == pf.srcCurrency
 	matchingAccount := issue.IsXRP() ||
 		(pf.srcIssuer != [20]byte{} && issue.Issuer == pf.srcIssuer) ||
@@ -786,6 +911,15 @@ func (pf *Pathfinder) issueMatchesOrigin(issue payment.Issue) bool {
 // This uses a zero account for matching (book steps don't have real accounts).
 // Reference: rippled STPath::hasSeen(xrpAccount(), currency, issuer)
 func pathHasSeenBookIssue(path []payment.PathStep, issue payment.Issue) bool {
+	if issue.IsMPT {
+		id := mptutil.EncodeID(issue.MPTID)
+		for _, step := range path {
+			if step.Account == "" && strings.EqualFold(step.MPTIssuanceID, id) {
+				return true
+			}
+		}
+		return false
+	}
 	issuerStr := state.EncodeAccountIDSafe(issue.Issuer)
 	for _, step := range path {
 		// Match book steps (typeCurrency or typeCurrency|typeIssuer)
@@ -798,19 +932,25 @@ func pathHasSeenBookIssue(path []payment.PathStep, issue payment.Issue) bool {
 	return false
 }
 
-// pathHasSeen returns true if the path already visits the given account+currency.
-func pathHasSeen(path []payment.PathStep, account [20]byte, currency string) bool {
+func pathHasSeenIssue(path []payment.PathStep, account [20]byte, issue payment.Issue) bool {
 	acctStr := state.EncodeAccountIDSafe(account)
 	for _, step := range path {
 		if step.Account == acctStr {
+			if issue.IsMPT {
+				return step.MPTIssuanceID == "" || strings.EqualFold(step.MPTIssuanceID, mptutil.EncodeID(issue.MPTID))
+			}
 			stepCurrency := step.Currency
 			if stepCurrency == "" {
 				stepCurrency = "XRP"
 			}
-			if stepCurrency == currency {
+			if stepCurrency == issue.Currency {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func pathHasSeen(path []payment.PathStep, account [20]byte, currency string) bool {
+	return pathHasSeenIssue(path, account, payment.Issue{Currency: currency})
 }

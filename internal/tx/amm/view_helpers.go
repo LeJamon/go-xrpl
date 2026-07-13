@@ -3,8 +3,10 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // noDefaultRipple reports whether the asset's issuer lacks lsfDefaultRipple,
@@ -12,7 +14,7 @@ import (
 // issuer, or when DefaultRipple is set.
 // Reference: rippled AMMCreate.cpp lines 126-135
 func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
-	if isXRPAsset(asset) {
+	if isXRPAsset(asset) || asset.IsMPT() {
 		return false
 	}
 
@@ -38,27 +40,38 @@ func noDefaultRipple(view tx.LedgerView, asset tx.Asset) bool {
 // XRP it compares against the liquid balance; for IOU it compares held funds
 // (issuers have unlimited supply).
 // Reference: rippled AMMCreate.cpp line 153-163
-func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amount, xrpLiquid int64) bool {
+func insufficientBalance(view tx.LedgerView, accountID [20]byte, amount tx.Amount, xrpLiquid int64) (bool, ter.Result) {
 	if amount.IsNative() {
-		return xrpLiquid < amount.Drops()
+		return xrpLiquid < amount.Drops(), ter.TesSUCCESS
+	}
+	if amount.IsMPT() {
+		requested, ok := amount.MPTRaw()
+		if !ok {
+			return false, ter.TefINTERNAL
+		}
+		held, result := mptFunds(view, accountID, amount, true)
+		if result == ter.TefINTERNAL {
+			return false, result
+		}
+		return result != ter.TesSUCCESS || held < requested, ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return true
+		return true, ter.TesSUCCESS
 	}
 	if accountID == issuerID {
-		return false
+		return false, ter.TesSUCCESS
 	}
 
 	held := tx.AccountFunds(view, accountID, amount, true, 0, 0)
-	return held.Compare(amount) < 0
+	return held.Compare(amount) < 0, ter.TesSUCCESS
 }
 
 // isLPToken reports whether the amount is issued by an AMM pseudo-account.
 // Reference: rippled AMMCreate.cpp line 172-177
 func isLPToken(view tx.LedgerView, amount tx.Amount) bool {
-	if amount.IsNative() {
+	if amount.IsNative() || amount.IsMPT() {
 		return false
 	}
 
@@ -83,6 +96,9 @@ func isLPToken(view tx.LedgerView, amount tx.Amount) bool {
 // setAMMNodeFlag sets lsfAMMNode on the AMM's trust line for an IOU asset.
 // Reference: rippled AMMCreate.cpp sendAndTrustSet line 297-306
 func setAMMNodeFlag(ammAccountID [20]byte, asset tx.Asset, view tx.LedgerView) error {
+	if asset.IsMPT() {
+		return nil
+	}
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
 		return err
@@ -115,6 +131,20 @@ func setAMMNodeFlag(ammAccountID [20]byte, asset tx.Asset, view tx.LedgerView) e
 // Reference: rippled AMMCreate.cpp preclaim lines 201-210
 func clawbackDisabled(view tx.LedgerView, asset tx.Asset) ter.Result {
 	if isXRPAsset(asset) {
+		return ter.TesSUCCESS
+	}
+	if asset.IsMPT() {
+		id, err := mptutil.DecodeID(asset.MPTIssuanceID)
+		if err != nil {
+			return ter.TecINTERNAL
+		}
+		issuance, _, result := mptutil.ReadIssuance(view, id)
+		if result != ter.TesSUCCESS {
+			return ter.TecINTERNAL
+		}
+		if issuance.Flags&entry.LsfMPTCanClawback != 0 {
+			return ter.TecNO_PERMISSION
+		}
 		return ter.TesSUCCESS
 	}
 

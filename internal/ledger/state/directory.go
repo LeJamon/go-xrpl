@@ -148,11 +148,17 @@ func GetRate(offerOut, offerIn Amount) (rate uint64) {
 }
 
 // rateMantissa returns the unsigned mantissa and exponent of a (non-zero)
-// amount for use in GetRate, lifting a native amount's drops into the IOU
+// amount for use in GetRate, lifting an integral amount into the IOU
 // mantissa band [10^15, 10^16) exactly as rippled's divide() does.
 func rateMantissa(a Amount) (uint64, int) {
-	if a.IsNative() {
-		v := uint64(a.Drops())
+	if a.IsNative() || a.IsMPT() {
+		m := a.Mantissa()
+		var v uint64
+		if m < 0 {
+			v = uint64(-(m + 1)) + 1
+		} else {
+			v = uint64(m)
+		}
 		offset := 0
 		for v < cMinValue && v > 0 {
 			v *= 10

@@ -1,6 +1,7 @@
 package check
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -19,6 +20,13 @@ func assertTemDisabled(t *testing.T, err error) {
 	t.Helper()
 	if re, ok := ter.AsResultError(err); !ok || re.Code != ter.TemDISABLED {
 		t.Fatalf("want temDISABLED, got %v", err)
+	}
+}
+
+func assertCheckResultError(t *testing.T, err error, want ter.Result) {
+	t.Helper()
+	if result, ok := ter.AsResultError(err); !ok || result.Code != want {
+		t.Fatalf("want %v, got %v", want, err)
 	}
 }
 
@@ -58,4 +66,30 @@ func TestCheckMPTGate(t *testing.T) {
 		c := &CheckCash{DeliverMin: &dm}
 		assertTemDisabled(t, c.CheckExtraFeatures(off))
 	})
+}
+
+func TestCheckRejectsMPTWithZeroIssuer(t *testing.T) {
+	source, _ := state.EncodeAccountID(checkMPTAccountID(0x51))
+	destination, _ := state.EncodeAccountID(checkMPTAccountID(0x52))
+	amount := state.NewMPTAmountWithIssuanceID(
+		1,
+		"",
+		"00000001"+strings.Repeat("00", 20),
+	)
+
+	assertCheckResultError(
+		t,
+		NewCheckCreate(source, destination, amount).Validate(),
+		ter.TemBAD_CURRENCY,
+	)
+
+	for _, useDeliverMin := range []bool{false, true} {
+		cash := NewCheckCash(destination, strings.Repeat("0", 64))
+		if useDeliverMin {
+			cash.DeliverMin = &amount
+		} else {
+			cash.Amount = &amount
+		}
+		assertCheckResultError(t, cash.Validate(), ter.TemBAD_CURRENCY)
+	}
 }

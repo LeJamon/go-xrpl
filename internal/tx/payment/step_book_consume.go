@@ -3,22 +3,18 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 func (s *BookStep) offerTakerGets(offer *state.LedgerOffer) EitherAmount {
-	if s.book.Out.IsXRP() {
-		return NewXRPEitherAmount(offer.TakerGets.Drops())
-	}
-	return NewIOUEitherAmount(offer.TakerGets)
+	return ToEitherAmount(offer.TakerGets)
 }
 
 // offerTakerPays returns what the taker pays to this offer
 func (s *BookStep) offerTakerPays(offer *state.LedgerOffer) EitherAmount {
-	if s.book.In.IsXRP() {
-		return NewXRPEitherAmount(offer.TakerPays.Drops())
-	}
-	return NewIOUEitherAmount(offer.TakerPays)
+	return ToEitherAmount(offer.TakerPays)
 }
 
 // offerQuality returns the quality of an offer, taken from its BookDirectory key
@@ -67,6 +63,11 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 	outRecipient := s.book.Out.Issuer // For XRP: zero account; for IOU: the issuer
 	if err := s.transferFunds(sb, offerOwner, outRecipient, ownerGives, s.book.Out); err != nil {
 		return err
+	}
+	if s.book.Out.IsMPT && offerOwner == s.book.Out.Issuer {
+		if result := mptutil.RecordIssuerSelfDebit(sb, s.book.Out.MPTID, uint64(consumedOut.MPT)); result != ter.TesSUCCESS {
+			return mptTransferResult(result)
+		}
 	}
 
 	// 3. Update offer's remaining amounts (use NET input for offer consumption)
@@ -121,6 +122,9 @@ func (s *BookStep) zeroOut() EitherAmount {
 	if s.book.Out.IsXRP() {
 		return ZeroXRPEitherAmount()
 	}
+	if s.book.Out.IsMPT {
+		return ZeroMPTEitherAmount(s.book.Out.MPTID)
+	}
 	return ZeroIOUEitherAmount(s.book.Out.Currency, state.EncodeAccountIDSafe(s.book.Out.Issuer))
 }
 
@@ -128,6 +132,9 @@ func (s *BookStep) zeroOut() EitherAmount {
 func (s *BookStep) zeroIn() EitherAmount {
 	if s.book.In.IsXRP() {
 		return ZeroXRPEitherAmount()
+	}
+	if s.book.In.IsMPT {
+		return ZeroMPTEitherAmount(s.book.In.MPTID)
 	}
 	return ZeroIOUEitherAmount(s.book.In.Currency, state.EncodeAccountIDSafe(s.book.In.Issuer))
 }
@@ -166,7 +173,8 @@ func (s *BookStep) deleteOffer(sb *PaymentSandbox, offer *state.LedgerOffer, own
 // applyDirRemoveResult applies directory removal changes to the sandbox
 func (s *BookStep) applyDirRemoveResult(sb *PaymentSandbox, result *state.DirRemoveResult) {
 	for _, mod := range result.ModifiedNodes {
-		isBookDir := mod.NewState.TakerPaysCurrency != [20]byte{} || mod.NewState.TakerGetsCurrency != [20]byte{}
+		isBookDir := mod.NewState.TakerPaysCurrency != [20]byte{} || mod.NewState.TakerGetsCurrency != [20]byte{} ||
+			mod.NewState.TakerPaysMPT != nil || mod.NewState.TakerGetsMPT != nil
 		data, err := state.SerializeDirectoryNode(mod.NewState, isBookDir)
 		if err != nil {
 			continue
@@ -182,17 +190,16 @@ func (s *BookStep) applyDirRemoveResult(sb *PaymentSandbox, result *state.DirRem
 }
 
 func (s *BookStep) subtractFromAmount(original, consumed EitherAmount) EitherAmount {
-	if original.IsNative {
-		return NewXRPEitherAmount(original.XRP - consumed.XRP)
-	}
-	result, _ := original.IOU.Sub(consumed.IOU)
-	return NewIOUEitherAmount(result)
+	return original.Sub(consumed)
 }
 
 // eitherAmountToTxAmount converts EitherAmount to tx.Amount
 func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amount {
 	if ea.IsNative {
 		return tx.NewXRPAmount(ea.XRP)
+	}
+	if ea.IsMPT {
+		return newMPTAmount(ea.MPT, issue.MPTID)
 	}
 	return ea.IOU
 }
@@ -207,6 +214,13 @@ func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amoun
 func retagToIssue(amt tx.Amount, issue Issue) tx.Amount {
 	if amt.IsNative() || issue.IsXRP() {
 		return amt
+	}
+	if issue.IsMPT {
+		if raw, ok := amt.MPTRaw(); ok {
+			return newMPTAmount(raw, issue.MPTID)
+		}
+		value := state.NewXRPLNumber(amt.Mantissa(), amt.Exponent()).ToInt64WithMode(state.RoundToNearest)
+		return newMPTAmount(value, issue.MPTID)
 	}
 	return tx.NewIssuedAmount(amt.Mantissa(), amt.Exponent(), issue.Currency, state.EncodeAccountIDSafe(issue.Issuer))
 }
