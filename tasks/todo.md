@@ -335,6 +335,12 @@ was restored instead of changing the contract for unrelated suites. Strict lint,
 repository lint, build, vet, formatting, and whitespace gates pass; no local
 tests were run.
 
+The next core run had one remaining failure: the historical delivered-amount
+fixture had been applied to the neighboring MPT projection test. The resolved
+modern ledger and sequence now belong to `TestTxProjectsDeliverMax`, while the
+unrelated test is restored. Strict lint, repository lint, build, vet, formatting,
+and whitespace gates pass; exact test verification remains CI-only.
+
 # Issue #1303 — trust-layer visibility and forward compatibility
 
 Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`

@@ -75,12 +75,9 @@ func TestTxSyntheticMetadata(t *testing.T) {
 	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
 		t.Run("api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
 			mock := newMockLedgerServiceTx()
-			mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
-				return &mockLedgerReader{seq: seq, closed: true, validated: true}, nil
-			}
 			mock.transactions[txHash] = &types.TransactionInfo{
 				TxData:      stored,
-				LedgerIndex: 4_594_095,
+				LedgerIndex: 2,
 				Validated:   true,
 			}
 			ctx := &types.RPCContext{
@@ -110,9 +107,12 @@ func TestTxProjectsDeliverMax(t *testing.T) {
 	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
 		t.Run("api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
 			mock := newMockLedgerServiceTx()
+			mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+				return &mockLedgerReader{seq: seq, closed: true, validated: true}, nil
+			}
 			mock.transactions[txHash] = &types.TransactionInfo{
 				TxData:      stored,
-				LedgerIndex: 2,
+				LedgerIndex: 4_594_095,
 				Validated:   true,
 			}
 			ctx := &types.RPCContext{
