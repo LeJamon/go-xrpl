@@ -218,6 +218,9 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RPCContext, params json.RawM
 func parseUintParam(raw json.RawMessage) (uint32, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err == nil {
+		if len(text) > 0 && text[0] == '+' {
+			text = text[1:]
+		}
 		value, err := strconv.ParseUint(text, 10, 32)
 		if err != nil {
 			return 0, fmt.Errorf("invalid uint string")

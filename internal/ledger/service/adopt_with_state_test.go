@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -230,8 +231,8 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	svc.FlushPersists()
 
 	// Both adopted transactions must now be retrievable from the DB with their
-	// metadata TransactionIndex preserved as txn_seq.
-	for wantID, wantTxnSeq := range map[[32]byte]uint32{id1: 0, id2: 1} {
+	// metadata TransactionIndex preserved in the stored metadata blob.
+	for wantID, wantTxnIndex := range map[[32]byte]uint32{id1: 0, id2: 1} {
 		var dbHash relationaldb.Hash
 		copy(dbHash[:], wantID[:])
 		got, search, err := rm.Transaction().GetTransaction(ctx, dbHash, nil)
@@ -241,7 +242,9 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 		require.NotNil(t, got, "adopted tx row must not be nil")
 		assert.Equal(t, relationaldb.LedgerIndex(hdr.LedgerIndex), got.LedgerSeq,
 			"adopted tx must be filed under the adopted ledger's seq")
-		assert.Equal(t, wantTxnSeq, got.TxnSeq)
+		gotTxnIndex, ok := tx.TransactionIndexFromMetadata(got.TxnMeta)
+		require.True(t, ok, "persisted metadata must contain TransactionIndex")
+		assert.Equal(t, wantTxnIndex, gotTxnIndex)
 	}
 
 	// And the adopted ledger row itself must be persisted.

@@ -822,7 +822,7 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 		{"node public key format", "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV", types.RpcACT_MALFORMED},
 		{"seed string", "foo", types.RpcACT_MALFORMED},
 		{"short string", "r", types.RpcACT_MALFORMED},
-		{"empty string", "", types.RpcINVALID_PARAMS},
+		{"empty string", "", types.RpcACT_MALFORMED},
 		{"too short address", "rHb9CJAWyB4rj91VRWn96DkukG", types.RpcACT_MALFORMED},
 		{"too long address", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars", types.RpcACT_MALFORMED},
 		{"invalid characters", "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@", types.RpcACT_MALFORMED},
@@ -1005,7 +1005,7 @@ func TestAccountInfoLedgerIndexFormats(t *testing.T) {
 		{"string closed", "closed", true},
 		{"integer 1", 1, true},
 		{"integer 2", 2, true},
-		{"integer 100", 100, true},
+		{"integer 100", 100, false},
 		{"string integer", "2", true},
 		{"float 2.0", 2.0, true}, // JSON numbers are floats
 	}

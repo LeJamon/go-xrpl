@@ -305,6 +305,14 @@ RPC behavior tree preserves relational indexing after node-store failures and
 guards online-delete notification when rotation is disabled. It passes the same
 build, vet, lint, and whitespace gates.
 
+Exact-head CI then exposed stale strict-lint helpers and regression fixtures plus
+three parser/runtime defects. Dead helpers were removed, exported keylets now
+have required API documentation, account RPC mocks/assertions follow rippled's
+lookup and error semantics, XChain vectors and persisted transaction-index
+checks use the canonical encodings, and aggregate-price/path-find validation was
+corrected. Strict CI lint, repository lint, build, vet, and whitespace checks
+pass on the remediation tree; the fixes await a new exact-head CI run.
+
 # Issue #1303 — trust-layer visibility and forward compatibility
 
 Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`

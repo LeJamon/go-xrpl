@@ -66,13 +66,13 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -80,7 +80,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -88,7 +88,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -96,7 +96,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -104,7 +104,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -112,7 +112,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -120,7 +120,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"val1", "val2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -240,7 +240,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		assert.Contains(t, resp, "validated")
 
 		assert.Equal(t, validAccount, resp["account"])
-		assert.Equal(t, true, resp["validated"])
+		assert.Equal(t, false, resp["validated"])
 
 		// account_objects should be an array
 		objs, ok := resp["account_objects"].([]any)
@@ -637,11 +637,11 @@ func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
 				return &types.AccountObjectsResult{
 					Account: account,
 					AccountObjects: []types.AccountObjectItem{
-						{Index: "01", LedgerEntryType: "Check"},
-						{Index: "02", LedgerEntryType: "Vault"},
-						{Index: "03", LedgerEntryType: "Offer"},
-						{Index: "04", LedgerEntryType: "Loan"},
-						{Index: "05", LedgerEntryType: "LoanBroker"},
+						{Index: "01", LedgerEntryType: "Check", Data: []byte{0xff}},
+						{Index: "02", LedgerEntryType: "Vault", Data: []byte{0xff}},
+						{Index: "03", LedgerEntryType: "Offer", Data: []byte{0xff}},
+						{Index: "04", LedgerEntryType: "Loan", Data: []byte{0xff}},
+						{Index: "05", LedgerEntryType: "LoanBroker", Data: []byte{0xff}},
 					},
 					LedgerIndex: 2,
 					Validated:   true,
@@ -1083,7 +1083,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 		})
 	}
 
-	t.Run("empty string triggers missing parameter error", func(t *testing.T) {
+	t.Run("empty string is malformed", func(t *testing.T) {
 		params := map[string]any{
 			"account": "",
 		}
@@ -1094,7 +1094,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
 	})
 }
 

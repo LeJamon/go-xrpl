@@ -125,6 +125,7 @@ func LedgerHashesForSeq(ledgerSeq uint32) Keylet {
 	}
 }
 
+// Bridge returns the keylet for a bridge entry.
 func Bridge(door [20]byte, currency [20]byte) Keylet {
 	return Keylet{
 		Type: entry.TypeBridge,
@@ -132,6 +133,7 @@ func Bridge(door [20]byte, currency [20]byte) Keylet {
 	}
 }
 
+// XChainBridge identifies the assets and door accounts on both sides of a bridge.
 type XChainBridge struct {
 	LockingDoor     [20]byte
 	LockingCurrency [20]byte
@@ -141,6 +143,7 @@ type XChainBridge struct {
 	IssuingIssuer   [20]byte
 }
 
+// XChainClaimID returns the keylet for an owned cross-chain claim entry.
 func XChainClaimID(bridge XChainBridge, sequence uint64) Keylet {
 	var seqBytes [8]byte
 	binary.BigEndian.PutUint64(seqBytes[:], sequence)
@@ -159,6 +162,7 @@ func XChainClaimID(bridge XChainBridge, sequence uint64) Keylet {
 	}
 }
 
+// XChainCreateAccountClaimID returns the keylet for an owned create-account claim entry.
 func XChainCreateAccountClaimID(bridge XChainBridge, sequence uint64) Keylet {
 	var seqBytes [8]byte
 	binary.BigEndian.PutUint64(seqBytes[:], sequence)

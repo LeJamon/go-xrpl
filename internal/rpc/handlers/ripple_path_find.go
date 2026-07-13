@@ -69,7 +69,9 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	}
 	var view types.LedgerStateView
 	var meta *pathFindLedgerMeta
-	usesLookup := hasLedgerSelector || ctx.Services.Ledger.GetServerInfo().Standalone
+	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil &&
+		ctx.Services.Ledger.GetServerInfo().Standalone
+	usesLookup := hasLedgerSelector || standalone
 	if usesLookup {
 		view, meta, rpcErr = resolvePathFindLedger(ctx, ledgerSpec, true)
 		if rpcErr != nil {
@@ -317,13 +319,11 @@ func parseSourceCurrencies(
 		}
 		rawCurrency, hasCurrency := fields["currency"]
 		rawMPT, hasMPT := fields["mpt_issuance_id"]
-		if hasCurrency == hasMPT {
+		_, hasIssuer := fields["issuer"]
+		if hasCurrency == hasMPT || hasMPT && hasIssuer {
 			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		if hasMPT {
-			if _, hasIssuer := fields["issuer"]; hasIssuer {
-				return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
-			}
 			var mptID string
 			if err := json.Unmarshal(rawMPT, &mptID); err != nil {
 				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")

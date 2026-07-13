@@ -407,33 +407,3 @@ func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
 	}
 	return out
 }
-
-// preResolveLedger mirrors rippled BookOffers.cpp:45-49 (RPC::lookupLedger).
-// For the keyword specifiers (validated/current/closed/"") we defer to the
-// service layer which always has those handles. For an explicit ledger_hash
-// or numeric ledger_index we pre-resolve so a bogus value returns
-// lgrNotFound / lgrIdxMalformed before any field-level validation runs.
-func preResolveLedger(ctx *types.RPCContext, selector string) *types.RPCError {
-	switch selector {
-	case "", "current", "closed", "validated":
-		return nil
-	}
-	if len(selector) == 64 {
-		raw, _ := hex.DecodeString(selector)
-		var h [32]byte
-		copy(h[:], raw)
-		if l, lerr := ctx.Services.Ledger.GetLedgerByHash(h); lerr != nil || l == nil {
-			return types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return nil
-	}
-
-	seq, perr := parseLedgerIndex(selector)
-	if perr != nil {
-		return types.RPCErrorExpectedField("ledger_index", "string or number")
-	}
-	if l, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil || l == nil {
-		return types.RPCErrorLgrNotFound("ledgerNotFound")
-	}
-	return nil
-}

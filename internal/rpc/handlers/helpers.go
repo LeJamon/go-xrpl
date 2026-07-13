@@ -243,27 +243,6 @@ func ValidateAccount(account string) *types.RPCError {
 	return nil
 }
 
-func readRequiredStringParam(params json.RawMessage, field string) (string, *types.RPCError) {
-	var fields map[string]json.RawMessage
-	if len(bytes.TrimSpace(params)) != 0 {
-		if err := json.Unmarshal(params, &fields); err != nil {
-			return "", types.RPCErrorInvalidParams("Invalid parameters.")
-		}
-	}
-	if fields == nil {
-		fields = make(map[string]json.RawMessage)
-	}
-	raw, ok := fields[field]
-	if !ok {
-		return "", types.RPCErrorMissingField(field)
-	}
-	var value string
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", types.RPCErrorInvalidField(field)
-	}
-	return value, nil
-}
-
 // normalizeLedgerSpecifier folds the legacy ledger field into the selector used
 // by the service. Exactly 64 characters denote a hash; all other strings denote
 // an index.
@@ -453,21 +432,6 @@ func FormatLedgerHash(hash [32]byte) string {
 // closed ledgers.
 func isOpenLedgerSelector(selector string) bool {
 	return selector == "current" || selector == ""
-}
-
-// fillLedgerFields writes the ledger-identity fields of an RPC response,
-// mirroring rippled's RPC::lookupLedger. For the open ledger it emits only
-// ledger_current_index (rippled withholds the interim hash and index); for a
-// closed ledger it emits ledger_hash and ledger_index. The validated flag is
-// always emitted. ledgerHash must already be the formatted uppercase-hex hash.
-func fillLedgerFields(response map[string]any, selector string, ledgerHash string, ledgerSeq uint32, validated bool) {
-	if isOpenLedgerSelector(selector) {
-		response["ledger_current_index"] = ledgerSeq
-	} else {
-		response["ledger_hash"] = ledgerHash
-		response["ledger_index"] = ledgerSeq
-	}
-	response["validated"] = validated
 }
 
 // FormatHash formats arbitrary bytes as uppercase hex string.

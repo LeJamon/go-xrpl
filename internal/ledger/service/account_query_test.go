@@ -690,11 +690,15 @@ func TestGetGatewayBalances_Categories(t *testing.T) {
 		t.Errorf("frozen balance not reported correctly: %+v", res.FrozenBalances[frozenPeer])
 	}
 
-	t.Run("account not found", func(t *testing.T) {
+	t.Run("missing account returns empty categories", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		_, err := svc.GetGatewayBalances(context.Background(), stranger, nil, "current")
-		if !errors.Is(err, svcerr.ErrAccountNotFound) {
-			t.Fatalf("want ErrAccountNotFound, got %v", err)
+		result, err := svc.GetGatewayBalances(context.Background(), stranger, nil, "current")
+		if err != nil {
+			t.Fatalf("GetGatewayBalances: %v", err)
+		}
+		if result.Account != stranger || len(result.Obligations) != 0 || len(result.Balances) != 0 ||
+			len(result.FrozenBalances) != 0 || len(result.Assets) != 0 || len(result.Locked) != 0 {
+			t.Fatalf("unexpected balances for missing account: %+v", result)
 		}
 	})
 

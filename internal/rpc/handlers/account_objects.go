@@ -108,9 +108,13 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 	}
-	account, accountErr := readRequiredStringParam(params, "account")
-	if accountErr != nil {
-		return nil, accountErr
+	accountRaw, ok := rawFields["account"]
+	if !ok {
+		return nil, types.RPCErrorMissingField("account")
+	}
+	account, ok := rawJSONString(accountRaw)
+	if !ok {
+		return nil, types.RPCErrorInvalidField("account")
 	}
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {

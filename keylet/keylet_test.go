@@ -140,12 +140,12 @@ func TestXChainClaimKeyletsHashRawBridgeFields(t *testing.T) {
 		{
 			"claim",
 			XChainClaimID(bridge, sequence).Key,
-			"76480e558958bf7c44e707062d5ecae6a0717d5f106aa8aa53e5865625cbb5a78",
+			"25e9bb7665ffbf5e0529daa2719490c7f3cb492f2e0c293e97084f6e39e691d7",
 		},
 		{
 			"create account claim",
 			XChainCreateAccountClaimID(bridge, sequence).Key,
-			"80f1fbbe6f8e711bd252ee7b26cc1518deee71e9cc9234fe90af4c942a5a8cf9",
+			"165772e2dacbb6c064392e074876561376e06d10e5c3e860e5ac47fbf21063a2",
 		},
 	}
 	for _, tc := range tests {

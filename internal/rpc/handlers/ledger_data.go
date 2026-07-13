@@ -190,61 +190,6 @@ func ledgerDataTypeMatches(filter, actual string) bool {
 	return strings.EqualFold(filter, actual) || filter == sleTypeToRPCName(actual)
 }
 
-// formatLedgerHeaderBinary creates a hex-encoded binary representation of ledger header
-func formatLedgerHeaderBinary(hdr *types.LedgerHeaderInfo) string {
-	// This is a simplified binary format - real implementation would match rippled's serialization
-	buf := make([]byte, 0, 4+8+len(hdr.ParentHash)+len(hdr.TransactionHash)+len(hdr.AccountHash)+4+4+1+1)
-
-	// Sequence (4 bytes)
-	seqBytes := make([]byte, 4)
-	seqBytes[0] = byte(hdr.LedgerIndex >> 24)
-	seqBytes[1] = byte(hdr.LedgerIndex >> 16)
-	seqBytes[2] = byte(hdr.LedgerIndex >> 8)
-	seqBytes[3] = byte(hdr.LedgerIndex)
-	buf = append(buf, seqBytes...)
-
-	// Total coins (8 bytes)
-	coinsBytes := make([]byte, 8)
-	coinsBytes[0] = byte(hdr.TotalCoins >> 56)
-	coinsBytes[1] = byte(hdr.TotalCoins >> 48)
-	coinsBytes[2] = byte(hdr.TotalCoins >> 40)
-	coinsBytes[3] = byte(hdr.TotalCoins >> 32)
-	coinsBytes[4] = byte(hdr.TotalCoins >> 24)
-	coinsBytes[5] = byte(hdr.TotalCoins >> 16)
-	coinsBytes[6] = byte(hdr.TotalCoins >> 8)
-	coinsBytes[7] = byte(hdr.TotalCoins)
-	buf = append(buf, coinsBytes...)
-
-	// Parent hash, tx hash, account hash
-	buf = append(buf, hdr.ParentHash[:]...)
-	buf = append(buf, hdr.TransactionHash[:]...)
-	buf = append(buf, hdr.AccountHash[:]...)
-
-	// Parent close time (4 bytes)
-	pctBytes := make([]byte, 4)
-	pct := uint32(hdr.ParentCloseTime)
-	pctBytes[0] = byte(pct >> 24)
-	pctBytes[1] = byte(pct >> 16)
-	pctBytes[2] = byte(pct >> 8)
-	pctBytes[3] = byte(pct)
-	buf = append(buf, pctBytes...)
-
-	// Close time (4 bytes)
-	ctBytes := make([]byte, 4)
-	ct := uint32(hdr.CloseTime)
-	ctBytes[0] = byte(ct >> 24)
-	ctBytes[1] = byte(ct >> 16)
-	ctBytes[2] = byte(ct >> 8)
-	ctBytes[3] = byte(ct)
-	buf = append(buf, ctBytes...)
-
-	// Close time resolution (1 byte) and close flags (1 byte)
-	buf = append(buf, byte(hdr.CloseTimeResolution))
-	buf = append(buf, hdr.CloseFlags)
-
-	return hex.EncodeToString(buf)
-}
-
 // deserializeLedgerEntry converts binary ledger entry data to JSON format
 func deserializeLedgerEntry(data []byte) (any, error) {
 	if len(data) == 0 {

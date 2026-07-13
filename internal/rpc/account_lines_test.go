@@ -546,7 +546,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = errors.New("ledger not found")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcLGR_NOT_FOUND,
 		},
 	}
 
@@ -1351,6 +1351,9 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testAccountLinesHistory lambda (lines 181-206)
 func TestAccountLinesHistoricLedgers(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
+	mock.currentLedgerIndex = 59
+	mock.closedLedgerIndex = 58
+	mock.validatedLedgerIndex = 58
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}
