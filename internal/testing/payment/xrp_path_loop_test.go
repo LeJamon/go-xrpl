@@ -54,7 +54,7 @@ func TestXRPPathLoop_Start(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			env, alice, bob, gw := newXRPPathLoopEnv(t, test.fix1781, "USD", "EUR")
-			xrp100 := tx.NewXRPAmount(int64(jtx.XRP(100)))
+			xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 			usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 			eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
 
@@ -70,7 +70,7 @@ func TestXRPPathLoop_Start(t *testing.T) {
 			}}
 			result := env.Submit(PayIssued(alice, bob,
 				tx.NewIssuedAmountFromFloat64(1, "EUR", gw.Address),
-			).SendMax(tx.NewXRPAmount(int64(jtx.XRP(1)))).Paths(paths).NoDirectRipple().Build())
+			).SendMax(tx.NewXRPAmount(jtx.XRP(1))).Paths(paths).NoDirectRipple().Build())
 			if test.fix1781 {
 				jtx.RequireTxFail(t, result, jtx.TemBAD_PATH_LOOP)
 			} else {
@@ -82,7 +82,7 @@ func TestXRPPathLoop_Start(t *testing.T) {
 
 func TestXRPPathLoop_End(t *testing.T) {
 	env, alice, bob, gw := newXRPPathLoopEnv(t, true, "USD", "EUR")
-	xrp100 := tx.NewXRPAmount(int64(jtx.XRP(100)))
+	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
 
@@ -105,7 +105,7 @@ func TestXRPPathLoop_End(t *testing.T) {
 
 func TestXRPPathLoop_Middle(t *testing.T) {
 	env, alice, bob, gw := newXRPPathLoopEnv(t, true, "USD", "EUR", "JPY")
-	xrp100 := tx.NewXRPAmount(int64(jtx.XRP(100)))
+	xrp100 := tx.NewXRPAmount(jtx.XRP(100))
 	usd100 := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	eur100 := tx.NewIssuedAmountFromFloat64(100, "EUR", gw.Address)
 	jpy100 := tx.NewIssuedAmountFromFloat64(100, "JPY", gw.Address)
