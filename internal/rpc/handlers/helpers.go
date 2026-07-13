@@ -138,18 +138,6 @@ func ValidateAccount(account string) *types.RPCError {
 	return nil
 }
 
-func normalizeLedgerSpecifier(spec types.LedgerSpecifier) types.LedgerSpecifier {
-	if spec.Ledger != "" {
-		if legacy := spec.Ledger.String(); len(legacy) == 64 {
-			spec.LedgerHash = legacy
-		} else {
-			spec.LedgerIndex = spec.Ledger
-		}
-		spec.Ledger = ""
-	}
-	return spec
-}
-
 func resolveLedgerSelector(params json.RawMessage) (string, *types.RPCError) {
 	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
 	if rpcErr != nil {
@@ -237,38 +225,6 @@ func parseLedgerSelectorParams(
 		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return parseRawLedgerSelector(raw, defaultSelection, lookupLedgerSelectorErrors)
-}
-
-func parseLedgerSelector(
-	spec types.LedgerSpecifier,
-	defaultSelection ledgerselector.Selector,
-) (ledgerselector.Selector, *types.RPCError) {
-	if spec.Ledger != "" && (spec.LedgerHash != "" || spec.LedgerIndex != "") {
-		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
-			"Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.",
-		)
-	}
-	if spec.LedgerHash != "" && spec.LedgerIndex != "" {
-		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
-			"Exactly one of 'ledger_hash' or 'ledger_index' can be specified.",
-		)
-	}
-	spec = normalizeLedgerSpecifier(spec)
-	if spec.LedgerHash != "" {
-		selection, err := ledgerselector.ParseHash(spec.LedgerHash)
-		if err != nil {
-			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledgerHashMalformed")
-		}
-		return selection, nil
-	}
-	if spec.LedgerIndex != "" {
-		selection, err := ledgerselector.ParseIndex(spec.LedgerIndex.String())
-		if err != nil || selection.Kind() == ledgerselector.KindAbsent {
-			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledgerIndexMalformed")
-		}
-		return selection, nil
-	}
-	return defaultSelection, nil
 }
 
 type rawLedgerSelectorErrors struct {

@@ -13,8 +13,11 @@ type Fees struct {
 }
 
 const (
-	DefaultBaseFee          XRPAmount = 10
-	DefaultReserveBase      XRPAmount = 10_000_000
+	// DefaultBaseFee is the network default transaction fee in drops.
+	DefaultBaseFee XRPAmount = 10
+	// DefaultReserveBase is the network default account reserve in drops.
+	DefaultReserveBase XRPAmount = 10_000_000
+	// DefaultReserveIncrement is the network default owner reserve in drops.
 	DefaultReserveIncrement XRPAmount = 2_000_000
 )
 

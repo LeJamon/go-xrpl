@@ -271,10 +271,11 @@ Target: `v3.0.0`. Protocol oracle: local rippled tag `3.2.0`
   freshness, RPC error precedence and response shape, transaction ranges and
   CTIDs, account pagination, ledger-header serialization, message framing,
   consensus parameters, and validation-quorum rechecks.
-- `just fmt`, `git diff --check`, `just build-all`, `just build-nocgo`,
-  `just vet`, and `just lint` pass; lint reports 0 issues. Go and linter caches
-  were redirected to `/private/tmp` because the sandbox cannot write the user
-  cache directories.
+- `just fmt`, `git diff --check`, `just build-all`, `just build-nocgo`, and
+  `just vet` pass. Both the advisory `just lint` recipe and the required CI
+  command (`golangci-lint` v2.11.3 with the default strict configuration) report
+  0 issues. Go and linter caches were redirected to `/private/tmp` because the
+  sandbox cannot write the user cache directories.
 - Focused tests pass for all touched core and RPC packages. The race detector
   passes for RPC, ledger service/selector, consensus validation/adaptor, gRPC,
   and node integration.
