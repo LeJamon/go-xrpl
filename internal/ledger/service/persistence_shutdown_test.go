@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"testing"
@@ -75,7 +76,7 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	const n = 10
+	const n = 100
 	ledgers := make([]*ledger.Ledger, n)
 	for i := range ledgers {
 		seq := uint32(100 + i)
@@ -90,10 +91,23 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 	}
 	svc.mu.Unlock()
 
-	// Release the gate and stop concurrently: Stop must not return until the
-	// worker has drained and written every queued ledger.
+	stopDone := make(chan struct{})
+	go func() {
+		svc.Stop()
+		close(stopDone)
+	}()
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned while a persist was blocked")
+	case <-time.After(50 * time.Millisecond):
+	}
+
 	store.open()
-	svc.Stop()
+	select {
+	case <-stopDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not drain the persistence queue")
+	}
 
 	ctx := context.Background()
 	for _, l := range ledgers {
@@ -104,6 +118,48 @@ func TestService_Stop_DrainsQueuedPersists(t *testing.T) {
 		if node == nil {
 			t.Errorf("ledger seq=%d was not persisted before Stop returned — a queued persist was dropped", l.Sequence())
 		}
+	}
+}
+
+func TestService_PersistLedgerWritesHeader(t *testing.T) {
+	store := newGatedStore()
+	store.open()
+	svc, err := New(Config{Standalone: false, NodeStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := buildLedgerWithState(t, 99)
+	if err := svc.persistLedger(context.Background(), l); err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.Fetch(context.Background(), nodestore.Hash256(l.Hash()))
+	if err != nil || node == nil {
+		t.Fatalf("header fetch = %v, %v", node, err)
+	}
+}
+
+func TestService_ValidatedTipDoesNotRegress(t *testing.T) {
+	store := newGatedStore()
+	store.open()
+	svc, err := New(Config{Standalone: false, NodeStore: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := buildLedgerWithState(t, 101)
+	older := buildLedgerWithState(t, 100)
+	if err := svc.persistValidatedTip(context.Background(), newer); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.persistValidatedTip(context.Background(), older); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.Fetch(context.Background(), validatedTipKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerHash := newer.Hash()
+	if stored == nil || stored.LedgerSeq != newer.Sequence() || !bytes.Equal(stored.Data, newerHash[:]) {
+		t.Fatalf("validated tip regressed: %+v", stored)
 	}
 }
 

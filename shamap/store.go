@@ -9,8 +9,10 @@ import (
 
 // FlushEntry holds a serialized node ready to be written to NodeStore.
 type FlushEntry struct {
-	Hash [32]byte // SHAMap node hash (used as key in NodeStore)
-	Data []byte   // SerializeWithPrefix() output
+	Hash      [32]byte // SHAMap node hash (used as key in NodeStore)
+	Data      []byte   // SerializeWithPrefix() output
+	LedgerSeq uint32
+	MapType   Type
 }
 
 // NodeBatch holds a batch of serialized nodes from FlushDirty().

@@ -4,11 +4,12 @@
 // Two pieces live here:
 //
 //   - Store, the advisory-delete state the can_delete RPC reads and writes. It
-//     tracks two ledger sequences, gated by the node_db advisory_delete config
+//     tracks retention state, gated by the node_db advisory_delete config
 //     flag and persisted across restarts (mirroring rippled's SavedStateDB):
 //     canDelete (the advisory boundary: ledgers at or below it are unprotected
 //     and online delete may remove them) and lastRotated (the most recent
-//     ledger online delete has rotated; 0 until the first rotation).
+//     ledger online delete has rotated; 0 until the first rotation), and the
+//     minimum online ledger retained after the most recent deletion.
 //   - Rotator, the background job that consumes those boundaries to actually
 //     reclaim disk: every node_db online_delete validated ledgers it deletes
 //     complete ledgers below the rotation boundary from the node store and the
@@ -31,15 +32,18 @@ const stateFile = "advisory_delete_state.json"
 // Store holds the advisory-delete state. It is safe for concurrent use.
 type Store struct {
 	mu             sync.RWMutex
+	saveMu         sync.Mutex
 	advisoryDelete bool
 	canDelete      uint32
 	lastRotated    uint32
+	minimumOnline  uint32
 	filePath       string
 }
 
 type persistedState struct {
-	CanDelete   uint32 `json:"can_delete"`
-	LastRotated uint32 `json:"last_rotated"`
+	CanDelete     uint32 `json:"can_delete"`
+	LastRotated   uint32 `json:"last_rotated"`
+	MinimumOnline uint32 `json:"minimum_online,omitempty"`
 }
 
 // New constructs the advisory-delete state store. advisoryDelete reflects the
@@ -103,6 +107,31 @@ func (s *Store) SetLastRotated(seq uint32) error {
 	return s.save()
 }
 
+func (s *Store) GetMinimumOnline() uint32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.minimumOnline
+}
+
+// SetMinimumOnline durably advances the lowest retained ledger before online
+// deletion starts removing records below it.
+func (s *Store) SetMinimumOnline(seq uint32) error {
+	s.mu.Lock()
+	if seq > s.minimumOnline {
+		s.minimumOnline = seq
+	}
+	s.mu.Unlock()
+	return s.save()
+}
+
+func (s *Store) SetRotation(lastRotated, minimumOnline uint32) error {
+	s.mu.Lock()
+	s.lastRotated = lastRotated
+	s.minimumOnline = minimumOnline
+	s.mu.Unlock()
+	return s.save()
+}
+
 func (s *Store) load() error {
 	if s.filePath == "" {
 		return nil
@@ -127,15 +156,22 @@ func (s *Store) load() error {
 		s.canDelete = ps.CanDelete
 	}
 	s.lastRotated = ps.LastRotated
+	s.minimumOnline = ps.MinimumOnline
 	return nil
 }
 
 func (s *Store) save() error {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 	if s.filePath == "" {
 		return nil
 	}
 	s.mu.RLock()
-	ps := persistedState{CanDelete: s.canDelete, LastRotated: s.lastRotated}
+	ps := persistedState{
+		CanDelete:     s.canDelete,
+		LastRotated:   s.lastRotated,
+		MinimumOnline: s.minimumOnline,
+	}
 	s.mu.RUnlock()
 
 	data, err := json.MarshalIndent(ps, "", "  ")
@@ -145,5 +181,31 @@ func (s *Store) save() error {
 	if err := os.MkdirAll(filepath.Dir(s.filePath), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(s.filePath, data, 0o600)
+	dir := filepath.Dir(s.filePath)
+	tmp, err := os.CreateTemp(dir, ".advisory-delete-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, s.filePath); err != nil {
+		return err
+	}
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer dirFile.Close()
+	return dirFile.Sync()
 }
