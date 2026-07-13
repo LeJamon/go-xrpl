@@ -76,11 +76,6 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 		ledgerHash = fmt.Sprintf("%X", h)
 	}
 
-	// Inject DeliveredAmount for Payment transactions
-	if storedTx.Meta != nil {
-		InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
-	}
-
 	response := map[string]any{
 		"tx_json": storedTx.TxJSON,
 	}

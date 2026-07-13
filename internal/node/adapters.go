@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -183,6 +184,7 @@ func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage) {
 		metaHex := hex.EncodeToString(metaBlob)
 		metaMap, err := binarycodec.Decode(metaHex)
 		if err == nil {
+			handlers.InjectSyntheticFields(txMap, metaMap)
 			if m, err := json.Marshal(metaMap); err == nil {
 				metaJSON = m
 			}

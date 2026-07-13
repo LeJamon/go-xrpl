@@ -233,3 +233,41 @@ Verification:
 - `just build`, `just vet`, and `just lint` pass; lint reports 0 issues.
 - The staged merge has no unmerged paths, conflict markers, or whitespace
   errors.
+
+# Issue #1306 — shared synthetic transaction metadata
+
+## Plan
+
+- [x] Trace every transaction-bearing RPC and stream response through the shared
+      JSON rendering path on `v3.0.0`.
+- [x] Compare NFT, offer, and MPT synthetic metadata behavior with the exact local
+      rippled `3.2.0` tag.
+- [x] Move synthetic-field injection to the narrowest shared renderer and remove
+      handler-specific duplication.
+- [x] Add focused regression tests for the shared renderer and affected RPC
+      surfaces.
+- [x] Run formatting, focused RPC tests, race coverage, vet, lint, and build.
+- [x] Review the final diff for endpoint coverage, mutation safety, and rippled
+      parity.
+
+## Review
+
+Implemented one shared JSON metadata enricher for `tx`, `account_tx`, simulate,
+and validated transaction/account/book streams. Expanded ledger transactions
+receive the MPT issuance ID but not NFT synthetic fields. `transaction_entry`
+now leaves metadata untouched; despite the issue text, that is the exact rippled
+3.2.0 behavior. API v2 `account_tx` also derives `delivered_amount` from the
+unmodified transaction so `DeliverMax` response projection cannot erase the
+Payment `Amount` fallback.
+
+Oracle: clean local rippled tag `3.2.0` at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+Verification:
+
+- Focused API v1/v2 synthetic-field and endpoint tests pass.
+- `go test ./internal/rpc/... ./internal/node/...` passes.
+- `go test -race ./internal/rpc/... ./internal/node/...` passes.
+- `just fmt`, `just vet`, `just lint`, `just build-all`, and `just test-core`
+  pass; lint reports 0 issues.
+- Independent final Go and rippled-conformance reviews found no defects.

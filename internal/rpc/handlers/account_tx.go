@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -201,6 +202,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			txEntry["ledger_index"] = txn.LedgerIndex
 		} else {
 			// JSON mode: decode tx_blob and meta into JSON objects
+			var sourceTxJSON map[string]any
 
 			// Determine the tx JSON key based on API version
 			txKey := "tx"
@@ -215,6 +217,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 				// Fallback to hex if decode fails
 				txEntry["tx_blob"] = strings.ToUpper(txBlobHex)
 			} else {
+				sourceTxJSON = maps.Clone(txJSON)
 				// Add date inside the tx JSON (both v1 and v2)
 				ledgerInfo := lookupLedger(txn.LedgerIndex)
 				if ledgerInfo.found && ledgerInfo.closeTimeSec > 0 {
@@ -243,9 +246,8 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			if metaErr != nil {
 				txEntry["meta"] = strings.ToUpper(metaHex)
 			} else {
-				// Inject DeliveredAmount into metadata if this is a Payment
-				if txJSONMap, ok := txEntry[txKey].(map[string]any); ok {
-					InjectDeliveredAmount(txJSONMap, metaJSON)
+				if sourceTxJSON != nil {
+					InjectSyntheticFields(sourceTxJSON, metaJSON)
 				}
 				txEntry["meta"] = metaJSON
 			}

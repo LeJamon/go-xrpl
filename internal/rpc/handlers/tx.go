@@ -144,7 +144,7 @@ func (m *TxMethod) buildResponseV1(
 		// Spread transaction fields flat on root
 		maps.Copy(response, storedTx.TxJSON)
 		if storedTx.Meta != nil {
-			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta)
 			response["meta"] = storedTx.Meta
 		}
 	}
@@ -201,7 +201,7 @@ func (m *TxMethod) buildResponseV2(
 		response["tx_json"] = txJSON
 
 		if storedTx.Meta != nil {
-			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta)
 			response["meta"] = storedTx.Meta
 		}
 	}

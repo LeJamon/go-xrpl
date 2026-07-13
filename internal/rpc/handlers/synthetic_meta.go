@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"sort"
 	"strings"
 
@@ -10,12 +11,10 @@ import (
 )
 
 // metadataToMap renders simulation metadata as a mutable JSON object so
-// synthetic fields can be injected. The production adapter supplies a typed
-// *tx.Metadata (marshalled here via its MarshalJSON); a value that is already a
-// map is returned as-is. Returns nil when the metadata cannot be rendered.
+// synthetic fields can be injected without changing the service result.
 func metadataToMap(meta any) map[string]any {
 	if m, ok := meta.(map[string]any); ok {
-		return m
+		return maps.Clone(m)
 	}
 	b, err := json.Marshal(meta)
 	if err != nil {
@@ -28,14 +27,9 @@ func metadataToMap(meta any) map[string]any {
 	return m
 }
 
-// enrichSimulateMeta injects rippled's synthetic transaction-metadata fields
-// (delivered_amount, nftoken_id / nftoken_ids, offer_id, mpt_issuance_id) into
-// a simulated transaction's `meta` JSON, matching what tx / account_tx report
-// for validated transactions. All of these require tesSUCCESS and are computed
-// from the metadata's AffectedNodes, so a failed simulation is a no-op.
-// Reference: rippled Simulate.cpp:277-288 (insertDeliveredAmount /
-// insertNFTSyntheticInJson / insertMPTokenIssuanceID).
-func enrichSimulateMeta(meta, txJSON map[string]any) {
+// InjectSyntheticFields adds rippled's derived transaction metadata fields to
+// JSON responses that render a transaction and its metadata together.
+func InjectSyntheticFields(txJSON, meta map[string]any) {
 	if meta == nil {
 		return
 	}
@@ -44,31 +38,13 @@ func enrichSimulateMeta(meta, txJSON map[string]any) {
 	}
 	txType, _ := txJSON["TransactionType"].(string)
 
-	insertSimulateDeliveredAmount(meta, txJSON, txType)
+	InjectDeliveredAmount(txJSON, meta)
 	insertNFTSynthetic(meta, txJSON, txType)
-	insertMPTokenIssuanceID(meta, txJSON, txType)
+	InjectMPTokenIssuanceID(txJSON, meta)
 }
 
-// insertSimulateDeliveredAmount mirrors rippled insertDeliveredAmount /
-// getDeliveredAmount for a simulated (current open ledger) transaction. Only
-// Payment / CheckCash / AccountDelete carry a delivered amount. If the engine
-// already recorded one it is kept; otherwise the transaction's Amount is used
-// (a simulation always runs against a recent-enough ledger for the fix1623
-// fallback), falling back to "unavailable" when there is no Amount.
-func insertSimulateDeliveredAmount(meta, txJSON map[string]any, txType string) {
-	switch txType {
-	case "Payment", "CheckCash", "AccountDelete":
-	default:
-		return
-	}
-	if _, ok := meta["delivered_amount"]; ok {
-		return
-	}
-	if amount, ok := txJSON["Amount"]; ok {
-		meta["delivered_amount"] = amount
-	} else {
-		meta["delivered_amount"] = "unavailable"
-	}
+func enrichSimulateMeta(meta, txJSON map[string]any) {
+	InjectSyntheticFields(txJSON, meta)
 }
 
 // insertNFTSynthetic mirrors rippled insertNFTSyntheticInJson: nftoken_id /
@@ -102,10 +78,23 @@ func insertNFTSynthetic(meta, txJSON map[string]any, txType string) {
 	}
 }
 
+// InjectMPTokenIssuanceID adds the id of the MPTokenIssuance created by an
+// MPTokenIssuanceCreate transaction.
+func InjectMPTokenIssuanceID(txJSON, meta map[string]any) {
+	if meta == nil {
+		return
+	}
+	if result, _ := meta["TransactionResult"].(string); result != "tesSUCCESS" {
+		return
+	}
+	txType, _ := txJSON["TransactionType"].(string)
+	insertMPTokenIssuanceID(meta, txType)
+}
+
 // insertMPTokenIssuanceID mirrors rippled insertMPTokenIssuanceID: the id of
 // the MPTokenIssuance created by an MPTokenIssuanceCreate, derived from the
 // created issuance's Sequence and Issuer (makeMptID).
-func insertMPTokenIssuanceID(meta, txJSON map[string]any, txType string) {
+func insertMPTokenIssuanceID(meta map[string]any, txType string) {
 	if txType != "MPTokenIssuanceCreate" {
 		return
 	}

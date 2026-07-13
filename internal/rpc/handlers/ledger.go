@@ -388,6 +388,7 @@ func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary 
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
 			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
@@ -396,6 +397,7 @@ func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary 
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
 			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["metaData"] = storedTx.Meta
 		}
 	}
