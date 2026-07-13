@@ -279,8 +279,8 @@ Verification:
 - [x] Close every confirmed RPC projection, stream, CTID, binary-shape, and historical delivered-amount gap.
 - [x] Re-review the completed behavior diff and pass build, vet, and lint.
 - [x] Reconcile the advanced `v3.0.0` base and reverify the combined tree.
-- [ ] Commit and push the behavior fix; require green CI at the exact remote head.
-- [ ] Run the separate AI-comment cleanup phase, then verify the final remote head and CI.
+- [x] Commit and push the behavior fix; require green CI at the exact remote head.
+- [x] Run the separate AI-comment cleanup phase, then verify the final remote head and CI.
 
 ### Finalization review
 
@@ -340,6 +340,12 @@ fixture had been applied to the neighboring MPT projection test. The resolved
 modern ledger and sequence now belong to `TestTxProjectsDeliverMax`, while the
 unrelated test is restored. Strict lint, repository lint, build, vet, formatting,
 and whitespace gates pass; exact test verification remains CI-only.
+
+Exact-head CI passed completely on behavior head `6db8603a`. The separate
+comment-only cleanup removed 28 lines of redundant narration and docstrings in
+commit `9180fe4c`; strict lint, repository lint, build, vet, formatting, and
+whitespace gates passed, followed by a fully green final CI matrix. PR #1316 is
+mergeable against unchanged base `be0e448e`.
 
 # Issue #1303 — trust-layer visibility and forward compatibility
 
