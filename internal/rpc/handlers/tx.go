@@ -267,9 +267,6 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	return m.ctidResponse(ctx, storedTx, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
 }
 
-// ctidResponse shapes a CTID lookup by reusing buildResponse, then keeping the
-// containing ledger fields unconditionally present and removing v1 fields that
-// the CTID format omits.
 func (m *TxMethod) ctidResponse(
 	ctx *types.RpcContext,
 	storedTx StoredTransaction,

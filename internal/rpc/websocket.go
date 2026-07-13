@@ -405,8 +405,6 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 
-	// Handle connection-bound commands specially while retaining the same
-	// admission and resource-accounting lifecycle as registry handlers.
 	switch cmd.Command {
 	case "subscribe":
 		ws.handleSpecialCommand(wsConn, rpcCtx, cmd, ws.executeSubscribe)
@@ -457,8 +455,7 @@ func (ws *WebSocketServer) handleSpecialCommand(wsConn *WebSocketConnection, ctx
 	}
 	finalizeLoad(ws.loadTracker, ctx, cmd.Command, kind, wsLog())
 	if rpcErr != nil {
-		// rippled replaces the outer response object with rpcError here, so a
-		// warning produced by the final charge is deliberately not exposed.
+		// Error responses deliberately omit warnings produced by the final charge.
 		ws.sendCommandError(wsConn, rpcErr, cmd)
 		return
 	}

@@ -265,9 +265,6 @@ func TestApiVersion_WS_V3GatedByBeta(t *testing.T) {
 	})
 }
 
-// TestApiVersion_WS_UnspecifiedDefaultsToV1 verifies a WS command without
-// api_version resolves to v1 internally without adding an api_version field
-// that was absent from the request.
 func TestApiVersion_WS_UnspecifiedDefaultsToV1(t *testing.T) {
 	ws := versionEchoWSServer(t, false)
 	resp := wsRoundTrip(t, ws, `{"command":"ping"}`)

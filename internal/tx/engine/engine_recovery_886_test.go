@@ -108,8 +108,6 @@ func readRecoveryAccount(t *testing.T, view txcore.LedgerView, k keylet.Keylet) 
 	return acct
 }
 
-// recoveryTx builds the common fields used by the closed-ledger recovery tests.
-// Tests that reach doApply wrap it in an Appliable fixture.
 func recoveryTx(fee, seq uint32) *txcore.BaseTx {
 	tx := txcore.NewBaseTx(txcore.TypeAccountSet, recoveryTestAccount)
 	tx.Common.Fee = strconv.FormatUint(uint64(fee), 10)

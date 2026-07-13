@@ -29,7 +29,6 @@ func rpcInternalInvariantError(operation string) *types.RpcError {
 	return types.RpcErrorInternal()
 }
 
-// rippled fixes the submission exception text; the runtime cause stays in server logs.
 func rpcTransactionSubmissionError(operation string, err error) *types.RpcError {
 	logRPCError(operation, err)
 	return types.RpcErrorTransactionSubmission()
@@ -76,10 +75,7 @@ func shedCheck(ctx *types.RpcContext) *types.ClientLoadShedder {
 	return ctx.Services.ClientLoad
 }
 
-// RequireNotBusyClient is the generic RPC admission gate fired before
-// every non-admin RPC dispatches. Mirrors rippled's fillHandler check
-// at RPCHandler.cpp:132-141: shed when admitting this request would put the
-// jtCLIENT-or-higher job count above Tuning::maxJobQueueClients (500).
+// RequireNotBusyClient rejects non-admin RPC requests when the client job queue is full.
 func RequireNotBusyClient(ctx *types.RpcContext) *types.RpcError {
 	s := shedCheck(ctx)
 	if s == nil {
