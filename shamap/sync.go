@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // Sync-related errors
@@ -139,22 +140,34 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		branch   int
 	}
 
+	gen, cache, done := fullBelowContext(sm)
+	defer done()
+	backed := sm != nil && sm.backed && cache != nil
+
 	sm.mu.RLock()
 	if sm.root == nil || sm.state == StateInvalid {
 		sm.mu.RUnlock()
 		return nil
 	}
+	root := sm.root
 	rootID := NewRootNodeID()
-	rootHash := sm.root.Hash()
+	rootHash := root.Hash()
+
+	// The whole tree was already proven complete — prune it.
+	if root.isFullBelow(gen) {
+		sm.mu.RUnlock()
+		return nil
+	}
 
 	// Capture every non-empty root branch under the source-map lock.
 	// Hash-only branches at depth 1 are reported synchronously here
 	// because they have no subtree to walk.
 	var (
-		mu       sync.Mutex
-		missing  []MissingNode
-		stopped  bool
-		subtrees = make([]subtreeStart, 0, BranchFactor)
+		mu           sync.Mutex
+		missing      []MissingNode
+		stopped      bool
+		rootComplete = true // every depth-1 branch resident and full-below
+		subtrees     = make([]subtreeStart, 0, BranchFactor)
 	)
 
 	reportLocked := func(m MissingNode) bool {
@@ -172,7 +185,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	}
 
 	for branch := range BranchFactor {
-		child, childHash, isSet := sm.root.LoadChild(branch)
+		child, childHash, isSet := root.LoadChild(branch)
 		if !isSet {
 			continue
 		}
@@ -180,14 +193,20 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		if err != nil {
 			continue
 		}
+		// Backed short-circuit: a released depth-1 child proven full-below
+		// needs no fetch or descent.
+		if child == nil && backed && cache.Has(gen, childHash) {
+			continue
+		}
 		if child == nil {
 			// Lenient request path: a transient fetch failure reports the
 			// branch missing (self-corrects via the wire).
-			if loaded, _ := loadFromStore(sm, sm.root, branch); loaded != nil {
+			if loaded, _ := loadFromStore(sm, root, branch); loaded != nil {
 				child = loaded
 			}
 		}
 		if child == nil {
+			rootComplete = false
 			if filter.ShouldFetch(childHash) {
 				if reportLocked(MissingNode{
 					Hash:       childHash,
@@ -215,29 +234,58 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	sm.mu.RUnlock()
 
 	if len(subtrees) == 0 {
+		// No inner subtrees to fan out. Mark the root complete when every
+		// depth-1 branch was resident-and-full-below and nothing stopped.
+		mu.Lock()
+		markRoot := rootComplete && !stopped
+		mu.Unlock()
+		if markRoot {
+			markRootFullBelow(root, gen)
+		}
 		return missing
 	}
 
+	subFull := make([]bool, len(subtrees))
+	var anyStopped atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(subtrees))
-	for _, s := range subtrees {
+	for i, s := range subtrees {
 		go func() {
 			defer wg.Done()
-			_, _ = walkSubtreeForMissing(
-				sm,
-				s.node,
-				s.nodeID,
-				s.nodeHash,
-				1,
-				filter,
-				false,
-				reportLocked,
+			full, stop, _ := walkFullBelow(
+				sm, s.node, s.nodeID, s.nodeHash, 1, gen, filter, false, cache, reportLocked,
 			)
+			subFull[i] = full
+			if stop {
+				anyStopped.Store(true)
+			}
 		}()
 	}
 	wg.Wait()
 
+	// Mark the root full-below only when every branch — those handled
+	// inline and every fanned-out subtree — came back complete and no
+	// worker was cut short by the missing cap.
+	allSub := true
+	for _, f := range subFull {
+		if !f {
+			allSub = false
+			break
+		}
+	}
+	mu.Lock()
+	markRoot := rootComplete && allSub && !stopped && !anyStopped.Load()
+	mu.Unlock()
+	if markRoot {
+		markRootFullBelow(root, gen)
+	}
+
 	return missing
+}
+
+// markRootFullBelow records the root as full-below at gen.
+func markRootFullBelow(root *innerNode, gen uint32) {
+	root.setFullBelowGen(gen)
 }
 
 // GetMissingNodes returns the nodes referenced by the tree but not
@@ -420,8 +468,10 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 	targetPath := nodeID.ID()
 
 	parent := sm.root
+	ancestors := make([]*innerNode, 0, targetDepth)
 
 	for curDepth := range targetDepth {
+		ancestors = append(ancestors, parent)
 		branch := selectBranchForPath(targetPath, curDepth)
 
 		child, childHash, isSet := parent.LoadChild(branch)
@@ -451,7 +501,13 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 			if newNode.Hash() != childHash {
 				return NodeInvalid, ErrNodeHashMismatch
 			}
-			parent.SetChildIfNil(branch, newNode)
+			if parent.SetChildIfNil(branch, newNode) != newNode {
+				return NodeDuplicate, nil
+			}
+			newNode.SetDirty(true)
+			for _, ancestor := range ancestors {
+				ancestor.SetDirty(true)
+			}
 			return NodeUseful, nil
 		}
 
@@ -507,6 +563,7 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 
 		if bytes.Equal(childHash[:], targetHash[:]) {
 			// Found the branch - insert the node here
+			newNode.SetDirty(true)
 			return inner.SetChild(branch, newNode)
 		}
 
@@ -514,6 +571,7 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 			// Recurse into this inner node
 			err := sm.insertNodeRecursive(child, targetHash, newNode, depth+1)
 			if err == nil {
+				inner.SetDirty(true)
 				return nil // Successfully inserted
 			}
 			// Continue searching other branches if not found
@@ -567,6 +625,7 @@ func (sm *SHAMap) AddRootNode(hash [32]byte, data []byte) error {
 	}
 
 	sm.root = root
+	root.SetDirty(true)
 	sm.state = StateSyncing
 	// Clear full as StartSync does: a stale full lets IsComplete report
 	// complete while the FinishSync walk still finds missing nodes.

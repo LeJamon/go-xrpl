@@ -316,6 +316,54 @@ func TestFlushDirty_Idempotent(t *testing.T) {
 	}
 }
 
+func TestStoreDirty_RetainsNodesAfterStoreFailure(t *testing.T) {
+	sMap := New(TypeState)
+	sMap.SetLedgerSeq(42)
+	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
+	if err := sMap.Put(key, intToBytes(1)); err != nil {
+		t.Fatal(err)
+	}
+
+	wantErr := fmt.Errorf("store failed")
+	var failedEntries []FlushEntry
+	if err := sMap.StoreDirty(func(entries []FlushEntry) error {
+		failedEntries = append(failedEntries, entries...)
+		return wantErr
+	}); err != wantErr {
+		t.Fatalf("StoreDirty error = %v, want %v", err, wantErr)
+	}
+	if len(failedEntries) == 0 {
+		t.Fatal("failed store received no entries")
+	}
+	for _, entry := range failedEntries {
+		if entry.LedgerSeq != 42 || entry.MapType != TypeState {
+			t.Fatalf("entry metadata = (%d, %d), want (42, %d)", entry.LedgerSeq, entry.MapType, TypeState)
+		}
+	}
+
+	var retryEntries []FlushEntry
+	if err := sMap.StoreDirty(func(entries []FlushEntry) error {
+		retryEntries = append(retryEntries, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty retry: %v", err)
+	}
+	if len(retryEntries) != len(failedEntries) {
+		t.Fatalf("retry entries = %d, want %d", len(retryEntries), len(failedEntries))
+	}
+
+	called := false
+	if err := sMap.StoreDirty(func([]FlushEntry) error {
+		called = true
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty after success: %v", err)
+	}
+	if called {
+		t.Fatal("StoreDirty called store after dirty nodes were persisted")
+	}
+}
+
 // TestFlushDirty_AfterModification verifies only modified nodes are re-flushed.
 func TestFlushDirty_AfterModification(t *testing.T) {
 	sMap := New(TypeState)

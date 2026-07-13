@@ -28,6 +28,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -58,6 +59,10 @@ type Config struct {
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
 	NodeStore nodestore.Database
 
+	// SHAMapFamily loads and stores state and transaction tree nodes.
+	SHAMapFamily shamap.Family
+	// FastLoad restores the newest complete persisted ledger at startup.
+	FastLoad bool
 	// RelationalDB is the repository manager for transaction indexing (optional)
 	RelationalDB relationaldb.RepositoryManager
 
@@ -99,7 +104,8 @@ type Service struct {
 	logger xrpllog.Logger
 
 	// NodeStore for persistent storage (nil if in-memory only)
-	nodeStore nodestore.Database
+	nodeStore    nodestore.Database
+	shamapFamily shamap.Family
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
@@ -224,20 +230,13 @@ type Service struct {
 	// the TxQ's timeLeap flag by processClosedLedgerLocked. Zero in standalone.
 	lastConsensusRoundTime time.Duration
 
-	// persistCh feeds the single persistence worker (see enqueuePersist);
-	// nil until Start. It is never closed — the worker exits on persistQuit
-	// after draining the queue, so a concurrent enqueuePersist can never send
-	// on a closed channel.
-	persistCh chan persistJob
-
-	// persistQuit signals the persistence worker to drain the queue and exit.
-	// Closed by Stop. persistStopped (guarded by mu, like enqueuePersist's
-	// callers) short-circuits new enqueues once Stop has begun. persistWG joins
-	// the worker so Stop can guarantee every queued validated-ledger persist is
-	// durable before the caller closes the underlying stores.
-	persistQuit    chan struct{}
-	persistStopped bool
-	persistWG      sync.WaitGroup
+	persistMu       sync.Mutex
+	persistQueue    []persistJob
+	persistWake     chan struct{}
+	persistStarted  bool
+	persistStopping bool
+	persistWG       sync.WaitGroup
+	validatedTipMu  sync.Mutex
 
 	// ledgerEventCh feeds the single accepted-ledger event dispatcher (see
 	// dispatchLedgerEvent). A single consumer preserves FIFO delivery and runs
@@ -246,6 +245,7 @@ type Service struct {
 	// and reordering ledgerClosed stream events. Started by Start, joined by Stop.
 	ledgerEventCh       chan *LedgerAcceptedEvent
 	ledgerEventQuit     chan struct{}
+	ledgerEventStopped  bool
 	ledgerEventWG       sync.WaitGroup
 	droppedLedgerEvents atomic.Uint64
 
@@ -280,6 +280,7 @@ func New(cfg Config) (*Service, error) {
 		config:                   cfg,
 		logger:                   logger.Named(xrpllog.PartitionLedger),
 		nodeStore:                cfg.NodeStore,
+		shamapFamily:             cfg.SHAMapFamily,
 		relationalDB:             cfg.RelationalDB,
 		amendmentTable:           cfg.Table,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
@@ -292,8 +293,8 @@ func New(cfg Config) (*Service, error) {
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
 		feeTrack:                 feetrack.New(),
+		persistWake:              make(chan struct{}, 1),
 	}
-
 	return s, nil
 }
 
@@ -392,10 +393,14 @@ func (s *Service) Start() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.persistCh == nil {
-		s.persistCh = make(chan persistJob, 32)
-		s.persistQuit = make(chan struct{})
+	s.persistMu.Lock()
+	startWorkers := !s.persistStarted
+	if startWorkers {
+		s.persistStarted = true
 		s.persistWG.Add(1)
+	}
+	s.persistMu.Unlock()
+	if startWorkers {
 		go s.runPersistWorker()
 
 		s.ledgerEventCh = make(chan *LedgerAcceptedEvent, ledgerEventBufferDepth)
@@ -416,6 +421,9 @@ func (s *Service) Start() error {
 		genesisResult.TxMap,
 		drops.Fees{},
 	)
+	if s.shamapFamily != nil {
+		genesisLedger.SetSHAMapFamily(s.shamapFamily)
+	}
 
 	s.genesisLedger = genesisLedger
 	s.putHistoryLocked(genesisLedger)
@@ -448,13 +456,30 @@ func (s *Service) Start() error {
 		}
 		s.openLedger = openLedger
 	} else {
-		// Consensus mode: stay at genesis (seq 1) and wait to adopt a peer's ledger.
-		s.closedLedger = genesisLedger
-		s.validatedLedger = genesisLedger
-		s.needsInitialSync = true
+		var latest *ledger.Ledger
+		if s.config.FastLoad {
+			latest, err = s.loadLatestLedger(context.Background())
+			if err != nil {
+				s.logger.Warn("fast load failed; starting from genesis", "err", err)
+			}
+		}
+		if latest == nil {
+			s.closedLedger = genesisLedger
+			s.validatedLedger = genesisLedger
+			s.needsInitialSync = true
+		} else {
+			s.closedLedger = latest
+			s.validatedLedger = latest
+			if latest.Sequence() != genesisLedger.Sequence() {
+				s.deleteHistoryLocked(genesisLedger.Sequence())
+			}
+			s.putHistoryLocked(latest)
+			s.collectTransactionResults(latest, latest.Sequence(), latest.Hash())
+			s.needsInitialSync = false
+			s.logger.Info("Loaded persisted validated ledger", "sequence", latest.Sequence())
+		}
 
-		// Create open ledger (seq 2) on top of genesis — will be replaced on adoption
-		openLedger, err := ledger.NewOpen(genesisLedger, time.Now())
+		openLedger, err := ledger.NewOpen(s.closedLedger, time.Now())
 		if err != nil {
 			return fmt.Errorf("failed to create open ledger: %w", err)
 		}

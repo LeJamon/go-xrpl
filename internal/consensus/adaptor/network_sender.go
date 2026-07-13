@@ -12,6 +12,7 @@ type NetworkSender interface {
 	BroadcastProposal(proposal *consensus.Proposal) error
 	BroadcastValidation(validation *consensus.Validation) error
 	BroadcastStatusChange(sc *message.StatusChange) error
+	CheckTracking(validSeq uint32)
 	// RelayProposal / RelayValidation forward a peer-originated message to
 	// other peers, subject to the squelch filter, excluding exceptPeer (the
 	// originator; 0 = unfiltered, test-only). SuppressionHash keys the
@@ -94,6 +95,7 @@ type noopSender struct{}
 func (n *noopSender) BroadcastProposal(*consensus.Proposal) error         { return nil }
 func (n *noopSender) BroadcastValidation(*consensus.Validation) error     { return nil }
 func (n *noopSender) BroadcastStatusChange(*message.StatusChange) error   { return nil }
+func (n *noopSender) CheckTracking(uint32)                                {}
 func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { return nil }
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}

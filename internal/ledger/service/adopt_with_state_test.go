@@ -171,8 +171,8 @@ func TestAdoptLedgerWithState_NilTxMapFallsBackToEmpty(t *testing.T) {
 		"nil txMap must fall back to the genesis-shaped empty tx map")
 }
 
-// TestAdoptLedgerWithState_PersistsToRelationalDB pins F1: adopting a
-// ledger with a tx map must flush those transactions to the
+// TestAdoptLedgerWithState_PersistsToRelationalDB pins F1: validating an
+// adopted ledger with a tx map must flush those transactions to the
 // RelationalDB so `tx`, `account_tx`, `tx_history`, and
 // `transaction_entry` RPCs can answer queries against peer-adopted
 // ledgers. Before F1, the adopt path never called persistLedger and
@@ -221,6 +221,11 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	}
 
 	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	svc.FlushPersists()
+	unvalidatedInfo, err := rm.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(hdr.LedgerIndex))
+	require.ErrorIs(t, err, relationaldb.ErrLedgerNotFound)
+	require.Nil(t, unvalidatedInfo, "unvalidated adoption must not enter the validated relational index")
+	svc.SetValidatedLedger(hdr.LedgerIndex, adoptedHash)
 	// Persistence runs on the async worker; barrier before asserting.
 	svc.FlushPersists()
 
