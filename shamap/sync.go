@@ -563,6 +563,7 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 
 		if bytes.Equal(childHash[:], targetHash[:]) {
 			// Found the branch - insert the node here
+			newNode.SetDirty(true)
 			return inner.SetChild(branch, newNode)
 		}
 
@@ -570,6 +571,7 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 			// Recurse into this inner node
 			err := sm.insertNodeRecursive(child, targetHash, newNode, depth+1)
 			if err == nil {
+				inner.SetDirty(true)
 				return nil // Successfully inserted
 			}
 			// Continue searching other branches if not found

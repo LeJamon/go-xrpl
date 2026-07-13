@@ -515,6 +515,67 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	}
 }
 
+func TestAddKnownNode_StoreDirtyPersistsAcquiredNodes(t *testing.T) {
+	source := New(TypeTransaction)
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			var key [32]byte
+			key[0] = (branch << 4) | sub
+			key[1] = 0x80
+			if err := source.Put(key, []byte{branch, sub, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55}); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	wireNodes, err := source.WalkWireNodes()
+	if err != nil {
+		t.Fatalf("WalkWireNodes: %v", err)
+	}
+
+	dest := New(TypeTransaction)
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+	for _, wire := range wireNodes[1:] {
+		node, err := deserializeNodeFromWire(wire.Data)
+		if err != nil {
+			t.Fatalf("deserialize acquired node: %v", err)
+		}
+		if err := node.UpdateHash(); err != nil {
+			t.Fatalf("hash acquired node: %v", err)
+		}
+		if err := dest.AddKnownNode(node.Hash(), wire.Data); err != nil {
+			t.Fatalf("AddKnownNode: %v", err)
+		}
+	}
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+
+	var stored []FlushEntry
+	if err := dest.StoreDirty(func(entries []FlushEntry) error {
+		stored = append(stored, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty: %v", err)
+	}
+	if len(stored) != len(wireNodes) {
+		t.Fatalf("stored acquired nodes = %d, want %d", len(stored), len(wireNodes))
+	}
+}
+
 func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	source := New(TypeTransaction)
 	for branch := range byte(3) {

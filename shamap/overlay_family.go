@@ -26,6 +26,7 @@ func NewOverlayFamily(base, overlay Family) *OverlayFamily {
 	return &OverlayFamily{base: base, overlay: overlay, cache: NewFullBelowCache()}
 }
 
+// FullBelowCache returns the cache shared by maps backed by this family.
 func (f *OverlayFamily) FullBelowCache() *FullBelowCache {
 	return f.cache
 }
