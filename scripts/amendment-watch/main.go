@@ -1,3 +1,4 @@
+// Package main provides a manual freshness-checked amendment registry report.
 package main
 
 import (
