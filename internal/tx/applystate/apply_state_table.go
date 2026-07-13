@@ -193,7 +193,7 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 		}
 		// Re-inserting a deleted entry becomes a modify
 		entry.Action = ActionModify
-		entry.Current = data
+		entry.Current = bytes.Clone(data)
 		entry.reinserted = true
 		return nil
 	}
@@ -211,7 +211,7 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 	t.items[k.Key] = &TrackedEntry{
 		Action:   ActionInsert,
 		Original: nil,
-		Current:  data,
+		Current:  bytes.Clone(data),
 	}
 
 	return nil
@@ -228,7 +228,7 @@ func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 			entry.Action = ActionModify
 		}
 		// For insert, keep it as insert with new data
-		entry.Current = data
+		entry.Current = bytes.Clone(data)
 		return nil
 	}
 
@@ -245,14 +245,14 @@ func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
 		// Reference: rippled's ApplyView uses insert() for new entries.
 		t.items[k.Key] = &TrackedEntry{
 			Action:  ActionInsert,
-			Current: data,
+			Current: bytes.Clone(data),
 		}
 	} else {
 		// Track as modified
 		t.items[k.Key] = &TrackedEntry{
 			Action:   ActionModify,
 			Original: original,
-			Current:  data,
+			Current:  bytes.Clone(data),
 		}
 	}
 

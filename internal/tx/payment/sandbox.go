@@ -326,7 +326,10 @@ func (s *PaymentSandbox) Update(k keylet.Keylet, data []byte) error {
 	if _, hasPreImage := s.preImages[key]; !hasPreImage {
 		// Get the original value from parent chain or underlying view
 		origData, err := s.readOriginal(k)
-		if err == nil && origData != nil {
+		if err != nil {
+			return err
+		}
+		if origData != nil {
 			preImageCopy := make([]byte, len(origData))
 			copy(preImageCopy, origData)
 			s.preImages[key] = preImageCopy

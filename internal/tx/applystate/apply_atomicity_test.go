@@ -257,6 +257,28 @@ func TestApplyStateTableAtomicFailureDoesNotMutateTable(t *testing.T) {
 	}
 }
 
+func TestApplyStateTableAtomicSuccessCopiesCallbackData(t *testing.T) {
+	base := newMockBaseView()
+	table := NewApplyStateTable(base, [32]byte{1}, 2, amendment.AllSupportedRules())
+	data := []byte{1}
+
+	err := table.ApplyAtomically(func(view ledgercore.Writer) error {
+		return view.Insert(kl(1), data)
+	})
+	if err != nil {
+		t.Fatalf("ApplyAtomically: %v", err)
+	}
+
+	data[0] = 9
+	got, err := table.Read(kl(1))
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if !bytes.Equal(got, []byte{1}) {
+		t.Fatalf("stored data changed through callback-owned slice: got %v", got)
+	}
+}
+
 func TestApplyFlushesTrackedItemsInKeyOrder(t *testing.T) {
 	entry := encodeApplyTestEntry(t, map[string]any{
 		"LedgerEntryType": "AccountRoot",
