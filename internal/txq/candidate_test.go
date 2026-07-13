@@ -188,6 +188,27 @@ func TestAccountQueue_GetPrevTx(t *testing.T) {
 	}
 }
 
+func TestAccountQueue_GetNextTx(t *testing.T) {
+	account := [20]byte{1, 2, 3}
+	aq := NewAccountQueue(account)
+	seq1 := &Candidate{Account: account, SeqProxy: NewSeqProxySequence(1)}
+	seq3 := &Candidate{Account: account, SeqProxy: NewSeqProxySequence(3)}
+	ticket2 := &Candidate{Account: account, SeqProxy: NewSeqProxyTicket(2)}
+	aq.Add(seq1)
+	aq.Add(seq3)
+	aq.Add(ticket2)
+
+	if next := aq.GetNextTx(seq1.SeqProxy); next != seq3 {
+		t.Errorf("GetNextTx(sequence 1) = %v, want sequence 3", next)
+	}
+	if next := aq.GetNextTx(seq3.SeqProxy); next != ticket2 {
+		t.Errorf("GetNextTx(sequence 3) = %v, want ticket 2", next)
+	}
+	if next := aq.GetNextTx(ticket2.SeqProxy); next != nil {
+		t.Errorf("GetNextTx(ticket 2) = %v, want nil", next)
+	}
+}
+
 // TestAccountQueue_GetFirstSeqTx tests finding the first sequence-based tx
 func TestAccountQueue_GetFirstSeqTx(t *testing.T) {
 	account := [20]byte{1, 2, 3}
