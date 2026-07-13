@@ -472,6 +472,7 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 		l.err = fmt.Errorf("create state map: %w", err)
 		return l.err
 	}
+	sm.SetLedgerSeq(h.LedgerIndex)
 
 	if err := sm.AddRootNode(h.AccountHash, nodes[1].NodeData); err != nil {
 		l.state = StateFailed
@@ -494,6 +495,7 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 			l.err = fmt.Errorf("create tx map: %w", terr)
 			return l.err
 		}
+		tm.SetLedgerSeq(h.LedgerIndex)
 		if len(nodes) >= 3 && len(nodes[2].NodeData) > 0 {
 			if err := tm.AddRootNode(h.TxHash, nodes[2].NodeData); err != nil {
 				l.state = StateFailed
@@ -516,11 +518,8 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 		}
 	}
 
-	if l.haveState && l.haveTx {
-		l.state = StateComplete
-	} else {
-		l.state = StateWantState
-	}
+	l.state = StateWantState
+	l.recomputeComplete()
 
 	l.logger.Info("inbound ledger: roots added, fetching missing nodes",
 		"seq", h.LedgerIndex,

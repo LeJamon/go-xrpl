@@ -19,6 +19,10 @@ func NewOverlaySender(overlay *peermanagement.Overlay) *OverlaySender {
 	return &OverlaySender{overlay: overlay}
 }
 
+func (s *OverlaySender) CheckTracking(validSeq uint32) {
+	s.overlay.CheckTracking(validSeq)
+}
+
 // BroadcastProposal sends OUR OWN proposal to every connected peer
 // WITHOUT applying the squelch filter: a peer that squelches our own
 // pubkey should NOT cause our own proposals to disappear from the

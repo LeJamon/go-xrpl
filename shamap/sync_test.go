@@ -496,6 +496,23 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	if destHash != rootHash {
 		t.Errorf("reconstructed hash mismatch: want %x got %x", rootHash[:8], destHash[:8])
 	}
+
+	dest.SetLedgerSeq(123)
+	var stored []FlushEntry
+	if err := dest.StoreDirty(func(entries []FlushEntry) error {
+		stored = append(stored, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("StoreDirty: %v", err)
+	}
+	if len(stored) != len(wireNodes) {
+		t.Fatalf("stored acquired nodes = %d, want %d", len(stored), len(wireNodes))
+	}
+	for _, entry := range stored {
+		if entry.LedgerSeq != 123 || entry.MapType != TypeTransaction {
+			t.Fatalf("stored metadata = (%d, %d), want (123, %d)", entry.LedgerSeq, entry.MapType, TypeTransaction)
+		}
+	}
 }
 
 func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {

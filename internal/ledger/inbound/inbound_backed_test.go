@@ -174,4 +174,52 @@ func TestGotBase_BackedFetchesOnlyForkDelta(t *testing.T) {
 	if !il.IsComplete() {
 		t.Fatalf("acquisition should complete after the peer supplies the fork delta; state=%d", il.State())
 	}
+	var stored []shamap.FlushEntry
+	if err := il.stateMap.StoreDirty(func(entries []shamap.FlushEntry) error {
+		stored = append(stored, entries...)
+		return nil
+	}); err != nil {
+		t.Fatalf("store acquired delta: %v", err)
+	}
+	if len(stored) == 0 || len(stored) >= len(wire) {
+		t.Fatalf("stored nodes = %d, want only the received fork frontier (full tree has %d)", len(stored), len(wire))
+	}
+}
+
+func TestGotBase_StoreCompleteTreePersistsOnlyReceivedRoot(t *testing.T) {
+	source, rootHash, rootData := buildBackedTestState(t, 0)
+	family := shamap.NewMemoryNodeStoreFamily()
+	nodes, err := source.WalkFetchPackNodes(1 << 20)
+	if err != nil {
+		t.Fatalf("walk fetch-pack nodes: %v", err)
+	}
+	entries := make([]shamap.FlushEntry, 0, len(nodes)-1)
+	for _, node := range nodes {
+		if node.Hash != rootHash {
+			entries = append(entries, shamap.FlushEntry{Hash: node.Hash, Data: node.Data, LedgerSeq: 99, MapType: shamap.TypeState})
+		}
+	}
+	if err := family.StoreBatch(context.Background(), entries); err != nil {
+		t.Fatalf("seed descendants: %v", err)
+	}
+
+	hdrBytes, ledgerHash := encodeHeader(header.LedgerHeader{LedgerIndex: 100, AccountHash: rootHash})
+	il := New(ledgerHash, 100, 7, discardLogger(), WithFamily(family))
+	if err := il.GotBase([]message.LedgerNode{{NodeData: hdrBytes}, {NodeData: rootData}}); err != nil {
+		t.Fatalf("GotBase: %v", err)
+	}
+	if !il.IsComplete() {
+		t.Fatalf("descendant-backed acquisition did not complete; state=%d", il.State())
+	}
+
+	var stored []shamap.FlushEntry
+	if err := il.stateMap.StoreDirty(func(got []shamap.FlushEntry) error {
+		stored = append(stored, got...)
+		return nil
+	}); err != nil {
+		t.Fatalf("store received root: %v", err)
+	}
+	if len(stored) != 1 || stored[0].Hash != rootHash {
+		t.Fatalf("stored nodes = %v, want only received root %x", stored, rootHash[:8])
+	}
 }

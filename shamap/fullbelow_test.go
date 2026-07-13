@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // countingFamily wraps a Family and counts Fetch calls so a test can prove
@@ -26,6 +27,10 @@ func (c *countingFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, erro
 
 func (c *countingFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
 	return c.inner.StoreBatch(ctx, entries)
+}
+
+func (c *countingFamily) FullBelowCache() *FullBelowCache {
+	return c.inner.(fullBelowCacheProvider).FullBelowCache()
 }
 
 func (c *countingFamily) count() int64 { return c.fetches.Load() }
@@ -332,7 +337,7 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 		t.Fatalf("NewFromRootHash: %v", err)
 	}
 
-	// Warm: materialize + mark + populate the hash set for every subtree.
+	// Materialize and mark the tree; the source flush populated the shared set.
 	if missing := dest.WalkMap(0, nil); len(missing) != 0 {
 		t.Fatalf("warm-up walk found %d missing", len(missing))
 	}
@@ -370,6 +375,76 @@ func TestFullBelow_HashSetSkipsReleasedChildWithoutFetch(t *testing.T) {
 	}
 }
 
+func TestFullBelow_SharedCacheDoesNotPublishUnstoredSubtree(t *testing.T) {
+	family := NewMemoryNodeStoreFamily()
+	source := buildRandomState(t, 100)
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootWire, err := source.root.SerializeForWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.fullBelow = family.FullBelowCache()
+	if missing := source.WalkMap(0, nil); len(missing) != 0 {
+		t.Fatalf("materialized source missing %d nodes", len(missing))
+	}
+
+	dest, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.AddRootNode(rootHash, rootWire); err != nil {
+		t.Fatal(err)
+	}
+	if missing := dest.GetMissingNodes(0, nil); len(missing) == 0 {
+		t.Fatal("shared cache hid an unstored subtree")
+	}
+}
+
+func TestStoreDirty_PinsFullBelowGenerationThroughStore(t *testing.T) {
+	family := NewMemoryNodeStoreFamily()
+	sm, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.Put([32]byte{1}, make([]byte, 12)); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	stored := make(chan error, 1)
+	go func() {
+		stored <- sm.StoreDirty(func([]FlushEntry) error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+
+	pruned := make(chan struct{})
+	go func() {
+		unlock := family.BeginPrune()
+		unlock()
+		close(pruned)
+	}()
+	select {
+	case <-pruned:
+		t.Fatal("prune invalidated the cache while dirty storage was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-stored; err != nil {
+		t.Fatal(err)
+	}
+	<-pruned
+	if size := family.FullBelowCache().Size(); size != 0 {
+		t.Fatalf("cache size after prune = %d, want 0", size)
+	}
+}
+
 // leafNodeIDFor returns the wire NodeID of the leaf holding key in sm.
 func leafNodeIDFor(t testing.TB, sm *SHAMap, key [32]byte) NodeID {
 	t.Helper()
@@ -395,8 +470,9 @@ func TestFullBelowCache_GenerationAndBump(t *testing.T) {
 
 	var h [32]byte
 	h[0] = 0xAB
-	c.Insert(h)
-	if !c.Has(h) {
+	gen := c.Generation()
+	c.Insert(gen, h)
+	if !c.Has(gen, h) {
 		t.Error("Has should report an inserted hash")
 	}
 	if c.Size() != 1 {
@@ -417,11 +493,37 @@ func TestFullBelowCache_GenerationAndBump(t *testing.T) {
 	if n.isFullBelow(c.Generation()) {
 		t.Error("node mark must not survive a generation bump")
 	}
-	if c.Has(h) {
+	if c.Has(c.Generation(), h) {
 		t.Error("Bump should drop recorded hashes")
 	}
 	if c.Size() != 0 {
 		t.Errorf("Size after Bump = %d, want 0", c.Size())
+	}
+}
+
+func TestFullBelowCache_RejectsStaleGenerationInsert(t *testing.T) {
+	c := NewFullBelowCache()
+	stale := c.Generation()
+	c.Bump()
+	h := [32]byte{0x7A}
+	c.Insert(stale, h)
+	if c.Has(c.Generation(), h) {
+		t.Fatal("stale generation insert survived reset")
+	}
+}
+
+func TestFullBelowCache_SharedByFamily(t *testing.T) {
+	family := NewMemoryNodeStoreFamily()
+	first, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewBacked(TypeTransaction, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.FullBelowCache() != second.FullBelowCache() {
+		t.Fatal("maps backed by one family must share completeness marks")
 	}
 }
 
@@ -450,6 +552,7 @@ func TestFullBelowCache_ZeroGenNeverMatches(t *testing.T) {
 // 2x cap while the most recent inserts remain queryable.
 func TestFullBelowCache_Bounded(t *testing.T) {
 	c := NewFullBelowCache()
+	gen := c.Generation()
 	n := fullBelowPartitionMax + fullBelowPartitionMax/2
 	var last [32]byte
 	for i := range n {
@@ -457,13 +560,13 @@ func TestFullBelowCache_Bounded(t *testing.T) {
 		h[0] = byte(i)
 		h[1] = byte(i >> 8)
 		h[2] = byte(i >> 16)
-		c.Insert(h)
+		c.Insert(gen, h)
 		last = h
 	}
 	if sz := c.Size(); sz > 2*fullBelowPartitionMax {
 		t.Errorf("Size = %d exceeds 2x partition cap %d", sz, 2*fullBelowPartitionMax)
 	}
-	if !c.Has(last) {
+	if !c.Has(gen, last) {
 		t.Error("most-recently inserted hash should still be present")
 	}
 }

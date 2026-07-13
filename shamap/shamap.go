@@ -78,11 +78,8 @@ type SHAMap struct {
 	full      bool
 	backed    bool
 	family    Family // nil for unbacked maps
-	// fullBelow prunes completed subtrees from missing-node walks. Never
-	// nil: every constructor installs one and snapshot shares the source's
-	// so structurally-shared trees agree on which subtrees are proven
-	// complete. Shared across an acquisition's state and tx maps when the
-	// caller injects one via WithFullBelowCache.
+	// fullBelow prunes completed subtrees from missing-node walks. Backed maps
+	// share their family's cache; snapshots share the source map's cache.
 	fullBelow *FullBelowCache
 	// cachedSize memoises Size(); -1 = uncached. Only written once the
 	// map is immutable, so concurrent first-readers race benignly on a
@@ -117,7 +114,7 @@ func NewBacked(mapType Type, family Family) (*SHAMap, error) {
 		full:      true,
 		backed:    true,
 		family:    family,
-		fullBelow: NewFullBelowCache(),
+		fullBelow: familyFullBelowCache(family),
 	}
 	sm.cachedSize.Store(-1)
 	return sm, nil
@@ -130,6 +127,9 @@ func (sm *SHAMap) SetFamily(family Family) {
 	defer sm.mu.Unlock()
 	sm.family = family
 	sm.backed = family != nil
+	if family != nil {
+		sm.fullBelow = familyFullBelowCache(family)
+	}
 }
 
 // NewFromRootHash creates a backed SHAMap from a root hash and a Family.
@@ -167,7 +167,7 @@ func NewFromRootHash(mapType Type, rootHash [32]byte, family Family) (*SHAMap, e
 		full:      true,
 		backed:    true,
 		family:    family,
-		fullBelow: NewFullBelowCache(),
+		fullBelow: familyFullBelowCache(family),
 	}
 	sm.cachedSize.Store(-1)
 	return sm, nil
@@ -694,14 +694,10 @@ func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
 // node's own lock.
 func (sm *SHAMap) snapshot(mutable bool) (*SHAMap, error) {
 	if sm.backed && sm.family != nil {
-		batch, err := sm.flushDirty(false)
-		if err != nil {
-			return nil, fmt.Errorf("failed to flush dirty nodes: %w", err)
-		}
-		if len(batch.Entries) > 0 {
-			if err := sm.family.StoreBatch(context.Background(), batch.Entries); err != nil {
-				return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
-			}
+		if err := sm.StoreDirty(func(entries []FlushEntry) error {
+			return sm.family.StoreBatch(context.Background(), entries)
+		}); err != nil {
+			return nil, fmt.Errorf("failed to store dirty nodes: %w", err)
 		}
 	}
 

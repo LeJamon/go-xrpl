@@ -301,7 +301,7 @@ func walkFullBelow(
 		// Backed short-circuit: a released (hash-only) child proven
 		// full-below in the family cache needs neither a store fetch nor a
 		// re-descent of its subtree.
-		if child == nil && backed && cache.Has(childHash) {
+		if child == nil && backed && cache.Has(gen, childHash) {
 			continue
 		}
 
@@ -357,9 +357,6 @@ func walkFullBelow(
 
 	if fullBelow {
 		node.setFullBelowGen(gen)
-		if backed {
-			cache.Insert(nodeHash)
-		}
 	}
 	return fullBelow, false, nil
 }
@@ -380,7 +377,8 @@ func walkSubtreeForMissing(
 	strict bool,
 	report func(MissingNode) bool,
 ) (bool, error) {
-	gen, cache := fullBelowContext(sm)
+	gen, cache, done := fullBelowContext(sm)
+	defer done()
 	_, stopped, err := walkFullBelow(sm, start, startID, startHash, startDepth, gen, filter, strict, cache, report)
 	return stopped, err
 }
@@ -389,11 +387,12 @@ func walkSubtreeForMissing(
 // use. Every constructed SHAMap installs a cache, but defend against a
 // zero-value map by falling back to generation 0 (which no node ever
 // matches, disabling the prune) and a nil cache.
-func fullBelowContext(sm *SHAMap) (uint32, *FullBelowCache) {
+func fullBelowContext(sm *SHAMap) (uint32, *FullBelowCache, func()) {
 	if sm == nil || sm.fullBelow == nil {
-		return 0, nil
+		return 0, nil, func() {}
 	}
-	return sm.fullBelow.Generation(), sm.fullBelow
+	gen, done := sm.fullBelow.Begin()
+	return gen, sm.fullBelow, done
 }
 
 // loadFromStore lazy-fetches a hash-only branch from the backing store and

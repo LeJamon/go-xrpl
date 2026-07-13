@@ -2,7 +2,9 @@ package shamapstore
 
 import (
 	"context"
+	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -13,13 +15,80 @@ type fakeNodePruner struct {
 	mu         sync.Mutex
 	boundaries []uint32
 	deleted    uint64
+	err        error
+	before     func()
+}
+
+func TestRotate_RefreshFailureAbortsDeletion(t *testing.T) {
+	r, nodes, rel := newTestRotator(t, false, 256)
+	r.SetStateRefresh(func(context.Context, uint32) error {
+		return errors.New("missing live node")
+	}, nil, nil)
+	r.maybeRotate(context.Background(), 500)
+	r.maybeRotate(context.Background(), 800)
+
+	if len(nodes.calls()) != 0 || len(rel.calls()) != 0 {
+		t.Fatal("refresh failure must abort all deletion")
+	}
+	if got := r.store.GetLastRotated(); got != 500 {
+		t.Fatalf("lastRotated = %d, want 500", got)
+	}
+}
+
+func TestRotate_WaitsForHealthyNode(t *testing.T) {
+	r, nodes, _ := newTestRotator(t, false, 256)
+	r.maybeRotate(context.Background(), 500)
+	var healthy atomic.Bool
+	r.SetHealthCheck(healthy.Load, time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		r.maybeRotate(context.Background(), 800)
+		close(done)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	if len(nodes.calls()) != 0 {
+		t.Fatal("unhealthy node started pruning")
+	}
+	healthy.Store(true)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("rotation did not resume after health recovered")
+	}
+	if len(nodes.calls()) != 1 {
+		t.Fatalf("prune calls = %v, want one", nodes.calls())
+	}
 }
 
 func (f *fakeNodePruner) DeleteBefore(_ context.Context, boundary uint32, _ int) (uint64, error) {
+	if f.before != nil {
+		f.before()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.boundaries = append(f.boundaries, boundary)
-	return f.deleted, nil
+	return f.deleted, f.err
+}
+
+func TestRotate_PartialPruneResetsCacheWithoutAdvancing(t *testing.T) {
+	r, nodes, _ := newTestRotator(t, false, 256)
+	r.maybeRotate(context.Background(), 500)
+	nodes.deleted = 3
+	nodes.err = errors.New("partial prune")
+	locked, unlocked := 0, 0
+	r.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, func() func() {
+		locked++
+		return func() { unlocked++ }
+	})
+
+	r.maybeRotate(context.Background(), 800)
+
+	if locked != 1 || unlocked != 1 {
+		t.Fatalf("prune guard = (%d, %d), want (1, 1)", locked, unlocked)
+	}
+	if got := r.store.GetLastRotated(); got != 500 {
+		t.Fatalf("lastRotated = %d, want 500", got)
+	}
 }
 
 func (f *fakeNodePruner) calls() []uint32 {
@@ -58,6 +127,7 @@ func newTestRotator(t *testing.T, advisory bool, interval uint32) (*Rotator, *fa
 	if r == nil {
 		t.Fatal("NewRotator returned nil")
 	}
+	r.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, nil)
 	return r, nodes, rel
 }
 
@@ -83,8 +153,8 @@ func TestRotate_FirstNotificationSeedsBoundaryNoDelete(t *testing.T) {
 	if got := r.store.GetLastRotated(); got != 1000 {
 		t.Fatalf("lastRotated = %d, want 1000 (seeded)", got)
 	}
-	if got := r.MinimumOnline(); got != 1000 {
-		t.Fatalf("minimumOnline = %d, want 1000", got)
+	if got := r.MinimumOnline(); got != 0 {
+		t.Fatalf("minimumOnline = %d, want 0", got)
 	}
 	if len(nodes.calls()) != 0 || len(rel.calls()) != 0 {
 		t.Fatal("first notification must not delete anything")
@@ -120,6 +190,11 @@ func TestRotate_WaitsForFullInterval(t *testing.T) {
 
 func TestRotate_DeletesBelowOldBoundaryInBothStores(t *testing.T) {
 	r, nodes, rel := newTestRotator(t, false, 256)
+	nodes.before = func() {
+		if got := r.store.GetMinimumOnline(); got != 501 {
+			t.Fatalf("minimumOnline at destructive prune = %d, want durable floor 501", got)
+		}
+	}
 	r.maybeRotate(context.Background(), 500) // seed lastRotated=500
 	r.maybeRotate(context.Background(), 800) // 800 >= 500+256 → rotate
 
@@ -131,6 +206,30 @@ func TestRotate_DeletesBelowOldBoundaryInBothStores(t *testing.T) {
 	}
 	if got := r.store.GetLastRotated(); got != 800 {
 		t.Fatalf("lastRotated = %d, want 800", got)
+	}
+}
+
+func TestRotator_MinimumOnlineFloorPersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	store, err := New(false, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewRotator(store, &fakeNodePruner{}, nil, RotationConfig{DeleteInterval: 256}, nil)
+	if err := r.SetMinimumOnlineFloor(700); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SetMinimumOnlineFloor(650); err != nil {
+		t.Fatal(err)
+	}
+
+	reloaded, err := New(false, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewRotator(reloaded, &fakeNodePruner{}, nil, RotationConfig{DeleteInterval: 256}, nil)
+	if got := restarted.MinimumOnline(); got != 700 {
+		t.Fatalf("minimumOnline after restart = %d, want 700", got)
 	}
 }
 
@@ -183,6 +282,7 @@ func TestRotate_TolerantOfNilRelationalPruner(t *testing.T) {
 	if r == nil {
 		t.Fatal("rotator nil with valid node pruner")
 	}
+	r.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, nil)
 	r.maybeRotate(context.Background(), 500)
 	r.maybeRotate(context.Background(), 800)
 	if nc := nodes.calls(); len(nc) != 1 || nc[0] != 500 {

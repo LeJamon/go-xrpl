@@ -511,8 +511,9 @@ func (n *innerNode) Clone() (Node, error) {
 	defer n.mu.RUnlock()
 
 	clone := &innerNode{
-		isBranch: n.isBranch,
-		hashes:   n.hashes, // Copy the array
+		isBranch:     n.isBranch,
+		hashes:       n.hashes, // Copy the array
+		fullBelowGen: n.fullBelowGen,
 	}
 	clone.hash = n.hash
 	clone.SetDirty(true)
@@ -542,9 +543,10 @@ func (n *innerNode) shallowClone() *innerNode {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	clone := &innerNode{
-		isBranch: n.isBranch,
-		hashes:   n.hashes,
-		children: n.children,
+		isBranch:     n.isBranch,
+		hashes:       n.hashes,
+		children:     n.children,
+		fullBelowGen: n.fullBelowGen,
 	}
 	clone.hash = n.hash
 	clone.SetDirty(true)

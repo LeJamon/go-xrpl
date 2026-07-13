@@ -11,7 +11,7 @@ import (
 // 2*fullBelowPartitionMax [32]byte keys without per-entry timestamps. This
 // is the idiomatic-Go stand-in for rippled's time-partitioned KeyCache
 // (FullBelowCache backed by KeyCache), which sweeps on a wall clock.
-const fullBelowPartitionMax = 1 << 17
+const fullBelowPartitionMax = 1 << 18
 
 // FullBelowCache remembers which SHAMap inner nodes have all of their
 // descendants resident, so a missing-node walk can prune whole subtrees
@@ -34,16 +34,19 @@ const fullBelowPartitionMax = 1 << 17
 //     is in the set is skipped without re-fetching and re-materializing its
 //     entire subtree from the store.
 //
-// A node hash is only ever inserted after its whole subtree has been
-// verified resident, and SHAMap trees are content-addressed and
-// path-copy-persistent, so a recorded mark can never become a false
-// positive: the subtree a hash names is immutable.
+// A node hash is inserted only after its subtree has been stored successfully.
+// This makes a shared family mark a guarantee that a hash-only child is
+// recoverable, not merely resident in another SHAMap instance.
 type FullBelowCache struct {
 	gen atomic.Uint32
 
-	mu   sync.Mutex
-	live map[[32]byte]struct{}
-	old  map[[32]byte]struct{}
+	// walks prevents a generation reset from overtaking an in-flight walk.
+	// Entries use a separate lock so a walk can populate the cache while it
+	// holds the generation read lock.
+	walks sync.RWMutex
+	mu    sync.Mutex
+	live  map[[32]byte]struct{}
+	old   map[[32]byte]struct{}
 }
 
 // NewFullBelowCache returns a cache at generation 1 (the first live
@@ -60,24 +63,41 @@ func (c *FullBelowCache) Generation() uint32 {
 	return c.gen.Load()
 }
 
-// Bump invalidates every outstanding full-below mark by advancing the
-// generation and dropping the recorded hashes. rippled bumps only on a
-// NodeFamily reset (never per acquisition, since content-addressing keeps
-// marks valid across ledgers); go-xrpl mirrors that — an acquisition gets a
-// fresh cache rather than bumping a shared one — and exposes Bump for that
-// reset path and for tests that need to defeat the cache.
+// Begin pins the current generation for one missing-node walk. The returned
+// function must be called when the walk finishes.
+func (c *FullBelowCache) Begin() (uint32, func()) {
+	c.walks.RLock()
+	return c.gen.Load(), c.walks.RUnlock
+}
+
+// Bump invalidates every outstanding full-below mark. It waits for active
+// missing-node walks so no mark from the old backing store enters the new
+// generation.
 func (c *FullBelowCache) Bump() {
+	unlock := c.invalidateAndLock()
+	unlock()
+}
+
+func (c *FullBelowCache) invalidateAndLock() func() {
+	c.walks.Lock()
+
 	c.mu.Lock()
 	c.live = make(map[[32]byte]struct{})
 	c.old = nil
+	if c.gen.Add(1) == 0 {
+		c.gen.Store(1)
+	}
 	c.mu.Unlock()
-	c.gen.Add(1)
+	return c.walks.Unlock
 }
 
 // Has reports whether hash was proven full-below in the current generation.
-func (c *FullBelowCache) Has(hash [32]byte) bool {
+func (c *FullBelowCache) Has(generation uint32, hash [32]byte) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.gen.Load() != generation {
+		return false
+	}
 	if _, ok := c.live[hash]; ok {
 		return true
 	}
@@ -88,9 +108,12 @@ func (c *FullBelowCache) Has(hash [32]byte) bool {
 // Insert records hash as full-below. When the live partition fills it is
 // demoted so recently-inserted hashes survive one more rotation, bounding
 // memory without per-entry expiry.
-func (c *FullBelowCache) Insert(hash [32]byte) {
+func (c *FullBelowCache) Insert(generation uint32, hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.gen.Load() != generation {
+		return
+	}
 	if len(c.live) >= fullBelowPartitionMax {
 		c.old = c.live
 		c.live = make(map[[32]byte]struct{})

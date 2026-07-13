@@ -140,7 +140,8 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		branch   int
 	}
 
-	gen, cache := fullBelowContext(sm)
+	gen, cache, done := fullBelowContext(sm)
+	defer done()
 	backed := sm != nil && sm.backed && cache != nil
 
 	sm.mu.RLock()
@@ -194,7 +195,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		}
 		// Backed short-circuit: a released depth-1 child proven full-below
 		// needs no fetch or descent.
-		if child == nil && backed && cache.Has(childHash) {
+		if child == nil && backed && cache.Has(gen, childHash) {
 			continue
 		}
 		if child == nil {
@@ -239,7 +240,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		markRoot := rootComplete && !stopped
 		mu.Unlock()
 		if markRoot {
-			markRootFullBelow(root, rootHash, gen, backed, cache)
+			markRootFullBelow(root, gen)
 		}
 		return missing
 	}
@@ -276,19 +277,15 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	markRoot := rootComplete && allSub && !stopped && !anyStopped.Load()
 	mu.Unlock()
 	if markRoot {
-		markRootFullBelow(root, rootHash, gen, backed, cache)
+		markRootFullBelow(root, gen)
 	}
 
 	return missing
 }
 
-// markRootFullBelow records the root as full-below at gen and, for backed
-// maps, in the family cache. Shared by both WalkMapParallel return paths.
-func markRootFullBelow(root *innerNode, rootHash [32]byte, gen uint32, backed bool, cache *FullBelowCache) {
+// markRootFullBelow records the root as full-below at gen.
+func markRootFullBelow(root *innerNode, gen uint32) {
 	root.setFullBelowGen(gen)
-	if backed {
-		cache.Insert(rootHash)
-	}
 }
 
 // GetMissingNodes returns the nodes referenced by the tree but not
@@ -471,8 +468,10 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 	targetPath := nodeID.ID()
 
 	parent := sm.root
+	ancestors := make([]*innerNode, 0, targetDepth)
 
 	for curDepth := range targetDepth {
+		ancestors = append(ancestors, parent)
 		branch := selectBranchForPath(targetPath, curDepth)
 
 		child, childHash, isSet := parent.LoadChild(branch)
@@ -502,7 +501,13 @@ func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, err
 			if newNode.Hash() != childHash {
 				return NodeInvalid, ErrNodeHashMismatch
 			}
-			parent.SetChildIfNil(branch, newNode)
+			if parent.SetChildIfNil(branch, newNode) != newNode {
+				return NodeDuplicate, nil
+			}
+			newNode.SetDirty(true)
+			for _, ancestor := range ancestors {
+				ancestor.SetDirty(true)
+			}
 			return NodeUseful, nil
 		}
 
@@ -618,6 +623,7 @@ func (sm *SHAMap) AddRootNode(hash [32]byte, data []byte) error {
 	}
 
 	sm.root = root
+	root.SetDirty(true)
 	sm.state = StateSyncing
 	// Clear full as StartSync does: a stale full lets IsComplete report
 	// complete while the FinishSync walk still finds missing nodes.

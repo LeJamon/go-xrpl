@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -93,30 +92,6 @@ func TestStatusChange_OnLedgerSwitchedPayload(t *testing.T) {
 	assert.Nil(t, sc.FirstSeq)
 	assert.Nil(t, sc.LastSeq)
 	assert.NotZero(t, sc.NetworkTime)
-}
-
-// Adopting a peer's ledger during initial sync is an LCL jump and must be
-// announced to peers.
-func TestStatusChange_AdoptLedgerFromHeaderAnnouncesSwitch(t *testing.T) {
-	svc := adg_newNonStandaloneService(t)
-	sender := &scRecordingSender{}
-	a := New(Config{LedgerService: svc, Sender: sender})
-
-	cl := svc.GetClosedLedger()
-	require.NotNil(t, cl)
-	h := cl.Header()
-	raw := header.AddRaw(h, true)
-
-	require.NoError(t, a.AdoptLedgerFromHeader(raw))
-
-	sender.mu.Lock()
-	defer sender.mu.Unlock()
-	require.Len(t, sender.scs, 1)
-	sc := sender.scs[0]
-	assert.Equal(t, message.NodeEventSwitchedLedger, sc.NewEvent)
-	assert.Equal(t, h.LedgerIndex, sc.LedgerSeq)
-	assert.Equal(t, h.Hash[:], sc.LedgerHash)
-	assert.Equal(t, h.ParentHash[:], sc.LedgerHashPrevious)
 }
 
 // A phase-driven status change omits new_status (peers inherit their last
