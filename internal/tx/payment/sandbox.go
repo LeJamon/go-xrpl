@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -63,6 +64,8 @@ type PaymentSandbox struct {
 	// playing the role of rippled's Throw<FlowException>(telFAILED_PROCESSING).
 	fundsFailure bool
 }
+
+var _ ledgercore.AtomicWriter = (*PaymentSandbox)(nil)
 
 // DeferredCredits tracks credits that shouldn't be spendable mid-transaction.
 // This prevents consuming liquidity from one path from affecting other paths.
@@ -286,9 +289,12 @@ func (s *PaymentSandbox) Insert(k keylet.Keylet, data []byte) error {
 	// "entry already exists".
 	// Reference: rippled OpenView::insert → if erased && existed in parent → modify
 	if _, wasDeleted := s.deletions[key]; wasDeleted {
-		delete(s.deletions, key)
 		// Check if the entry existed in the base view before this sandbox
-		origData, _ := s.readOriginal(k)
+		origData, err := s.readOriginal(k)
+		if err != nil {
+			return err
+		}
+		delete(s.deletions, key)
 		if origData != nil {
 			// Entry exists in base → treat as modification
 			s.modifications[key] = dataCopy
@@ -320,7 +326,10 @@ func (s *PaymentSandbox) Update(k keylet.Keylet, data []byte) error {
 	if _, hasPreImage := s.preImages[key]; !hasPreImage {
 		// Get the original value from parent chain or underlying view
 		origData, err := s.readOriginal(k)
-		if err == nil && origData != nil {
+		if err != nil {
+			return err
+		}
+		if origData != nil {
 			preImageCopy := make([]byte, len(origData))
 			copy(preImageCopy, origData)
 			s.preImages[key] = preImageCopy
@@ -348,6 +357,10 @@ func (s *PaymentSandbox) readOriginal(k keylet.Keylet) ([]byte, error) {
 // Erase marks a ledger entry for deletion
 func (s *PaymentSandbox) Erase(k keylet.Keylet) error {
 	key := k.Key
+	if _, inserted := s.insertions[key]; inserted {
+		delete(s.insertions, key)
+		return nil
+	}
 	// If this entry was modified, save the final state before deletion
 	// This is needed for correct metadata generation (PreviousFields vs FinalFields)
 	if modData, ok := s.modifications[key]; ok {
@@ -376,6 +389,14 @@ func (s *PaymentSandbox) getDeletedFinalState(key [32]byte) []byte {
 // AdjustDropsDestroyed records XRP that has been destroyed
 func (s *PaymentSandbox) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	s.dropsDestroyed = s.dropsDestroyed.Add(drops)
+}
+
+func (s *PaymentSandbox) ApplyAtomically(apply func(ledgercore.Writer) error) error {
+	staged := NewChildSandbox(s)
+	if err := apply(staged); err != nil {
+		return err
+	}
+	return staged.Apply(s)
 }
 
 // TxExists delegates to the parent sandbox or underlying view.
@@ -760,8 +781,29 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 		return errors.New("PaymentSandbox.Apply: parent mismatch")
 	}
 
+	var reinserted map[[32]byte]bool
+	for key := range s.insertions {
+		if !to.deletions[key] {
+			continue
+		}
+		original, err := to.readOriginal(keylet.Keylet{Key: key})
+		if err != nil {
+			return err
+		}
+		if reinserted == nil {
+			reinserted = make(map[[32]byte]bool)
+		}
+		reinserted[key] = original != nil
+	}
+
 	// Apply ledger item changes
 	for key := range s.deletions {
+		if _, inserted := to.insertions[key]; inserted {
+			delete(to.insertions, key)
+			delete(to.modifications, key)
+			delete(to.deletedFinalStates, key)
+			continue
+		}
 		// Before marking as deleted in parent, save the final state if we have one
 		// or if parent has a modification that should become the final state
 		if finalState, ok := s.deletedFinalStates[key]; ok {
@@ -787,8 +829,14 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 	}
 
 	for key, data := range s.insertions {
-		if to.deletions[key] {
+		if existed, wasDeleted := reinserted[key]; wasDeleted {
 			delete(to.deletions, key)
+			if existed {
+				to.modifications[key] = data
+			} else {
+				to.insertions[key] = data
+			}
+			continue
 		}
 		// If parent has this as a modification, keep it as modification
 		if _, ok := to.modifications[key]; ok {
@@ -802,7 +850,11 @@ func (s *PaymentSandbox) Apply(to *PaymentSandbox) error {
 		if to.deletions[key] {
 			continue
 		}
-		to.modifications[key] = data
+		if _, inserted := to.insertions[key]; inserted {
+			to.insertions[key] = data
+		} else {
+			to.modifications[key] = data
+		}
 	}
 
 	// Propagate preImages (only if parent doesn't already have one)

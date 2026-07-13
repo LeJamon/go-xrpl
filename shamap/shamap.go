@@ -688,7 +688,20 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
+	return sm.snapshotLocked(mutable)
+}
 
+// MutableFork returns a mutable, structurally shared copy without flushing
+// dirty backed nodes. It is intended for short-lived transactional staging;
+// path-copy persistence keeps subsequent mutations isolated. Neither map may
+// be flushed until the caller has discarded one of them.
+func (sm *SHAMap) MutableFork() (*SHAMap, error) {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.snapshotLocked(true)
+}
+
+func (sm *SHAMap) snapshotLocked(mutable bool) (*SHAMap, error) {
 	if sm.state == StateInvalid {
 		return nil, fmt.Errorf("%w: cannot snapshot invalid map", ErrInvalidState)
 	}

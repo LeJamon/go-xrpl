@@ -185,9 +185,8 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 		applied = false
 	}
 
-	// Record fee as destroyed and assign TransactionIndex
+	// The charged fee was committed atomically with the state table.
 	if applied {
-		e.view.AdjustDropsDestroyed(drops.XRPAmount(fee))
 		metadata.TransactionIndex = e.txCount.Add(1) - 1
 	}
 
@@ -400,6 +399,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		return r, st.chargedFee
 	}
 
+	tecTable.AdjustDropsDestroyed(drops.XRPAmount(st.chargedFee))
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
 		return ter.TefINTERNAL, 0

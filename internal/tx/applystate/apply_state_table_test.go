@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
+	ledgercore "github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -44,6 +45,18 @@ func (m *mockBaseView) Erase(k keylet.Keylet) error {
 }
 
 func (m *mockBaseView) AdjustDropsDestroyed(drops.XRPAmount) {}
+
+func (m *mockBaseView) ApplyAtomically(apply func(ledgercore.Writer) error) error {
+	staged := newMockBaseView()
+	for key, data := range m.data {
+		staged.data[key] = bytes.Clone(data)
+	}
+	if err := apply(staged); err != nil {
+		return err
+	}
+	m.data = staged.data
+	return nil
+}
 
 func (m *mockBaseView) TxExists([32]byte) bool { return false }
 
