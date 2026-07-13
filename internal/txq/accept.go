@@ -85,7 +85,7 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 		candidate.LastResult = result
 
 		// Check if it's a permanent failure
-		if result.IsTef() || isTemMalformed(result) || candidate.RetriesRemaining <= 0 {
+		if result.IsTef() || result.IsTem() || candidate.RetriesRemaining <= 0 {
 			// Mark penalties
 			if candidate.RetriesRemaining <= 0 {
 				aq.RetryPenalty = true
@@ -145,16 +145,7 @@ func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 	}
 
 	// Check if there's a next transaction for this account that we should try.
-	var nextCandidate *Candidate
-	if !c.SeqProxy.IsTicket {
-		nextSeq := c.Consequences.FollowingSeq.Value
-		for sp, candidate := range aq.Transactions {
-			if !sp.IsTicket && sp.Value == nextSeq {
-				nextCandidate = candidate
-				break
-			}
-		}
-	}
+	nextCandidate := aq.GetNextTx(c.SeqProxy)
 
 	// Determine what comes next in byFee after the current candidate.
 	var feeNext *Candidate
@@ -166,7 +157,6 @@ func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 	// Yes if the account's next tx has a higher fee level than the next
 	// byFee entry (i.e., it would sort earlier).
 	useAccountNext := nextCandidate != nil &&
-		nextCandidate.SeqProxy.Value > c.SeqProxy.Value &&
 		(feeNext == nil || q.candidateLess(nextCandidate, feeNext))
 
 	q.erase(c)
@@ -219,9 +209,4 @@ func (q *TxQ) indexInByFee(c *Candidate) int {
 		}
 	}
 	return -1
-}
-
-// isTemMalformed returns true if the result is a tem (malformed) failure.
-func isTemMalformed(result ter.Result) bool {
-	return result <= -200 && result >= -299
 }

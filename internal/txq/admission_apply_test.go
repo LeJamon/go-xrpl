@@ -45,6 +45,7 @@ type stubApplyCtx struct {
 	preclaim  ter.Result
 	applyRes  ter.Result
 	applied   bool
+	applyFn   func(tx.Transaction) (ter.Result, bool)
 }
 
 func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32             { return c.seq }
@@ -61,7 +62,11 @@ func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) ter.Result { return 
 func (c *stubApplyCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) ter.Result {
 	return c.preclaim
 }
-func (c *stubApplyCtx) ApplyTransaction(tx.Transaction) (ter.Result, bool) {
+
+func (c *stubApplyCtx) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
+	if c.applyFn != nil {
+		return c.applyFn(txn)
+	}
 	return c.applyRes, c.applied
 }
 func (c *stubApplyCtx) NewSandbox() (SandboxContext, error) {
@@ -129,6 +134,134 @@ func TestAcceptDropsTefCategory(t *testing.T) {
 	}
 }
 
+func TestAcceptRevisitsNextAccountCandidateAcrossGap(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	q.byAccount[acct] = aq
+
+	front := mkCandidate(acct, NewSeqProxySequence(1), FeeLevel(BaseLevel*2))
+	successor := mkCandidate(acct, NewSeqProxySequence(3), FeeLevel(BaseLevel*3))
+	aq.Add(front)
+	aq.Add(successor)
+	q.insertByFee(front)
+	q.insertByFee(successor)
+
+	var appliedSeqs []uint32
+	ctx := &stubApplyCtx{applyFn: func(txn tx.Transaction) (ter.Result, bool) {
+		seq := txn.(*seqTx).seq
+		appliedSeqs = append(appliedSeqs, seq)
+		if seq == 1 {
+			return ter.TefNFTOKEN_IS_NOT_TRANSFERABLE, false
+		}
+		return ter.TesSUCCESS, true
+	}}
+
+	require.True(t, q.Accept(ctx))
+	require.Equal(t, []uint32{1, 3}, appliedSeqs)
+	require.Zero(t, q.Size())
+	require.Same(t, aq, q.byAccount[acct])
+	require.True(t, aq.DropPenalty)
+}
+
+func TestAcceptRevisitsNextTicketCandidate(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	q.byAccount[acct] = aq
+
+	lowerTicket := mkCandidate(acct, NewSeqProxyTicket(2), FeeLevel(BaseLevel*2))
+	higherTicket := mkCandidate(acct, NewSeqProxyTicket(3), FeeLevel(BaseLevel*3))
+	aq.Add(lowerTicket)
+	aq.Add(higherTicket)
+	q.insertByFee(lowerTicket)
+	q.insertByFee(higherTicket)
+
+	var appliedTickets []uint32
+	higherAttempts := 0
+	ctx := &stubApplyCtx{applyFn: func(txn tx.Transaction) (ter.Result, bool) {
+		ticket := txn.(*seqTx).seq
+		appliedTickets = append(appliedTickets, ticket)
+		if ticket == 2 {
+			return ter.TefNO_TICKET, false
+		}
+		higherAttempts++
+		if higherAttempts == 1 {
+			return ter.TerPRE_TICKET, false
+		}
+		return ter.TesSUCCESS, true
+	}}
+
+	require.True(t, q.Accept(ctx))
+	require.Equal(t, []uint32{3, 2, 3}, appliedTickets)
+	require.Zero(t, q.Size())
+}
+
+func TestAcceptDropsQueuedPastSequence(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	q.byAccount[acct] = aq
+	addQueued(q, aq, 1, 2)
+
+	ctx := &stubApplyCtx{seq: 2}
+	ctx.applyFn = func(txn tx.Transaction) (ter.Result, bool) {
+		if *txn.GetCommon().Sequence < ctx.seq {
+			return ter.TefPAST_SEQ, false
+		}
+		return ter.TesSUCCESS, true
+	}
+
+	require.False(t, q.Accept(ctx))
+	require.True(t, aq.Empty())
+	require.True(t, aq.DropPenalty)
+}
+
+func TestAcceptRetainedRetryPenaltyAffectsNextCandidate(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	q.byAccount[acct] = aq
+	addQueued(q, aq, 1, 2)
+
+	ctx := &stubApplyCtx{applyRes: ter.TerPRE_SEQ}
+	for range RetriesAllowed + 1 {
+		require.False(t, q.Accept(ctx))
+	}
+
+	require.True(t, aq.Empty())
+	require.True(t, aq.RetryPenalty)
+
+	next := addQueued(q, aq, 2, 3)
+	require.False(t, q.Accept(ctx))
+	require.Equal(t, 1, next.RetriesRemaining)
+}
+
+func TestAcceptRetainedDropPenaltyDropsLastCandidate(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	q.byAccount[acct] = aq
+	addQueued(q, aq, 1, 2)
+
+	require.False(t, q.Accept(&stubApplyCtx{applyRes: ter.TefNFTOKEN_IS_NOT_TRANSFERABLE}))
+	require.True(t, aq.DropPenalty)
+
+	first := mkCandidate(acct, NewSeqProxySequence(2), FeeLevel(BaseLevel*3))
+	last := mkCandidate(acct, NewSeqProxySequence(3), FeeLevel(BaseLevel*2))
+	aq.Add(first)
+	aq.Add(last)
+	q.insertByFee(first)
+	q.insertByFee(last)
+	q.SetMaxSize(2)
+
+	require.False(t, q.Accept(&stubApplyCtx{applyRes: ter.TerPRE_SEQ}))
+	require.Equal(t, RetriesAllowed-1, first.RetriesRemaining)
+	require.Same(t, first, aq.Transactions[first.SeqProxy])
+	_, exists := aq.Transactions[last.SeqProxy]
+	require.False(t, exists)
+}
+
 func TestAcceptCleansRetainedPenaltyOnNextClosedLedger(t *testing.T) {
 	q := New(makeAdmissionConfig())
 	acct := [20]byte{9}
@@ -169,6 +302,70 @@ func TestEraseRetainsAccountQueueUntilNextClosedLedger(t *testing.T) {
 	q.ProcessClosedLedger(&stubClosedLedgerCtx{}, false)
 	_, exists = q.byAccount[acct]
 	require.False(t, exists)
+}
+
+func TestApplyReusesRetainedEmptyAccountQueue(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	aq.DropPenalty = true
+	aq.RetryPenalty = true
+	q.byAccount[acct] = aq
+	candidate := addQueued(q, aq, 1, 2)
+	q.erase(candidate)
+
+	ctx := &stubApplyCtx{
+		seq:        2,
+		balance:    1_000_000_000,
+		exists:     true,
+		baseFee:    10,
+		txInLedger: 4,
+	}
+
+	past := q.Apply(ctx, &seqTx{seq: 1, fee: "10"}, [32]byte{1}, acct)
+	require.Equal(t, ter.TefPAST_SEQ, past.Result)
+	future := q.Apply(ctx, &seqTx{seq: 3, fee: "10"}, [32]byte{2}, acct)
+	require.Equal(t, ter.TerPRE_SEQ, future.Result)
+	current := q.Apply(ctx, &seqTx{seq: 2, fee: "10"}, [32]byte{3}, acct)
+	require.Equal(t, ter.TerQUEUED, current.Result)
+	require.True(t, current.Queued)
+
+	require.Same(t, aq, q.byAccount[acct])
+	require.True(t, aq.DropPenalty)
+	require.True(t, aq.RetryPenalty)
+	require.Contains(t, aq.Transactions, NewSeqProxySequence(2))
+}
+
+func TestApplyFullQueueEvictionRetainsAccountQueue(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	evictedAccount := [20]byte{8}
+	evictedQueue := NewAccountQueue(evictedAccount)
+	evictedQueue.DropPenalty = true
+	evictedQueue.RetryPenalty = true
+	q.byAccount[evictedAccount] = evictedQueue
+	evicted := addQueued(q, evictedQueue, 1, 2)
+	evicted.FeeLevel = FeeLevel(BaseLevel)
+	q.SetMaxSize(1)
+
+	newAccount := [20]byte{9}
+	ctx := &stubApplyCtx{
+		seq:        1,
+		balance:    1_000_000_000,
+		exists:     true,
+		baseFee:    10,
+		txInLedger: 4,
+	}
+	result := q.Apply(ctx, &seqTx{seq: 1, fee: "130"}, [32]byte{4}, newAccount)
+
+	require.Equal(t, ter.TerQUEUED, result.Result)
+	require.True(t, result.Queued)
+	require.Same(t, evictedQueue, q.byAccount[evictedAccount])
+	require.True(t, evictedQueue.Empty())
+	require.True(t, evictedQueue.DropPenalty)
+	require.True(t, evictedQueue.RetryPenalty)
+	require.Contains(t, q.byAccount, newAccount)
+	require.Equal(t, 1, q.Size())
+	require.Equal(t, newAccount, q.byFee[0].Account)
 }
 
 func TestApplyReplacementPreservesAccountPenalties(t *testing.T) {

@@ -224,3 +224,92 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 		t.Error("empty account queue must be removed after a closed ledger")
 	}
 }
+
+func TestTryClearAccountQueue_CommitRemovesReplacement(t *testing.T) {
+	tests := []struct {
+		name     string
+		withTail bool
+	}{
+		{name: "replace last"},
+		{name: "replace middle", withTail: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			q, aq, preceding, newTx, account, seqProxy := setupClearQueue()
+			aq.DropPenalty = true
+			aq.RetryPenalty = true
+
+			replaced := &Candidate{
+				Txn:              &mockTx{id: 3},
+				Account:          account,
+				FeeLevel:         FeeLevel(1_000_000),
+				SeqProxy:         seqProxy,
+				RetriesRemaining: RetriesAllowed,
+			}
+			aq.Add(replaced)
+			q.insertByFee(replaced)
+
+			var tail *Candidate
+			if test.withTail {
+				tail = &Candidate{
+					Txn:              &mockTx{id: 4},
+					Account:          account,
+					FeeLevel:         FeeLevel(1_000_000),
+					SeqProxy:         NewSeqProxySequence(3),
+					RetriesRemaining: RetriesAllowed,
+				}
+				aq.Add(tail)
+				q.insertByFee(tail)
+			}
+
+			sb := &mockSandbox{results: mkResults(
+				struct {
+					tx      *mockTx
+					res     ter.Result
+					applied bool
+				}{preceding.Txn.(*mockTx), ter.TesSUCCESS, true},
+				struct {
+					tx      *mockTx
+					res     ter.Result
+					applied bool
+				}{newTx, ter.TesSUCCESS, true},
+			)}
+
+			result := q.tryClearAccountQueue(
+				&mockClearCtx{sandbox: sb}, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1,
+			)
+
+			if result == nil || !result.Applied {
+				t.Fatalf("expected an applied result, got %v", result)
+			}
+			if !sb.committed {
+				t.Fatal("sandbox must be committed")
+			}
+			if len(sb.appliedTo) != 2 || sb.appliedTo[0] != preceding.Txn || sb.appliedTo[1] != newTx {
+				t.Fatalf("replacement must not be applied: got %v", sb.appliedTo)
+			}
+			if _, exists := aq.Transactions[preceding.SeqProxy]; exists {
+				t.Error("preceding candidate must be removed")
+			}
+			if _, exists := aq.Transactions[replaced.SeqProxy]; exists {
+				t.Error("replaced candidate must be removed")
+			}
+			if test.withTail {
+				if aq.Transactions[tail.SeqProxy] != tail {
+					t.Error("candidate after the replacement must remain queued")
+				}
+				if q.Size() != 1 || q.byFee[0] != tail {
+					t.Error("only the candidate after the replacement must remain fee-indexed")
+				}
+			} else if !aq.Empty() {
+				t.Error("account queue must be empty after replacing its last candidate")
+			} else if q.Size() != 0 {
+				t.Error("fee index must be empty after replacing the last candidate")
+			}
+			if q.byAccount[account] != aq || !aq.DropPenalty || !aq.RetryPenalty {
+				t.Error("account queue and penalties must be retained")
+			}
+		})
+	}
+}

@@ -160,6 +160,20 @@ func (aq *AccountQueue) GetPrevTx(seqProxy SeqProxy) *Candidate {
 	return prev
 }
 
+// GetNextTx finds the transaction that follows the given SeqProxy.
+// Returns nil if there is no following transaction.
+func (aq *AccountQueue) GetNextTx(seqProxy SeqProxy) *Candidate {
+	var next *Candidate
+	for sp, c := range aq.Transactions {
+		if seqProxy.Less(sp) {
+			if next == nil || sp.Less(next.SeqProxy) {
+				next = c
+			}
+		}
+	}
+	return next
+}
+
 // GetFirstSeqTx returns the first sequence-based transaction (lowest sequence).
 // Returns nil if there are no sequence-based transactions.
 func (aq *AccountQueue) GetFirstSeqTx() *Candidate {
