@@ -44,29 +44,18 @@ const txQueueBroadcastInterval = 1 * time.Second
 // go-xrpl has no per-peer cursor state.
 const txQueueMaxEntriesPerFrame = 64
 
-// buildFrame encodes msg and wraps it in a msgType wire frame.
-// Failures are logged at debug level under opName, with any extra
-// logAttrs appended, and return nil.
-func buildFrame(msgType message.MessageType, msg message.Message, opName string, logAttrs ...any) []byte {
-	encoded, err := message.Encode(msg)
+func buildFrame(msg message.Message, opName string, logAttrs ...any) []byte {
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		slog.Debug(opName+" encode failed",
-			append([]any{"t", "Overlay"}, append(logAttrs, "err", err)...)...)
-		return nil
-	}
-	frame, err := message.BuildWireMessage(msgType, encoded)
-	if err != nil {
-		slog.Debug(opName+" frame build failed",
 			append([]any{"t", "Overlay"}, append(logAttrs, "err", err)...)...)
 		return nil
 	}
 	return frame
 }
 
-// encodeAndSend builds a msgType wire frame from msg and sends it to
-// peer, logging failures at debug level under opName.
-func encodeAndSend(peer *Peer, msgType message.MessageType, msg message.Message, opName string) {
-	frame := buildFrame(msgType, msg, opName, "peer", peer.ID())
+func encodeAndSend(peer *Peer, msg message.Message, opName string) {
+	frame := buildFrame(msg, opName, "peer", peer.ID())
 	if frame == nil {
 		return
 	}
@@ -90,7 +79,7 @@ func (o *Overlay) BroadcastHaveTxSet(setID [32]byte) {
 		Status: message.TxSetStatusHave,
 		Hash:   setID[:],
 	}
-	frame := buildFrame(message.TypeHaveSet, msg, "HaveTxSet announce")
+	frame := buildFrame(msg, "HaveTxSet announce")
 	if frame == nil {
 		return
 	}
@@ -159,7 +148,7 @@ func (o *Overlay) sendClusterUpdate() {
 		}
 	}
 
-	frame := buildFrame(message.TypeCluster, clusterMsg, "TMCluster")
+	frame := buildFrame(clusterMsg, "TMCluster")
 	if frame == nil {
 		return
 	}
@@ -219,7 +208,7 @@ func (o *Overlay) sendTxQueueAnnounce() {
 		wire = append(wire, hh[:])
 	}
 	msg := &message.HaveTransactions{Hashes: wire}
-	frame := buildFrame(message.TypeHaveTransactions, msg, "HaveTransactions")
+	frame := buildFrame(msg, "HaveTransactions")
 	if frame == nil {
 		return
 	}

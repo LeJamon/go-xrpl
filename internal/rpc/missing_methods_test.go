@@ -288,8 +288,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns lgrNotFound because GetLedgerBySequence returns error
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
 	})
 
 	t.Run("Validated ledger returns error when GetLedgerBySequence not implemented", func(t *testing.T) {
@@ -305,7 +304,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1354,7 +1353,7 @@ func TestLogRotateMethod(t *testing.T) {
 
 func TestAMMInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	services := servicesForMissingMethods(mock)
+	services := &types.ServiceContainer{Ledger: &ammInfoTestLedgerService{mock}}
 
 	method := &handlers.AMMInfoMethod{}
 
@@ -1459,6 +1458,14 @@ func TestAMMInfoMethod(t *testing.T) {
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
 		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
+}
+
+type ammInfoTestLedgerService struct {
+	*mockLedgerServiceMissingMethods
+}
+
+func (m *ammInfoTestLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	return newDefaultLedgerReader(seq, seq == m.validatedLedgerIndex), nil
 }
 
 // VaultInfoMethod Tests

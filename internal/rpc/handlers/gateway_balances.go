@@ -16,7 +16,6 @@ type GatewayBalancesMethod struct{ BaseHandler }
 func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
-		types.LedgerSpecifier
 		HotWallet json.RawMessage `json:"hotwallet,omitempty"`
 	}
 
@@ -64,7 +63,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		}
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -80,9 +79,6 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
@@ -92,7 +88,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 			}
 			return nil, types.RPCErrorInvalidParams("Invalid field 'hotwallet'.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get gateway balances: %v", err))
 	}
 
 	// Build response matching rippled's GatewayBalances.cpp format: rippled only
@@ -101,7 +97,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 	response := map[string]any{
 		"account": result.Account,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	// Helper to convert account->[]CurrencyBalance map to JSON-friendly structure
 	convertBalanceMap := func(src map[string][]types.CurrencyBalance) map[string]any {

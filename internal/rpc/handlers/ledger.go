@@ -7,24 +7,20 @@ import (
 	"maps"
 	"strconv"
 	"strings"
-	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// rippleEpochTime is 2000-01-01T00:00:00Z
-var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // LedgerMethod handles the ledger RPC method.
 type LedgerMethod struct{ BaseHandler }
 
 func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
-		types.LedgerSpecifier
 		Accounts     bool `json:"accounts,omitempty"`
 		Full         bool `json:"full,omitempty"`
 		Transactions bool `json:"transactions,omitempty"`
@@ -41,29 +37,43 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	// full and accounts dump every state node; rippled gates both behind an
-	// unlimited (admin / identified) role else rpcNO_PERMISSION
-	// (LedgerHandler.cpp:66-72). full also implies expand + transactions +
-	// accounts (LedgerToJson.cpp isFull/isExpanded).
-	if request.Full || request.Accounts {
-		if !ctx.Unlimited {
-			return nil, types.RPCErrorNoPermission("ledger")
+	rawParams := make(map[string]json.RawMessage)
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &rawParams); err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters")
 		}
 	}
-	if request.Full {
-		request.Transactions = true
-		request.Expand = true
-		request.Accounts = true
+	_, hasLegacyLedger := rawParams["ledger"]
+	_, hasLedgerHash := rawParams["ledger_hash"]
+	_, hasLedgerIndex := rawParams["ledger_index"]
+	if !hasLegacyLedger && !hasLedgerHash && !hasLedgerIndex {
+		response, rpcErr := ledgerDefaultResponse(ctx)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		addLedgerTypeWarning(response, rawParams)
+		return response, nil
 	}
 
 	// Resolve the target ledger through the shared lookup (rippled
 	// RPC::lookupLedger), which defaults to the current ledger and emits the
 	// rippled-faithful ledgerHashMalformed / ledgerIndexMalformed /
 	// ledgerNotFound errors.
-	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	targetLedger, validated, lerr := LookupLedger(ctx, params)
 	if lerr != nil {
 		return nil, lerr
+	}
+	// Ledger lookup precedes the permission check.
+	if (request.Full || request.Accounts) && !ctx.Unlimited {
+		return nil, types.RPCErrorNoPermission("ledger")
+	}
+	if request.Full {
+		request.Transactions = true
+		request.Expand = true
+		request.Accounts = true
+	}
+	if request.Queue && targetLedger.IsClosed() {
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Build ledger info (shared with ledger_request).
@@ -71,7 +81,7 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	ledgerHash := ledgerInfo["ledger_hash"].(string)
 
 	closeTimeSec := targetLedger.CloseTime()
-	closeTimeISO := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second).UTC().Format(time.RFC3339)
+	closeTimeISO := protocol.FormatCloseTimeISO(protocol.FromRippleTime(uint32(max(closeTimeSec, 0))))
 
 	_, reserveBase, reserveInc := ctx.Services.Ledger.GetCurrentFees()
 
@@ -122,10 +132,14 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	}
 
 	response := map[string]any{
-		"ledger":       ledgerInfo,
-		"ledger_hash":  ledgerHash,
-		"ledger_index": targetLedger.Sequence(),
-		"validated":    validated,
+		"ledger":    ledgerInfo,
+		"validated": validated,
+	}
+	if !targetLedger.IsClosed() {
+		response["ledger_current_index"] = targetLedger.Sequence()
+	} else {
+		response["ledger_hash"] = ledgerHash
+		response["ledger_index"] = targetLedger.Sequence()
 	}
 
 	response["reserve_base_drops"] = fmt.Sprintf("%d", reserveBase)
@@ -136,8 +150,55 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 			response["queue_data"] = queueData
 		}
 	}
+	addLedgerTypeWarning(response, rawParams)
 
 	return response, nil
+}
+
+func addLedgerTypeWarning(response map[string]any, rawParams map[string]json.RawMessage) {
+	if _, present := rawParams["type"]; !present {
+		return
+	}
+	response["warnings"] = []map[string]any{{
+		"id": 1004,
+		"message": "Some fields from your request are deprecated. Please check the documentation at " +
+			"https://xrpl.org/docs/references/http-websocket-apis/ and update your request. Field `type` is deprecated.",
+	}}
+}
+
+func ledgerDefaultResponse(ctx *types.RPCContext) (map[string]any, *types.RPCError) {
+	closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+	if err != nil || closed == nil {
+		return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+	}
+	open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+	if err != nil || open == nil {
+		return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+	}
+	return map[string]any{
+		"closed": map[string]any{"ledger": ledgerDataHeader(ledgerHeaderInfo(closed), false, ctx.ApiVersion)},
+		"open":   map[string]any{"ledger": ledgerDataHeader(ledgerHeaderInfo(open), false, ctx.ApiVersion)},
+	}, nil
+}
+
+func ledgerHeaderInfo(l types.LedgerReader) *types.LedgerHeaderInfo {
+	closeTime := l.CloseTime()
+	close := protocol.FromRippleTime(uint32(max(closeTime, 0)))
+	return &types.LedgerHeaderInfo{
+		AccountHash:         l.StateMapHash(),
+		CloseFlags:          l.CloseFlags(),
+		CloseTime:           closeTime,
+		CloseTimeHuman:      close.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
+		CloseTimeISO:        protocol.FormatCloseTimeISO(close),
+		CloseTimeResolution: l.CloseTimeResolution(),
+		Closed:              l.IsClosed(),
+		LedgerHash:          l.Hash(),
+		LedgerIndex:         l.Sequence(),
+		ParentCloseTime:     l.ParentCloseTime(),
+		ParentHash:          l.ParentHash(),
+		TotalCoins:          l.TotalDrops(),
+		TransactionHash:     l.TxMapHash(),
+	}
 }
 
 // ownerFundsLedgerView resolves the state view for the target ledger so
@@ -226,8 +287,12 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 	ledgerIndex := strconv.FormatUint(uint64(l.Sequence()), 10)
 	state := make([]any, 0)
 	marker := ""
+	limit := LimitLedgerData.Default
+	if binary {
+		limit = LimitLedgerDataBinary.Default
+	}
 	for {
-		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, 0, marker)
+		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
 		if err != nil || result == nil {
 			break
 		}
@@ -240,7 +305,7 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 					"tx_blob": strings.ToUpper(hex.EncodeToString(item.Data)),
 				})
 			case expanded:
-				if decoded, derr := binarycodec.Decode(hex.EncodeToString(item.Data)); derr == nil {
+				if decoded, derr := decodeBinaryObject(item.Data); derr == nil {
 					decoded["index"] = upperIndex
 					state = append(state, decoded)
 				} else {

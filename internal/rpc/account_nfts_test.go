@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"time"
@@ -19,6 +20,7 @@ import (
 type mockAccountNFTsLedgerService struct {
 	accountNFTsResult    *types.AccountNFTsResult
 	accountNFTsErr       error
+	accountNFTsMarker    string
 	accountInfo          *types.AccountInfo
 	accountInfoErr       error
 	currentLedgerIndex   uint32
@@ -131,7 +133,8 @@ func (m *mockAccountNFTsLedgerService) GetAccountChannels(_ context.Context, acc
 func (m *mockAccountNFTsLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountNFTsLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockAccountNFTsLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
+	m.accountNFTsMarker = marker
 	if m.accountNFTsErr != nil {
 		return nil, m.accountNFTsErr
 	}
@@ -416,8 +419,9 @@ func TestAccountNFTsBasic(t *testing.T) {
 
 		// Check top-level fields
 		assert.Equal(t, bobAccount, resp["account"])
-		assert.Contains(t, resp, "ledger_hash")
-		assert.Contains(t, resp, "ledger_index")
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_index")
 		assert.Contains(t, resp, "validated")
 
 		// Check account_nfts array
@@ -820,6 +824,9 @@ func TestAccountNFTsPagination(t *testing.T) {
 		nftsResp := resp["account_nfts"].([]any)
 		assert.Len(t, nftsResp, 4, "Should have only 4 NFTs with limit=4")
 		assert.Contains(t, resp, "marker", "Should have marker for pagination")
+		assert.Equal(t, float64(20), resp["limit"])
+		assert.NotContains(t, resp, "account")
+		assert.Empty(t, mock.accountNFTsMarker)
 	})
 
 	t.Run("Marker continues pagination", func(t *testing.T) {
@@ -868,6 +875,33 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 		nftsResp := resp["account_nfts"].([]any)
 		assert.Len(t, nftsResp, 2, "Should have 2 NFTs from marker")
+		assert.Equal(t, params["marker"], mock.accountNFTsMarker)
+		assert.NotContains(t, resp, "marker")
+		assert.NotContains(t, resp, "limit")
+		assert.Equal(t, bobAccount, resp["account"])
+	})
+
+	t.Run("Malformed and null markers are rejected", func(t *testing.T) {
+		for _, marker := range []any{"ABCD", strings.Repeat("G", 64), nil} {
+			paramsJSON, err := json.Marshal(map[string]any{"account": bobAccount, "marker": marker})
+			require.NoError(t, err)
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		}
+	})
+
+	t.Run("Stale marker maps to invalid field", func(t *testing.T) {
+		mock.accountNFTsResult = nil
+		mock.accountNFTsErr = svcerr.ErrInvalidMarker
+		marker := strings.Repeat("A", 64)
+		paramsJSON, err := json.Marshal(map[string]any{"account": bobAccount, "marker": marker})
+		require.NoError(t, err)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
 	})
 }
 
@@ -962,8 +996,9 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 	// Verify all required top-level fields are present
 	assert.Contains(t, resp, "account")
 	assert.Contains(t, resp, "account_nfts")
-	assert.Contains(t, resp, "ledger_hash")
-	assert.Contains(t, resp, "ledger_index")
+	assert.Contains(t, resp, "ledger_current_index")
+	assert.NotContains(t, resp, "ledger_hash")
+	assert.NotContains(t, resp, "ledger_index")
 	assert.Contains(t, resp, "validated")
 
 	// Verify NFT object fields

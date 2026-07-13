@@ -49,6 +49,26 @@ func enrichSimulateMeta(meta, txJSON map[string]any) {
 	insertMPTokenIssuanceID(meta, txJSON, txType)
 }
 
+func enrichTransactionMeta(meta, txJSON map[string]any) {
+	if meta == nil {
+		return
+	}
+	source := txJSON
+	if _, hasAmount := source["Amount"]; !hasAmount {
+		if deliverMax, ok := source["DeliverMax"]; ok {
+			source = make(map[string]any, len(txJSON)+1)
+			for key, value := range txJSON {
+				source[key] = value
+			}
+			source["Amount"] = deliverMax
+		}
+	}
+	InjectDeliveredAmount(source, meta)
+	txType, _ := source["TransactionType"].(string)
+	insertNFTSynthetic(meta, source, txType)
+	insertMPTokenIssuanceID(meta, source, txType)
+}
+
 // insertSimulateDeliveredAmount mirrors rippled insertDeliveredAmount /
 // getDeliveredAmount for a simulated (current open ledger) transaction. Only
 // Payment / CheckCash / AccountDelete carry a delivered amount. If the engine

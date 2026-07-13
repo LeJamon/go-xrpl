@@ -16,7 +16,6 @@ type VaultInfoMethod struct{ BaseHandler }
 
 func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
-		types.LedgerSpecifier
 		VaultID string `json:"vault_id,omitempty"`
 		Owner   string `json:"owner,omitempty"`
 		Seq     uint32 `json:"seq,omitempty"`
@@ -42,7 +41,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 		return nil, err
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}

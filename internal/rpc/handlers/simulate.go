@@ -20,7 +20,7 @@ import (
 // SimulateMethod handles the simulate RPC method.
 // Runs a transaction against a snapshot of the open ledger without committing.
 // Reference: rippled Simulate.cpp
-type SimulateMethod struct{}
+type SimulateMethod struct{ BaseHandler }
 
 func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var rawParams map[string]json.RawMessage
@@ -298,14 +298,6 @@ func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (
 	}
 
 	return response, nil
-}
-
-func (m *SimulateMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *SimulateMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *SimulateMethod) RequiredCondition() types.Condition {

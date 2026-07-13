@@ -15,7 +15,7 @@ import (
 
 // ChannelAuthorizeMethod handles the channel_authorize RPC method
 // This creates a signature that can be used to redeem a specific amount from a payment channel.
-type ChannelAuthorizeMethod struct{}
+type ChannelAuthorizeMethod struct{ BaseHandler }
 
 // channelAuthorizeRequest represents the request parameters
 type channelAuthorizeRequest struct {
@@ -43,20 +43,10 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	// Validate required fields: channel_id and amount
 	// rippled: for (auto const& p : {jss::channel_id, jss::amount}) if (!params.isMember(p)) return RPC::missing_field_error(p);
 	if request.ChannelID == "" {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'channel_id'.",
-		}
+		return nil, types.RPCErrorMissingField("channel_id")
 	}
 	if request.Amount == "" {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'amount'.",
-		}
+		return nil, types.RPCErrorMissingField("amount")
 	}
 
 	// Parse credentials and derive keypair
@@ -77,20 +67,10 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
 	channelIDHex := strings.ToUpper(request.ChannelID)
 	if len(channelIDHex) != 64 {
-		return nil, &types.RPCError{
-			Code:        types.RpcCHANNEL_MALFORMED,
-			ErrorString: "channelMalformed",
-			Type:        "channelMalformed",
-			Message:     "Payment channel is malformed.",
-		}
+		return nil, types.RPCErrorChannelMalformed()
 	}
 	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, &types.RPCError{
-			Code:        types.RpcCHANNEL_MALFORMED,
-			ErrorString: "channelMalformed",
-			Type:        "channelMalformed",
-			Message:     "Payment channel is malformed.",
-		}
+		return nil, types.RPCErrorChannelMalformed()
 	}
 
 	// Validate amount - must be a string that parses to uint64
@@ -98,12 +78,7 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
 	drops, err := strconv.ParseUint(request.Amount, 10, 64)
 	if err != nil {
-		return nil, &types.RPCError{
-			Code:        types.RpcCHANNEL_AMT_MALFORMED,
-			ErrorString: "channelAmtMalformed",
-			Type:        "channelAmtMalformed",
-			Message:     "Payment channel amount is malformed.",
-		}
+		return nil, types.RPCErrorChannelAmountMalformed()
 	}
 
 	// Serialize the payment channel claim message using EncodeForSigningClaim
@@ -159,12 +134,4 @@ func (m *ChannelAuthorizeMethod) RequiredRole() types.Role {
 	// Note: rippled requires admin role OR signing enabled
 	// For now, allow user role since we're implementing the signing functionality
 	return types.RoleUser
-}
-
-func (m *ChannelAuthorizeMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ChannelAuthorizeMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }

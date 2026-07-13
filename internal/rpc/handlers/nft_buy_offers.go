@@ -29,10 +29,9 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
 func handleNFTOffers(ctx *types.RPCContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RPCError) {
 	var request struct {
-		NFTokenID string `json:"nft_id"`
-		types.LedgerSpecifier
-		Limit  *uint32 `json:"limit,omitempty"`
-		Marker string  `json:"marker,omitempty"`
+		NFTokenID string  `json:"nft_id"`
+		Limit     *uint32 `json:"limit,omitempty"`
+		Marker    string  `json:"marker,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -58,7 +57,7 @@ func handleNFTOffers(ctx *types.RPCContext, params json.RawMessage, fetch func(c
 	var nftID [32]byte
 	copy(nftID[:], nftIDBytes)
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}

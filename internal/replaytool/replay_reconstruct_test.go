@@ -9,6 +9,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -43,7 +44,7 @@ func encodeMeta(t *testing.T, affected ...map[string]any) []byte {
 
 func mustIndex(t *testing.T, s string) [32]byte {
 	t.Helper()
-	idx, err := decodeIndex(s)
+	idx, err := protocol.Hash256FromHex(s)
 	if err != nil {
 		t.Fatalf("decodeIndex %s: %v", s, err)
 	}

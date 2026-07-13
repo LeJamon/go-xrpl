@@ -30,7 +30,7 @@ func encodeManifestsFrame(serialized ...[]byte) ([]byte, error) {
 		}
 		list = append(list, message.Manifest{STObject: b})
 	}
-	return encodeFrame(message.TypeManifests, &message.Manifests{List: list})
+	return message.EncodeFrame(&message.Manifests{List: list})
 }
 
 // SendLocalManifestTo sends the aggregated TMManifests frame (every

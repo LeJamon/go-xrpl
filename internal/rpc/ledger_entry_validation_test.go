@@ -11,10 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLedgerEntryLedgerSelectorValidation covers the rippled 3.0.0
-// ledgerFromRequest drift: null ledger_hash / ledger_index are treated as
-// absent, a non-string ledger_hash is ledgerHashNotString, and an unparseable
-// ledger_index is ledgerIndexMalformed (all invalidParams, code 31).
 func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
@@ -37,42 +33,46 @@ func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 		expectCode int
 	}{
 		{
-			name:       "non-string ledger_hash is ledgerHashNotString",
+			name:       "non-string ledger_hash is expected hex string",
 			params:     map[string]any{"index": validIndex, "ledger_hash": 12345},
 			expectErr:  true,
-			expectMsg:  "ledgerHashNotString",
+			expectMsg:  "Invalid field 'ledger_hash', not hex string.",
 			expectCode: types.RpcINVALID_PARAMS,
 		},
 		{
-			name:       "bad-hex ledger_hash is ledgerHashMalformed",
+			name:       "bad-hex ledger_hash is expected hex string",
 			params:     map[string]any{"index": validIndex, "ledger_hash": "not-hex"},
 			expectErr:  true,
-			expectMsg:  "ledgerHashMalformed",
+			expectMsg:  "Invalid field 'ledger_hash', not hex string.",
 			expectCode: types.RpcINVALID_PARAMS,
 		},
 		{
-			name:      "null ledger_hash is treated as absent",
-			params:    map[string]any{"index": validIndex, "ledger_hash": nil},
-			expectErr: false,
+			name:       "null ledger_hash is expected hex string",
+			params:     map[string]any{"index": validIndex, "ledger_hash": nil},
+			expectErr:  true,
+			expectMsg:  "Invalid field 'ledger_hash', not hex string.",
+			expectCode: types.RpcINVALID_PARAMS,
 		},
 		{
-			name:       "object ledger_index is ledgerIndexMalformed",
+			name:       "object ledger_index is expected string or number",
 			params:     map[string]any{"index": validIndex, "ledger_index": map[string]any{"x": 1}},
 			expectErr:  true,
-			expectMsg:  "ledgerIndexMalformed",
+			expectMsg:  "Invalid field 'ledger_index', not string or number.",
 			expectCode: types.RpcINVALID_PARAMS,
 		},
 		{
-			name:       "non-integral ledger_index is ledgerIndexMalformed",
+			name:       "non-integral ledger_index is expected string or number",
 			params:     map[string]any{"index": validIndex, "ledger_index": 2.5},
 			expectErr:  true,
-			expectMsg:  "ledgerIndexMalformed",
+			expectMsg:  "Invalid field 'ledger_index', not string or number.",
 			expectCode: types.RpcINVALID_PARAMS,
 		},
 		{
-			name:      "null ledger_index is treated as absent",
-			params:    map[string]any{"index": validIndex, "ledger_index": nil},
-			expectErr: false,
+			name:       "null ledger_index is expected string or number",
+			params:     map[string]any{"index": validIndex, "ledger_index": nil},
+			expectErr:  true,
+			expectMsg:  "Invalid field 'ledger_index', not string or number.",
+			expectCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name:      "string ledger_index keyword still works",
@@ -106,6 +106,48 @@ func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLedgerEntryLegacyAndConflictingSelectors(t *testing.T) {
+	const (
+		entryIndex = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+		ledgerHash = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
+	)
+	mock := newMockLedgerEntryService()
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RPCContext{
+		Context:  context.Background(),
+		Services: newLedgerEntryTestServices(mock),
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"legacy sequence", 2, "2"},
+		{"legacy hash", ledgerHash, ledgerHash},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{"index": entryIndex, "ledger": test.value})
+			require.NoError(t, err)
+			_, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, test.want, mock.lastLedgerIndex)
+		})
+	}
+
+	t.Run("conflicting fields", func(t *testing.T) {
+		params, err := json.Marshal(map[string]any{
+			"index":        entryIndex,
+			"ledger_hash":  ledgerHash,
+			"ledger_index": 2,
+		})
+		require.NoError(t, err)
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified.", rpcErr.Message)
+	})
 }
 
 // TestLedgerEntryNFTOfferAlias verifies the canonical rippled `nft_offer`

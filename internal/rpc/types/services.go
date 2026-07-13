@@ -751,6 +751,40 @@ type TransactionSubmitter interface {
 	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
+// TransactionSearchRange is the inclusive ledger interval used by tx.
+type TransactionSearchRange struct {
+	Min uint32
+	Max uint32
+}
+
+// TransactionSearchResult preserves rippled's searched_all distinction when a
+// ranged transaction lookup does not find a transaction. SearchedAll is nil
+// when the backend cannot determine whether the complete range was searched.
+type TransactionSearchResult struct {
+	Transaction *TransactionInfo
+	SearchedAll *bool
+}
+
+// TransactionSearcher is implemented by services backed by durable
+// transaction tables. Keeping it separate from LedgerService lets lightweight
+// RPC mocks continue to provide the legacy in-memory lookup.
+type TransactionSearcher interface {
+	SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *TransactionSearchRange) (*TransactionSearchResult, error)
+}
+
+// LedgerContext contains the durable ledger fields needed to decorate
+// historical transaction rows.
+type LedgerContext struct {
+	Hash      [32]byte
+	CloseTime int64
+}
+
+// LedgerContextReader resolves ledger header fields without requiring the full
+// ledger to remain in the in-memory history window.
+type LedgerContextReader interface {
+	GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error)
+}
+
 // TransactionRulesSource provides the amendment rules used to admit a
 // transaction to the current open ledger. Handlers that validate before
 // submission or simulation use this optional facet to match the engine.
@@ -767,7 +801,7 @@ type AccountQuerier interface {
 	GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*AccountChannelsResult, error)
 	GetAccountCurrencies(ctx context.Context, account string, ledgerIndex string) (*AccountCurrenciesResult, error)
 	GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error)
-	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error)
+	GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error)
 }
 
 // LedgerService is the full interface for ledger operations.
@@ -1016,6 +1050,9 @@ type TransactionInfo struct {
 
 	// TxIndex is the transaction's index within the ledger
 	TxIndex uint32
+
+	// CloseTime is the containing ledger's close time in Ripple epoch seconds.
+	CloseTime int64
 }
 
 // Amount identifies an XRP, issued-currency, or MPT amount.

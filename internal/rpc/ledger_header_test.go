@@ -239,6 +239,8 @@ func TestLedgerHeaderBinaryFormat(t *testing.T) {
 	resp := resultToMapHeader(t, result)
 	ledgerDataHex, ok := resp["ledger_data"].(string)
 	require.True(t, ok)
+	const expectedLedgerData = "00000005016345785D89FFEC01000000000000000000000000000000000000000000000000000000000000AA100000000000000000000000000000000000000000000000000000000000000020000000000000000000000000000000000000000000000000000000000000002E40D2142E40D21E0A00"
+	assert.Equal(t, expectedLedgerData, ledgerDataHex)
 
 	data, err := hex.DecodeString(ledgerDataHex)
 	require.NoError(t, err)

@@ -754,7 +754,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
-		ledgerTime := uint32(event.LedgerInfo.CloseTime.Unix() - protocol.RippleEpochUnix)
+		ledgerTime := protocol.ToRippleTime(event.LedgerInfo.CloseTime)
 
 		ledgerCloseEvent := &rpc.LedgerCloseEvent{
 			Type:             "ledgerClosed",
@@ -1064,11 +1064,7 @@ func newTxBroadcaster(overlay *peermanagement.Overlay) func([]byte) {
 			RawTransaction: txBlob,
 			Status:         message.TxStatusCurrent,
 		}
-		encoded, err := message.Encode(txMsg)
-		if err != nil {
-			return
-		}
-		frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+		frame, err := message.EncodeFrame(txMsg)
 		if err != nil {
 			return
 		}

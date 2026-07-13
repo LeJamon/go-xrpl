@@ -15,7 +15,6 @@ type NoRippleCheckMethod struct{ BaseHandler }
 func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
-		types.LedgerSpecifier
 		Role         string `json:"role,omitempty"` // "gateway" or "user"
 		Transactions bool   `json:"transactions,omitempty"`
 		Limit        uint32 `json:"limit,omitempty"`
@@ -59,7 +58,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 
 	// Determine ledger index to use. rippled's lookupLedger defaults to the
 	// open ("current") ledger in the absence of ledger_index/ledger_hash.
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -79,21 +78,18 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		request.Transactions,
 	)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RPCErrorInternal(err.Error())
+		return nil, mapAccountQueryErr(err, err.Error())
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format
 	response := map[string]any{}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	// Problems is always present (may be empty array)
 	// Reference: NoRippleCheck.cpp line 123: result["problems"] = Json::arrayValue

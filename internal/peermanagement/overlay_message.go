@@ -472,7 +472,7 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	// `date`. Mutate sc so the auto-filled value is observable to
 	// subscribers.
 	if sc.NetworkTime == 0 {
-		sc.NetworkTime = uint64(time.Now().Unix() - protocol.RippleEpochUnix)
+		sc.NetworkTime = uint64(protocol.RippleSeconds(time.Now()))
 	}
 
 	effectiveStatus := peer.applyStatusChange(sc)
@@ -610,11 +610,7 @@ func (o *Overlay) handlePing(evt Event) {
 			Seq:      ping.Seq,
 			PingTime: ping.PingTime,
 		}
-		encoded, err := message.Encode(pong)
-		if err != nil {
-			return
-		}
-		wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
+		wireMsg, err := message.EncodeFrame(pong)
 		if err != nil {
 			return
 		}

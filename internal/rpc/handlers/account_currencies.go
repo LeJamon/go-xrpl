@@ -16,7 +16,6 @@ type AccountCurrenciesMethod struct{ BaseHandler }
 func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		types.AccountParam
-		types.LedgerSpecifier
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -31,7 +30,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 		return nil, err
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -46,23 +45,18 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account currencies: %v", err))
 	}
 
 	// Build response
 	response := map[string]any{
-		"ledger_hash":        FormatLedgerHash(result.LedgerHash),
-		"ledger_index":       result.LedgerIndex,
 		"receive_currencies": result.ReceiveCurrencies,
 		"send_currencies":    result.SendCurrencies,
-		"validated":          result.Validated,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	return response, nil
 }

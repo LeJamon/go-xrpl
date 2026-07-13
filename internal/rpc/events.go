@@ -2,16 +2,9 @@ package rpc
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// ToRippleTime converts a time.Time to seconds since Ripple epoch
-func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
-}
 
 // LedgerCloseEvent represents a ledger close notification sent to subscribers
 // This matches the rippled ledgerClosed stream message format

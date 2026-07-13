@@ -49,22 +49,12 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 
 	// rippled: if (count == 0 || secretType == nullptr) { error = RPC::missing_field_error(jss::secret); return {}; }
 	if secretCount == 0 {
-		return "", "", &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'secret'.",
-		}
+		return "", "", types.RPCErrorMissingField("secret")
 	}
 
 	// rippled: if (count > 1) { error = RPC::make_param_error("Exactly one of the following must be specified: ..."); return {}; }
 	if secretCount > 1 {
-		return "", "", &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Exactly one of the following must be specified: passphrase, secret, seed or seed_hex",
-		}
+		return "", "", types.RPCErrorInvalidParams("Exactly one of the following must be specified: passphrase, secret, seed or seed_hex")
 	}
 
 	// Determine key type
@@ -78,29 +68,14 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 			useEd25519 = true
 		default:
 			if apiVersion > 1 {
-				return "", "", &types.RPCError{
-					Code:        types.RpcBAD_KEY_TYPE,
-					ErrorString: "badKeyType",
-					Type:        "badKeyType",
-					Message:     "Bad key type.",
-				}
+				return "", "", types.RPCErrorBadKeyType("Bad key type.")
 			}
-			return "", "", &types.RPCError{
-				Code:        types.RpcINVALID_PARAMS,
-				ErrorString: "invalidParams",
-				Type:        "invalidParams",
-				Message:     "Invalid field 'key_type'.",
-			}
+			return "", "", types.RPCErrorInvalidField("key_type")
 		}
 
 		// rippled: if (strcmp(secretType, jss::secret.c_str()) == 0) { error = RPC::make_param_error("The secret field is not allowed if key_type is used."); return {}; }
 		if secretType == "secret" {
-			return "", "", &types.RPCError{
-				Code:        types.RpcINVALID_PARAMS,
-				ErrorString: "invalidParams",
-				Type:        "invalidParams",
-				Message:     "The secret field is not allowed if key_type is used.",
-			}
+			return "", "", types.RPCErrorInvalidParams("The secret field is not allowed if key_type is used.")
 		}
 	}
 
@@ -115,12 +90,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 		var algo any
 		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
 		if err != nil {
-			return "", "", &types.RPCError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
+			return "", "", types.RPCErrorBadSeed()
 		}
 		// If key_type not specified, use the algorithm from the seed
 		if !hasKeyType {
@@ -132,12 +102,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 		// Hex-encoded 16-byte seed
 		seedBytes, err = hex.DecodeString(secretValue)
 		if err != nil || len(seedBytes) != 16 {
-			return "", "", &types.RPCError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
+			return "", "", types.RPCErrorBadSeed()
 		}
 
 	case "passphrase":
@@ -175,12 +140,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 	}
 
 	if err != nil {
-		return "", "", &types.RPCError{
-			Code:        types.RpcBAD_SEED,
-			ErrorString: "badSeed",
-			Type:        "badSeed",
-			Message:     "Disallowed seed.",
-		}
+		return "", "", types.RPCErrorBadSeed()
 	}
 
 	return privateKeyHex, publicKeyHex, nil

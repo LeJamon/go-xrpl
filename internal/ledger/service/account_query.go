@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // AccountInfoResult contains account information from the ledger
@@ -67,7 +68,7 @@ func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool
 }
 
 func formatDirMarker(key [32]byte, page uint64) string {
-	return formatHashHex(key) + "," + strconv.FormatUint(page, 10)
+	return protocol.Hash256Hex(key) + "," + strconv.FormatUint(page, 10)
 }
 
 // withAccountQuery runs the shared account_* preamble — context check, read lock,
@@ -524,7 +525,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 				return err
 			}
 			result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-				Index:           formatHashHex(pageKey),
+				Index:           protocol.Hash256Hex(pageKey),
 				LedgerEntryType: "NFTokenPage",
 				Data:            pageData,
 			})
@@ -545,7 +546,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 
 			mlimit--
 			if mlimit == 0 && nextOK {
-				result.Marker = "0," + formatHashHex(pageKey)
+				result.Marker = "0," + protocol.Hash256Hex(pageKey)
 				return nil
 			}
 
@@ -593,7 +594,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 
 		// NFTokenPages exactly filled the limit; resume at the first dir entry.
 		if i == mlimit && mlimit < limit {
-			result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[start])
+			result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[start])
 			return nil
 		}
 
@@ -606,7 +607,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			if data != nil {
 				if t := state.EntryType(data); wantType(t) {
 					result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-						Index:           formatHashHex(itemKey),
+						Index:           protocol.Hash256Hex(itemKey),
 						LedgerEntryType: t,
 						Data:            data,
 					})
@@ -615,7 +616,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 			i++
 			if i == mlimit {
 				if idx+1 < len(entries) {
-					result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[idx+1])
+					result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(entries[idx+1])
 					return nil
 				}
 				break
@@ -640,7 +641,7 @@ func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [2
 		}
 		if i == mlimit {
 			if len(dir.Indexes) > 0 {
-				result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(dir.Indexes[0])
+				result.Marker = protocol.Hash256Hex(dirIndex) + "," + protocol.Hash256Hex(dir.Indexes[0])
 			}
 			return nil
 		}
@@ -795,13 +796,13 @@ func (s *Service) GetOwnerInfo(ctx context.Context, account string, ledgerIndex 
 			switch entryType {
 			case "Offer":
 				result.Offers = append(result.Offers, AccountObjectItem{
-					Index:           formatHashHex(itemKey),
+					Index:           protocol.Hash256Hex(itemKey),
 					LedgerEntryType: entryType,
 					Data:            data,
 				})
 			case "RippleState":
 				result.RippleLines = append(result.RippleLines, AccountObjectItem{
-					Index:           formatHashHex(itemKey),
+					Index:           protocol.Hash256Hex(itemKey),
 					LedgerEntryType: entryType,
 					Data:            data,
 				})
@@ -901,7 +902,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 			destAddr, _ := addresscodec.EncodeAccountIDToClassicAddress(payChan.DestinationID[:])
 
 			channel := AccountChannel{
-				ChannelID:          formatHashHex(key),
+				ChannelID:          protocol.Hash256Hex(key),
 				Account:            srcAddr,
 				DestinationAccount: destAddr,
 				Amount:             strconv.FormatUint(payChan.Amount, 10),
@@ -1075,7 +1076,7 @@ type AccountNFTsResult struct {
 }
 
 // GetAccountNFTs retrieves NFTs owned by an account
-func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountNFTsResult, error) {
+func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountNFTsResult, error) {
 		accountKey := keylet.Account(accountID)
 		exists, err := targetLedger.Exists(accountKey)
@@ -1091,16 +1092,24 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			limit = 256
 		}
 
+		var markerID [32]byte
+		hasMarker := marker != ""
+		if hasMarker {
+			decoded, err := hex.DecodeString(marker)
+			if err != nil || len(decoded) != len(markerID) {
+				return nil, svcerr.ErrInvalidMarker
+			}
+			copy(markerID[:], decoded)
+		}
+
 		var nfts []NFTInfo
+		markerFound := !hasMarker
+		var nextMarker string
 
 		targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 			if ctx.Err() != nil {
 				return false
 			}
-			if uint32(len(nfts)) >= limit {
-				return false
-			}
-
 			if len(data) < 3 {
 				return true
 			}
@@ -1126,18 +1135,28 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			}
 
 			for _, token := range page.NFTokens {
-				if uint32(len(nfts)) >= limit {
-					break
+				if !markerFound {
+					if token.NFTokenID == markerID {
+						markerFound = true
+					}
+					continue
 				}
 
 				nft := extractNFTInfo(token.NFTokenID, token.URI)
 				nfts = append(nfts, nft)
+				if uint32(len(nfts)) == limit {
+					nextMarker = nft.NFTokenID
+					return false
+				}
 			}
 
 			return true
 		})
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if !markerFound {
+			return nil, svcerr.ErrInvalidMarker
 		}
 
 		return &AccountNFTsResult{
@@ -1146,6 +1165,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			LedgerIndex: targetLedger.Sequence(),
 			LedgerHash:  targetLedger.Hash(),
 			Validated:   validated,
+			Marker:      nextMarker,
 		}, nil
 	})
 }
@@ -1610,7 +1630,7 @@ func extractNFTInfo(tokenID [32]byte, uri string) NFTInfo {
 	return NFTInfo{
 		Flags:        flags,
 		Issuer:       issuer,
-		NFTokenID:    formatHashHex(tokenID),
+		NFTokenID:    protocol.Hash256Hex(tokenID),
 		NFTokenTaxon: taxon,
 		URI:          uri,
 		NFTSerial:    sequence,
@@ -1748,7 +1768,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 	// Parent close time in Ripple-epoch seconds for the expiry check.
 	var parentCloseTimeSecs uint32
 	if t := targetLedger.ParentCloseTime(); !t.IsZero() {
-		switch secs := toRippleTime(t); {
+		switch secs := protocol.RippleSeconds(t); {
 		case secs > math.MaxUint32:
 			parentCloseTimeSecs = math.MaxUint32
 		case secs > 0:

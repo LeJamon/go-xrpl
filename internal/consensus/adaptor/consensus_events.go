@@ -302,12 +302,40 @@ func (a *Adaptor) ancestorOf(ledger consensus.Ledger, targetSeq uint32) consensu
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
-	a.ledgerService.SetValidatedLedger(seq, hash)
+	a.ledgerService.SetValidatedLedgerAt(seq, hash, a.validatedSignTime(ledgerID, seq))
 	a.refreshRemoteFee(ledgerID)
 	a.logger.Info("Ledger fully validated",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 	)
+}
+
+func (a *Adaptor) validatedSignTime(ledgerID consensus.LedgerID, seq uint32) time.Time {
+	if a.validationHistorian == nil {
+		return time.Time{}
+	}
+	validations := a.filterNegativeUNL(a.validationHistorian.GetTrustedValidations(ledgerID))
+	signTime, count := sampleValidatedSignTime(validations, seq)
+	if count == 0 || count < a.GetQuorum() {
+		return time.Time{}
+	}
+	return signTime
+}
+
+func sampleValidatedSignTime(validations []*consensus.Validation, seq uint32) (time.Time, int) {
+	times := make([]time.Time, 0, len(validations))
+	for _, validation := range validations {
+		if validation != nil && validation.Full && validation.LedgerSeq == seq && !validation.SignTime.IsZero() {
+			times = append(times, time.Unix(validation.SignTime.Unix(), 0).UTC())
+		}
+	}
+	if len(times) == 0 {
+		return time.Time{}, 0
+	}
+	slices.SortFunc(times, func(a, b time.Time) int { return a.Compare(b) })
+	t0 := times[(len(times)-1)/2]
+	t1 := times[len(times)/2]
+	return t0.Add(t1.Sub(t0) / 2), len(times)
 }
 
 // refreshRemoteFee takes the sfLoadFee of each trusted validation
@@ -426,7 +454,7 @@ func (a *Adaptor) OnLedgerSwitched(ledger consensus.Ledger) {
 // networkTime is the current time-adjusted clock as ripple-epoch seconds, for
 // the TMStatusChange networktime field.
 func (a *Adaptor) networkTime() uint64 {
-	return uint64(a.Now().Unix() - protocol.RippleEpochUnix)
+	return uint64(protocol.RippleSeconds(a.Now()))
 }
 
 // broadcastSwitchedLedger sends a SWITCHED_LEDGER status change carrying the

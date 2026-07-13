@@ -415,13 +415,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 			ws.sendError(wsConn, rpcErr, cmd.ID)
 			return
 		}
-		ws.sendResponse(wsConn, types.WebSocketResponse{
-			Type:       "response",
-			ID:         cmd.ID,
-			Status:     "success",
-			Result:     result,
-			ApiVersion: ctx.ApiVersion,
-		})
+		ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, nil)
 		return
 	}
 
@@ -436,14 +430,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 
 	result := ws.buildSubscribeAck(ctx, request)
 
-	response := types.WebSocketResponse{
-		Type:       "response",
-		ID:         cmd.ID,
-		Status:     "success",
-		Result:     result,
-		ApiVersion: ctx.ApiVersion,
-	}
-	ws.sendResponse(wsConn, response)
+	ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, nil)
 }
 
 func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
@@ -466,13 +453,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 			ws.sendError(wsConn, rpcErr, cmd.ID)
 			return
 		}
-		ws.sendResponse(wsConn, types.WebSocketResponse{
-			Type:       "response",
-			ID:         cmd.ID,
-			Status:     "success",
-			Result:     result,
-			ApiVersion: ctx.ApiVersion,
-		})
+		ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, nil)
 		return
 	}
 
@@ -481,14 +462,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 		return
 	}
 
-	response := types.WebSocketResponse{
-		Type:       "response",
-		ID:         cmd.ID,
-		Status:     "success",
-		Result:     map[string]any{},
-		ApiVersion: ctx.ApiVersion,
-	}
-	ws.sendResponse(wsConn, response)
+	ws.sendSuccess(wsConn, cmd.ID, map[string]any{}, ctx.ApiVersion, nil)
 }
 
 // handlePathFind processes path_find commands (special WebSocket-only method).
@@ -554,14 +528,7 @@ func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx
 
 	wsConn.installPathFindSession(session)
 
-	response := types.WebSocketResponse{
-		Type:       "response",
-		ID:         cmd.ID,
-		Status:     "success",
-		Result:     event,
-		ApiVersion: ctx.ApiVersion,
-	}
-	ws.sendResponse(wsConn, response)
+	ws.sendSuccess(wsConn, cmd.ID, event, ctx.ApiVersion, nil)
 }
 
 // handlePathFindClose closes the active pathfinding session on this connection.
@@ -573,14 +540,7 @@ func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx 
 		return
 	}
 
-	response := types.WebSocketResponse{
-		Type:       "response",
-		ID:         cmd.ID,
-		Status:     "success",
-		Result:     session.Close(),
-		ApiVersion: ctx.ApiVersion,
-	}
-	ws.sendResponse(wsConn, response)
+	ws.sendSuccess(wsConn, cmd.ID, session.Close(), ctx.ApiVersion, nil)
 }
 
 // handlePathFindStatus returns the current status of the active pathfinding session.
@@ -596,14 +556,7 @@ func (ws *WebSocketServer) handlePathFindStatus(wsConn *WebSocketConnection, ctx
 
 	event := session.Status()
 
-	response := types.WebSocketResponse{
-		Type:       "response",
-		ID:         cmd.ID,
-		Status:     "success",
-		Result:     event,
-		ApiVersion: ctx.ApiVersion,
-	}
-	ws.sendResponse(wsConn, response)
+	ws.sendSuccess(wsConn, cmd.ID, event, ctx.ApiVersion, nil)
 }
 
 // UpdatePathFindSessions re-runs pathfinding for all active sessions on ledger close.
@@ -716,13 +669,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		ws.sendErrorWithOptions(wsConn, rpcErr, cmd.ID, opts)
 		return
 	}
-	ws.sendResponseWithOptions(wsConn, types.WebSocketResponse{
-		Type:       "response",
-		ID:         cmd.ID,
-		Status:     "success",
-		Result:     result,
-		ApiVersion: ctx.ApiVersion,
-	}, opts)
+	ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, opts)
 }
 
 // wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
@@ -735,8 +682,14 @@ func wsLoadWarningOpts(ctx *types.RPCContext) *types.WebSocketResponseOptions {
 	return nil
 }
 
-func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response types.WebSocketResponse) {
-	ws.sendResponseWithOptions(wsConn, response, nil)
+func (ws *WebSocketServer) sendSuccess(wsConn *WebSocketConnection, id, result any, apiVersion int, opts *types.WebSocketResponseOptions) {
+	ws.sendResponseWithOptions(wsConn, types.WebSocketResponse{
+		Type:       "response",
+		ID:         id,
+		Status:     "success",
+		Result:     result,
+		ApiVersion: apiVersion,
+	}, opts)
 }
 
 func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, response types.WebSocketResponse, opts *types.WebSocketResponseOptions) {
@@ -835,32 +788,34 @@ func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.
 // sendErrorWithOptions writes an XRPL-format error: error fields are at top
 // level (not nested in result) per the WebSocket spec.
 func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RPCError, id any, opts *types.WebSocketResponseOptions) {
-	response := types.WebSocketResponse{
-		Type:   "response",
-		Status: "error",
-		ID:     id,
-		Error:  rpcErr.ErrorString,
-	}
-	// Bare-token errors carry only `error` on the wire (rippled's direct
-	// jvResult[jss::error] path); leave error_code/error_message zero so
-	// omitempty drops them.
-	if !rpcErr.IsBareToken() {
-		response.ErrorCode = rpcErr.Code
-		response.ErrorMessage = rpcErr.Message
-	}
-
-	if opts != nil {
-		response.Warning = opts.Warning
-		response.Warnings = opts.Warnings
-		response.Forwarded = opts.Forwarded
-	}
-
+	response := buildWebSocketErrorResponse(rpcErr, id, opts)
 	data, err := json.Marshal(response)
 	if err != nil {
 		wsLog().Error("Failed to marshal WebSocket error response", "err", err)
 		return
 	}
 	ws.deliver(wsConn, data)
+}
+
+func buildWebSocketErrorResponse(rpcErr *types.RPCError, id any, opts *types.WebSocketResponseOptions) map[string]any {
+	response := rpcErr.ResponseFields()
+	response["type"] = "response"
+	response["status"] = "error"
+	if id != nil {
+		response["id"] = id
+	}
+	if opts != nil {
+		if opts.Warning != "" {
+			response["warning"] = opts.Warning
+		}
+		if len(opts.Warnings) > 0 {
+			response["warnings"] = opts.Warnings
+		}
+		if opts.Forwarded {
+			response["forwarded"] = true
+		}
+	}
+	return response
 }
 
 // attachConnection is the single point at which a new WS connection

@@ -334,3 +334,12 @@ func BuildWireMessage(msgType MessageType, payload []byte) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
+
+// EncodeFrame serializes a message and wraps it in its wire-protocol header.
+func EncodeFrame(msg Message) ([]byte, error) {
+	payload, err := Encode(msg)
+	if err != nil {
+		return nil, err
+	}
+	return BuildWireMessage(msg.Type(), payload)
+}

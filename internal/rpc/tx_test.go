@@ -97,13 +97,13 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		{
 			name:          "Missing transaction field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: transaction",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing transaction field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: transaction",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -175,8 +175,8 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"transaction": "",
 			},
-			expectedError: "Missing required parameter: transaction",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Transaction not found - valid hash format (txnNotFound)",
@@ -243,8 +243,8 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"transaction": nil,
 			},
-			expectedError: "Missing required parameter: transaction",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 	}
 
@@ -368,7 +368,7 @@ func TestTxMethodLookupByHash(t *testing.T) {
 				// Required fields per rippled
 				assert.Contains(t, resp, "hash")
 				assert.Contains(t, resp, "ledger_index")
-				assert.Contains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_hash")
 				assert.Contains(t, resp, "validated")
 				assert.Contains(t, resp, "meta")
 			},
@@ -1321,13 +1321,13 @@ func TestTxMethodResponseFields(t *testing.T) {
 		// Check required response fields per rippled spec
 		assert.Contains(t, resp, "hash", "Response must include hash")
 		assert.Contains(t, resp, "ledger_index", "Response must include ledger_index")
-		assert.Contains(t, resp, "ledger_hash", "Response must include ledger_hash")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "close_time_iso")
 		assert.Contains(t, resp, "validated", "Response must include validated")
 
 		// Verify field values
 		assert.Equal(t, validHash, resp["hash"])
 		assert.Equal(t, float64(100), resp["ledger_index"])
-		assert.Equal(t, expectedLedgerHash, resp["ledger_hash"])
 		assert.Equal(t, true, resp["validated"])
 
 		// Check transaction fields are present (for JSON mode)
@@ -1385,7 +1385,8 @@ func TestTxMethodResponseFields(t *testing.T) {
 		// Required fields in binary mode
 		assert.Contains(t, resp, "hash")
 		assert.Contains(t, resp, "ledger_index")
-		assert.Contains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "close_time_iso")
 		assert.Contains(t, resp, "validated")
 
 		// Binary-specific fields
@@ -1528,14 +1529,119 @@ func TestTxMethodApiVersions(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			require.Nil(t, rpcErr, "Should succeed for API version %d", version)
 			require.NotNil(t, result)
-
-			// Note: API version 2+ may have different response format
-			// (tx_json instead of flat fields, close_time_iso, etc.)
+			resp := result.(map[string]any)
 			if version > 1 {
-				t.Logf("API version %d may return tx_json wrapper and additional fields", version)
+				shaped := resp["tx_json"].(map[string]any)
+				assert.Equal(t, "1000000", shaped["DeliverMax"])
+				assert.NotContains(t, shaped, "Amount")
+				assert.Contains(t, resp, "ledger_hash")
+			} else {
+				assert.Equal(t, "1000000", resp["Amount"])
+				assert.Equal(t, "1000000", resp["DeliverMax"])
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "close_time_iso")
 			}
 		})
 	}
+}
+
+func TestTxCTIDResponsePlacement(t *testing.T) {
+	const (
+		hash             = "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+		ledgerIndex      = uint32(3)
+		transactionIndex = uint32(3)
+		serverNetworkID  = uint32(7)
+		transactionNetID = uint32(9)
+		rootCTID         = "C000000300030007"
+		embeddedCTID     = "C000000300030009"
+	)
+
+	txJSON := map[string]any{
+		"TransactionType": "Payment",
+		"Sequence":        uint32(1),
+		"NetworkID":       transactionNetID,
+	}
+	storedData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: txJSON,
+		Meta: map[string]any{
+			"TransactionIndex": transactionIndex,
+		},
+	})
+	require.NoError(t, err)
+
+	mock := newMockLedgerServiceTx()
+	mock.serverInfo.NetworkID = serverNetworkID
+	mock.transactions[hash] = &types.TransactionInfo{
+		TxData:      storedData,
+		LedgerIndex: ledgerIndex,
+		LedgerHash:  strings.Repeat("A", 64),
+		Validated:   true,
+		TxIndex:     transactionIndex,
+	}
+
+	request := func(t *testing.T, apiVersion int, binary bool) map[string]any {
+		t.Helper()
+		params, err := json.Marshal(map[string]any{"transaction": hash, "binary": binary})
+		require.NoError(t, err)
+		result, rpcErr := (&handlers.TxMethod{}).Handle(&types.RPCContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: apiVersion,
+			Services:   servicesForTx(mock),
+		}, params)
+		require.Nil(t, rpcErr)
+		response, ok := result.(map[string]any)
+		require.True(t, ok)
+		return response
+	}
+
+	t.Run("API v1 JSON keeps strict CTID at root", func(t *testing.T) {
+		response := request(t, types.ApiVersion1, false)
+		assert.Equal(t, rootCTID, response["ctid"])
+		assert.NotContains(t, response, "tx_json")
+	})
+
+	t.Run("API v2 JSON has strict root and inclusive embedded CTIDs", func(t *testing.T) {
+		response := request(t, types.ApiVersion2, false)
+		assert.Equal(t, rootCTID, response["ctid"])
+		tx, ok := response["tx_json"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, embeddedCTID, tx["ctid"])
+	})
+
+	t.Run("API v1 binary uses tx and retains root CTID", func(t *testing.T) {
+		response := request(t, types.ApiVersion1, true)
+		assert.Equal(t, rootCTID, response["ctid"])
+		assert.Contains(t, response, "tx")
+		assert.NotContains(t, response, "tx_blob")
+	})
+
+	t.Run("API v2 binary uses tx_blob and retains root CTID", func(t *testing.T) {
+		response := request(t, types.ApiVersion2, true)
+		assert.Equal(t, rootCTID, response["ctid"])
+		assert.Contains(t, response, "tx_blob")
+		assert.NotContains(t, response, "tx_json")
+	})
+
+	mock.serverInfo.NetworkID = 0xFFFF
+
+	t.Run("API v1 retains inclusive embedded CTID at strict boundary", func(t *testing.T) {
+		for _, binary := range []bool{false, true} {
+			response := request(t, types.ApiVersion1, binary)
+			assert.Equal(t, embeddedCTID, response["ctid"])
+		}
+	})
+
+	t.Run("API v2 boundary retains only nonbinary embedded CTID", func(t *testing.T) {
+		response := request(t, types.ApiVersion2, false)
+		assert.NotContains(t, response, "ctid")
+		tx, ok := response["tx_json"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, embeddedCTID, tx["ctid"])
+
+		binaryResponse := request(t, types.ApiVersion2, true)
+		assert.NotContains(t, binaryResponse, "ctid")
+	})
 }
 
 // CTID Lookup Tests (when implemented)

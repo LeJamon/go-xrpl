@@ -62,13 +62,12 @@ func Reserve(env *jtx.TestEnv, count uint32) uint64 {
 // LastClose returns the parent close time in Ripple epoch seconds.
 // Equivalent to rippled's lastClose(env) in Offer_test.cpp.
 func LastClose(env *jtx.TestEnv) uint32 {
-	unixSecs := env.Now().Unix()
-	return uint32(unixSecs - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(env.Now())
 }
 
 // RippleTimeFromUnix converts a time.Time to Ripple epoch seconds.
 func RippleTimeFromUnix(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(t)
 }
 
 // OfferInLedger checks if an offer exists in the ledger by account and sequence.

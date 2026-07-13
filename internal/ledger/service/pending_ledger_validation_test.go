@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
@@ -503,4 +505,119 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 	svc.mu.RUnlock()
 	assert.False(t, hashStashed,
 		"pendingValidation[hash] must NOT be populated when F4 drain fires inline")
+}
+
+func TestPendingValidationDrainRefreshesSignTime(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Standalone = false
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	hdr, stateMap, txMap := pendingAdoptionFixture(t, svc, 0xE1)
+	initialSignTime := time.Unix(1_700_000_000, 0).UTC()
+	refreshedSignTime := initialSignTime.Add(30 * time.Second)
+	resolverCalls := 0
+	svc.SetPendingValidationResolver(func(seq uint32, hash [32]byte) (time.Time, bool) {
+		resolverCalls++
+		assert.Equal(t, hdr.LedgerIndex, seq)
+		assert.Equal(t, hdr.Hash, hash)
+		return refreshedSignTime, true
+	})
+
+	svc.SetValidatedLedgerAt(hdr.LedgerIndex, hdr.Hash, initialSignTime)
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+
+	assert.Equal(t, 1, resolverCalls)
+	assert.Equal(t, hdr.LedgerIndex, svc.GetValidatedLedgerIndex())
+	svc.mu.RLock()
+	gotSignTime := svc.validatedSignTime
+	svc.mu.RUnlock()
+	assert.Equal(t, refreshedSignTime, gotSignTime)
+}
+
+func TestPendingValidationDrainRejectsLostQuorumUntilRefired(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Standalone = false
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	hdr, stateMap, txMap := pendingAdoptionFixture(t, svc, 0xE2)
+	startValidated := svc.GetValidatedLedgerIndex()
+	resolverCalls := 0
+	svc.SetPendingValidationResolver(func(uint32, [32]byte) (time.Time, bool) {
+		resolverCalls++
+		return time.Time{}, false
+	})
+
+	svc.SetValidatedLedgerAt(hdr.LedgerIndex, hdr.Hash, time.Unix(1_700_000_000, 0).UTC())
+	require.NoError(t, svc.AdoptLedgerWithState(context.TODO(), hdr, stateMap, txMap))
+	assert.Equal(t, startValidated, svc.GetValidatedLedgerIndex())
+	assert.Equal(t, 1, resolverCalls)
+
+	refiredSignTime := time.Unix(1_700_000_100, 0).UTC()
+	svc.SetValidatedLedgerAt(hdr.LedgerIndex, hdr.Hash, refiredSignTime)
+	assert.Equal(t, hdr.LedgerIndex, svc.GetValidatedLedgerIndex())
+	svc.mu.RLock()
+	gotSignTime := svc.validatedSignTime
+	svc.mu.RUnlock()
+	assert.Equal(t, refiredSignTime, gotSignTime)
+}
+
+func TestPendingValidationDrainRechecksBeforeBelowTipValidation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Standalone = false
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	seq := svc.GetValidatedLedgerIndex()
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
+	candidate := ledger.NewOpenWithHeader(header.LedgerHeader{LedgerIndex: seq}, stateMap, txMap, drops.Fees{})
+	require.NoError(t, candidate.Close(time.Unix(1_700_000_000, 0).UTC(), 0))
+	require.False(t, candidate.IsValidated())
+
+	resolverCalls := 0
+	svc.SetPendingValidationResolver(func(uint32, [32]byte) (time.Time, bool) {
+		resolverCalls++
+		return time.Time{}, false
+	})
+	svc.mu.Lock()
+	svc.pendingLedgerValidations[seq] = pendingValidationEntry{
+		expectedHash: candidate.Hash(),
+		signTime:     time.Unix(1_700_000_000, 0).UTC(),
+		at:           time.Now(),
+	}
+	svc.pendingLedgerValidationsOrder = append(svc.pendingLedgerValidationsOrder, seq)
+	promoted := svc.drainPendingLedgerValidationLocked(seq, candidate)
+	svc.mu.Unlock()
+
+	assert.False(t, promoted)
+	assert.Equal(t, 1, resolverCalls)
+	assert.False(t, candidate.IsValidated())
+}
+
+func pendingAdoptionFixture(
+	t *testing.T,
+	svc *Service,
+	hashTag byte,
+) (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap) {
+	t.Helper()
+	txMap := shamap.New(shamap.TypeTransaction)
+	txRoot, err := txMap.Hash()
+	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
+	stateRoot, err := stateMap.Hash()
+	require.NoError(t, err)
+
+	var hash [32]byte
+	hash[0] = hashTag
+	return &header.LedgerHeader{
+		LedgerIndex: svc.GetClosedLedgerIndex() + 1,
+		Hash:        hash,
+		TxHash:      txRoot,
+		AccountHash: stateRoot,
+	}, stateMap, txMap
 }

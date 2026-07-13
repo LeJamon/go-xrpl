@@ -28,6 +28,13 @@ func (m *ledgerDataMock) GetLedgerData(ctx context.Context, ledgerIndex string, 
 	return m.mockLedgerService.GetLedgerData(ctx, ledgerIndex, limit, marker)
 }
 
+func (m *ledgerDataMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	if seq == 0 || seq > m.currentLedgerIndex {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	return newDefaultLedgerReader(seq, seq <= m.validatedLedgerIndex), nil
+}
+
 // newDefaultLedgerDataResult creates a default LedgerDataResult for testing
 func newDefaultLedgerDataResult(numItems int, withMarker bool) *types.LedgerDataResult {
 	var ledgerHash [32]byte
@@ -58,8 +65,28 @@ func newDefaultLedgerDataResult(numItems int, withMarker bool) *types.LedgerData
 	return result
 }
 
-// TestLedgerDataLimitClamping tests that the limit is properly clamped
-// Rippled Tuning.h: JSON mode {min:16, default:256, max:256}, binary mode {min:16, default:2048, max:2048}
+func TestLedgerDataCurrentResponseFields(t *testing.T) {
+	mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+		assert.Equal(t, "current", ledgerIndex)
+		result := newDefaultLedgerDataResult(0, false)
+		result.LedgerIndex = mock.currentLedgerIndex
+		result.Validated = false
+		return result, nil
+	}
+	ctx := &types.RPCContext{
+		Context:  context.Background(),
+		Services: &types.ServiceContainer{Ledger: mock},
+	}
+
+	result, rpcErr := (&handlers.LedgerDataMethod{}).Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
+	require.Nil(t, rpcErr)
+	response := resultToMapData(t, result)
+	assert.Equal(t, float64(mock.currentLedgerIndex), response["ledger_current_index"])
+	assert.Equal(t, float64(mock.currentLedgerIndex), response["ledger_index"])
+	assert.Equal(t, handlers.FormatLedgerHash(newDefaultLedgerDataResult(0, false).LedgerHash), response["ledger_hash"])
+}
+
 func TestLedgerDataLimitClamping(t *testing.T) {
 	var capturedLimit uint32
 
@@ -68,7 +95,11 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	}
 	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 		capturedLimit = limit
-		return newDefaultLedgerDataResult(int(limit), false), nil
+		result := newDefaultLedgerDataResult(int(limit), false)
+		if limit == 0 {
+			result.Marker = strings.Repeat("0", 64)
+		}
+		return result, nil
 	}
 
 	services := &types.ServiceContainer{Ledger: mock}
@@ -132,7 +163,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		assert.Equal(t, uint32(256), capturedLimit, "JSON limit 257 should be clamped to 256")
 	})
 
-	t.Run("JSON mode limit below 16 is clamped to 16", func(t *testing.T) {
+	t.Run("JSON mode limit below 16 passes through", func(t *testing.T) {
 		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        5,
@@ -142,7 +173,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
-		assert.Equal(t, uint32(16), capturedLimit, "JSON limit below 16 should be clamped to 16")
+		assert.Equal(t, uint32(5), capturedLimit)
 	})
 
 	t.Run("JSON mode limit 255 passes through", func(t *testing.T) {
@@ -183,6 +214,8 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 		assert.Equal(t, uint32(500), capturedLimit, "Binary limit 500 should pass through")
+		response := resultToMapData(t, result)
+		assert.Len(t, response["state"], 500, "binary pages must not be re-capped to the JSON maximum")
 	})
 
 	t.Run("Binary mode limit above 2048 is clamped", func(t *testing.T) {
@@ -199,7 +232,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		assert.Equal(t, uint32(2048), capturedLimit, "Binary limit above 2048 should be clamped to 2048")
 	})
 
-	t.Run("Binary mode limit below 16 is clamped to 16", func(t *testing.T) {
+	t.Run("Binary mode limit below 16 passes through", func(t *testing.T) {
 		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
@@ -210,8 +243,38 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
-		assert.Equal(t, uint32(16), capturedLimit, "Binary limit below 16 should be clamped to 16")
+		assert.Equal(t, uint32(3), capturedLimit)
 	})
+
+	t.Run("Explicit zero returns an empty page with marker", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","limit":0}`))
+		require.Nil(t, rpcErr)
+		assert.Equal(t, uint32(0), capturedLimit)
+		response := resultToMapData(t, result)
+		assert.Empty(t, response["state"])
+		assert.Equal(t, strings.Repeat("0", 64), response["marker"])
+		assert.NotContains(t, response, "limit")
+	})
+
+	t.Run("Negative integral limit uses the mode maximum", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","limit":-1}`))
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+		assert.Equal(t, uint32(256), capturedLimit)
+	})
+
+	for _, input := range []string{
+		`{"ledger_index":"current","limit":null}`,
+		`{"ledger_index":"current","limit":1.5}`,
+		`{"ledger_index":"current","limit":"1"}`,
+	} {
+		t.Run("Non-integral limit is rejected "+input, func(t *testing.T) {
+			result, rpcErr := method.Handle(ctx, json.RawMessage(input))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, "Invalid field 'limit', not integer.", rpcErr.Message)
+		})
+	}
 }
 
 // TestLedgerDataBinaryMode tests binary vs JSON response format
@@ -298,7 +361,14 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 		mockLedgerService: newMockLedgerService(),
 	}
 	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-		return newDefaultLedgerDataResult(5, false), nil
+		result := newDefaultLedgerDataResult(0, false)
+		result.State = []types.LedgerDataItem{
+			{Index: strings.Repeat("1", 64), Data: []byte{0x11, 0x00, 0x61}},
+			{Index: strings.Repeat("2", 64), Data: []byte{0x11, 0x00, 0x6f}},
+			{Index: strings.Repeat("3", 64), Data: []byte{0x11, 0x00, 0x61}},
+		}
+		result.Marker = strings.Repeat("F", 64)
+		return result, nil
 	}
 
 	services := &types.ServiceContainer{Ledger: mock}
@@ -311,19 +381,41 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 		Services:   services,
 	}
 
-	// The type parameter is passed through to the service layer.
-	// The handler itself should not error for valid types.
-	t.Run("Type parameter accepted", func(t *testing.T) {
+	t.Run("RPC type filters without changing page marker", func(t *testing.T) {
 		params := map[string]any{
 			"ledger_index": "current",
-			"type":         "account",
+			"binary":       true,
+			"type":         "offer",
 		}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr, "Expected no error for valid type, got: %v", rpcErr)
-		require.NotNil(t, result)
+		response := resultToMapData(t, result)
+		state := response["state"].([]any)
+		require.Len(t, state, 1)
+		assert.Equal(t, strings.Repeat("2", 64), state[0].(map[string]any)["index"])
+		assert.Equal(t, strings.Repeat("F", 64), response["marker"])
 	})
+
+	t.Run("Canonical type is case insensitive", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","binary":true,"type":"aCcOuNtRoOt"}`))
+		require.Nil(t, rpcErr)
+		assert.Len(t, resultToMapData(t, result)["state"], 2)
+	})
+
+	for _, input := range []string{
+		`{"ledger_index":"current","type":"MPT_Issuance"}`,
+		`{"ledger_index":"current","type":"unknown"}`,
+		`{"ledger_index":"current","type":123}`,
+	} {
+		t.Run("Invalid type "+input, func(t *testing.T) {
+			result, rpcErr := method.Handle(ctx, json.RawMessage(input))
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		})
+	}
 }
 
 // TestLedgerDataMarkerPagination tests marker-based pagination
@@ -354,7 +446,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("First page has marker and limit", func(t *testing.T) {
+	t.Run("First page has marker without limit echo", func(t *testing.T) {
 		callCount = 0
 		params := map[string]any{
 			"ledger_index": "current",
@@ -373,11 +465,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		markerStr, ok := resp["marker"].(string)
 		assert.True(t, ok, "marker should be a string")
 		assert.NotEmpty(t, markerStr, "marker should not be empty")
-		// limit should be present when marker is present
-		assert.Contains(t, resp, "limit", "limit should be present when marker is present")
-		limitVal, ok := resp["limit"].(float64)
-		assert.True(t, ok, "limit should be a number")
-		assert.Equal(t, float64(50), limitVal, "limit should match clamped request limit")
+		assert.NotContains(t, resp, "limit")
 	})
 
 	t.Run("Second page with marker has no marker and no limit", func(t *testing.T) {
@@ -453,23 +541,17 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 	resp := resultToMapData(t, result)
 
 	// Check required top-level fields
+	assert.Contains(t, resp, "ledger_current_index")
 	assert.Contains(t, resp, "ledger_hash")
 	assert.Contains(t, resp, "ledger_index")
 	assert.Contains(t, resp, "state")
 	assert.Contains(t, resp, "validated")
 
-	// ledger_hash should be an uppercase hex string
-	hashStr, ok := resp["ledger_hash"].(string)
-	assert.True(t, ok, "ledger_hash should be a string")
-	assert.Equal(t, 64, len(hashStr), "ledger_hash should be 64 hex chars")
-	assert.Equal(t, strings.ToUpper(hashStr), hashStr, "ledger_hash should be uppercase hex")
-
-	// ledger_index should be a number
-	switch v := resp["ledger_index"].(type) {
+	switch v := resp["ledger_current_index"].(type) {
 	case float64:
 		assert.Equal(t, float64(2), v)
 	default:
-		t.Errorf("unexpected ledger_index type: %T", v)
+		t.Errorf("unexpected ledger_current_index type: %T", v)
 	}
 
 	// state should be an array
@@ -672,6 +754,8 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		// ledger_data should be an uppercase hex string
 		dataStr, ok := ledger["ledger_data"].(string)
 		assert.True(t, ok, "ledger_data should be a string in binary mode")
+		const expectedLedgerData = "00000003016345785D89FFEC0200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002E40D2142E40D21E0A00"
+		assert.Equal(t, expectedLedgerData, dataStr)
 		_, err := hex.DecodeString(dataStr)
 		assert.NoError(t, err, "ledger_data should be valid hex")
 		assert.Equal(t, strings.ToUpper(dataStr), dataStr, "ledger_data should be uppercase hex")

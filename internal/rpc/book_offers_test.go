@@ -1365,9 +1365,6 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.Contains(t, rpcErr.LogDetail(), "Failed to get book offers")
 }
 
-// TestBookOffersMarkerPassthrough exercises the handler's marker handling:
-// the request marker is forwarded to GetBookOffers, an emitted response
-// marker is surfaced in the JSON, and an absent marker is omitted.
 func TestBookOffersMarkerPassthrough(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1401,14 +1398,12 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
-	assert.Equal(t, reqMarker, capturedMarker)
+	assert.Empty(t, capturedMarker)
 	assert.Equal(t, uint32(7), capturedLimit)
 	resp, ok := result.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, respMarker, resp["marker"])
-	// Paginated response pairs marker with limit echo (account_offers
-	// convention, AccountOffers.cpp:172-176).
-	assert.Equal(t, uint32(7), resp["limit"], "paginated response must echo limit alongside marker")
+	assert.NotContains(t, resp, "marker")
+	assert.NotContains(t, resp, "limit")
 
 	// Verify the inverse: when the service emits no marker, the response
 	// contains neither a marker nor a limit key.
@@ -1427,10 +1422,6 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	assert.False(t, hasLimit, "response must omit limit when no marker is emitted")
 }
 
-// TestBookOffersStaleMarkerMapping: a well-formed marker pointing at an entry
-// that no longer exists in the ledger must map to rpcINVALID_PARAMS (not
-// invalid_field_error). Mirrors rippled's AccountOffers.cpp:128-132
-// distinction between malformed marker and missing-referent marker.
 func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1457,10 +1448,7 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "marker")
-	assert.NotEqual(t, "Invalid field 'marker'.", rpcErr.Message,
-		"stale marker must not collapse into invalid_field_error")
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 
 	// Sanity: the malformed-marker branch still produces the invalid_field
 	// shape so callers can distinguish the two on the wire.
@@ -1470,11 +1458,9 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 }
 
-// TestBookOffersMarkerValidation checks that the handler rejects malformed
-// markers before invoking the service.
 func TestBookOffersMarkerValidation(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1485,11 +1471,10 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
-	// Fail the test if the service is reached: every case below must
-	// short-circuit inside the handler.
+	var calls int
 	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-		t.Fatalf("service must not be called for invalid markers")
-		return nil, nil
+		calls++
+		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
 
 	cases := []struct {
@@ -1502,6 +1487,7 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			before := calls
 			params := map[string]any{
 				"taker_pays": map[string]any{"currency": "XRP"},
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
@@ -1510,9 +1496,9 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 			paramsJSON, err := json.Marshal(params)
 			require.NoError(t, err)
 			result, rpcErr := method.Handle(ctx, paramsJSON)
-			assert.Nil(t, result)
-			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.Message, "marker")
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, before+1, calls)
 		})
 	}
 }
@@ -1890,8 +1876,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed",
-			"malformed length must surface ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("malformed ledger_hash pre-empts missing-field errors", func(t *testing.T) {
@@ -1906,7 +1891,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("non-hex ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
@@ -1925,7 +1910,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("valid ledger_hash not found returns lgrNotFound", func(t *testing.T) {

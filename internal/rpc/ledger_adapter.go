@@ -146,11 +146,7 @@ func (a *ledgerReaderAdapter) TotalDrops() uint64 {
 }
 
 func (a *ledgerReaderAdapter) CloseTime() int64 {
-	t := a.l.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.l.CloseTime())
 }
 
 func (a *ledgerReaderAdapter) CloseTimeResolution() uint32 {
@@ -162,11 +158,7 @@ func (a *ledgerReaderAdapter) CloseFlags() uint8 {
 }
 
 func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
-	t := a.l.ParentCloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.l.ParentCloseTime())
 }
 
 func (a *ledgerReaderAdapter) TxMapHash() [32]byte {
@@ -348,14 +340,53 @@ func (a *LedgerServiceAdapter) GetTransaction(txHash [32]byte) (*types.Transacti
 	if err != nil {
 		return nil, err
 	}
+	return transactionInfoFromService(result), nil
+}
 
+func transactionInfoFromService(result *service.TransactionResult) *types.TransactionInfo {
 	return &types.TransactionInfo{
 		TxData:      result.TxData,
 		LedgerIndex: result.LedgerIndex,
 		LedgerHash:  handlers.FormatLedgerHash(result.LedgerHash),
 		Validated:   result.Validated,
 		TxIndex:     result.TxIndex,
-	}, nil
+		CloseTime:   result.CloseTime,
+	}
+}
+
+func (a *LedgerServiceAdapter) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *types.TransactionSearchRange) (*types.TransactionSearchResult, error) {
+	var serviceRange *relationaldb.LedgerRange
+	if ledgerRange != nil {
+		serviceRange = &relationaldb.LedgerRange{
+			Min: relationaldb.LedgerIndex(ledgerRange.Min),
+			Max: relationaldb.LedgerIndex(ledgerRange.Max),
+		}
+	}
+	result, err := a.svc.SearchTransaction(ctx, txHash, serviceRange)
+	if err != nil {
+		return nil, err
+	}
+	response := &types.TransactionSearchResult{}
+	if result.Transaction != nil {
+		response.Transaction = transactionInfoFromService(result.Transaction)
+	}
+	switch result.Searched {
+	case relationaldb.TxSearchAll:
+		searchedAll := true
+		response.SearchedAll = &searchedAll
+	case relationaldb.TxSearchSome:
+		searchedAll := false
+		response.SearchedAll = &searchedAll
+	}
+	return response, nil
+}
+
+func (a *LedgerServiceAdapter) GetLedgerContext(ctx context.Context, sequence uint32) (*types.LedgerContext, error) {
+	result, err := a.svc.GetLedgerContext(ctx, sequence)
+	if err != nil {
+		return nil, err
+	}
+	return &types.LedgerContext{Hash: result.Hash, CloseTime: result.CloseTime}, nil
 }
 
 // StoreTransaction stores a transaction in the current ledger
@@ -760,8 +791,8 @@ func (a *LedgerServiceAdapter) GetAccountCurrencies(ctx context.Context, account
 }
 
 // GetAccountNFTs retrieves NFTs owned by an account
-func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
-	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
+	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}

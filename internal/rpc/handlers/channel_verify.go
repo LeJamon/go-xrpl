@@ -39,36 +39,16 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// Validate required fields
 	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
 	if request.PublicKey == "" {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'public_key'.",
-		}
+		return nil, types.RPCErrorMissingField("public_key")
 	}
 	if request.ChannelID == "" {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'channel_id'.",
-		}
+		return nil, types.RPCErrorMissingField("channel_id")
 	}
 	if request.Amount == "" {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'amount'.",
-		}
+		return nil, types.RPCErrorMissingField("amount")
 	}
 	if request.Signature == "" {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Missing field 'signature'.",
-		}
+		return nil, types.RPCErrorMissingField("signature")
 	}
 
 	// Parse public key - can be base58 (AccountPublic) or hex
@@ -77,32 +57,17 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// if (!pk) { pkHex = strUnHex(strPk); if (!pkHex) return rpcError(rpcPUBLIC_MALFORMED); ... }
 	pubKeyHex, err := parsePublicKey(request.PublicKey)
 	if err != nil {
-		return nil, &types.RPCError{
-			Code:        types.RpcPUBLIC_MALFORMED,
-			ErrorString: "publicMalformed",
-			Type:        "publicMalformed",
-			Message:     "Public key is malformed.",
-		}
+		return nil, types.RPCErrorPublicMalformed()
 	}
 
 	// Validate channel_id - must be valid 256-bit hex (64 characters)
 	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
 	channelIDHex := strings.ToUpper(request.ChannelID)
 	if len(channelIDHex) != 64 {
-		return nil, &types.RPCError{
-			Code:        types.RpcCHANNEL_MALFORMED,
-			ErrorString: "channelMalformed",
-			Type:        "channelMalformed",
-			Message:     "Payment channel is malformed.",
-		}
+		return nil, types.RPCErrorChannelMalformed()
 	}
 	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, &types.RPCError{
-			Code:        types.RpcCHANNEL_MALFORMED,
-			ErrorString: "channelMalformed",
-			Type:        "channelMalformed",
-			Message:     "Payment channel is malformed.",
-		}
+		return nil, types.RPCErrorChannelMalformed()
 	}
 
 	// Validate amount - must be a string that parses to uint64
@@ -110,12 +75,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
 	drops, err := strconv.ParseUint(request.Amount, 10, 64)
 	if err != nil {
-		return nil, &types.RPCError{
-			Code:        types.RpcCHANNEL_AMT_MALFORMED,
-			ErrorString: "channelAmtMalformed",
-			Type:        "channelAmtMalformed",
-			Message:     "Payment channel amount is malformed.",
-		}
+		return nil, types.RPCErrorChannelAmountMalformed()
 	}
 
 	// Validate signature - must be valid hex and non-empty
@@ -123,12 +83,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	sigHex := strings.ToUpper(request.Signature)
 	sigBytes, err := hex.DecodeString(sigHex)
 	if err != nil || len(sigBytes) == 0 {
-		return nil, &types.RPCError{
-			Code:        types.RpcINVALID_PARAMS,
-			ErrorString: "invalidParams",
-			Type:        "invalidParams",
-			Message:     "Invalid field 'signature'.",
-		}
+		return nil, types.RPCErrorInvalidField("signature")
 	}
 
 	// Serialize the payment channel claim message

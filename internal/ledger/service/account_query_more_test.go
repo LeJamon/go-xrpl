@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // lsfCredentialAccepted mirrors credential.LsfCredentialAccepted; duplicated
@@ -87,7 +88,7 @@ func TestGetAccountNFTs_DecodesTokenFields(t *testing.T) {
 		{NFTokenID: tokenID, URI: uriHex},
 	})
 
-	res, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 0)
+	res, err := svc.GetAccountNFTs(context.Background(), ownerAddr, "current", 0, "")
 	if err != nil {
 		t.Fatalf("GetAccountNFTs: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestGetAccountNFTs_DecodesTokenFields(t *testing.T) {
 
 	t.Run("account not found", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		_, err := svc.GetAccountNFTs(context.Background(), stranger, "current", 0)
+		_, err := svc.GetAccountNFTs(context.Background(), stranger, "current", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
 		}
@@ -326,7 +327,7 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		// Expiration one hour ahead in Ripple-epoch seconds. Guards against
 		// comparing a Ripple-epoch expiration with Unix-epoch close time,
 		// which would falsely expire every credential.
-		exp := uint32(toRippleTime(time.Now().Add(time.Hour)))
+		exp := protocol.ToRippleTime(time.Now().Add(time.Hour))
 		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("FUTURE"), true, &exp)
 		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
 			[]string{formatHashHex(key)})

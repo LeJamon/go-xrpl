@@ -66,13 +66,13 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -80,7 +80,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -88,7 +88,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -96,7 +96,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -104,7 +104,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -112,7 +112,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -120,7 +120,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"val1", "val2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -278,6 +278,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		// Marker should not be present when there are no more pages
 		_, hasMarker := resp["marker"]
 		assert.False(t, hasMarker, "marker should be absent when no more pages")
+		assert.NotContains(t, resp, "limit")
 	})
 
 	t.Run("Marker present when more pages exist", func(t *testing.T) {
@@ -309,6 +310,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, expectedMarker, resp["marker"])
+		assert.Equal(t, float64(200), resp["limit"])
 	})
 }
 

@@ -80,7 +80,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 
 	baseFee, reserveBase, reserveInc := a.ledgerService.GetCurrentFees()
 
-	ledgerTime := uint32(validatedLedger.CloseTime().Unix() - protocol.RippleEpochUnix)
+	ledgerTime := protocol.ToRippleTime(validatedLedger.CloseTime())
 
 	hash := validatedLedger.Hash()
 	serverInfo := a.ledgerService.GetServerInfo()
@@ -251,7 +251,7 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 		strconv.FormatUint(uint64(v.LedgerSeq), 10),
 		signingEnc,
 		upperHex(v.Signature),
-		uint32(v.SignTime.Unix()-protocol.RippleEpochUnix),
+		protocol.ToRippleTime(v.SignTime),
 		v.Flags,
 		v.Full,
 	)
@@ -476,7 +476,7 @@ func (a *acceptedLedgerView) CloseTime() int64 {
 	if a == nil || a.event == nil || a.event.LedgerInfo == nil {
 		return 0
 	}
-	return a.event.LedgerInfo.CloseTime.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.event.LedgerInfo.CloseTime)
 }
 
 func (a *acceptedLedgerView) IsValidated() bool {

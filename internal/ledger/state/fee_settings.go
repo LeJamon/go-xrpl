@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -175,7 +176,7 @@ func (f *FeeSettings) GetBaseFee() uint64 {
 	if f.BaseFee > 0 {
 		return f.BaseFee
 	}
-	return 10 // Default: 10 drops
+	return uint64(drops.DefaultBaseFee)
 }
 
 // GetReserveBase returns the account reserve base in drops.
@@ -187,7 +188,7 @@ func (f *FeeSettings) GetReserveBase() uint64 {
 	if f.ReserveBase > 0 {
 		return uint64(f.ReserveBase)
 	}
-	return 10_000_000 // Default: 10 XRP
+	return uint64(drops.DefaultReserveBase)
 }
 
 // GetReserveIncrement returns the owner reserve increment in drops.
@@ -199,7 +200,17 @@ func (f *FeeSettings) GetReserveIncrement() uint64 {
 	if f.ReserveIncrement > 0 {
 		return uint64(f.ReserveIncrement)
 	}
-	return 2_000_000 // Default: 2 XRP
+	return uint64(drops.DefaultReserveIncrement)
+}
+
+// Fees resolves the active modern or legacy fields and fills missing values
+// from the network defaults.
+func (f *FeeSettings) Fees() drops.Fees {
+	return drops.Fees{
+		Base:      drops.XRPAmount(f.GetBaseFee()),
+		Reserve:   drops.XRPAmount(f.GetReserveBase()),
+		Increment: drops.XRPAmount(f.GetReserveIncrement()),
+	}
 }
 
 // IsUsingModernFees returns true if the entry encodes the post-XRPFees field

@@ -11,6 +11,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -31,39 +32,15 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	// ledger_hash takes precedence over ledger_index, matching rippled's
-	// RPC::ledgerFromRequest. A JSON null in either field is treated as absent
-	// (rippled's isNull() / isConvertibleTo checks), a present non-string
-	// ledger_hash is ledgerHashNotString, and an unparseable ledger_index is
-	// ledgerIndexMalformed.
-	ledgerIndex := "validated"
-	if lh, ok := rawParams["ledger_hash"]; ok && !isJSONNull(lh) {
-		var lhStr string
-		if err := json.Unmarshal(lh, &lhStr); err != nil {
-			return nil, types.RPCErrorInvalidParams("ledgerHashNotString")
-		}
-		if raw, err := hex.DecodeString(lhStr); err != nil || len(raw) != 32 {
-			return nil, types.RPCErrorInvalidParams("ledgerHashMalformed")
-		}
-		ledgerIndex = lhStr
-	} else if li, ok := rawParams["ledger_index"]; ok && !isJSONNull(li) {
-		tok := strings.TrimSpace(string(li))
-		if len(tok) > 0 && tok[0] == '"' {
-			var liStr string
-			if err := json.Unmarshal(li, &liStr); err != nil {
-				return nil, types.RPCErrorInvalidParams("ledgerIndexMalformed")
-			}
-			ledgerIndex = liStr
-		} else {
-			// A numeric ledger_index must be an integral, in-range uint32;
-			// objects/arrays/booleans/non-integral doubles are malformed.
-			var liNum uint32
-			if err := json.Unmarshal(li, &liNum); err != nil {
-				return nil, types.RPCErrorInvalidParams("ledgerIndexMalformed")
-			}
-			ledgerIndex = tok
-		}
+	selection, selectorErr := parseRawLedgerSelector(
+		rawParams,
+		ledgerselector.Current(),
+		lookupLedgerSelectorErrors,
+	)
+	if selectorErr != nil {
+		return nil, selectorErr
 	}
+	ledgerIndex := selection.String()
 
 	// Parse binary flag
 	var binary bool
@@ -480,11 +457,17 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	}
 
 	response := map[string]any{
-		"index":        result.Index,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"index":     result.Index,
+		"validated": result.Validated,
 	}
+	fillLedgerFields(
+		response,
+		selection.String(),
+		FormatLedgerHash(result.LedgerHash),
+		result.LedgerIndex,
+		ctx.Services.Ledger.GetCurrentLedgerIndex(),
+		result.Validated,
+	)
 
 	if binary {
 		response["node_binary"] = result.NodeBinary

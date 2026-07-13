@@ -15,7 +15,7 @@ import (
 )
 
 // GetAggregatePriceMethod handles the get_aggregate_price RPC method
-type GetAggregatePriceMethod struct{}
+type GetAggregatePriceMethod struct{ BaseHandler }
 
 // PriceDataPoint represents a single price data point with its update time
 type PriceDataPoint struct {
@@ -103,15 +103,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RPCContext, params json.RawM
 		return nil, err
 	}
 
-	// Parse the ledger specifier from the raw params
-	var ledgerSpec struct {
-		types.LedgerSpecifier
-	}
-	if params != nil {
-		_ = json.Unmarshal(params, &ledgerSpec)
-	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(ledgerSpec.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -446,14 +438,6 @@ func calculateMedian(prices []PriceDataPoint) float64 {
 		return (prices[n/2-1].Price + prices[n/2].Price) / 2
 	}
 	return prices[n/2].Price
-}
-
-func (m *GetAggregatePriceMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *GetAggregatePriceMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *GetAggregatePriceMethod) RequiredCondition() types.Condition {

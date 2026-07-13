@@ -142,7 +142,7 @@ func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, ac
 func (m *mockAccountLinesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -203,13 +203,13 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -217,7 +217,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -225,7 +225,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.5,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -233,7 +233,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -241,8 +241,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			// Note: JSON null gets unmarshaled as empty string in Go, triggering missing parameter error
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -250,7 +249,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -258,7 +257,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -498,7 +497,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = errors.New("ledger index malformed")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: ledger not found for non-existent sequence

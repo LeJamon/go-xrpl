@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -228,9 +230,9 @@ func (r *replayRunner) run() error {
 // computeReplaySuccess reports whether the replayed ledger matches the expected
 // fixture on every checked hash, total coins, and with no execution errors.
 func computeReplaySuccess(result *ReplayResult, expected *ExpectedFixture) bool {
-	expectedLedgerHash, _ := hexToHash32(expected.LedgerHash)
-	expectedAccountHash, _ := hexToHash32(expected.AccountHash)
-	expectedTxHash, _ := hexToHash32(expected.TransactionHash)
+	expectedLedgerHash, _ := protocol.Hash256FromHex(expected.LedgerHash)
+	expectedAccountHash, _ := protocol.Hash256FromHex(expected.AccountHash)
+	expectedTxHash, _ := protocol.Hash256FromHex(expected.TransactionHash)
 	expectedCoins, _ := parseDrops(expected.TotalCoins)
 
 	return result.LedgerHash == expectedLedgerHash &&
@@ -313,7 +315,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 	stateMap := shamap.New(shamap.TypeState)
 
 	for i, entry := range state.Entries {
-		key, err := hexToHash32(entry.Index)
+		key, err := protocol.Hash256FromHex(entry.Index)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parsing entry %d key: %w", i, err)
 		}
@@ -352,13 +354,19 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		return nil, nil, fmt.Errorf("parsing total_coins: %w", err)
 	}
 
-	parentHash, err := hexToHash32(env.ParentHash)
+	parentHash, err := protocol.Hash256FromHex(env.ParentHash)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing parent_hash: %w", err)
 	}
 
-	closeTime := time.Unix(protocol.RippleEpochUnix+env.CloseTime, 0).UTC()
-	parentCloseTime := time.Unix(protocol.RippleEpochUnix+env.ParentCloseTime, 0).UTC()
+	closeTime, err := replayCloseTime(env.CloseTime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing close_time: %w", err)
+	}
+	parentCloseTime, err := replayCloseTime(env.ParentCloseTime)
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing parent_close_time: %w", err)
+	}
 
 	ledgerHeader := header.LedgerHeader{
 		LedgerIndex:         env.LedgerIndex,
@@ -391,7 +399,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		ReserveBase:               uint64(fees.Reserve),
 		ReserveIncrement:          uint64(fees.Increment),
 		LedgerSequence:            env.LedgerIndex,
-		ParentCloseTime:           uint32(env.ParentCloseTime),
+		ParentCloseTime:           protocol.ToRippleTime(parentCloseTime),
 		SkipSignatureVerification: true,
 		Standalone:                true,
 		Rules:                     rules,
@@ -513,9 +521,9 @@ func (r *replayRunner) printDetailedResults(result *ReplayResult, expected *Expe
 	fmt.Fprintln(r.out, "================================================================================")
 
 	// Hash comparisons
-	expectedLedgerHash, _ := hexToHash32(expected.LedgerHash)
-	expectedAccountHash, _ := hexToHash32(expected.AccountHash)
-	expectedTxHash, _ := hexToHash32(expected.TransactionHash)
+	expectedLedgerHash, _ := protocol.Hash256FromHex(expected.LedgerHash)
+	expectedAccountHash, _ := protocol.Hash256FromHex(expected.AccountHash)
+	expectedTxHash, _ := protocol.Hash256FromHex(expected.TransactionHash)
 	expectedCoins, _ := parseDrops(expected.TotalCoins)
 
 	ledgerHashMatch := result.LedgerHash == expectedLedgerHash
@@ -771,19 +779,6 @@ func buildRulesFromAmendments(amendments []string) *amendment.Rules {
 	return builder.Build()
 }
 
-func hexToHash32(s string) ([32]byte, error) {
-	var hash [32]byte
-	decoded, err := hex.DecodeString(s)
-	if err != nil {
-		return hash, err
-	}
-	if len(decoded) != 32 {
-		return hash, fmt.Errorf("expected 32 bytes, got %d", len(decoded))
-	}
-	copy(hash[:], decoded)
-	return hash, nil
-}
-
 // shortHex returns the first n characters of a hex string with a trailing
 // ellipsis, never panicking on inputs shorter than n.
 func shortHex(s string, n int) string {
@@ -797,6 +792,13 @@ func shortHex(s string, n int) string {
 // garbage (unlike fmt.Sscanf).
 func parseDrops(s string) (uint64, error) {
 	return strconv.ParseUint(strings.TrimSpace(s), 10, 64)
+}
+
+func replayCloseTime(seconds int64) (time.Time, error) {
+	if seconds < 0 || seconds > math.MaxUint32 {
+		return time.Time{}, fmt.Errorf("XRPL close time %d is outside uint32 range", seconds)
+	}
+	return protocol.FromRippleTime(uint32(seconds)), nil
 }
 
 func writeResultJSON(path string, result *ReplayResult) error {
@@ -827,25 +829,19 @@ func writeResultJSON(path string, result *ReplayResult) error {
 func extractFeesFromState(entries []StateEntry) drops.Fees {
 	feeKey := keylet.Fees().Key
 	for _, entry := range entries {
-		idx, err := hexToHash32(entry.Index)
+		idx, err := protocol.Hash256FromHex(entry.Index)
 		if err != nil || idx != feeKey {
 			continue
 		}
-		decoded, err := binarycodec.Decode(entry.Data)
+		data, err := hex.DecodeString(entry.Data)
 		if err != nil {
-			return defaultFees()
+			return drops.DefaultFees()
 		}
-		return feesFromDecoded(decoded)
+		feeSettings, err := ledgerstate.ParseFeeSettings(data)
+		if err != nil {
+			return drops.DefaultFees()
+		}
+		return feeSettings.Fees()
 	}
-	return defaultFees()
-}
-
-// parseHexOrDecimal parses a string that could be hex (0x-prefixed) or decimal,
-// rejecting trailing garbage (unlike fmt.Sscanf).
-func parseHexOrDecimal(s string) (uint64, error) {
-	s = strings.TrimSpace(s)
-	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
-		return strconv.ParseUint(s[2:], 16, 64)
-	}
-	return strconv.ParseUint(s, 10, 64)
+	return drops.DefaultFees()
 }

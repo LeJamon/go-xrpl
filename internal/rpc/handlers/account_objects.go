@@ -3,12 +3,10 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -99,48 +97,38 @@ var validLedgerEntryTypeNames = map[string]bool{
 }
 
 func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		Type                 string `json:"type,omitempty"`
-		DeletionBlockersOnly bool   `json:"deletion_blockers_only,omitempty"`
-		types.PaginationParams
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
 	if selErr != nil {
 		return nil, selErr
 	}
 
-	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
-	if limitErr != nil {
-		return nil, limitErr
+	var objectType string
+	if rawType, ok := fields["type"]; ok {
+		if isJSONNull(rawType) || json.Unmarshal(rawType, &objectType) != nil {
+			return nil, types.RPCErrorInvalidField("type")
+		}
 	}
+	deletionBlockersOnly := legacyBoolValue(fields["deletion_blockers_only"])
 
 	// Determine effective type filter based on deletion_blockers_only and type params.
 	// Matches rippled's doAccountObjects logic in AccountObjects.cpp.
-	effectiveType := request.Type
+	effectiveType := objectType
 	// forceEmptyResults short-circuits an impossible filter (a non-blocker
 	// type combined with deletion_blockers_only) without using a magic
 	// service-level sentinel. The service is still called so ledger
 	// metadata + the account-existence check fire.
 	forceEmptyResults := false
 
-	if request.DeletionBlockersOnly {
-		if request.Type != "" {
-			typeLower := strings.ToLower(request.Type)
+	if deletionBlockersOnly {
+		if objectType != "" {
+			typeLower := strings.ToLower(objectType)
 			if !deletionBlockerTypes[typeLower] {
 				if !validLedgerEntryTypeNames[typeLower] {
 					return nil, types.RPCErrorInvalidField("type")
@@ -157,11 +145,11 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		}
 		// If only deletion_blockers_only is set (no type), we need to filter
 		// results to only blocker types after retrieval.
-	} else if request.Type != "" {
+	} else if objectType != "" {
 		// Validate the type parameter against known types.
 		// rippled's chooseLedgerEntryType returns rpcINVALID_PARAMS for unknown types.
 		// isAccountObjectsValidType further rejects amendments, directory, fee, hashes, nunl.
-		typeLower := strings.ToLower(request.Type)
+		typeLower := strings.ToLower(objectType)
 		if !validLedgerEntryTypeNames[typeLower] {
 			return nil, types.RPCErrorInvalidField("type")
 		}
@@ -169,26 +157,19 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, types.RPCErrorInvalidField("type")
 		}
 	}
+	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 
-	markerStr, mErr := markerString(request.Marker)
+	markerStr, mErr := markerString(fields["marker"])
 	if mErr != nil {
 		return nil, mErr
 	}
 
-	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit, markerStr)
+	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
-		if rerr := mapLedgerLookupErr(err); rerr != nil {
-			return nil, rerr
-		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
-		// rippled AccountObjects.cpp returns invalid_field_error("marker") for a
-		// malformed marker or one whose dirIndex/entryIndex no longer resolves.
-		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account objects: %v", err))
 	}
 
 	// Build account_objects array with deserialized fields. When
@@ -201,7 +182,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	}
 	for _, obj := range result.AccountObjects {
 		// If deletion_blockers_only is set without a specific type, filter here.
-		if request.DeletionBlockersOnly && request.Type == "" {
+		if deletionBlockersOnly && objectType == "" {
 			objTypeLower := sleTypeToRPCName(obj.LedgerEntryType)
 			if !deletionBlockerTypes[objTypeLower] {
 				continue
@@ -226,11 +207,11 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	response := map[string]any{
 		"account":         result.Account,
 		"account_objects": objects,
-		"limit":           limit,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	if result.Marker != "" {
+		response["limit"] = limit
 		response["marker"] = result.Marker
 	}
 

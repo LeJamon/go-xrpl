@@ -5,47 +5,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LedgerDataMethod handles the ledger_data RPC method
 type LedgerDataMethod struct{ BaseHandler }
 
 func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	// Parse parameters
-	var request struct {
-		types.LedgerSpecifier
-		Binary bool            `json:"binary,omitempty"`
-		Limit  uint32          `json:"limit,omitempty"`
-		Marker json.RawMessage `json:"marker,omitempty"`
-		Type   string          `json:"type,omitempty"`
-	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	rawParams := make(map[string]json.RawMessage)
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &rawParams); err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters")
+		}
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	// Clamp limit using rippled's pageLength ranges from Tuning.h:
-	//   binary mode: {16, 2048, 2048}
-	//   JSON mode:   {16, 256, 256}
-	limitRange := LimitLedgerData
-	if request.Binary {
-		limitRange = LimitLedgerDataBinary
-	}
-	limit := ClampLimit(request.Limit, limitRange, ctx.Unlimited)
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	selection, selErr := parseRawLedgerSelector(rawParams, ledgerselector.Current(), lookupLedgerSelectorErrors)
 	if selErr != nil {
 		return nil, selErr
 	}
+	if _, resolveErr := resolveLedgerSelection(ctx, selection); resolveErr != nil {
+		return nil, resolveErr
+	}
+	ledgerIndex := selection.String()
 
 	// Validate a present marker up front, mirroring rippled's doLedgerData which
 	// runs key.parseHex before touching the view: a present non-string marker
@@ -57,9 +51,9 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// a nil any, indistinguishable from an absent marker — is still rejected, as
 	// rippled's isMember + isString checks do.
 	markerStr := ""
-	if request.Marker != nil {
+	if rawMarker, ok := rawParams["marker"]; ok {
 		var m string
-		if err := json.Unmarshal(request.Marker, &m); err != nil {
+		if err := json.Unmarshal(rawMarker, &m); err != nil {
 			return nil, types.RPCErrorExpectedField("marker", "valid")
 		}
 		switch m {
@@ -75,6 +69,17 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		}
 	}
 
+	binary := false
+	if raw, ok := rawParams["binary"]; ok {
+		if err := json.Unmarshal(raw, &binary); err != nil {
+			return nil, types.RPCErrorExpectedField("binary", "boolean")
+		}
+	}
+	limit, limitErr := ledgerDataLimit(rawParams, binary, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
+
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
@@ -88,138 +93,206 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}
 
+	entryType, typeErr := ledgerDataEntryType(rawParams)
+	if typeErr != nil {
+		return nil, typeErr
+	}
+
 	// Build state array based on binary flag
-	state := make([]map[string]any, len(result.State))
-	for i, item := range result.State {
+	state := make([]map[string]any, 0, len(result.State))
+	for _, item := range result.State {
+		if entryType != 0 && ledgerstate.EntryTypeCode(item.Data) != entryType {
+			continue
+		}
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
 
-		if request.Binary {
+		if binary {
 			// Binary format: data as uppercase hex and index
-			state[i] = map[string]any{
+			state = append(state, map[string]any{
 				"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 				"index": upperIndex,
-			}
+			})
 		} else {
 			// JSON format: deserialize the ledger entry
 			jsonObj, err := deserializeLedgerEntry(item.Data)
 			if err != nil {
 				// Fallback to binary format if deserialization fails
-				state[i] = map[string]any{
+				state = append(state, map[string]any{
 					"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 					"index": upperIndex,
-				}
+				})
 			} else {
 				if objMap, ok := jsonObj.(map[string]any); ok {
 					objMap["index"] = upperIndex
-					state[i] = objMap
+					state = append(state, objMap)
 				} else {
-					state[i] = map[string]any{
+					state = append(state, map[string]any{
 						"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 						"index": upperIndex,
-					}
+					})
 				}
 			}
 		}
 	}
 
 	response := map[string]any{
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"state":        state,
-		"validated":    result.Validated,
+		"state": state,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	response["ledger_hash"] = FormatLedgerHash(result.LedgerHash)
+	response["ledger_index"] = result.LedgerIndex
 
 	// Include ledger header info on first query (when no marker was provided)
 	if result.LedgerHeader != nil {
-		if request.Binary {
-			// Binary format: include ledger_data as hex serialization
-			response["ledger"] = map[string]any{
-				"ledger_data": strings.ToUpper(formatLedgerHeaderBinary(result.LedgerHeader)),
-				"closed":      result.LedgerHeader.Closed,
-			}
-		} else {
-			// JSON format: include full ledger header fields
-			response["ledger"] = map[string]any{
-				"account_hash":          FormatLedgerHash(result.LedgerHeader.AccountHash),
-				"close_flags":           result.LedgerHeader.CloseFlags,
-				"close_time":            result.LedgerHeader.CloseTime,
-				"close_time_human":      result.LedgerHeader.CloseTimeHuman,
-				"close_time_iso":        result.LedgerHeader.CloseTimeISO,
-				"close_time_resolution": result.LedgerHeader.CloseTimeResolution,
-				"closed":                result.LedgerHeader.Closed,
-				"ledger_hash":           FormatLedgerHash(result.LedgerHeader.LedgerHash),
-				"ledger_index":          result.LedgerHeader.LedgerIndex,
-				"parent_close_time":     result.LedgerHeader.ParentCloseTime,
-				"parent_hash":           FormatLedgerHash(result.LedgerHeader.ParentHash),
-				"total_coins":           fmt.Sprintf("%d", result.LedgerHeader.TotalCoins),
-				"transaction_hash":      FormatLedgerHash(result.LedgerHeader.TransactionHash),
-			}
-		}
+		response["ledger"] = ledgerDataHeader(result.LedgerHeader, binary, ctx.ApiVersion)
 	}
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker
-		// Include limit in response only when paginating (marker present)
-		response["limit"] = limit
 	}
 
 	return response, nil
 }
 
-// formatLedgerHeaderBinary creates a hex-encoded binary representation of ledger header
-func formatLedgerHeaderBinary(hdr *types.LedgerHeaderInfo) string {
-	// This is a simplified binary format - real implementation would match rippled's serialization
-	buf := make([]byte, 0, 4+8+len(hdr.ParentHash)+len(hdr.TransactionHash)+len(hdr.AccountHash)+4+4+1+1)
+func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *types.RPCError) {
+	maxLimit := uint64(LimitLedgerData.Default)
+	if binary {
+		maxLimit = uint64(LimitLedgerDataBinary.Default)
+	}
+	raw, ok := params["limit"]
+	if !ok {
+		return uint32(maxLimit), nil
+	}
 
-	// Sequence (4 bytes)
-	seqBytes := make([]byte, 4)
-	seqBytes[0] = byte(hdr.LedgerIndex >> 24)
-	seqBytes[1] = byte(hdr.LedgerIndex >> 16)
-	seqBytes[2] = byte(hdr.LedgerIndex >> 8)
-	seqBytes[3] = byte(hdr.LedgerIndex)
-	buf = append(buf, seqBytes...)
+	value := string(raw)
+	if strings.ContainsAny(value, ".eE") || value == "" || value == "null" || value == "true" || value == "false" {
+		return 0, types.RPCErrorExpectedField("limit", "integer")
+	}
+	if strings.HasPrefix(value, "-") {
+		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
+			return 0, types.RPCErrorExpectedField("limit", "integer")
+		}
+		return uint32(maxLimit), nil
+	}
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return 0, types.RPCErrorExpectedField("limit", "integer")
+	}
+	if !unlimited && parsed > maxLimit {
+		parsed = maxLimit
+	}
+	if parsed > uint64(^uint32(0)) {
+		return 0, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	return uint32(parsed), nil
+}
 
-	// Total coins (8 bytes)
-	coinsBytes := make([]byte, 8)
-	coinsBytes[0] = byte(hdr.TotalCoins >> 56)
-	coinsBytes[1] = byte(hdr.TotalCoins >> 48)
-	coinsBytes[2] = byte(hdr.TotalCoins >> 40)
-	coinsBytes[3] = byte(hdr.TotalCoins >> 32)
-	coinsBytes[4] = byte(hdr.TotalCoins >> 24)
-	coinsBytes[5] = byte(hdr.TotalCoins >> 16)
-	coinsBytes[6] = byte(hdr.TotalCoins >> 8)
-	coinsBytes[7] = byte(hdr.TotalCoins)
-	buf = append(buf, coinsBytes...)
+type ledgerDataType struct {
+	canonical string
+	rpc       string
+	code      uint16
+}
 
-	// Parent hash, tx hash, account hash
-	buf = append(buf, hdr.ParentHash[:]...)
-	buf = append(buf, hdr.TransactionHash[:]...)
-	buf = append(buf, hdr.AccountHash[:]...)
+var ledgerDataTypes = [...]ledgerDataType{
+	{"NFTokenOffer", "nft_offer", 0x0037},
+	{"Check", "check", 0x0043},
+	{"DID", "did", 0x0049},
+	{"NegativeUNL", "nunl", 0x004e},
+	{"NFTokenPage", "nft_page", 0x0050},
+	{"SignerList", "signer_list", 0x0053},
+	{"Ticket", "ticket", 0x0054},
+	{"AccountRoot", "account", 0x0061},
+	{"DirectoryNode", "directory", 0x0064},
+	{"Amendments", "amendments", 0x0066},
+	{"LedgerHashes", "hashes", 0x0068},
+	{"Bridge", "bridge", 0x0069},
+	{"Offer", "offer", 0x006f},
+	{"DepositPreauth", "deposit_preauth", 0x0070},
+	{"XChainOwnedClaimID", "xchain_owned_claim_id", 0x0071},
+	{"RippleState", "state", 0x0072},
+	{"FeeSettings", "fee", 0x0073},
+	{"XChainOwnedCreateAccountClaimID", "xchain_owned_create_account_claim_id", 0x0074},
+	{"Escrow", "escrow", 0x0075},
+	{"PayChannel", "payment_channel", 0x0078},
+	{"AMM", "amm", 0x0079},
+	{"MPTokenIssuance", "mpt_issuance", 0x007e},
+	{"MPToken", "mptoken", 0x007f},
+	{"Oracle", "oracle", 0x0080},
+	{"Credential", "credential", 0x0081},
+	{"PermissionedDomain", "permissioned_domain", 0x0082},
+	{"Delegate", "delegate", 0x0083},
+	{"Vault", "vault", 0x0084},
+	{"LoanBroker", "loan_broker", 0x0088},
+	{"Loan", "loan", 0x0089},
+}
 
-	// Parent close time (4 bytes)
-	pctBytes := make([]byte, 4)
-	pct := uint32(hdr.ParentCloseTime)
-	pctBytes[0] = byte(pct >> 24)
-	pctBytes[1] = byte(pct >> 16)
-	pctBytes[2] = byte(pct >> 8)
-	pctBytes[3] = byte(pct)
-	buf = append(buf, pctBytes...)
+func ledgerDataEntryType(params map[string]json.RawMessage) (uint16, *types.RPCError) {
+	raw, ok := params["type"]
+	if !ok {
+		return 0, nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, types.RPCErrorExpectedField("type", "string")
+	}
+	for _, candidate := range ledgerDataTypes {
+		if strings.EqualFold(value, candidate.canonical) || value == candidate.rpc {
+			return candidate.code, nil
+		}
+	}
+	return 0, types.RPCErrorInvalidField("type")
+}
 
-	// Close time (4 bytes)
-	ctBytes := make([]byte, 4)
-	ct := uint32(hdr.CloseTime)
-	ctBytes[0] = byte(ct >> 24)
-	ctBytes[1] = byte(ct >> 16)
-	ctBytes[2] = byte(ct >> 8)
-	ctBytes[3] = byte(ct)
-	buf = append(buf, ctBytes...)
+func ledgerDataHeader(header *types.LedgerHeaderInfo, binary bool, apiVersion int) map[string]any {
+	if binary {
+		ledger := map[string]any{"closed": header.Closed}
+		if !header.Closed {
+			return ledger
+		}
+		rawHeader := ledgerheader.AddRaw(ledgerheader.LedgerHeader{
+			LedgerIndex:         header.LedgerIndex,
+			ParentCloseTime:     protocol.FromRippleTime(uint32(max(header.ParentCloseTime, 0))),
+			ParentHash:          header.ParentHash,
+			TxHash:              header.TransactionHash,
+			AccountHash:         header.AccountHash,
+			Drops:               header.TotalCoins,
+			CloseFlags:          header.CloseFlags,
+			CloseTimeResolution: header.CloseTimeResolution,
+			CloseTime:           protocol.FromRippleTime(uint32(max(header.CloseTime, 0))),
+		}, false)
+		ledger["ledger_data"] = strings.ToUpper(hex.EncodeToString(rawHeader))
+		return ledger
+	}
 
-	// Close time resolution (1 byte) and close flags (1 byte)
-	buf = append(buf, byte(hdr.CloseTimeResolution))
-	buf = append(buf, hdr.CloseFlags)
-
-	return hex.EncodeToString(buf)
+	var ledgerIndex any = header.LedgerIndex
+	if apiVersion <= types.ApiVersion1 {
+		ledgerIndex = strconv.FormatUint(uint64(header.LedgerIndex), 10)
+	}
+	ledger := map[string]any{
+		"parent_hash":  FormatLedgerHash(header.ParentHash),
+		"ledger_index": ledgerIndex,
+		"closed":       header.Closed,
+	}
+	if !header.Closed {
+		return ledger
+	}
+	ledger["account_hash"] = FormatLedgerHash(header.AccountHash)
+	ledger["close_flags"] = header.CloseFlags
+	ledger["close_time"] = header.CloseTime
+	ledger["close_time_resolution"] = header.CloseTimeResolution
+	ledger["ledger_hash"] = FormatLedgerHash(header.LedgerHash)
+	ledger["parent_close_time"] = header.ParentCloseTime
+	ledger["total_coins"] = fmt.Sprintf("%d", header.TotalCoins)
+	ledger["transaction_hash"] = FormatLedgerHash(header.TransactionHash)
+	if header.CloseTime != 0 {
+		ledger["close_time_human"] = header.CloseTimeHuman
+		ledger["close_time_iso"] = header.CloseTimeISO
+		if header.CloseFlags&ledgerheader.LCFNoConsensusTime != 0 {
+			ledger["close_time_estimated"] = true
+		}
+	}
+	return ledger
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format

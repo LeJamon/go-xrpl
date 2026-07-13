@@ -24,11 +24,27 @@ const counterpartySignatureField = "CounterpartySignature"
 // signCredentials holds the signing credential parameters common to both
 // the sign and submit RPC methods.
 type signCredentials struct {
-	Secret     string
-	Seed       string
-	SeedHex    string
-	Passphrase string
-	KeyType    string
+	Secret     string `json:"secret,omitempty"`
+	Seed       string `json:"seed,omitempty"`
+	SeedHex    string `json:"seed_hex,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
+	KeyType    string `json:"key_type,omitempty"`
+}
+
+func (c signCredentials) any() bool {
+	return c.Secret != "" || c.Seed != "" || c.SeedHex != "" || c.Passphrase != ""
+}
+
+func (c signCredentials) deriveKeypair(apiVersion int) (string, string, *types.RPCError) {
+	return parseCredentialsAndDeriveKeypair(c.Secret, c.Seed, c.SeedHex, c.Passphrase, c.KeyType, apiVersion)
+}
+
+type signingRequest struct {
+	signCredentials
+	TxJson          json.RawMessage `json:"tx_json"`
+	Offline         bool            `json:"offline,omitempty"`
+	BuildPath       bool            `json:"build_path,omitempty"`
+	SignatureTarget string          `json:"signature_target,omitempty"`
 }
 
 // feeOptions holds the fee_mult_max and fee_div_max parameters for auto-fee.
@@ -149,6 +165,29 @@ type signResult struct {
 	TxBlob string         // The hex-encoded signed transaction blob
 }
 
+func formatSignResult(result signResult, apiVersion int) map[string]any {
+	injectDeliverMax(result.TxMap, apiVersion)
+	response := map[string]any{
+		"tx_blob": result.TxBlob,
+		"tx_json": result.TxMap,
+	}
+	if apiVersion > 1 {
+		if hash, ok := result.TxMap["hash"].(string); ok {
+			response["hash"] = hash
+		}
+	}
+	return response
+}
+
+func submitWithFailHard(ledger types.LedgerService, txJSON []byte, txBlob string, failHard bool) (*types.SubmitResult, error) {
+	if failHard {
+		if submitter, ok := ledger.(types.FailHardSubmitter); ok {
+			return submitter.SubmitTransactionFailHard(txJSON, txBlob)
+		}
+	}
+	return ledger.SubmitTransaction(txJSON, txBlob)
+}
+
 // signTransactionJSON takes a raw tx_json and signing credentials, derives the
 // keypair, auto-fills missing fields (unless offline), signs the transaction,
 // and returns the signed tx map + blob. This is the shared logic used by both
@@ -165,14 +204,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	}
 
 	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, rpcErr := parseCredentialsAndDeriveKeypair(
-		creds.Secret,
-		creds.Seed,
-		creds.SeedHex,
-		creds.Passphrase,
-		creds.KeyType,
-		apiVersion,
-	)
+	privateKey, publicKey, rpcErr := creds.deriveKeypair(apiVersion)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -292,7 +324,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 				}
 				return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to autofill fee: %v", feeErr))
 			}
-			txMap["Fee"] = formatUint64AsString(fee)
+			txMap["Fee"] = strconv.FormatUint(fee, 10)
 		}
 	} else {
 		// Offline callers must supply Sequence and Fee themselves

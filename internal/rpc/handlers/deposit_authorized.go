@@ -15,14 +15,13 @@ import (
 const maxCredentialsArraySize = 8
 
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
-type DepositAuthorizedMethod struct{}
+type DepositAuthorizedMethod struct{ BaseHandler }
 
 func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
 		SourceAccount      string          `json:"source_account"`
 		DestinationAccount string          `json:"destination_account"`
 		Credentials        json.RawMessage `json:"credentials,omitempty"`
-		types.LedgerSpecifier
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -65,7 +64,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawM
 
 	// Determine ledger index to use. rippled's lookupLedger defaults to the
 	// open ("current") ledger in the absence of ledger_index/ledger_hash.
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -107,7 +106,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawM
 		"destination_account": result.DestinationAccount,
 		"deposit_authorized":  result.DepositAuthorized,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	// Echo credentials in response if provided (matches rippled)
 	if len(credentials) > 0 {
@@ -155,14 +154,6 @@ func parseCredentialsFormat(raw json.RawMessage) ([]string, *types.RPCError) {
 	}
 
 	return credentials, nil
-}
-
-func (m *DepositAuthorizedMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *DepositAuthorizedMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *DepositAuthorizedMethod) RequiredCondition() types.Condition {

@@ -233,3 +233,56 @@ Verification:
 - `just build`, `just vet`, and `just lint` pass; lint reports 0 issues.
 - The staged merge has no unmerged paths, conflict markers, or whitespace
   errors.
+
+# Issue #1304 — DRY D1+D2 consolidation
+
+Target: `v3.0.0`. Protocol oracle: local rippled tag `3.2.0`
+(`3c43f4614f87965298773279ff5b85d4c56c637b`). The user approved one large PR.
+
+## Plan
+
+- [x] Inventory every D1/D2 duplication named in the issue and record existing
+      behavioral differences before selecting shared abstractions.
+- [x] Consolidate RPC error construction, handler metadata, account-query error
+      mapping, websocket envelopes, and book-offers pagination without changing
+      response JSON.
+- [x] Add canonical protocol time and Hash256 helpers; remove duplicated
+      consensus parameters, frame encoding, ledger-sync tracking, fee defaults,
+      dead relational retry settings, and state-diff computation.
+- [x] Golden-test ledger-header bytes, then route every serializer through
+      `header.AddRaw`.
+- [x] Consolidate ledger selection across RPC and gRPC while preserving each
+      endpoint's validated/current/error semantics and pagination behavior.
+- [x] Consolidate transaction rendering/decoding/sign-submit seams while
+      preserving `close_time_iso`, CTID, and response-field compatibility.
+- [x] Run formatting and focused tests after each subsystem; compare all
+      protocol-bearing behavior with rippled `3.2.0`.
+- [x] Run `just build-all`, `just build-nocgo`, `just vet`, `just lint`, full
+      tests, and conformance; review the complete diff for correctness and scope.
+- [x] Commit only intentional files, push `feat/issue-1304-dry-sweep`, and open
+      one PR with base `v3.0.0`.
+
+## Review
+
+- Implemented the complete D1+D2 sweep as one branch based on
+  `origin/v3.0.0` (`48bc716f7f9f9d92a07a494500b7294547f505ac`).
+- Verified protocol behavior against the clean local rippled `3.2.0` checkout
+  at `3c43f4614f87965298773279ff5b85d4c56c637b`, including ledger lookup and
+  freshness, RPC error precedence and response shape, transaction ranges and
+  CTIDs, account pagination, ledger-header serialization, message framing,
+  consensus parameters, and validation-quorum rechecks.
+- `just fmt`, `git diff --check`, `just build-all`, `just build-nocgo`,
+  `just vet`, and `just lint` pass; lint reports 0 issues. Go and linter caches
+  were redirected to `/private/tmp` because the sandbox cannot write the user
+  cache directories.
+- Focused tests pass for all touched core and RPC packages. The race detector
+  passes for RPC, ledger service/selector, consensus validation/adaptor, gRPC,
+  and node integration.
+- `just test` passes every package except `internal/testing/conformance`, whose
+  known out-of-scope Batch/Vault/XChain failures make the aggregate command
+  return non-zero. `just conformance --failing` reports 941 pass / 117 fail
+  overall, with all 879 in-scope tests passing and all 117 failures confined to
+  the existing out-of-scope list.
+- Re-fetched `origin/v3.0.0`; the branch base and merge-base remain
+  `48bc716f7f9f9d92a07a494500b7294547f505ac`. No conflict markers, whitespace
+  errors, or unrelated worktree changes are present.

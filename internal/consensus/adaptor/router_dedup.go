@@ -18,7 +18,7 @@ import (
 //   - proposeSeq (big-endian uint32)
 //   - closeTime as an XRPL NetClock count — seconds since the XRPL epoch
 //     (2000-01-01 UTC), NOT Unix epoch. Derived from Proposal.CloseTime
-//     via Unix() - protocol.RippleEpochUnix, big-endian uint32.
+//     via protocol.ToRippleTime, big-endian uint32.
 //   - publicKey (VL length prefix + raw bytes)
 //   - signature (VL length prefix + raw bytes)
 //
@@ -39,14 +39,7 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 	buf = append(buf, p.PreviousLedger[:]...)
 	buf = binary.BigEndian.AppendUint32(buf, p.Position)
 	// closeTime as the XRPL NetClock count (seconds since 2000-01-01).
-	// Negative pre-epoch times cannot occur for a well-formed proposal
-	// (signing time is always post-epoch); clamp at zero so a bogus
-	// pre-epoch Time still produces a deterministic hash rather than
-	// wrapping to a large positive uint32.
-	var closeTimeSec uint32
-	if ct := p.CloseTime.Unix() - protocol.RippleEpochUnix; ct > 0 {
-		closeTimeSec = uint32(ct)
-	}
+	closeTimeSec := protocol.ToRippleTime(p.CloseTime)
 	buf = binary.BigEndian.AppendUint32(buf, closeTimeSec)
 	// Hash the wire signing pubkey, NOT the master-derived NodeID: using
 	// NodeID would break suppression-hash parity with other peers.

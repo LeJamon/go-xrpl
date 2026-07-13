@@ -103,7 +103,6 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 
 func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
-		types.LedgerSpecifier
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -114,7 +113,7 @@ func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	// RPC::lookupLedger): defaults to current, threads ledger_hash, and rejects
 	// a malformed numeric ledger_index with ledgerIndexMalformed instead of
 	// silently falling back.
-	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	targetLedger, _, lerr := LookupLedger(ctx, params)
 	if lerr != nil {
 		return nil, lerr
 	}

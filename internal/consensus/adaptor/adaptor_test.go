@@ -479,6 +479,75 @@ func TestAdaptor_OnLedgerFullyValidated_HashMismatchIsNoop(t *testing.T) {
 		"validated_ledger must not flip to a hash we don't hold")
 }
 
+func TestValidatedSignTimeUsesSampleMedian(t *testing.T) {
+	a := newTestAdaptor(t)
+	a.quorum = 2
+	ledgerID := consensus.LedgerID{0x42}
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	t1 := t0.Add(10 * time.Second)
+	a.SetValidationHistorian(&stubHistorian{byLedger: map[consensus.LedgerID][]*consensus.Validation{
+		ledgerID: {
+			{LedgerSeq: 7, Full: true, SignTime: t1.Add(900 * time.Millisecond)},
+			{LedgerSeq: 7, Full: true, SignTime: t0.Add(500 * time.Millisecond)},
+			{LedgerSeq: 7, SignTime: t0.Add(-time.Hour)},
+			{LedgerSeq: 8, Full: true, SignTime: t0.Add(time.Hour)},
+		},
+	}})
+
+	assert.Equal(t, t0.Add(5*time.Second), a.validatedSignTime(ledgerID, 7))
+
+	a.quorum = 0
+	a.SetValidationHistorian(&stubHistorian{})
+	assert.True(t, a.validatedSignTime(ledgerID, 7).IsZero())
+}
+
+type recheckingHistorian struct {
+	*stubHistorian
+	validations []*consensus.Validation
+	quorum      int
+	accepted    bool
+	calls       int
+	gotLedgerID consensus.LedgerID
+	gotSeq      uint32
+}
+
+func (h *recheckingHistorian) RecheckFullyValidated(
+	ledgerID consensus.LedgerID,
+	seq uint32,
+) ([]*consensus.Validation, int, bool) {
+	h.calls++
+	h.gotLedgerID = ledgerID
+	h.gotSeq = seq
+	return h.validations, h.quorum, h.accepted
+}
+
+func TestPendingValidationResolverUsesFreshValidationSnapshot(t *testing.T) {
+	t0 := time.Unix(1_700_000_000, 0).UTC()
+	historian := &recheckingHistorian{
+		stubHistorian: &stubHistorian{},
+		validations: []*consensus.Validation{
+			{LedgerSeq: 7, Full: true, SignTime: t0.Add(500 * time.Millisecond)},
+			{LedgerSeq: 7, Full: true, SignTime: t0.Add(10*time.Second + 900*time.Millisecond)},
+		},
+		quorum:   2,
+		accepted: true,
+	}
+
+	resolver := newPendingValidationResolver(historian)
+	signTime, accepted := resolver(7, [32]byte{0x42})
+	assert.True(t, accepted)
+	assert.Equal(t, t0.Add(5*time.Second), signTime)
+	assert.Equal(t, 1, historian.calls)
+	assert.Equal(t, consensus.LedgerID{0x42}, historian.gotLedgerID)
+	assert.Equal(t, uint32(7), historian.gotSeq)
+
+	historian.accepted = false
+	signTime, accepted = resolver(7, [32]byte{0x42})
+	assert.False(t, accepted)
+	assert.True(t, signTime.IsZero())
+	assert.Equal(t, 2, historian.calls)
+}
+
 // TestGetParentLedgerForReplay_RejectsOpenLedger guards against the
 // replay-delta live-lock that bit goxrpl-1 in the consensus enclave.
 // When LCL is at seq N-1 and openLedger is at seq N, asking for the

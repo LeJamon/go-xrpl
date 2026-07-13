@@ -41,7 +41,7 @@ func (f *snd_fakeOverlay) BroadcastValidation(v *consensus.Validation) error {
 func (f *snd_fakeOverlay) BroadcastStatusChange(sc *message.StatusChange) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	frame, err := encodeFrame(message.TypeStatusChange, sc)
+	frame, err := message.EncodeFrame(sc)
 	if err != nil {
 		return err
 	}

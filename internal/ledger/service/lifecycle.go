@@ -82,6 +82,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	closedLedgerHash := s.openLedger.Hash()
 	s.closedLedger = s.openLedger
 	s.validatedLedger = s.openLedger
+	s.validatedSignTime = s.openLedger.CloseTime()
 	s.putHistoryLocked(s.openLedger)
 	s.evictOldHistoryLocked(closedSeq)
 
@@ -583,12 +584,18 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 // different hash than we closed at this seq, our ledger is on the wrong fork and
 // must NOT be flipped to validated.
 func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
+	s.SetValidatedLedgerAt(seq, expectedHash, time.Time{})
+}
+
+// SetValidatedLedgerAt marks a ledger validated using the trusted-validation
+// signing-time median. A zero signing time falls back to the ledger close time.
+func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
 	s.mu.Lock()
 	l, ok := s.ledgerHistory[seq]
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
 	// or "different-hash" (same-height fork) — both stash and arm acquisition.
 	if !ok || l.Hash() != expectedHash {
-		s.stashPendingLedgerValidationLocked(seq, expectedHash)
+		s.stashPendingLedgerValidationLocked(seq, expectedHash, signTime)
 		// Capture handler under lock; fire when seq > last validated seq.
 		// Gating on closedSeq instead wedged recovery when the node ran ahead
 		// on a private chain (closedSeq >> the divergent canonical seq).
@@ -621,6 +628,10 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 		return
 	}
 	s.validatedLedger = l
+	if signTime.IsZero() {
+		signTime = l.CloseTime()
+	}
+	s.validatedSignTime = signTime
 	s.evictOldHistoryLocked(seq)
 
 	// Sweep the held local pool against the just-validated ledger (not every

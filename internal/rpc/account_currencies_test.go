@@ -148,7 +148,7 @@ func (m *mockAccountCurrenciesLedgerService) GetAccountCurrencies(_ context.Cont
 		Validated:         true,
 	}, nil
 }
-func (m *mockAccountCurrenciesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockAccountCurrenciesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountCurrenciesLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -573,9 +573,9 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	// Verify all required fields are present
-	assert.Contains(t, resp, "ledger_hash")
-	assert.Contains(t, resp, "ledger_index")
+	assert.Contains(t, resp, "ledger_current_index")
+	assert.NotContains(t, resp, "ledger_hash")
+	assert.NotContains(t, resp, "ledger_index")
 	assert.Contains(t, resp, "receive_currencies")
 	assert.Contains(t, resp, "send_currencies")
 	assert.Contains(t, resp, "validated")

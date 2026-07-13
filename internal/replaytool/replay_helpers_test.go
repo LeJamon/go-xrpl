@@ -3,6 +3,7 @@ package replaytool
 import (
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,29 +11,12 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // feeSettingsIndexHex is keylet::fees() — the singleton FeeSettings key the
 // replay fee extractors look the entry up by.
 const feeSettingsIndexHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A651"
-
-func TestParseHexOrDecimal(t *testing.T) {
-	cases := []struct {
-		in   string
-		want uint64
-		ok   bool
-	}{
-		{"255", 255, true},
-		{"0x1F", 31, true},
-		{"0", 0, true},
-	}
-	for _, tc := range cases {
-		got, err := parseHexOrDecimal(tc.in)
-		if (err == nil) != tc.ok || got != tc.want {
-			t.Errorf("parseHexOrDecimal(%q) = (%d,%v) want (%d,ok=%v)", tc.in, got, err, tc.want, tc.ok)
-		}
-	}
-}
 
 func TestParseDrops(t *testing.T) {
 	if got, err := parseDrops("12345"); err != nil || got != 12345 {
@@ -40,23 +24,6 @@ func TestParseDrops(t *testing.T) {
 	}
 	if _, err := parseDrops("not-a-number"); err == nil {
 		t.Error("expected error for non-numeric drops")
-	}
-}
-
-func TestHexToHash32(t *testing.T) {
-	good := "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
-	h, err := hexToHash32(good)
-	if err != nil {
-		t.Fatalf("hexToHash32: %v", err)
-	}
-	if h[0] != 0x00 || h[1] != 0x11 || h[31] != 0xFF {
-		t.Errorf("unexpected hash bytes: %x", h)
-	}
-	if _, err := hexToHash32("00"); err == nil {
-		t.Error("expected length error for short hex")
-	}
-	if _, err := hexToHash32("zz"); err == nil {
-		t.Error("expected decode error for non-hex")
 	}
 }
 
@@ -179,6 +146,24 @@ func TestLoadJSON(t *testing.T) {
 	}
 	if err := loadJSON(filepath.Join(dir, "missing.json"), &sf); err == nil {
 		t.Error("expected error for missing file")
+	}
+}
+
+func TestReplayCloseTimeBounds(t *testing.T) {
+	for _, seconds := range []int64{0, math.MaxUint32} {
+		got, err := replayCloseTime(seconds)
+		if err != nil {
+			t.Fatalf("replayCloseTime(%d): %v", seconds, err)
+		}
+		if want := protocol.FromRippleTime(uint32(seconds)); !got.Equal(want) {
+			t.Errorf("replayCloseTime(%d) = %v, want %v", seconds, got, want)
+		}
+	}
+
+	for _, seconds := range []int64{-1, math.MaxUint32 + 1} {
+		if _, err := replayCloseTime(seconds); err == nil {
+			t.Errorf("replayCloseTime(%d) succeeded", seconds)
+		}
 	}
 }
 

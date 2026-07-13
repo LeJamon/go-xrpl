@@ -380,7 +380,7 @@ func New(cfg Config) *Adaptor {
 		negUNLVoter = negativeunlvote.NewVoter(cfg.Identity.NodeID)
 	}
 
-	return &Adaptor{
+	a := &Adaptor{
 		ledgerService:     cfg.LedgerService,
 		sender:            sender,
 		identity:          cfg.Identity,
@@ -404,6 +404,10 @@ func New(cfg Config) *Adaptor {
 		relayValidations:  cfg.RelayValidations,
 		logger:            logger,
 	}
+	if cfg.LedgerService != nil {
+		cfg.LedgerService.SetValidatedLedgerAgeClock(a.Now)
+	}
+	return a
 }
 
 // SetValidationHistorian wires per-ledger trusted-validation lookups into the
@@ -411,8 +415,29 @@ func New(cfg Config) *Adaptor {
 // Until set, GenerateNegativeUNLPseudoTx emits no votes.
 func (a *Adaptor) SetValidationHistorian(h consensus.ValidationHistorian) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.validationHistorian = h
+	a.mu.Unlock()
+
+	if a.ledgerService == nil {
+		return
+	}
+	rechecker, ok := h.(consensus.ValidationQuorumRechecker)
+	if !ok {
+		a.ledgerService.SetPendingValidationResolver(nil)
+		return
+	}
+	a.ledgerService.SetPendingValidationResolver(newPendingValidationResolver(rechecker))
+}
+
+func newPendingValidationResolver(rechecker consensus.ValidationQuorumRechecker) service.PendingValidationResolver {
+	return func(seq uint32, hash [32]byte) (time.Time, bool) {
+		validations, _, accepted := rechecker.RecheckFullyValidated(consensus.LedgerID(hash), seq)
+		if !accepted {
+			return time.Time{}, false
+		}
+		signTime, count := sampleValidatedSignTime(validations, seq)
+		return signTime, count > 0
+	}
 }
 
 // UpdatePeerLCL records the last-closed-ledger hash a peer reported via

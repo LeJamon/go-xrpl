@@ -16,6 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 var errNotImplemented = errors.New("rpcenv: LedgerService method not implemented — extend the adapter when adding a consumer test")
@@ -344,7 +345,7 @@ func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string,
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32) (*types.AccountNFTsResult, error) {
+func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -391,22 +392,14 @@ func (r *ledgerReaderAdapter) IsValidated() bool {
 func (r *ledgerReaderAdapter) TotalDrops() uint64 { return r.l.TotalDrops() }
 
 func (r *ledgerReaderAdapter) CloseTime() int64 {
-	t := r.l.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return rippleEpochSeconds(t)
+	return protocol.RippleSeconds(r.l.CloseTime())
 }
 
 func (r *ledgerReaderAdapter) CloseTimeResolution() uint32 { return r.l.Header().CloseTimeResolution }
 func (r *ledgerReaderAdapter) CloseFlags() uint8           { return r.l.Header().CloseFlags }
 
 func (r *ledgerReaderAdapter) ParentCloseTime() int64 {
-	t := r.l.ParentCloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return rippleEpochSeconds(t)
+	return protocol.RippleSeconds(r.l.ParentCloseTime())
 }
 
 func (r *ledgerReaderAdapter) TxMapHash() [32]byte {

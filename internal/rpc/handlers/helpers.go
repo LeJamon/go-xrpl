@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // RequireLedgerService checks that the ledger service is available
@@ -137,16 +138,9 @@ func ValidateAccount(account string) *types.RPCError {
 	return nil
 }
 
-// normalizeLedgerSpecifier folds rippled's legacy combined `ledger` field into
-// LedgerHash/LedgerIndex (RPCHelpers.cpp:367-374): a string longer than 12
-// characters becomes a ledger_hash, anything else a ledger_index. When present,
-// the legacy field overwrites the matching slot even if an explicit ledger_hash
-// or ledger_index was also supplied, leaving the other slot untouched; the
-// hash-before-index resolution that follows then gives a long legacy `ledger`
-// priority over an explicit ledger_index, matching rippled.
 func normalizeLedgerSpecifier(spec types.LedgerSpecifier) types.LedgerSpecifier {
 	if spec.Ledger != "" {
-		if legacy := spec.Ledger.String(); len(legacy) > 12 {
+		if legacy := spec.Ledger.String(); len(legacy) == 64 {
 			spec.LedgerHash = legacy
 		} else {
 			spec.LedgerIndex = spec.Ledger
@@ -156,98 +150,278 @@ func normalizeLedgerSpecifier(spec types.LedgerSpecifier) types.LedgerSpecifier 
 	return spec
 }
 
-// resolveLedgerSelector returns the string ledger selector the service query
-// path expects, mirroring rippled's ledgerFromRequest (RPCHelpers.cpp:367-402).
-// ledger_hash takes precedence over ledger_index when both are supplied, and the
-// hash is threaded through verbatim so the service resolves the specific named
-// ledger (its 64-char-hex branch) rather than collapsing to the latest validated
-// one. A malformed hash maps to rpcINVALID_PARAMS, matching rippled's
-// ledgerHashMalformed. With neither field set the request falls back to the open
-// "current" ledger.
-func resolveLedgerSelector(spec types.LedgerSpecifier) (string, *types.RPCError) {
-	spec = normalizeLedgerSpecifier(spec)
-	if spec.LedgerHash != "" {
-		if len(spec.LedgerHash) != 64 {
-			return "", types.RPCErrorInvalidParams("ledgerHashMalformed")
-		}
-		if _, err := hex.DecodeString(spec.LedgerHash); err != nil {
-			return "", types.RPCErrorInvalidParams("ledgerHashMalformed")
-		}
-		return spec.LedgerHash, nil
+func resolveLedgerSelector(params json.RawMessage) (string, *types.RPCError) {
+	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if rpcErr != nil {
+		return "", rpcErr
 	}
-	if spec.LedgerIndex != "" {
-		return spec.LedgerIndex.String(), nil
-	}
-	return "current", nil
+	return selection.String(), nil
 }
 
-// LookupLedger resolves the ledger a request targets and returns the reader plus
-// whether that ledger is validated, mirroring rippled's RPC::lookupLedger /
-// ledgerFromRequest (RPCHelpers.cpp:355-402). ledger_hash takes precedence over
-// ledger_index; with neither supplied it defaults to the open (current) ledger.
-// Errors use rippled's tokens: ledgerHashMalformed / ledgerIndexMalformed
-// (rpcINVALID_PARAMS) for bad selectors and ledgerNotFound (rpcLGR_NOT_FOUND)
-// for an absent ledger. It is the single resolution point the direct-ledger
-// handlers share in place of hand-rolled validated/current/closed/numeric
-// switches.
-func LookupLedger(ctx *types.RPCContext, spec types.LedgerSpecifier) (types.LedgerReader, bool, *types.RPCError) {
+func preflightAccountPage(
+	ctx *types.RPCContext,
+	params json.RawMessage,
+	account string,
+	internalDetail string,
+) (string, *types.RPCError) {
+	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if rpcErr != nil {
+		return "", rpcErr
+	}
+	ledgerIndex := selection.String()
+	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, ledgerIndex); err != nil {
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			switch selection.Kind() {
+			case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
+				if ctx.ApiVersion <= types.ApiVersion1 {
+					return "", types.RPCErrorNoNetwork("InsufficientNetworkMode")
+				}
+				return "", types.RPCErrorNotSynced("notSynced")
+			}
+		}
+		return "", mapAccountQueryErr(err, internalDetail)
+	}
+	if rpcErr := ValidateAccount(account); rpcErr != nil {
+		return "", rpcErr
+	}
+	return ledgerIndex, nil
+}
+
+func accountPageParams(params json.RawMessage) (map[string]json.RawMessage, string, *types.RPCError) {
+	var fields map[string]json.RawMessage
+	if len(params) > 0 && !isJSONNull(params) {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, "", types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
+	rawAccount, ok := fields["account"]
+	if !ok {
+		return fields, "", types.RPCErrorMissingField("account")
+	}
+	var account string
+	if isJSONNull(rawAccount) || json.Unmarshal(rawAccount, &account) != nil {
+		return fields, "", types.RPCErrorInvalidField("account")
+	}
+	return fields, account, nil
+}
+
+func legacyBoolValue(raw json.RawMessage) bool {
+	if raw == nil || isJSONNull(raw) {
+		return false
+	}
+	var value any
+	if json.Unmarshal(raw, &value) != nil {
+		return false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return typed != ""
+	case float64:
+		return typed != 0
+	default:
+		return false
+	}
+}
+
+func parseLedgerSelectorParams(
+	params json.RawMessage,
+	defaultSelection ledgerselector.Selector,
+) (ledgerselector.Selector, *types.RPCError) {
+	if len(params) == 0 || isJSONNull(params) {
+		return defaultSelection, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+	}
+	return parseRawLedgerSelector(raw, defaultSelection, lookupLedgerSelectorErrors)
+}
+
+func parseLedgerSelector(
+	spec types.LedgerSpecifier,
+	defaultSelection ledgerselector.Selector,
+) (ledgerselector.Selector, *types.RPCError) {
+	if spec.Ledger != "" && (spec.LedgerHash != "" || spec.LedgerIndex != "") {
+		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
+			"Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.",
+		)
+	}
+	if spec.LedgerHash != "" && spec.LedgerIndex != "" {
+		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
+			"Exactly one of 'ledger_hash' or 'ledger_index' can be specified.",
+		)
+	}
+	spec = normalizeLedgerSpecifier(spec)
+	if spec.LedgerHash != "" {
+		selection, err := ledgerselector.ParseHash(spec.LedgerHash)
+		if err != nil {
+			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledgerHashMalformed")
+		}
+		return selection, nil
+	}
+	if spec.LedgerIndex != "" {
+		selection, err := ledgerselector.ParseIndex(spec.LedgerIndex.String())
+		if err != nil || selection.Kind() == ledgerselector.KindAbsent {
+			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledgerIndexMalformed")
+		}
+		return selection, nil
+	}
+	return defaultSelection, nil
+}
+
+type rawLedgerSelectorErrors struct {
+	hashType       func() *types.RPCError
+	hashMalformed  func() *types.RPCError
+	indexType      func(field string) *types.RPCError
+	indexMalformed func(field string) *types.RPCError
+}
+
+var lookupLedgerSelectorErrors = rawLedgerSelectorErrors{
+	hashType: func() *types.RPCError {
+		return types.RPCErrorExpectedField("ledger_hash", "hex string")
+	},
+	hashMalformed: func() *types.RPCError {
+		return types.RPCErrorExpectedField("ledger_hash", "hex string")
+	},
+	indexType: func(field string) *types.RPCError {
+		return types.RPCErrorExpectedField(field, "string or number")
+	},
+	indexMalformed: func(field string) *types.RPCError {
+		return types.RPCErrorExpectedField(field, "string or number")
+	},
+}
+
+func parseRawLedgerSelector(
+	raw map[string]json.RawMessage,
+	defaultSelection ledgerselector.Selector,
+	errorStyle rawLedgerSelectorErrors,
+) (ledgerselector.Selector, *types.RPCError) {
+	rawLedger, hasLedger := raw["ledger"]
+	rawHash, hasHash := raw["ledger_hash"]
+	rawIndex, hasIndex := raw["ledger_index"]
+	selectorCount := 0
+	for _, present := range []bool{hasLedger, hasHash, hasIndex} {
+		if present {
+			selectorCount++
+		}
+	}
+	if selectorCount > 1 {
+		if hasLedger {
+			return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
+				"Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.",
+			)
+		}
+		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
+			"Exactly one of 'ledger_hash' or 'ledger_index' can be specified.",
+		)
+	}
+	if selectorCount == 0 {
+		return defaultSelection, nil
+	}
+
+	spec := types.LedgerSpecifier{}
+	if hasHash {
+		if isJSONNull(rawHash) || json.Unmarshal(rawHash, &spec.LedgerHash) != nil {
+			return ledgerselector.Selector{}, errorStyle.hashType()
+		}
+		selection, err := ledgerselector.ParseHash(spec.LedgerHash)
+		if err != nil {
+			return ledgerselector.Selector{}, errorStyle.hashMalformed()
+		}
+		return selection, nil
+	}
+
+	field := "ledger_index"
+	value := rawIndex
+	if hasLedger {
+		field = "ledger"
+		value = rawLedger
+	}
+	var index types.LedgerIndex
+	if isJSONNull(value) || json.Unmarshal(value, &index) != nil {
+		return ledgerselector.Selector{}, errorStyle.indexType(field)
+	}
+	parse := ledgerselector.ParseIndex
+	if hasLedger {
+		parse = ledgerselector.Parse
+	}
+	selection, err := parse(index.String())
+	if err != nil || selection.Kind() == ledgerselector.KindAbsent {
+		return ledgerselector.Selector{}, errorStyle.indexMalformed(field)
+	}
+	return selection, nil
+}
+
+func resolveLedgerSelection(
+	ctx *types.RPCContext,
+	selection ledgerselector.Selector,
+) (ledgerselector.Result[types.LedgerReader], *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, false, err
+		return ledgerselector.Result[types.LedgerReader]{}, err
 	}
 	svc := ctx.Services.Ledger
-	spec = normalizeLedgerSpecifier(spec)
 
-	if spec.LedgerHash != "" {
-		if len(spec.LedgerHash) != 64 {
-			return nil, false, types.RPCErrorInvalidParams("ledgerHashMalformed")
+	bySequence := func(sequence uint32) (types.LedgerReader, bool, error) {
+		reader, err := svc.GetLedgerBySequence(sequence)
+		return reader, reader != nil, err
+	}
+	byHash := func(hash [32]byte) (types.LedgerReader, bool, error) {
+		reader, err := svc.GetLedgerByHash(hash)
+		return reader, reader != nil, err
+	}
+	current := func() (types.LedgerReader, bool, error) {
+		return bySequence(svc.GetCurrentLedgerIndex())
+	}
+	closed := func() (types.LedgerReader, bool, error) {
+		return bySequence(svc.GetClosedLedgerIndex())
+	}
+	validated := func() (types.LedgerReader, bool, error) {
+		sequence := svc.GetValidatedLedgerIndex()
+		if sequence == 0 {
+			return nil, false, nil
 		}
-		hashBytes, err := hex.DecodeString(spec.LedgerHash)
-		if err != nil {
-			return nil, false, types.RPCErrorInvalidParams("ledgerHashMalformed")
-		}
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-		l, err := svc.GetLedgerByHash(hash)
-		if err != nil || l == nil {
-			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return l, l.IsValidated(), nil
+		return bySequence(sequence)
 	}
 
-	switch idx := spec.LedgerIndex.String(); idx {
-	case "", "current":
-		l, err := svc.GetLedgerBySequence(svc.GetCurrentLedgerIndex())
-		if err != nil || l == nil {
-			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
+	resolved, err := ledgerselector.Resolve(selection, ledgerselector.Callbacks[types.LedgerReader]{
+		Absent:     current,
+		Current:    current,
+		Closed:     closed,
+		Validated:  validated,
+		BySequence: bySequence,
+		ByHash:     byHash,
+	})
+	if err != nil {
+		switch selection.Kind() {
+		case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
+			if ctx.ApiVersion <= types.ApiVersion1 {
+				return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorNoNetwork("InsufficientNetworkMode")
+			}
+			return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorNotSynced("notSynced")
 		}
-		return l, false, nil
-	case "validated":
-		seq := svc.GetValidatedLedgerIndex()
-		if seq == 0 {
-			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		l, err := svc.GetLedgerBySequence(seq)
-		if err != nil || l == nil {
-			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return l, true, nil
-	case "closed":
-		l, err := svc.GetLedgerBySequence(svc.GetClosedLedgerIndex())
-		if err != nil || l == nil {
-			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return l, l.IsValidated(), nil
-	default:
-		seq, perr := strconv.ParseUint(idx, 10, 32)
-		if perr != nil {
-			return nil, false, types.RPCErrorInvalidParams("ledgerIndexMalformed")
-		}
-		l, err := svc.GetLedgerBySequence(uint32(seq))
-		if err != nil || l == nil {
-			return nil, false, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return l, l.IsValidated(), nil
+		return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorLgrNotFound("ledgerNotFound")
 	}
+	if selection.Kind() == ledgerselector.KindCurrent || selection.Kind() == ledgerselector.KindAbsent {
+		resolved.Validated = false
+	} else if selection.Kind() == ledgerselector.KindValidated {
+		resolved.Validated = true
+	}
+	return resolved, nil
+}
+
+// LookupLedger resolves a request's ledger selector, defaulting to current.
+func LookupLedger(ctx *types.RPCContext, params json.RawMessage) (types.LedgerReader, bool, *types.RPCError) {
+	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+	if rpcErr != nil {
+		return nil, false, rpcErr
+	}
+	resolved, rpcErr := resolveLedgerSelection(ctx, selection)
+	if rpcErr != nil {
+		return nil, false, rpcErr
+	}
+	return resolved.Value, resolved.Validated, nil
 }
 
 // mapLedgerLookupErr maps the ledger-resolution errors a ledger-backed account
@@ -268,17 +442,33 @@ func mapLedgerLookupErr(err error) *types.RPCError {
 	return nil
 }
 
-// markerString extracts the opaque pagination marker from a request's
-// PaginationParams.Marker (decoded as `any`). A nil marker means "first page";
-// a non-string marker is rejected as rippled's expected_field_error(marker,
-// "string"). The service validates the marker's contents (a 64-hex ledger-state
-// key).
-func markerString(marker any) (string, *types.RPCError) {
+func mapAccountQueryErr(err error, internalDetail string) *types.RPCError {
+	if rpcErr := mapLedgerLookupErr(err); rpcErr != nil {
+		return rpcErr
+	}
+	switch {
+	case errors.Is(err, svcerr.ErrAccountMalformed):
+		return types.RPCErrorActMalformed("Account malformed.")
+	case errors.Is(err, svcerr.ErrAccountNotFound):
+		return types.RPCErrorActNotFound("Account not found.")
+	case errors.Is(err, svcerr.ErrInvalidMarker):
+		return types.RPCErrorInvalidField("marker")
+	default:
+		return types.RPCErrorInternal(internalDetail)
+	}
+}
+
+// markerString extracts an opaque pagination marker while preserving the
+// distinction between an absent member and a present JSON null.
+func markerString(marker json.RawMessage) (string, *types.RPCError) {
 	if marker == nil {
 		return "", nil
 	}
-	s, ok := marker.(string)
-	if !ok {
+	if isJSONNull(marker) {
+		return "", types.RPCErrorExpectedField("marker", "string")
+	}
+	var s string
+	if err := json.Unmarshal(marker, &s); err != nil {
 		return "", types.RPCErrorExpectedField("marker", "string")
 	}
 	return s, nil
@@ -286,7 +476,7 @@ func markerString(marker any) (string, *types.RPCError) {
 
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).
 func FormatLedgerHash(hash [32]byte) string {
-	return strings.ToUpper(hex.EncodeToString(hash[:]))
+	return protocol.Hash256Hex(hash)
 }
 
 // isOpenLedgerSelector reports whether a resolved ledger selector refers to
@@ -302,12 +492,29 @@ func isOpenLedgerSelector(selector string) bool {
 // ledger_current_index (rippled withholds the interim hash and index); for a
 // closed ledger it emits ledger_hash and ledger_index. The validated flag is
 // always emitted. ledgerHash must already be the formatted uppercase-hex hash.
-func fillLedgerFields(response map[string]any, selector string, ledgerHash string, ledgerSeq uint32, validated bool) {
-	if isOpenLedgerSelector(selector) {
+func fillLedgerFields(
+	response map[string]any,
+	selector string,
+	ledgerHash string,
+	ledgerSeq uint32,
+	currentLedgerSeq uint32,
+	validated bool,
+) {
+	if isOpenLedgerSelector(selector) || ledgerSeq == currentLedgerSeq {
 		response["ledger_current_index"] = ledgerSeq
 	} else {
 		response["ledger_hash"] = ledgerHash
 		response["ledger_index"] = ledgerSeq
+	}
+	response["validated"] = validated
+}
+
+func fillResolvedLedgerFields(response map[string]any, reader types.LedgerReader, validated bool) {
+	if reader.IsClosed() {
+		response["ledger_hash"] = FormatLedgerHash(reader.Hash())
+		response["ledger_index"] = reader.Sequence()
+	} else {
+		response["ledger_current_index"] = reader.Sequence()
 	}
 	response["validated"] = validated
 }
@@ -341,31 +548,6 @@ var (
 	LimitLedgerData       = LimitRange{16, 256, 256}
 	LimitLedgerDataBinary = LimitRange{16, 2048, 2048}
 )
-
-// ClampLimit applies rippled's pre-3.1.3 clamp logic: if the user provides
-// a limit, clamp it to [range.Min, range.Max] when unlimited is false;
-// otherwise return the user value unchanged. unlimited is true for both
-// admin and identified roles (matches rippled isUnlimited in Role.cpp).
-// If the user does not provide a limit (0), use the default.
-//
-// Prefer ReadLimitField for commands that route through rippled's readLimitField
-// (which rejects an explicit limit=0). ClampLimit is retained for ledger_data,
-// whose rippled handler does not use readLimitField and still maps 0 to default.
-func ClampLimit(userLimit uint32, r LimitRange, unlimited bool) uint32 {
-	if userLimit == 0 {
-		return r.Default
-	}
-	if unlimited {
-		return userLimit
-	}
-	if userLimit < r.Min {
-		return r.Min
-	}
-	if userLimit > r.Max {
-		return r.Max
-	}
-	return userLimit
-}
 
 // ReadLimitField mirrors rippled's readLimitField (RPCHelpers.cpp): it reads the
 // "limit" field from the raw request params. An absent or null limit yields the
@@ -439,6 +621,10 @@ func (AdminHandler) SupportedApiVersions() []int {
 }
 func (AdminHandler) RequiredCondition() types.Condition { return types.NoCondition }
 
+func decodeBinaryObject(data []byte) (map[string]any, error) {
+	return binarycodec.Decode(hex.EncodeToString(data))
+}
+
 // decodeTxBlob decodes transaction data that may be in one of two formats:
 //  1. VL-encoded binary blob: [VL-prefix][tx_bytes][VL-prefix][meta_bytes]
 //     (produced by tx.CreateTxWithMetaBlob, stored via AddTransactionWithMeta)
@@ -450,11 +636,11 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	// Try VL-encoded binary format first
 	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
 	if err == nil {
-		txJSON, decErr := binarycodec.Decode(hex.EncodeToString(txBytes))
+		txJSON, decErr := decodeBinaryObject(txBytes)
 		if decErr == nil {
 			st := StoredTransaction{TxJSON: txJSON}
 			if len(metaBytes) > 0 {
-				metaJSON, metaErr := binarycodec.Decode(hex.EncodeToString(metaBytes))
+				metaJSON, metaErr := decodeBinaryObject(metaBytes)
 				if metaErr == nil {
 					st.Meta = metaJSON
 				}

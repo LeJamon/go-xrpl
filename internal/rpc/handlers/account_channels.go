@@ -2,10 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -15,66 +13,46 @@ import (
 type AccountChannelsMethod struct{ BaseHandler }
 
 func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		DestinationAccount string `json:"destination_account,omitempty"`
-		types.PaginationParams
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	// Validate destination_account parameter if provided (rippled: rpcACT_MALFORMED)
-	if request.DestinationAccount != "" {
-		if !types.IsValidXRPLAddress(request.DestinationAccount) {
-			return nil, types.RPCErrorActMalformed("Destination account malformed.")
-		}
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
 	if selErr != nil {
 		return nil, selErr
 	}
 
-	markerStr, mErr := markerString(request.Marker)
-	if mErr != nil {
-		return nil, mErr
+	var destination string
+	if rawDestination, ok := fields["destination_account"]; ok {
+		if isJSONNull(rawDestination) || json.Unmarshal(rawDestination, &destination) != nil {
+			return nil, types.RPCErrorInvalidField("destination_account")
+		}
+		if destination != "" && !types.IsValidXRPLAddress(destination) {
+			return nil, types.RPCErrorActMalformed("Destination account malformed.")
+		}
 	}
 
-	// Get account channels from the ledger service
 	limit, limitErr := ReadLimitField(params, LimitAccountChannels, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
+	markerStr, mErr := markerString(fields["marker"])
+	if mErr != nil {
+		return nil, mErr
+	}
 	result, err := ctx.Services.Ledger.GetAccountChannels(
 		ctx.Context,
-		request.Account,
-		request.DestinationAccount,
+		account,
+		destination,
 		ledgerIndex,
 		limit,
 		markerStr,
 	)
 	if err != nil {
-		if rerr := mapLedgerLookupErr(err); rerr != nil {
-			return nil, rerr
-		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
-		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account channels: %v", err))
 	}
 
 	// Build channels array with proper field handling
@@ -117,7 +95,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		"account":  result.Account,
 		"channels": channels,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

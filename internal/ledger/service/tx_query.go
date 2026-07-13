@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
@@ -18,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -205,31 +207,25 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 // readFeesFromLedger reads fee settings from the FeeSettings SLE in the given
 // ledger. It supports both the modern XRPFees format (BaseFeeDrops /
 // ReserveBaseDrops / ReserveIncrementDrops) and the legacy format (BaseFee /
-// ReserveBase / ReserveIncrement). Falls back to hardcoded defaults if the SLE
+// ReserveBase / ReserveIncrement). Falls back to network defaults if the SLE
 // cannot be found or parsed.
 func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
-	// Hardcoded defaults (same as rippled)
-	const (
-		defaultBaseFee          = 10
-		defaultReserveBase      = 10_000_000
-		defaultReserveIncrement = 2_000_000
-	)
-
+	fees := drops.DefaultFees()
 	if l == nil {
-		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
 	}
 
 	data, err := l.Read(keylet.Fees())
 	if err != nil || data == nil {
-		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
 	}
 
 	feeSettings, err := state.ParseFeeSettings(data)
 	if err != nil {
-		return defaultBaseFee, defaultReserveBase, defaultReserveIncrement
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
 	}
-
-	return feeSettings.GetBaseFee(), feeSettings.GetReserveBase(), feeSettings.GetReserveIncrement()
+	fees = feeSettings.Fees()
+	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
 }
 
 // GetCurrentFees returns the current fee settings read from the FeeSettings
@@ -457,6 +453,17 @@ type TransactionResult struct {
 	LedgerHash  [32]byte
 	Validated   bool
 	TxIndex     uint32
+	CloseTime   int64
+}
+
+type TransactionSearchResult struct {
+	Transaction *TransactionResult
+	Searched    relationaldb.TxSearchResult
+}
+
+type LedgerContext struct {
+	Hash      [32]byte
+	CloseTime int64
 }
 
 // GetTransaction retrieves a transaction by its hash
@@ -491,6 +498,86 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 		LedgerHash:  l.Hash(),
 		Validated:   l.IsValidated(),
 		TxIndex:     s.txPositionIndex[txHash],
+		CloseTime:   protocol.RippleSeconds(l.CloseTime()),
+	}, nil
+}
+
+func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *relationaldb.LedgerRange) (*TransactionSearchResult, error) {
+	s.mu.RLock()
+	db := s.relationalDB
+	s.mu.RUnlock()
+
+	if db == nil {
+		result, err := s.GetTransaction(txHash)
+		if err != nil {
+			return nil, err
+		}
+		if ledgerRange != nil &&
+			(relationaldb.LedgerIndex(result.LedgerIndex) < ledgerRange.Min ||
+				relationaldb.LedgerIndex(result.LedgerIndex) > ledgerRange.Max) {
+			return &TransactionSearchResult{Searched: relationaldb.TxSearchUnknown}, nil
+		}
+		return &TransactionSearchResult{Transaction: result, Searched: relationaldb.TxSearchUnknown}, nil
+	}
+
+	info, searched, err := db.Transaction().GetTransaction(ctx, relationaldb.Hash(txHash), ledgerRange)
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return &TransactionSearchResult{Searched: searched}, nil
+	}
+
+	vlTx, err := tx.EncodeWithVL(info.RawTxn)
+	if err != nil {
+		return nil, err
+	}
+	vlMeta, err := tx.EncodeWithVL(info.TxnMeta)
+	if err != nil {
+		return nil, err
+	}
+	txData := make([]byte, 0, len(vlTx)+len(vlMeta))
+	txData = append(txData, vlTx...)
+	txData = append(txData, vlMeta...)
+
+	contextInfo, err := s.GetLedgerContext(ctx, uint32(info.LedgerSeq))
+	if err != nil {
+		return nil, err
+	}
+	return &TransactionSearchResult{
+		Transaction: &TransactionResult{
+			TxData:      txData,
+			LedgerIndex: uint32(info.LedgerSeq),
+			LedgerHash:  contextInfo.Hash,
+			Validated:   true,
+			TxIndex:     info.TxnSeq,
+			CloseTime:   contextInfo.CloseTime,
+		},
+		Searched: searched,
+	}, nil
+}
+
+func (s *Service) GetLedgerContext(ctx context.Context, sequence uint32) (*LedgerContext, error) {
+	if l, err := s.GetLedgerBySequence(sequence); err == nil && l != nil {
+		return &LedgerContext{Hash: l.Hash(), CloseTime: protocol.RippleSeconds(l.CloseTime())}, nil
+	}
+
+	s.mu.RLock()
+	db := s.relationalDB
+	s.mu.RUnlock()
+	if db == nil {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	info, err := db.Ledger().GetLedgerInfoBySeq(ctx, relationaldb.LedgerIndex(sequence))
+	if err != nil {
+		return nil, err
+	}
+	if info == nil {
+		return nil, svcerr.ErrLedgerNotFound
+	}
+	return &LedgerContext{
+		Hash:      [32]byte(info.Hash),
+		CloseTime: protocol.RippleSeconds(info.CloseTime),
 	}, nil
 }
 

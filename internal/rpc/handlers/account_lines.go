@@ -2,10 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -15,66 +13,46 @@ import (
 type AccountLinesMethod struct{ BaseHandler }
 
 func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		Peer          string `json:"peer,omitempty"`
-		IgnoreDefault bool   `json:"ignore_default,omitempty"`
-		types.PaginationParams
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	// Validate peer parameter if provided (rippled: rpcACT_MALFORMED)
-	if request.Peer != "" {
-		if !types.IsValidXRPLAddress(request.Peer) {
-			return nil, types.RPCErrorActMalformed("Malformed peer account.")
-		}
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
 	if selErr != nil {
 		return nil, selErr
 	}
 
-	markerStr, mErr := markerString(request.Marker)
-	if mErr != nil {
-		return nil, mErr
+	var peer string
+	if rawPeer, ok := fields["peer"]; ok && !isJSONNull(rawPeer) {
+		if json.Unmarshal(rawPeer, &peer) != nil {
+			return nil, types.RPCErrorActMalformed("Malformed peer account.")
+		}
+		if peer != "" && !types.IsValidXRPLAddress(peer) {
+			return nil, types.RPCErrorActMalformed("Malformed peer account.")
+		}
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit, markerStr)
+	markerStr, mErr := markerString(fields["marker"])
+	if mErr != nil {
+		return nil, mErr
+	}
+	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, markerStr)
 	if err != nil {
-		if rerr := mapLedgerLookupErr(err); rerr != nil {
-			return nil, rerr
-		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
-		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account lines: %v", err))
 	}
 
 	// Filter out default-state trust lines when ignore_default is true
 	// In rippled, this checks if the line has the reserve flag set for the account's side.
 	// A line is in default state when: balance=0, limit=0, limit_peer=0, quality_in=0, quality_out=0, no flags set.
 	lines := result.Lines
-	if request.IgnoreDefault {
+	if legacyBoolValue(fields["ignore_default"]) {
 		filtered := make([]types.TrustLine, 0, len(lines))
 		for _, line := range lines {
 			if isDefaultTrustLine(line) {
@@ -124,7 +102,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		"account": result.Account,
 		"lines":   jsonLines,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

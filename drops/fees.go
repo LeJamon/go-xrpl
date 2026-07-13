@@ -12,6 +12,22 @@ type Fees struct {
 	Increment XRPAmount
 }
 
+const (
+	DefaultBaseFee          XRPAmount = 10
+	DefaultReserveBase      XRPAmount = 10_000_000
+	DefaultReserveIncrement XRPAmount = 2_000_000
+)
+
+// DefaultFees returns the fee schedule used when a ledger has no readable
+// FeeSettings entry.
+func DefaultFees() Fees {
+	return Fees{
+		Base:      DefaultBaseFee,
+		Reserve:   DefaultReserveBase,
+		Increment: DefaultReserveIncrement,
+	}
+}
+
 // AccountReserve returns the total reserve an account must hold to own
 // ownerSize objects: the base reserve plus ownerSize reserve increments.
 func (f *Fees) AccountReserve(ownerSize int64) XRPAmount {

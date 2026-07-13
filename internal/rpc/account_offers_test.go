@@ -68,13 +68,13 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -82,7 +82,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -90,7 +90,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -98,7 +98,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -106,7 +106,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -114,7 +114,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -122,7 +122,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -1058,10 +1058,6 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 	}
 }
 
-// TestAccountOffersLedgerHashThreading verifies the M1 fix on PR #870: a
-// ledger_hash query is threaded verbatim to the service (so it resolves the
-// named ledger), ledger_hash takes precedence over ledger_index when both are
-// supplied, and an unknown hash surfaces as lgrNotFound rather than internal.
 func TestAccountOffersLedgerHashThreading(t *testing.T) {
 	const validAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const hashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
@@ -1090,11 +1086,10 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		assert.Equal(t, hashHex, seenSelector, "service must receive the hash as its selector")
 	})
 
-	t.Run("hash wins over ledger_index", func(t *testing.T) {
+	t.Run("hash and ledger_index conflict", func(t *testing.T) {
 		mock := newAccountOffersMock()
-		var seenSelector string
 		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-			seenSelector = ledgerIndex
+			t.Fatal("service must not be called for conflicting selectors")
 			return &types.AccountOffersResult{Account: account, Offers: []types.AccountOffer{}}, nil
 		}
 
@@ -1104,8 +1099,9 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 			"ledger_index": "validated",
 		})
 		_, rpcErr := method.Handle(ctx(mock), params)
-		require.Nil(t, rpcErr)
-		assert.Equal(t, hashHex, seenSelector, "ledger_hash must win over ledger_index")
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified.", rpcErr.Message)
 	})
 
 	t.Run("unknown hash → lgrNotFound", func(t *testing.T) {

@@ -672,6 +672,41 @@ func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) 
 	return result
 }
 
+// RecheckFullyValidated returns the validations that currently count toward
+// finality for ledgerID together with the quorum from the same tracker state.
+// When the set no longer reaches quorum it removes the prior firing marker
+// before unlocking, so a concurrent or later validation can notify again.
+func (vt *ValidationTracker) RecheckFullyValidated(
+	ledgerID consensus.LedgerID,
+	seq uint32,
+) ([]*consensus.Validation, int, bool) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+
+	quorum := vt.quorum
+	ledgerVals, exists := vt.validations[ledgerID]
+	if !exists {
+		delete(vt.fired, ledgerID)
+		return nil, quorum, false
+	}
+	ledgerVals.touch(vt.now())
+
+	result := make([]*consensus.Validation, 0, len(ledgerVals.vals))
+	for nodeID, validation := range ledgerVals.vals {
+		if validation == nil || !validation.Full || validation.LedgerSeq != seq ||
+			validation.SignTime.IsZero() || !vt.trusted[nodeID] || vt.negUNL[nodeID] {
+			continue
+		}
+		copy := *validation
+		result = append(result, &copy)
+	}
+	accepted := len(result) > 0 && len(result) >= quorum
+	if !accepted {
+		delete(vt.fired, ledgerID)
+	}
+	return result, quorum, accepted
+}
+
 // TrustedValidationCount returns the count of trusted validations
 // for a ledger, EXCLUDING validators currently on the negative UNL.
 // Matches rippled's LedgerMaster.cpp:886,952,1120 where every trusted

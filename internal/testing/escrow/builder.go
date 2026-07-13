@@ -13,12 +13,12 @@ import (
 
 // ToRippleTime converts a Go time.Time to Ripple epoch time.
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(t)
 }
 
 // FromRippleTime converts a Ripple epoch time to Go time.Time.
 func FromRippleTime(rippleTime uint32) time.Time {
-	return time.Unix(int64(rippleTime)+protocol.RippleEpochUnix, 0)
+	return protocol.FromRippleTime(rippleTime)
 }
 
 // EscrowCreateBuilder provides a fluent interface for building EscrowCreate transactions.

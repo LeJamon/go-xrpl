@@ -15,6 +15,19 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
+func TestBuildXrplErrorResponseGolden(t *testing.T) {
+	rpcErr := types.RPCErrorEntryNotFound("").WithExtra(map[string]any{"index": "ABC"})
+	body := buildXrplResponseBody(map[string]any{"command": "ledger_entry"}, nil, rpcErr, nil)
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	const want = `{"result":{"error":"entryNotFound","error_code":98,"error_message":"Entry not found.","index":"ABC","request":{"command":"ledger_entry"},"status":"error"}}`
+	if got := string(encoded); got != want {
+		t.Fatalf("response = %s, want %s", got, want)
+	}
+}
+
 type stubHandler struct {
 	role    types.Role
 	handle  func(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError)

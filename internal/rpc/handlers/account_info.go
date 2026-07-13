@@ -50,7 +50,6 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 
 	var request struct {
 		types.AccountParam
-		types.LedgerSpecifier
 		Queue       bool `json:"queue,omitempty"`
 		SignerLists bool `json:"signer_lists,omitempty"`
 	}
@@ -78,10 +77,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine ledger index. ledger_hash takes precedence over ledger_index
-	// and is threaded through so the service resolves the specific named
-	// ledger, mirroring rippled's ledgerFromRequest.
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(params)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -106,13 +102,10 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 
 	info, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, request.Account, ledgerIndex)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RPCErrorLgrNotFound("Ledger not found.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account info: %v", err))
 	}
 
 	// Build account_data by decoding the full SLE binary via binarycodec,
@@ -144,7 +137,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		"account_flags": accountFlags,
 	}
 	addPseudoAccount(response, accountData)
-	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
+	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), info.Validated)
 
 	// Add queue data if requested (only for current/open ledger — validated above)
 	if request.Queue && ledgerIndex == "current" {
