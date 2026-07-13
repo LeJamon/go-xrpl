@@ -12,15 +12,9 @@ import (
 )
 
 // TestRotation_ReclaimsNodeStoreSpace drives a Rotator against a real
-// nodestore and models the production persistence contract: each ledger writes
-// a unique header and re-writes the live account-state leaves at the current
-// sequence, while a churned leaf (state that existed only at that ledger) is
-// left behind at its original sequence. The production node store holds exactly
-// these seq-stamped records — state leaves and ledger headers; tx trees live in
-// the relational index, and the live state map is not NodeStoreFamily-backed in
-// production, so no LedgerSeq=0 inner nodes are written. After a rotation, the
-// headers and churned leaves below the boundary are reclaimed while the live
-// state — re-written at the latest sequence — survives.
+// nodestore. Each synthetic ledger re-stamps live state at its current sequence
+// while leaving churned state at its original sequence, allowing rotation to
+// reclaim old records without removing the live state.
 func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 10000, time.Hour)
@@ -71,6 +65,7 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	if rot == nil {
 		t.Fatal("NewRotator returned nil")
 	}
+	rot.SetStateRefresh(func(context.Context, uint32) error { return nil }, nil, nil)
 
 	// Build 25 ledgers, notifying the rotator synchronously per ledger via the
 	// internal predicate path so the assertions are deterministic.

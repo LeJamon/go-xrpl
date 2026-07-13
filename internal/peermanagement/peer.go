@@ -466,6 +466,15 @@ func (p *Peer) CheckTracking(peerSeq, validSeq uint32) {
 	}
 }
 
+// CheckTrackingAgainst compares the peer's advertised ledger range to a
+// quorum-validated sequence.
+func (p *Peer) CheckTrackingAgainst(validSeq uint32) {
+	p.mu.RLock()
+	peerSeq := p.lastLedgerSeq
+	p.mu.RUnlock()
+	p.CheckTracking(peerSeq, validSeq)
+}
+
 func (p *Peer) ServerDomain() string {
 	p.mu.RLock()
 	defer p.mu.RUnlock()

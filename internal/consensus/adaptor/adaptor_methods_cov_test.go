@@ -2,13 +2,11 @@ package adaptor
 
 import (
 	"context"
-	"encoding/binary"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -280,15 +278,7 @@ func TestAdg_OnPhaseChange(t *testing.T) {
 	})
 }
 
-func TestAdg_AdoptLedgerFromHeader_InvalidBytes(t *testing.T) {
-	a := newTestAdaptor(t)
-
-	err := a.AdoptLedgerFromHeader([]byte{0x00, 0x01})
-	assert.Error(t, err, "short input must fail deserialization")
-}
-
-// adg_newNonStandaloneService builds a consensus-mode (non-standalone)
-// service that sets needsInitialSync=true, required by AdoptLedgerHeader.
+// adg_newNonStandaloneService builds a consensus-mode service.
 func adg_newNonStandaloneService(t *testing.T) *service.Service {
 	t.Helper()
 	cfg := service.Config{
@@ -299,52 +289,6 @@ func adg_newNonStandaloneService(t *testing.T) *service.Service {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 	return svc
-}
-
-func TestAdg_AdoptLedgerFromHeader_ValidHeader(t *testing.T) {
-	svc := adg_newNonStandaloneService(t)
-	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
-	require.NoError(t, err)
-	a := New(Config{
-		LedgerService: svc,
-		Identity:      identity,
-		Validators:    []consensus.NodeID{identity.NodeID},
-	})
-
-	cl := svc.GetClosedLedger()
-	require.NotNil(t, cl)
-	h := cl.Header()
-
-	// Serialize with hash so AdoptLedgerFromHeader can verify.
-	raw := header.AddRaw(h, true)
-
-	a.SetOperatingMode(consensus.OpModeConnected)
-	err = a.AdoptLedgerFromHeader(raw)
-	require.NoError(t, err)
-
-	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
-}
-
-func TestAdg_AdoptLedgerFromHeader_PrefixedHeader(t *testing.T) {
-	svc := adg_newNonStandaloneService(t)
-	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
-	require.NoError(t, err)
-	a := New(Config{
-		LedgerService: svc,
-		Identity:      identity,
-		Validators:    []consensus.NodeID{identity.NodeID},
-	})
-	cl := svc.GetClosedLedger()
-	require.NotNil(t, cl)
-	h := cl.Header()
-	raw := header.AddRaw(h, true)
-
-	prefixed := make([]byte, 4+len(raw))
-	binary.BigEndian.PutUint32(prefixed[:4], 0x534E4400) // arbitrary prefix
-	copy(prefixed[4:], raw)
-
-	err = a.AdoptLedgerFromHeader(prefixed)
-	require.NoError(t, err)
 }
 
 func TestAdg_BroadcastStatus_NoClosedLedgerNoPanic(t *testing.T) {

@@ -11,8 +11,8 @@ import (
 // OperatingMode transitions. It is subscribed to the engine at startup
 // and its only live entry point is OnEvent.
 //
-// Production paths (router.go, AdoptLedgerFromHeader, catch-up) set the
-// operating mode directly via Adaptor.SetOperatingMode, so m.mode is not
+// Production router and catch-up paths set the operating mode directly via
+// Adaptor.SetOperatingMode, so m.mode is not
 // the authoritative source of truth — OnEvent reads the adaptor's mode
 // and only steers the wrongLedger ↔ syncing/tracking edges consensus
 // signals. The earlier peer-count / LCL-acquisition ladder
@@ -51,8 +51,8 @@ type pendingTransition struct {
 
 // OnEvent translates engine ModeChangedEvents into adaptor OperatingMode
 // transitions. Reads adaptor.GetOperatingMode() rather than m.mode because
-// production paths (router.go, AdoptLedgerFromHeader) bypass this state
-// machine via direct SetOperatingMode calls, so m.mode isn't authoritative.
+// production router paths bypass this state machine via direct SetOperatingMode
+// calls, so m.mode isn't authoritative.
 func (m *ModeManager) OnEvent(event consensus.Event) {
 	mc, ok := event.(*consensus.ModeChangedEvent)
 	if !ok {

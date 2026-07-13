@@ -144,6 +144,21 @@ func (o *Overlay) Peers() []PeerInfo {
 	return result
 }
 
+// CheckTracking compares every connected peer's advertised ledger range to a
+// quorum-validated sequence during initial synchronization.
+func (o *Overlay) CheckTracking(validSeq uint32) {
+	o.peersMu.RLock()
+	peers := make([]*Peer, 0, len(o.peers))
+	for _, peer := range o.peers {
+		peers = append(peers, peer)
+	}
+	o.peersMu.RUnlock()
+
+	for _, peer := range peers {
+		peer.CheckTrackingAgainst(validSeq)
+	}
+}
+
 // Cluster returns the registry of cluster-trusted node identities
 // loaded from [cluster_nodes]. Always non-nil post-construction.
 func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }

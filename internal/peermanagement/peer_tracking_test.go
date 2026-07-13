@@ -33,6 +33,8 @@ func TestPeerTracking_CheckTracking(t *testing.T) {
 	}{
 		{"converged_within_limit", 1000, 1000, PeerTrackingUnknown, PeerTrackingConverged},
 		{"converged_at_boundary_minus_one", 1000, 1023, PeerTrackingUnknown, PeerTrackingConverged},
+		{"converged_boundary_unchanged", 1000, 1024, PeerTrackingUnknown, PeerTrackingUnknown},
+		{"diverged_boundary_unchanged", 1000, 1128, PeerTrackingUnknown, PeerTrackingUnknown},
 		{"diverged_above_limit", 1000, 1200, PeerTrackingUnknown, PeerTrackingDiverged},
 		{"between_limits_no_change", 1000, 1050, PeerTrackingUnknown, PeerTrackingUnknown},
 		{"converged_overrides_previous_unknown", 5000, 5005, PeerTrackingUnknown, PeerTrackingConverged},
@@ -49,6 +51,27 @@ func TestPeerTracking_CheckTracking(t *testing.T) {
 			assert.Equal(t, tc.want, p.Tracking())
 		})
 	}
+}
+
+func TestOverlay_CheckTrackingUsesAdvertisedLastSequence(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	near := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 1}, false, id, nil)
+	far := NewPeer(PeerID(2), Endpoint{Host: "127.0.0.1", Port: 2}, false, id, nil)
+	unknown := NewPeer(PeerID(3), Endpoint{Host: "127.0.0.1", Port: 3}, false, id, nil)
+	near.mu.Lock()
+	near.lastLedgerSeq = 9_990
+	near.mu.Unlock()
+	far.mu.Lock()
+	far.lastLedgerSeq = 9_800
+	far.mu.Unlock()
+
+	o := newTestOverlayWithPeers(map[PeerID]*Peer{1: near, 2: far, 3: unknown})
+	o.CheckTracking(10_000)
+
+	assert.Equal(t, PeerTrackingConverged, near.Tracking())
+	assert.Equal(t, PeerTrackingDiverged, far.Tracking())
+	assert.Equal(t, PeerTrackingUnknown, unknown.Tracking())
 }
 
 func TestOverlay_handleStatusChange_UpdatesTracking(t *testing.T) {

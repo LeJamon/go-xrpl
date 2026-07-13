@@ -32,6 +32,13 @@ type innerNode struct {
 	children [BranchFactor]Node
 	hashes   [BranchFactor][32]byte
 	isBranch uint16
+	// fullBelowGen caches the FullBelowCache generation at which this node
+	// was last proven to have every descendant resident. It is meaningful
+	// only while it equals the cache's current generation (see
+	// isFullBelow); a fresh or wire/store-deserialized node carries 0,
+	// which never matches a live generation. Mirrors rippled's
+	// SHAMapInnerNode::fullBelowGen_. Guarded by mu.
+	fullBelowGen uint32
 }
 
 // newInnerNode creates a new empty inner node
@@ -142,6 +149,23 @@ func (n *innerNode) SetChildIfNil(index int, child Node) Node {
 	}
 	n.children[index] = child
 	return child
+}
+
+// isFullBelow reports whether this node was proven full-below at the given
+// (current) cache generation. Mirrors rippled
+// SHAMapInnerNode::isFullBelow.
+func (n *innerNode) isFullBelow(generation uint32) bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.fullBelowGen == generation
+}
+
+// setFullBelowGen records that every descendant is resident as of
+// generation. Mirrors rippled SHAMapInnerNode::setFullBelowGen.
+func (n *innerNode) setFullBelowGen(generation uint32) {
+	n.mu.Lock()
+	n.fullBelowGen = generation
+	n.mu.Unlock()
 }
 
 // ChildHash returns the hash at a given branch index
@@ -487,8 +511,9 @@ func (n *innerNode) Clone() (Node, error) {
 	defer n.mu.RUnlock()
 
 	clone := &innerNode{
-		isBranch: n.isBranch,
-		hashes:   n.hashes, // Copy the array
+		isBranch:     n.isBranch,
+		hashes:       n.hashes, // Copy the array
+		fullBelowGen: n.fullBelowGen,
 	}
 	clone.hash = n.hash
 	clone.SetDirty(true)
@@ -518,9 +543,10 @@ func (n *innerNode) shallowClone() *innerNode {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	clone := &innerNode{
-		isBranch: n.isBranch,
-		hashes:   n.hashes,
-		children: n.children,
+		isBranch:     n.isBranch,
+		hashes:       n.hashes,
+		children:     n.children,
+		fullBelowGen: n.fullBelowGen,
 	}
 	clone.hash = n.hash
 	clone.SetDirty(true)

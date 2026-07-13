@@ -20,15 +20,10 @@ type PrunableDatabase interface {
 	Database
 
 	// DeleteBefore removes every stored node whose LedgerSeq is strictly below
-	// boundary, returning the number of nodes deleted. The production node store
-	// holds two kinds of seq-stamped record: the live state leaves and the
-	// per-ledger headers, both re-written every ledger at the current sequence
-	// (the live state map is not backed by a NodeStoreFamily in production, so
-	// no LedgerSeq=0 inner nodes are written, and transaction trees live in the
-	// relational index, not here). A leaf still part of recent state therefore
-	// always carries a LedgerSeq at or above the retained range and is immune;
-	// only the superseded copies of state leaves and old ledger headers carry a
-	// LedgerSeq below the boundary.
+	// boundary, returning the number of nodes deleted. Before pruning, online
+	// deletion re-stamps the complete validated state tree at the current ledger
+	// sequence so every node reachable from the live root remains above the
+	// boundary.
 	//
 	// Deletion is performed in batches of at most batchSize keys (a non-positive
 	// batchSize selects a default). The context is honoured between batches so a

@@ -286,3 +286,48 @@ Verification:
   conformance suites. `just conformance --failing` reports 941 pass / 117 fail
   overall and 879 pass / 0 fail in scope; failures remain confined to Batch,
   Vault, XChain, and XChainSim.
+
+# Issue #1302 — testnet sync scalability and durability
+
+Target: `v3.0.0`. Behavioral oracle: clean local rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] B1: make missing-node discovery retain full-below knowledge so repeated
+      inbound replies resume at unresolved frontiers instead of rescanning the
+      state-map root.
+- [x] H1: reject stray or failed `liBASE` catch-up adoption unless the acquired
+      ledger has complete, verified state matching its header roots; preserve
+      acquisition eligibility after rejection.
+- [x] B2: persist only state nodes introduced since the validated parent while
+      retaining complete ledgers and safe retry/backpressure behavior.
+- [x] H4: stamp family-flushed SHAMap nodes with the owning ledger sequence so
+      online deletion cannot collect the live content-addressed state tree.
+- [x] B3: restore the latest complete durable validated ledger on startup and
+      honor configured history bounds rather than resetting to synthetic genesis.
+- [x] Discovery: allow peer endpoint exchange to converge during initial sync
+      once a peer quorum agrees on a ledger even when the local synthetic
+      genesis cannot yet be classified as tracking.
+- [x] Add focused regression, lifecycle, persistence, pruning, and restart tests
+      for every behavior; use rippled 3.2.0 as the protocol/operational oracle.
+- [x] Run format, focused tests, race-sensitive suites where applicable, build,
+      vet, lint, and the broad repository test gate.
+- [x] Review the full diff for correctness, concurrency, failure paths, and test
+      coverage; record exact verification results below.
+- [x] Commit only intentional files, push the issue branch, and open a PR with
+      base `v3.0.0` and `Fixes #1302`.
+
+## Review
+
+Implemented full-below frontier pruning, complete-state-only initial adoption,
+delta node persistence, crash-safe online deletion, validated-tip fast load,
+retention-floor wiring, and initial-sync peer tracking. Protocol and operational
+behavior was audited against local rippled 3.2.0 at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+Verification: focused package tests and race suites pass; `just vet`,
+`just build-all`, and `just lint` pass with zero issues. `go test ./...` passes
+all packages except the existing `internal/testing/conformance` Vault, Batch,
+and XChain backlog, which is outside this diff.
+
+PR: https://github.com/LeJamon/go-xrpl/pull/1319
