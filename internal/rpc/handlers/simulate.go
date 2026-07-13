@@ -99,6 +99,7 @@ func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (
 	if _, ok := txJsonMap["Account"]; !ok {
 		return nil, types.RPCErrorMissingField("tx.Account")
 	}
+	transactionType := txJsonMap["TransactionType"]
 
 	// rippled autofillTx() — Simulate.cpp:71-156. Steps run in the same
 	// order so rippled's error precedence is preserved:
@@ -211,6 +212,9 @@ func (m *SimulateMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (
 	if parseMessage := serializedFieldParseMessage(txJsonMap, "tx_json", defs); parseMessage != "" {
 		return nil, types.RPCErrorInvalidParams(parseMessage)
 	}
+	// STParsedJSONObject stores TransactionType as its UInt16 code, while the
+	// Go transaction registry selects concrete types by their JSON name.
+	txJsonMap["TransactionType"] = transactionType
 
 	// STParsedJSONObject also caps each JSON array field at MaxJSONArrayElements
 	// (rippled maxSTParsedJSONArraySize); surface an overflow as invalidParams

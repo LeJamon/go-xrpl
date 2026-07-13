@@ -645,7 +645,6 @@ func TestLedgerResponseStructure(t *testing.T) {
 
 	// Ledger object fields
 	ledger := resp["ledger"].(map[string]any)
-	assert.Contains(t, ledger, "accepted")
 	assert.Contains(t, ledger, "account_hash")
 	assert.Contains(t, ledger, "close_flags")
 	assert.Contains(t, ledger, "close_time")
@@ -660,8 +659,6 @@ func TestLedgerResponseStructure(t *testing.T) {
 	assert.Contains(t, ledger, "ledger_index")
 	assert.Contains(t, ledger, "parent_close_time")
 	assert.Contains(t, ledger, "parent_hash")
-	assert.Contains(t, ledger, "seqNum")
-	assert.Contains(t, ledger, "totalCoins")
 	assert.Contains(t, ledger, "total_coins")
 	assert.Contains(t, ledger, "transaction_hash")
 

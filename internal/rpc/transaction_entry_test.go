@@ -129,6 +129,10 @@ func newTransactionEntryTestServices(mock *mockLedgerServiceTE) *types.ServiceCo
 // Based on rippled TransactionEntry_test.cpp testBadInput (no params case).
 func TestTransactionEntryMissingTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
+	current := newMockLedgerReaderTE(mock.currentLedgerIndex)
+	current.closed = false
+	current.validated = false
+	mock.addLedger(current)
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
@@ -150,12 +154,6 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 		{
 			name:   "nil params",
 			params: nil,
-		},
-		{
-			name: "tx_hash is empty string",
-			params: map[string]any{
-				"tx_hash": "",
-			},
 		},
 	}
 
@@ -187,6 +185,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 // Based on rippled TransactionEntry_test.cpp (DEADBEEF case and too-short/too-long cases).
 func TestTransactionEntryInvalidTxHash(t *testing.T) {
 	mock := newMockLedgerServiceTE()
+	mock.addLedger(newMockLedgerReaderTE(mock.validatedLedgerIndex))
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
@@ -201,6 +200,10 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 		name   string
 		txHash string
 	}{
+		{
+			name:   "empty string",
+			txHash: "",
+		},
 		{
 			name:   "too short - DEADBEEF",
 			txHash: "DEADBEEF",
@@ -236,6 +239,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid tx_hash")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid tx_hash: %s", tc.txHash)
+			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
 		})
 	}
 }

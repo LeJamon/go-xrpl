@@ -67,7 +67,7 @@ func (m *mockLedgerEntryService) GetLedgerEntry(_ context.Context, entryKey [32]
 func (m *mockLedgerEntryService) GetLedgerBySequence(sequence uint32) (types.LedgerReader, error) {
 	return &mockLedgerReader{
 		seq:       sequence,
-		hash:      [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
+		hash:      [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 		closed:    sequence != m.currentLedgerIndex,
 		validated: sequence <= m.validatedLedgerIndex,
 	}, nil
@@ -3220,7 +3220,7 @@ func TestLedgerEntryUppercaseHex(t *testing.T) {
 	require.True(t, ok)
 
 	// Verify uppercase hex
-	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", ledgerHash,
+	assert.Equal(t, "4BC50C9B00000000000000000000000000000000000000000000000000000000", ledgerHash,
 		"ledger_hash should use uppercase hex")
 	// Verify no lowercase letters in the hash
 	assert.Equal(t, ledgerHash, strings.ToUpper(ledgerHash),

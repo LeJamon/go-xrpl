@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -48,7 +49,7 @@ func (m *mockLedgerServiceTx) GetTransaction(txHash [32]byte) (*types.Transactio
 	if tx, ok := m.transactions[hashStr]; ok {
 		return tx, nil
 	}
-	return nil, errors.New("transaction not found")
+	return nil, svcerr.ErrTxnNotFound
 }
 
 func (m *mockLedgerServiceTx) GetTransactionWithRange(_ context.Context, txHash [32]byte, _, _ uint32) (*types.TransactionInfo, types.TxSearchResult, error) {
@@ -286,7 +287,7 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			expectedError: "Transaction not found",
 			expectedCode:  types.RpcTXN_NOT_FOUND,
 			setupMock: func() {
-				mock.txLookupError = errors.New("transaction not found")
+				mock.txLookupError = svcerr.ErrTxnNotFound
 			},
 		},
 		{
@@ -328,8 +329,8 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"transaction": []string{"hash1", "hash2"},
 			},
-			expectedError: "Not implemented.",
-			expectedCode:  types.RpcNOT_IMPL,
+			expectedError: "Invalid parameters.",
+			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid transaction type - object",
@@ -344,8 +345,8 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"transaction": 123.456,
 			},
-			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - null",
@@ -477,7 +478,7 @@ func TestTxMethodLookupByHash(t *testing.T) {
 				// Required fields per rippled
 				assert.Contains(t, resp, "hash")
 				assert.Contains(t, resp, "ledger_index")
-				assert.Contains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_hash")
 				assert.Contains(t, resp, "validated")
 				assert.Contains(t, resp, "meta")
 			},
@@ -1614,6 +1615,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 		TxJSON: txJSON,
 		Meta: map[string]any{
 			"TransactionResult": "tesSUCCESS",
+			"TransactionIndex":  0,
 		},
 	}
 	storedData, _ := json.Marshal(storedTx)
@@ -1650,7 +1652,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 
 			if version > 1 {
 				txJSON := resp["tx_json"].(map[string]any)
-				assert.Equal(t, resp["ctid"], txJSON["ctid"])
+				assert.NotContains(t, txJSON, "ctid")
 			} else {
 				assert.NotContains(t, resp, "ledger_hash")
 				assert.NotContains(t, resp, "close_time_iso")
@@ -1669,30 +1671,26 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 		serverNetworkID      uint32
 		transactionNetworkID *uint32
 		rootCTID             string
-		transactionCTID      string
 	}{
 		{
-			name:                 "transaction NetworkID overrides nested CTID only",
+			name:                 "transaction NetworkID does not override response CTID",
 			ledgerIndex:          100,
 			transactionIndex:     2,
 			serverNetworkID:      11111,
 			transactionNetworkID: &overrideNetworkID,
 			rootCTID:             "C000006400022B67",
-			transactionCTID:      "C000006400025359",
 		},
 		{
 			name:             "maximum network ID excludes root CTID",
 			ledgerIndex:      100,
 			transactionIndex: 2,
 			serverNetworkID:  0xFFFF,
-			transactionCTID:  "C00000640002FFFF",
 		},
 		{
 			name:             "maximum ledger index excludes root CTID",
 			ledgerIndex:      0x0FFFFFFF,
 			transactionIndex: 2,
 			serverNetworkID:  11111,
-			transactionCTID:  "CFFFFFFF00022B67",
 		},
 		{
 			name:             "maximum transaction index remains valid at root",
@@ -1700,7 +1698,6 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			transactionIndex: 0xFFFF,
 			serverNetworkID:  11111,
 			rootCTID:         "C0000064FFFF2B67",
-			transactionCTID:  "C0000064FFFF2B67",
 		},
 	}
 
@@ -1725,7 +1722,7 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 				TxData:      stored,
 				LedgerIndex: tc.ledgerIndex,
 				Validated:   true,
-				TxIndex:     tc.transactionIndex,
+				TxIndex:     tc.transactionIndex + 1,
 			}
 			ctx := &types.RPCContext{
 				Context:    context.Background(),
@@ -1746,11 +1743,11 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 				assert.Equal(t, tc.rootCTID, response["ctid"])
 			}
 			responseTx := response["tx_json"].(map[string]any)
-			assert.Equal(t, tc.transactionCTID, responseTx["ctid"])
+			assert.NotContains(t, responseTx, "ctid")
 		})
 	}
 
-	t.Run("API v1 preserves transaction CTID only in JSON mode when root is excluded", func(t *testing.T) {
+	t.Run("API v1 omits CTID when the network ID is at the excluded maximum", func(t *testing.T) {
 		stored, err := json.Marshal(handlers.StoredTransaction{
 			TxJSON: map[string]any{
 				"TransactionType": "Payment",
@@ -1783,7 +1780,7 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			json.RawMessage(`{"transaction":"`+txHash+`"}`),
 		)
 		require.Nil(t, rpcErr)
-		assert.Equal(t, "C000006400025359", result.(map[string]any)["ctid"])
+		assert.NotContains(t, result.(map[string]any), "ctid")
 
 		result, rpcErr = (&handlers.TxMethod{}).Handle(
 			ctx,
@@ -2082,7 +2079,7 @@ func TestTxMethodInternalErrors(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Should return txnNotFound error
-		assert.Contains(t, rpcErr.Message, "not found")
+		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }

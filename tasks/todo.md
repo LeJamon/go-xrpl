@@ -325,6 +325,16 @@ marker, selected-header, warning JSON, and ledger-entry hash expectations were
 aligned with rippled 3.2.0 without changing production behavior. All permitted
 local gates pass again; exact test verification remains CI-only.
 
+A fourth core pass exposed the remaining shared RPC fixture assumptions. The
+ledger, NFT offer, no-ripple, transaction-entry, tx, simulate, and vault fixtures
+now model their real lookup and binary contracts. Two production adapters were
+also corrected against rippled 3.2.0: simulate restores the JSON transaction type
+after STObject validation, and tx emits only the root CTID derived from metadata,
+the server network, and rippled's exclusive bounds. A shared partial ledger hash
+was restored instead of changing the contract for unrelated suites. Strict lint,
+repository lint, build, vet, formatting, and whitespace gates pass; no local
+tests were run.
+
 # Issue #1303 — trust-layer visibility and forward compatibility
 
 Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`

@@ -214,9 +214,6 @@ func (m *TxMethod) buildResponseV1(
 		}
 	} else {
 		maps.Copy(response, projectTransactionJSON(storedTx.TxJSON, "", 1))
-		if ctid, ok := transactionJSONCTID(storedTx.TxJSON, txInfo, networkID); ok {
-			response["ctid"] = ctid
-		}
 		if storedTx.Meta != nil {
 			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta, SyntheticMetadataContext{
 				LedgerSequence: txInfo.LedgerIndex,
@@ -232,7 +229,7 @@ func (m *TxMethod) buildResponseV1(
 		response["ledger_index"] = txInfo.LedgerIndex
 	}
 	response["validated"] = txInfo.Validated
-	if ctid, ok := txResultCTID(txInfo, networkID); ok {
+	if ctid, ok := txResultCTID(storedTx.Meta, txInfo, networkID); ok {
 		response["ctid"] = ctid
 	}
 
@@ -275,9 +272,6 @@ func (m *TxMethod) buildResponseV2(
 				txJSON["date"] = closeTimeSec
 			}
 		}
-		if ctid, ok := transactionJSONCTID(storedTx.TxJSON, txInfo, networkID); ok {
-			txJSON["ctid"] = ctid
-		}
 		response["tx_json"] = txJSON
 
 		if storedTx.Meta != nil {
@@ -292,7 +286,7 @@ func (m *TxMethod) buildResponseV2(
 	// Root-level fields
 	response["hash"] = hashStr
 	response["validated"] = txInfo.Validated
-	if ctid, ok := txResultCTID(txInfo, networkID); ok {
+	if ctid, ok := txResultCTID(storedTx.Meta, txInfo, networkID); ok {
 		response["ctid"] = ctid
 	}
 
@@ -401,21 +395,16 @@ func (m *TxMethod) ctidResponse(
 	return response
 }
 
-func transactionJSONCTID(txJSON map[string]any, txInfo *types.TransactionInfo, networkID uint32) (string, bool) {
-	if txInfo.LedgerIndex == 0 {
+func txResultCTID(meta map[string]any, txInfo *types.TransactionInfo, networkID uint32) (string, bool) {
+	if txInfo.LedgerIndex == 0 || txInfo.LedgerIndex >= maxCTIDLedgerSequence ||
+		networkID >= maxCTIDComponent {
 		return "", false
 	}
-	if override, ok := jsonUint32(txJSON["NetworkID"]); ok {
-		networkID = override
-	}
-	return EncodeCTID(txInfo.LedgerIndex, txInfo.TxIndex, networkID)
-}
-
-func txResultCTID(txInfo *types.TransactionInfo, networkID uint32) (string, bool) {
-	if txInfo.LedgerIndex == 0 {
+	transactionIndex, ok := jsonUint32(meta["TransactionIndex"])
+	if !ok {
 		return "", false
 	}
-	return EncodeCTID(txInfo.LedgerIndex, txInfo.TxIndex, networkID)
+	return EncodeCTID(txInfo.LedgerIndex, transactionIndex, networkID)
 }
 
 // parseCTID decodes a CTID hex string to ledger sequence and tx index.

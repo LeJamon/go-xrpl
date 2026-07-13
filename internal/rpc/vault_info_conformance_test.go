@@ -143,13 +143,22 @@ func TestVaultInfoProjectsSharesFromResolvedLedger(t *testing.T) {
 		LedgerIndex: 99,
 		LedgerHash:  [32]byte{0xAA},
 		Validated:   true,
-		Node:        []byte(`{"LedgerEntryType":"Vault","Owner":"` + vaultInfoAccount + `","ShareMPTID":"` + vaultShareMPTID + `"}`),
+		Node: encodeSyntheticRPCObject(t, map[string]any{
+			"LedgerEntryType": "Vault",
+			"Owner":           vaultInfoAccount,
+			"ShareMPTID":      vaultShareMPTID,
+		}),
 	}
 	mock.entries[issuanceKey] = &types.LedgerEntryResult{
 		LedgerIndex: 99,
 		LedgerHash:  [32]byte{0xAA},
 		Validated:   true,
-		Node:        []byte(`{"LedgerEntryType":"MPTokenIssuance","Sequence":1,"Issuer":"` + vaultInfoAccount + `","OutstandingAmount":"10"}`),
+		Node: encodeSyntheticRPCObject(t, map[string]any{
+			"LedgerEntryType":   "MPTokenIssuance",
+			"Sequence":          uint32(1),
+			"Issuer":            vaultInfoAccount,
+			"OutstandingAmount": "10",
+		}),
 	}
 
 	result, rpcErr := method.Handle(ctx, []byte(`{"ledger_index":3,"owner":"`+vaultInfoAccount+`","seq":1}`))
