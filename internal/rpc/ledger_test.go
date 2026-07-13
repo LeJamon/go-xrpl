@@ -196,7 +196,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 			resp := resultToMap(t, result)
 			assert.NotContains(t, resp, "closed")
 			assert.NotContains(t, resp, "open")
-			assert.Equal(t, uint32(3), resp["ledger_current_index"])
+			assert.Equal(t, float64(3), resp["ledger_current_index"])
 		})
 	}
 
@@ -228,7 +228,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 			require.Nil(t, rpcErr)
 			ledgerIndex := any("3")
 			if apiVersion > 1 {
-				ledgerIndex = uint32(3)
+				ledgerIndex = float64(3)
 			}
 			assert.Equal(t, map[string]any{
 				"ledger": map[string]any{
@@ -236,7 +236,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 					"ledger_index": ledgerIndex,
 					"closed":       false,
 				},
-				"ledger_current_index": uint32(3),
+				"ledger_current_index": float64(3),
 				"validated":            false,
 			}, resultToMap(t, result))
 		}
@@ -248,7 +248,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.Nil(t, rpcErr)
 		assert.Equal(t, map[string]any{
 			"ledger":               map[string]any{"closed": false},
-			"ledger_current_index": uint32(3),
+			"ledger_current_index": float64(3),
 			"validated":            false,
 		}, resultToMap(t, result))
 
@@ -260,7 +260,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 				"ledger_data": expectedLedgerHeaderHex(reader),
 			},
 			"ledger_hash":  handlers.FormatLedgerHash(reader.Hash()),
-			"ledger_index": uint32(2),
+			"ledger_index": float64(2),
 			"validated":    true,
 		}, resultToMap(t, result))
 	})
@@ -275,20 +275,20 @@ func TestLedgerBasicRequest(t *testing.T) {
 			"ledger": map[string]any{
 				"accountState":          []any{},
 				"account_hash":          handlers.FormatLedgerHash(currentReader.StateMapHash()),
-				"close_flags":           currentReader.CloseFlags(),
-				"close_time":            currentReader.CloseTime(),
+				"close_flags":           float64(currentReader.CloseFlags()),
+				"close_time":            float64(currentReader.CloseTime()),
 				"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
 				"close_time_iso":        closeTime.Format(time.RFC3339),
-				"close_time_resolution": currentReader.CloseTimeResolution(),
+				"close_time_resolution": float64(currentReader.CloseTimeResolution()),
 				"ledger_hash":           handlers.FormatLedgerHash(currentReader.Hash()),
 				"ledger_index":          "3",
-				"parent_close_time":     currentReader.ParentCloseTime(),
+				"parent_close_time":     float64(currentReader.ParentCloseTime()),
 				"parent_hash":           handlers.FormatLedgerHash(currentReader.ParentHash()),
 				"total_coins":           "99999999999999980",
 				"transaction_hash":      handlers.FormatLedgerHash(currentReader.TxMapHash()),
 				"transactions":          []any{},
 			},
-			"ledger_current_index": uint32(3),
+			"ledger_current_index": float64(3),
 			"validated":            false,
 		}, resultToMap(t, result))
 		ctx.Role = types.RoleGuest
@@ -298,9 +298,11 @@ func TestLedgerBasicRequest(t *testing.T) {
 	t.Run("Deprecated type field emits warning", func(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"type":"ledger"}`))
 		require.Nil(t, rpcErr)
-		warnings := resultToMap(t, result)["warnings"].([]map[string]any)
+		warnings := resultToMap(t, result)["warnings"].([]any)
 		require.Len(t, warnings, 1)
-		assert.Equal(t, 2004, warnings[0]["id"])
+		warning, ok := warnings[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, float64(2004), warning["id"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {
@@ -714,21 +716,21 @@ func TestLedgerResponseStructure(t *testing.T) {
 	assert.Equal(t, map[string]any{
 		"ledger": map[string]any{
 			"account_hash":          handlers.FormatLedgerHash(reader.StateMapHash()),
-			"close_flags":           reader.CloseFlags(),
-			"close_time":            reader.CloseTime(),
+			"close_flags":           float64(reader.CloseFlags()),
+			"close_time":            float64(reader.CloseTime()),
 			"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
 			"close_time_iso":        closeTime.Format(time.RFC3339),
-			"close_time_resolution": reader.CloseTimeResolution(),
+			"close_time_resolution": float64(reader.CloseTimeResolution()),
 			"closed":                true,
 			"ledger_hash":           handlers.FormatLedgerHash(reader.Hash()),
 			"ledger_index":          "2",
-			"parent_close_time":     reader.ParentCloseTime(),
+			"parent_close_time":     float64(reader.ParentCloseTime()),
 			"parent_hash":           handlers.FormatLedgerHash(reader.ParentHash()),
 			"total_coins":           "99999999999999980",
 			"transaction_hash":      handlers.FormatLedgerHash(reader.TxMapHash()),
 		},
 		"ledger_hash":  handlers.FormatLedgerHash(reader.Hash()),
-		"ledger_index": uint32(2),
+		"ledger_index": float64(2),
 		"validated":    true,
 	}, resultToMap(t, result))
 }

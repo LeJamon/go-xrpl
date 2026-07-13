@@ -108,9 +108,8 @@ func readRecoveryAccount(t *testing.T, view txcore.LedgerView, k keylet.Keylet) 
 	return acct
 }
 
-// recoveryTx builds a closed-ledger-applicable single-signed AccountSet-shaped
-// BaseTx with an explicit fee and sequence. AccountSet is a no-op when it has no
-// fields, so it never reaches a per-type Apply that would itself fail.
+// recoveryTx builds the common fields used by the closed-ledger recovery tests.
+// Tests that reach doApply wrap it in an Appliable fixture.
 func recoveryTx(fee, seq uint32) *txcore.BaseTx {
 	tx := txcore.NewBaseTx(txcore.TypeAccountSet, recoveryTestAccount)
 	tx.Common.Fee = strconv.FormatUint(uint64(fee), 10)
@@ -119,11 +118,17 @@ func recoveryTx(fee, seq uint32) *txcore.BaseTx {
 	return tx
 }
 
+type successfulRecoveryTx struct {
+	*txcore.BaseTx
+}
+
+func (successfulRecoveryTx) Apply(*txcore.ApplyContext) ter.Result { return ter.TesSUCCESS }
+
 func TestApply_SuccessStagesFeeAtomically(t *testing.T) {
 	view := newRecordingBaseView()
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
-	res := recoveryEngine(view, txcore.TapNONE).Apply(recoveryTx(10, 1))
+	res := recoveryEngine(view, txcore.TapNONE).Apply(successfulRecoveryTx{recoveryTx(10, 1)})
 	if res.Result != ter.TesSUCCESS || !res.Applied {
 		t.Fatalf("result/applied = %s/%v, want tesSUCCESS/true", res.Result, res.Applied)
 	}
