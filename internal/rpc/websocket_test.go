@@ -491,6 +491,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			ws := NewWebSocketServer(time.Second, nil)
+			ws.RegisterAllMethods()
 			wsConn := &WebSocketConnection{
 				ID:          "decode-test",
 				sendChannel: make(chan []byte, 1),
