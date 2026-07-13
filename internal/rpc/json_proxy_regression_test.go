@@ -53,9 +53,7 @@ func TestJSONProxyUsesSingleDispatchAccounting(t *testing.T) {
 		server.loadTracker.LocalBalance(transportRegressionClientIP),
 	)
 
-	envelope := decodeEnvelope(t, response.Body.Bytes())
-	result, ok := envelope["result"].(map[string]any)
-	require.True(t, ok)
+	result := decodeEnvelope(t, response.Body.Bytes())
 	assert.Equal(t, true, result["proxied"])
 	assert.Equal(t, "success", result["status"])
 }
@@ -72,7 +70,8 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 			body:    `{"method":"capture","params":[{"id":{"SeCrEt":"single-private"},"payload":"kept"}]}`,
 			secrets: []string{"single-private"},
 			result: func(t *testing.T, body []byte) map[string]any {
-				envelope := decodeEnvelope(t, body)
+				var envelope map[string]any
+				require.NoError(t, json.Unmarshal(body, &envelope))
 				assertMaskedStructuredID(t, envelope["id"])
 				result, ok := envelope["result"].(map[string]any)
 				require.True(t, ok)
@@ -101,7 +100,8 @@ func TestHTTPStructuredIDRedactionAcrossDispatchShapes(t *testing.T) {
 				"inner-private",
 			},
 			result: func(t *testing.T, body []byte) map[string]any {
-				envelope := decodeEnvelope(t, body)
+				var envelope map[string]any
+				require.NoError(t, json.Unmarshal(body, &envelope))
 				assertMaskedStructuredID(t, envelope["id"])
 				result, ok := envelope["result"].(map[string]any)
 				require.True(t, ok)

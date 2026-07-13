@@ -504,7 +504,7 @@ func TestWebSocketSpecialCommandDecodeErrorsAreFixed(t *testing.T) {
 				Request: map[string]any{"command": test.command, "id": int32(7)},
 			}
 
-			test.invoke(ws, wsConn, &types.RpcContext{}, cmd)
+			test.invoke(ws, wsConn, &types.RpcContext{ApiVersion: types.DefaultApiVersion}, cmd)
 			body := <-wsConn.sendChannel
 			if got := string(body); got != test.want {
 				t.Fatalf("response = %s, want %s", got, test.want)
@@ -538,7 +538,7 @@ func TestWebSocketJSONInvalidWireEnvelope(t *testing.T) {
 		{name: "oversized", request: strings.Repeat(" ", MaxRequestBytes+1), want: `{"error":"jsonInvalid","type":"error","value":"<redacted>"}`},
 		{name: "null", request: `null`, want: `{"error":"jsonInvalid","type":"error","value":"null"}`},
 		{name: "scalar", request: `7`, want: `{"error":"jsonInvalid","type":"error","value":"7"}`},
-		{name: "redacted array", request: `[{"secret":"private seed","nested":{"Seed":"nested seed"}}]`, want: `{"error":"jsonInvalid","type":"error","value":"[{\\"nested\\":{\\"Seed\\":\\"<masked>\\"},\\"secret\\":\\"<masked>\\"}]"}`},
+		{name: "redacted array", request: `[{"secret":"private seed","nested":{"Seed":"nested seed"}}]`, want: `{"error":"jsonInvalid","type":"error","value":"[{\"nested\":{\"Seed\":\"<masked>\"},\"secret\":\"<masked>\"}]"}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

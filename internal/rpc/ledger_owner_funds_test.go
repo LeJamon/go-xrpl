@@ -100,8 +100,9 @@ func TestLedgerOwnerFunds(t *testing.T) {
 			"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
 			"value":    "100",
 		},
-		"Sequence": 1,
-		"Fee":      "10",
+		"Sequence":      1,
+		"Fee":           "10",
+		"SigningPubKey": "",
 	}
 	stored := map[string]any{"tx_json": offerCreate}
 	storedJSON, err := json.Marshal(stored)

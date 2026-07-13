@@ -534,6 +534,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	meta, ok := resp["metadata"].(map[string]any)
 	require.True(t, ok, "metadata must be an object")
 	assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
+	assert.NotContains(t, meta, "DeliveredAmount")
 }
 
 func TestTransactionEntryCorruptedStoredDataIsSanitized(t *testing.T) {

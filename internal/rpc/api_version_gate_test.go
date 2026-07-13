@@ -287,9 +287,13 @@ func TestApiVersion_WSRequiresJSONInteger(t *testing.T) {
 	ws := versionEchoWSServer(t, false)
 	for _, rawVersion := range []string{`"2"`, `1.5`, `1.0`, `1e0`} {
 		t.Run(rawVersion, func(t *testing.T) {
-			resp := wsRoundTrip(t, ws, `{"command":"ping","api_version":`+rawVersion+`}`)
-			if resp.Error != "invalid_API_version" {
-				t.Fatalf("error = %q, want invalid_API_version", resp.Error)
+			raw := wsRawRoundTrip(t, ws, `{"command":"ping","api_version":`+rawVersion+`}`)
+			var resp map[string]any
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v\nraw: %s", err, string(raw))
+			}
+			if resp["error"] != "invalid_API_version" {
+				t.Fatalf("error = %q, want invalid_API_version", resp["error"])
 			}
 		})
 	}
