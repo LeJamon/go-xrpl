@@ -439,7 +439,6 @@ func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	l.dropsDestroyed = l.dropsDestroyed.Add(drops)
 }
 
-// ApplyAtomically commits state changes made through apply as one unit.
 func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()

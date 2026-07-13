@@ -80,7 +80,6 @@ type ApplyStateTable struct {
 	rules            *amendment.Rules
 }
 
-// AtomicLedgerView is a ledger view that can commit a group of writes as one unit.
 type AtomicLedgerView interface {
 	tx.LedgerView
 	ledgercore.AtomicWriter
@@ -135,7 +134,6 @@ func (t *ApplyStateTable) adopt(staged *ApplyStateTable) {
 	t.drops = staged.drops
 }
 
-// ApplyAtomically stages changes in an isolated copy of the table.
 func (t *ApplyStateTable) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := t.clone()
 	if err := apply(staged); err != nil {

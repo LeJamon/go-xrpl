@@ -391,7 +391,6 @@ func (s *PaymentSandbox) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	s.dropsDestroyed = s.dropsDestroyed.Add(drops)
 }
 
-// ApplyAtomically stages changes in a child sandbox before merging them.
 func (s *PaymentSandbox) ApplyAtomically(apply func(ledgercore.Writer) error) error {
 	staged := NewChildSandbox(s)
 	if err := apply(staged); err != nil {

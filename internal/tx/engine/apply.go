@@ -185,8 +185,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) tx
 		applied = false
 	}
 
-	// Assign TransactionIndex. The charged fee was committed atomically with
-	// the state table that produced this applied result.
+	// The charged fee was committed atomically with the state table.
 	if applied {
 		metadata.TransactionIndex = e.txCount.Add(1) - 1
 	}
