@@ -260,7 +260,7 @@ Verification:
 - [x] Review every changed file and reachable caller for correctness, failure
       paths, lifecycle/concurrency, wiring, and rippled v3.2.0 parity; record the
       coverage matrix and unresolved scope honestly.
-- [ ] Commit only intentional files, push the issue branch, and open a PR against
+- [x] Commit only intentional files, push the issue branch, and open a PR against
       `v3.0.0` with the verified test plan.
 
 ## Review
@@ -293,3 +293,5 @@ Verification:
   out-of-scope Batch, Vault, XChain, and XChainSim suites.
 - No unresolved in-scope conformance gaps were found. The fail-fast empty-trust
   check is an intentional startup safety requirement from issue #1301.
+- Delivery: PR #1317 is open and mergeable from
+  `fix/issue-1301-testnet-readiness-r1` into `v3.0.0`.
