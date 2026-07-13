@@ -11,19 +11,28 @@ import (
 // Per-MessageType payload-size caps applied by ReadMessage BEFORE
 // allocating. Without these, a peer can claim MaxPayloadSize for any
 // type and force a 64MB allocation per claim — trivial OOM vector.
-// Values are ~10× typical observed traffic per type; unknown types
-// fall back to defaultPerTypeMax.
+// Values are ~10× typical observed traffic per known type.
 const (
-	smallMsgMax       = 64 * 1024        // 64 KiB
-	mediumMsgMax      = 1 * 1024 * 1024  // 1 MiB
-	largeMsgMax       = 16 * 1024 * 1024 // 16 MiB
-	defaultPerTypeMax = mediumMsgMax
+	smallMsgMax  = 64 * 1024        // 64 KiB
+	mediumMsgMax = 1 * 1024 * 1024  // 1 MiB
+	largeMsgMax  = 16 * 1024 * 1024 // 16 MiB
 )
 
 // MaxPayloadSizeForType returns the largest payload a peer may claim
 // for the given message type (post-decompress for compressed frames).
-// Unknown types fall back to defaultPerTypeMax.
+// Unknown types are bounded only by the universal protocol ceiling so a
+// newer peer can introduce message types without breaking older peers.
 func MaxPayloadSizeForType(t MessageType) uint32 {
+	return payloadSizeLimit(t)
+}
+
+// IsKnownMessageType reports whether this implementation can dispatch t.
+func IsKnownMessageType(t MessageType) bool {
+	_, known := codecs[t]
+	return known
+}
+
+func payloadSizeLimit(t MessageType) uint32 {
 	switch t {
 	case TypePing, TypeSquelch:
 		return 2048
@@ -61,7 +70,7 @@ func MaxPayloadSizeForType(t MessageType) uint32 {
 		// ReadMessage) rather than a stricter limit.
 		return MaxMessageSize
 	default:
-		return defaultPerTypeMax
+		return MaxMessageSize
 	}
 }
 

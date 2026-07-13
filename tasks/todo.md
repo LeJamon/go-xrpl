@@ -233,3 +233,56 @@ Verification:
 - `just build`, `just vet`, and `just lint` pass; lint reports 0 issues.
 - The staged merge has no unmerged paths, conflict markers, or whitespace
   errors.
+
+# Issue #1303 — trust-layer visibility and forward compatibility
+
+Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`
+worktree at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Match rippled's UNL-blocked operating behavior: immediately demote an
+      already-FULL node to CONNECTED and prevent promotion while blocked.
+- [x] Surface expired validator-list state in `server_info`, including rippled's
+      public warning and admin-only validator-list summary/expiry fields.
+- [x] Derive `Ledger.Rules()` from the ledger Amendments object so consensus
+      feature gates, especially NegativeUNL round hooks, use ledger truth.
+- [x] Accept future unknown overlay message types up to the universal 64 MiB
+      ceiling and skip them without disconnecting or resource charges.
+- [x] Rewrite Docker handshake interop around the production handshake path,
+      pin rippled 3.2.0, and exercise `network_id=1`.
+- [x] Add a deterministic, unit-tested manual amendment-registry checker that
+      compares a remote `feature` response without claiming scheduled coverage.
+- [x] Document host time synchronization and the safe TLS reverse-proxy topology,
+      including loopback admin isolation and trusted proxy-header handling.
+- [x] Format and run focused package tests after each change group; then run
+      build, vet, lint, core/full tests as applicable, Docker interop when the
+      local runtime permits it, and inspect the final diff against rippled 3.2.0.
+- [x] Record exact verification and review results below, then commit, push, and
+      open a PR targeting `v3.0.0`.
+
+## Review
+
+Implemented UNL-blocked mode enforcement and trust-state RPC visibility,
+ledger-backed immutable Rules snapshots, forward-compatible overlay framing,
+production-path rippled interop, and a manual freshness-checked amendment
+registry tool. The operator documentation covers NTP/chrony, TLS termination,
+loopback-only admin RPC, and trusted proxy headers. No scheduled checker workflow
+was added.
+
+Verification:
+
+- Three independent final audits are clean against the local rippled 3.2.0
+  oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Focused normal and race suites pass for ledger, consensus/adaptor, validator
+  lists, RPC, node, overlay, replay, and the amendment checker.
+- `just build-all`, `just build-nocgo`, `just vet`, `just lint` (0 issues), and
+  `just docs-check` pass.
+- The production `Peer.Connect` Docker interop passes against
+  `xrpllabsofficial/xrpld:3.2.0` on network ID 1 with the server version checked.
+- The live default manual checker reports 98 Testnet amendments on network ID 1
+  from a fresh validated ledger close.
+- `just test` passes every package except the documented out-of-scope
+  conformance suites. `just conformance --failing` reports 941 pass / 117 fail
+  overall and 879 pass / 0 fail in scope; failures remain confined to Batch,
+  Vault, XChain, and XChainSim.

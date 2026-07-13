@@ -801,7 +801,10 @@ func (s *Service) AdoptLedgerHeader(h *header.LedgerHeader) error {
 		return fmt.Errorf("failed to snapshot genesis tx map: %w", err)
 	}
 
-	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	adopted, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("failed to construct adopted ledger: %w", err)
+	}
 
 	// Adopted becomes closedLedger and joins history but is NOT marked validated
 	// (no quorum yet); validatedLedger advances later via SetValidatedLedger.
@@ -862,7 +865,10 @@ func (s *Service) ReAdoptLedgerHeader(h *header.LedgerHeader) error {
 		return fmt.Errorf("failed to snapshot genesis tx map: %w", err)
 	}
 
-	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	adopted, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("failed to construct adopted ledger: %w", err)
+	}
 
 	// Advance closedLedger to the peer's tip but NOT validatedLedger: "closed"
 	// is not "validated"; the quorum gate in SetValidatedLedger owns that.
@@ -924,7 +930,10 @@ func (s *Service) adoptLedgerWithStateLocked(
 		txMap = empty
 	}
 
-	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	adopted, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("failed to construct adopted ledger: %w", err)
+	}
 
 	// Invalidate the history tail if adopted doesn't chain to our seq-1 entry
 	// (divergent fork) so RPCs don't resolve stale state. See fixMismatchLocked.

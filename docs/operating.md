@@ -58,6 +58,14 @@ A fully-commented example lives at
 is **required** unless marked optional — the server refuses to start if a required
 field is missing.
 
+### Time synchronization
+
+Accurate host time is a hard requirement. The peer handshake rejects a connection
+when the two nodes' clocks differ by more than 20 seconds, and go-xrpl does not
+include an SNTP client. Install and enable a host time service such as `chrony` or
+the operating system's NTP daemon, then monitor its synchronization state and
+offset. Do not rely on a VM or container clock without a synchronized host.
+
 ### Endpoints
 
 The server exposes the protocols configured in the `[server]` `ports` list. With
@@ -74,8 +82,44 @@ the example configuration:
 | gRPC (optional) | `127.0.0.1:50051` | Clio integration (uncomment `[port_grpc]` and add it to `[server].ports`) |
 
 A port gets **admin** role when its `admin` field lists the client's IP (CIDR
-supported); a port with no `admin` field is public and all clients get the
-**guest** role.
+supported). When neither `admin` nor `secure_gateway` is configured, direct
+loopback requests also receive admin role; other clients receive **guest** role.
+Always set `secure_gateway` on a same-host public proxy backend so loopback does
+not trigger that admin fallback.
+
+### TLS and reverse proxies
+
+The HTTP and WebSocket listeners do not terminate TLS. For public RPC, run a TLS
+reverse proxy on the same host and bind the guest RPC ports to loopback rather
+than a public interface. Set `secure_gateway` on each proxied guest port to the
+proxy's exact source IP; for a same-host proxy this is normally `127.0.0.1` or
+`::1`:
+
+```toml
+[port_rpc_public]
+port = 5555
+ip = "127.0.0.1"
+protocol = "http"
+secure_gateway = ["127.0.0.1"]
+
+[port_rpc_admin_local]
+port = 5005
+ip = "127.0.0.1"
+protocol = "http"
+admin = ["127.0.0.1"]
+```
+
+Expose only the proxy's TLS listener publicly. Configure the proxy to replace,
+not append to, client-supplied `Forwarded`, `X-Forwarded-For`, and `X-Real-IP`
+headers, and strip any client-supplied `X-User` header before setting trusted
+forwarding headers itself. Never use a broad `secure_gateway` network when a
+single proxy address is sufficient.
+
+Keep admin HTTP and WebSocket ports separate, loopback-only, and absent from the
+public proxy configuration. The peer port is different: its TLS handshake feeds
+the XRPL session signature, so peers must connect directly or through a
+transparent TCP path that preserves TLS end to end. Do not terminate peer TLS in
+an HTTP reverse proxy or load balancer.
 
 ### Standalone vs networked
 
@@ -182,6 +226,25 @@ omit one to use rippled's `TxQ::Setup` default, or set it explicitly
   an amendment (rippled's `[amendments]` stanza); `veto` refuses to vote for it
   (rippled's `[veto_amendments]`). Names match the amendment registry; an amendment
   must not appear in both lists.
+
+Before deploying to a public network, manually compare that network's amendment
+state with this build's registry:
+
+```bash
+# Defaults to the XRPL Testnet JSON-RPC endpoint.
+go run ./scripts/amendment-watch
+
+# Check another rippled-compatible endpoint and require its expected network.
+go run ./scripts/amendment-watch -rpc-url https://example.net:51234/ -network-id 1 -timeout 15s
+```
+
+The command exits nonzero when the remote node reports an amendment absent from
+the local registry, even if it is disabled, or when a locally unsupported
+amendment is enabled or holds majority. A known, disabled unsupported amendment
+and an amendment present only in the local registry are safe. The check also
+requires the same endpoint to report the expected network ID and a validated
+ledger no more than 60 seconds old; HTTPS redirects are not allowed to downgrade
+to HTTP.
 
 ### Validation
 

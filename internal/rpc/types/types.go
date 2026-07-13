@@ -189,6 +189,7 @@ type LedgerSpecifier struct {
 const (
 	WarningUnsupportedAmendmentsMajority = 1001 // Unsupported amendments have reached majority
 	WarningAmendmentBlocked              = 1002 // This server is amendment blocked
+	WarningExpiredValidatorList          = 1003 // This server has an expired validator list
 	WarningClioServer                    = 2001 // This is a clio server
 )
 

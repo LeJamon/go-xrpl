@@ -125,6 +125,9 @@ type ValidatorListReader interface {
 	// number of publishers whose lists must agree on a validator
 	// before it enters the effective UNL).
 	Threshold() int
+	// IsUNLBlocked reports whether publisher-list expiry or an empty trusted
+	// union has locked the node out of consensus participation.
+	IsUNLBlocked() bool
 	// Publishers returns a snapshot of per-publisher state for the
 	// `validators` RPC.
 	Publishers() []ValidatorListPublisherInfo
@@ -223,6 +226,11 @@ type ServiceContainer struct {
 	// (rippled getJson at ValidatorList.cpp:1657-1661). Nil-safe — a nil
 	// func means "no static keys".
 	LocalStaticTrustedKeysBase58 func() []string
+
+	// TrustedValidatorKeysBase58 returns the current effective trusted UNL,
+	// including configured static validators, the local identity, and validators
+	// selected from publisher lists. Surfaced as `trusted_validator_keys`.
+	TrustedValidatorKeysBase58 func() []string
 
 	// SigningKeysBase58 returns the master→signing key map projected as
 	// base58 strings. Surfaced by the `validators` RPC as `signing_keys`

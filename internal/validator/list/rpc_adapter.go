@@ -56,6 +56,10 @@ func (r *RPCReader) Threshold() int {
 	return r.agg.Threshold()
 }
 
+func (r *RPCReader) IsUNLBlocked() bool {
+	return r != nil && r.agg != nil && r.agg.IsUNLBlocked()
+}
+
 func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 	if r == nil || r.agg == nil {
 		return nil

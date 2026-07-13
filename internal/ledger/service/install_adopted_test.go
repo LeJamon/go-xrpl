@@ -46,9 +46,17 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 			Hash:        ledgerHash,
 		}
 		if validated {
-			return ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+			l, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})
+			if err != nil {
+				t.Fatalf("NewFromHeader: %v", err)
+			}
+			return l
 		}
-		return ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+		l, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+		if err != nil {
+			t.Fatalf("NewOpenWithHeader: %v", err)
+		}
+		return l
 	}
 
 	seq := parentSeq + 5

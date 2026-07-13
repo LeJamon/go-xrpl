@@ -16,10 +16,8 @@ func (m *ServerStateMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	}
 
 	state := buildServerInfo(ctx, false)
-
-	response := map[string]any{
-		"state": state,
+	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
+		state["warnings"] = warnings
 	}
-
-	return response, nil
+	return map[string]any{"state": state}, nil
 }

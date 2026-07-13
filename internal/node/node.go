@@ -560,8 +560,19 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// Bind to the live accessor (not a boot-time copy) so a SIGHUP
 		// reload of the [validators] stanza is visible to the RPC.
 		componentsRef := consensusComponents
+		adaptorRef := consensusComponents.Adaptor
 		services.LocalStaticTrustedKeysBase58 = func() []string {
 			masters := componentsRef.StaticTrustedMasterKeys()
+			out := make([]string, 0, len(masters))
+			for _, mk := range masters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
+		services.TrustedValidatorKeysBase58 = func() []string {
+			masters := adaptorRef.GetTrustedMasterKeys()
 			out := make([]string, 0, len(masters))
 			for _, mk := range masters {
 				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
@@ -574,10 +585,10 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
 			// `signing_keys` only surfaces master→signing pairs for
 			// masters present in keyListings_, i.e. validators listed
-			// by at least one publisher or pinned in the local
-			// [validators] stanza. Without this filter we would leak
-			// every gossiped manifest, including ones unrelated to any
-			// trusted publisher.
+			// by at least one publisher, pinned in the local
+			// [validators] stanza, or used as the local identity. Without
+			// this filter we would leak every gossiped manifest, including
+			// ones unrelated to any trusted publisher.
 			vlAgg := consensusComponents.ValidatorList
 			services.SigningKeysBase58 = func() map[string]string {
 				snap := mc.MasterToSigning()
@@ -585,11 +596,14 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 					return nil
 				}
 				listed := make(map[[33]byte]struct{})
-				for _, mk := range componentsRef.StaticTrustedMasterKeys() {
+				for _, mk := range adaptorRef.GetTrustedMasterKeys() {
 					listed[mk] = struct{}{}
 				}
 				if vlAgg != nil {
 					for _, p := range vlAgg.PublisherSnapshot() {
+						if p.Status != validatorlist.StatusAvailable {
+							continue
+						}
 						for _, mk := range p.Validators {
 							listed[mk] = struct{}{}
 						}
@@ -612,7 +626,6 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 				return out
 			}
 		}
-		adaptorRef := consensusComponents.Adaptor
 		services.NegativeUNLBase58 = func() []string {
 			masters := adaptorRef.GetNegativeUNLMasters()
 			if len(masters) == 0 {

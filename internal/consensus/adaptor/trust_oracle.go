@@ -109,6 +109,15 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 	return result
 }
 
+// GetTrustedMasterKeys returns the master keys for the current effective UNL.
+func (a *Adaptor) GetTrustedMasterKeys() [][33]byte {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := make([][33]byte, len(a.trustedMasterKeys))
+	copy(result, a.trustedMasterKeys)
+	return result
+}
+
 // SetTrustedValidators atomically replaces the operator-trusted validator set.
 //
 // validators and masterKeys are index-aligned and MUST be the same length; a
@@ -150,6 +159,9 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	// releasing a.mu to avoid lock nesting.
 	if a.trustedVotes != nil {
 		a.trustedVotes.TrustChanged(vCopy)
+	}
+	if a.IsUNLBlocked() && a.GetOperatingMode() > consensus.OpModeConnected {
+		a.SetOperatingMode(consensus.OpModeConnected)
 	}
 	// Outside a.mu: the engine's trust refresh reads back through
 	// GetTrustedValidators / GetQuorum, which re-lock it.

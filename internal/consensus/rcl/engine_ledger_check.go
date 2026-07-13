@@ -95,10 +95,10 @@ func (e *Engine) timerEntry() {
 		return
 	}
 
-	// An amendment-blocked node can no longer build correct ledgers: latch
-	// the operating mode down so it stops claiming to be synced.
+	// A blocked node can no longer participate safely: latch the operating
+	// mode down so it stops claiming to be synced.
 	if e.adaptor.GetOperatingMode() > consensus.OpModeConnected &&
-		e.adaptor.IsAmendmentBlocked() {
+		(e.adaptor.IsAmendmentBlocked() || e.adaptor.IsUNLBlocked()) {
 		e.adaptor.SetOperatingMode(consensus.OpModeConnected)
 	}
 
