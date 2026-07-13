@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"maps"
+	"math"
 	"sort"
 	"strings"
 
@@ -29,7 +30,7 @@ func metadataToMap(meta any) map[string]any {
 
 // InjectSyntheticFields adds rippled's derived transaction metadata fields to
 // JSON responses that render a transaction and its metadata together.
-func InjectSyntheticFields(txJSON, meta map[string]any) {
+func InjectSyntheticFields(txJSON, meta map[string]any, ctx SyntheticMetadataContext) {
 	if meta == nil {
 		return
 	}
@@ -38,13 +39,13 @@ func InjectSyntheticFields(txJSON, meta map[string]any) {
 	}
 	txType, _ := txJSON["TransactionType"].(string)
 
-	InjectDeliveredAmount(txJSON, meta)
+	InjectDeliveredAmount(txJSON, meta, ctx)
 	insertNFTSynthetic(meta, txJSON, txType)
 	InjectMPTokenIssuanceID(txJSON, meta)
 }
 
-func enrichSimulateMeta(meta, txJSON map[string]any) {
-	InjectSyntheticFields(txJSON, meta)
+func enrichSimulateMeta(meta, txJSON map[string]any, ctx SyntheticMetadataContext) {
+	InjectSyntheticFields(txJSON, meta, ctx)
 }
 
 // insertNFTSynthetic mirrors rippled insertNFTSyntheticInJson: nftoken_id /
@@ -247,7 +248,7 @@ func nftokenIDsInFields(fields map[string]any) []string {
 func jsonUint32(v any) (uint32, bool) {
 	switch n := v.(type) {
 	case float64:
-		if n >= 0 && n <= 4294967295 {
+		if n >= 0 && n <= math.MaxUint32 && n == math.Trunc(n) {
 			return uint32(n), true
 		}
 	case uint32:

@@ -271,3 +271,27 @@ Verification:
 - `just fmt`, `just vet`, `just lint`, `just build-all`, and `just test-core`
   pass; lint reports 0 issues.
 - Independent final Go and rippled-conformance reviews found no defects.
+
+## PR #1316 finalization remediation
+
+- [x] Pin the exact PR head, base, clean worktree, and clean local rippled 3.2.0 oracle.
+- [x] Review the full diff for Go correctness and protocol-surface conformance.
+- [x] Close every confirmed RPC projection, stream, CTID, binary-shape, and historical delivered-amount gap.
+- [x] Re-review the completed behavior diff and pass build, vet, and lint.
+- [ ] Commit and push the behavior fix; require green CI at the exact remote head.
+- [ ] Run the separate AI-comment cleanup phase, then verify the final remote head and CI.
+
+### Finalization review
+
+Behavior remediation is complete against the pinned PR head and clean local
+rippled 3.2.0 oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+The review covered all changed RPC and subscription surfaces, ledger-local and
+historical transaction lookup, binary parsing, CTID handling, pathfinding, and
+synthetic metadata projection. Independent Go and exact-rippled reviews are
+clean, including the final zero-`uint256` parsing and ranged-lookup error
+propagation edge cases.
+
+Verification on the stable behavior tree: `just build`, `just vet`, and
+`just lint` pass; lint reports zero issues. Per the finalization workflow, local
+test execution is intentionally deferred to CI. The local audit trail remains
+outside the repository until the final remote head and CI result are known.

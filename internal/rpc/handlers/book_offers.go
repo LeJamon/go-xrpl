@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -41,14 +40,18 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		}
 	}
 
-	// rippled BookOffers.cpp:45-49 runs RPC::lookupLedger BEFORE per-field
-	// validation. A bogus ledger_index combined with missing taker_pays must
-	// surface lgrNotFound, not invalidParams (Book_test.cpp:1329-1336). For
-	// the keyword specifiers (validated/current/closed/"") the service layer
-	// always has the handles, so we only pre-resolve when the caller named
-	// an explicit hash or numeric seq.
-	if rpcErr := preResolveLedger(ctx, probe); rpcErr != nil {
-		return nil, rpcErr
+	ledgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selectorErr := resolveLedgerSelector(ledgerSpec)
+	if selectorErr != nil {
+		return nil, selectorErr
+	}
+
+	ledger, validated, lookupErr := LookupLedger(ctx, ledgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
 	}
 
 	// Validation order mirrors rippled BookOffers.cpp:51-199 exactly so that
@@ -107,7 +110,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 
 	// taker (BookOffers.cpp:164-173).
 	var takerStr string
-	if rawTaker, ok := probe["taker"]; ok && !isJSONNull(rawTaker) {
+	if rawTaker, ok := probe["taker"]; ok {
 		if !isJSONString(rawTaker) {
 			return nil, types.RPCErrorExpectedField("taker", "string")
 		}
@@ -122,7 +125,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// domain (BookOffers.cpp:175-189). Non-string OR parseHex-fail both
 	// produce the same rpcDOMAIN_MALFORMED with "Unable to parse domain.".
 	var domain string
-	if rawDomain, ok := probe["domain"]; ok && !isJSONNull(rawDomain) {
+	if rawDomain, ok := probe["domain"]; ok {
 		if !isJSONString(rawDomain) {
 			return nil, types.RPCErrorDomainMalformed("Unable to parse domain.")
 		}
@@ -180,44 +183,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// regardless of its JSON value (BookOffers.cpp:201).
 	_, withProofs := probe["proof"]
 
-	var spec types.LedgerSpecifier
-	if rawLedgerHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawLedgerHash) {
-		if err := json.Unmarshal(rawLedgerHash, &spec.LedgerHash); err != nil {
-			return nil, types.RPCErrorExpectedField("ledger_hash", "string")
-		}
-	}
-	if rawLedgerIndex, ok := probe["ledger_index"]; ok && !isJSONNull(rawLedgerIndex) {
-		if err := json.Unmarshal(rawLedgerIndex, &spec.LedgerIndex); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid ledger_index: %v", err))
-		}
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(spec)
-	if selErr != nil {
-		return nil, selErr
-	}
-
-	// marker is a go-xrpl extension. rippled's handler (BookOffers.cpp:201-214)
-	// reads `marker` from params and threads it through to getBookPage, but
-	// NetworkOPsImp::getBookPage doesn't actually use it (NetworkOPs.cpp:4627
-	// shows the response field is commented out). We treat it as an opaque
-	// 64-hex offer-index resume token; the service rejects non-matching shapes.
-	var markerStr string
-	if rawMarker, ok := probe["marker"]; ok && !isJSONNull(rawMarker) {
-		if !isJSONString(rawMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-		if err := json.Unmarshal(rawMarker, &markerStr); err != nil {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-		if len(markerStr) != 64 {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-		if _, err := hex.DecodeString(markerStr); err != nil {
-			return nil, types.RPCErrorInvalidField("marker")
-		}
-	}
-
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, markerStr, withProofs)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", withProofs)
 	if err != nil {
 		// Mirrors rippled AccountOffers.cpp:107-132 two-tier mapping:
 		// malformed / wrong-scope marker → invalid_field_error("marker");
@@ -236,16 +202,8 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	response := map[string]any{
-		"offers": result.Offers,
-	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
-	if result.Marker != "" {
-		// Pair marker with limit echo, matching rippled's account_offers
-		// convention (AccountOffers.cpp:172-176 emits both fields together).
-		response["marker"] = result.Marker
-		response["limit"] = limit
-	}
+	response := ledgerEntryResponseFields(ledger, validated)
+	response["offers"] = result.Offers
 	return response, nil
 }
 
@@ -339,7 +297,7 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 	var issuerStr string
 	var issuerID [20]byte
 	hasIssuer := false
-	if rawIssuer, ok := inner["issuer"]; ok && !isJSONNull(rawIssuer) {
+	if rawIssuer, ok := inner["issuer"]; ok {
 		if !isJSONString(rawIssuer) {
 			return "", [20]byte{}, types.RPCErrorExpectedField(field, "string")
 		}
@@ -455,21 +413,13 @@ func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
 // service layer which always has those handles. For an explicit ledger_hash
 // or numeric ledger_index we pre-resolve so a bogus value returns
 // lgrNotFound / lgrIdxMalformed before any field-level validation runs.
-func preResolveLedger(ctx *types.RPCContext, probe map[string]json.RawMessage) *types.RPCError {
-	if rawHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawHash) {
-		var hashStr string
-		if err := json.Unmarshal(rawHash, &hashStr); err != nil {
-			return types.RPCErrorExpectedField("ledger_hash", "string")
-		}
-		raw, err := hex.DecodeString(hashStr)
-		if err != nil || len(raw) != 32 {
-			return &types.RPCError{
-				Code:        types.RpcINVALID_PARAMS,
-				ErrorString: "invalidParams",
-				Type:        "invalidParams",
-				Message:     "ledgerHashMalformed",
-			}
-		}
+func preResolveLedger(ctx *types.RPCContext, selector string) *types.RPCError {
+	switch selector {
+	case "", "current", "closed", "validated":
+		return nil
+	}
+	if len(selector) == 64 {
+		raw, _ := hex.DecodeString(selector)
 		var h [32]byte
 		copy(h[:], raw)
 		if l, lerr := ctx.Services.Ledger.GetLedgerByHash(h); lerr != nil || l == nil {
@@ -478,22 +428,9 @@ func preResolveLedger(ctx *types.RPCContext, probe map[string]json.RawMessage) *
 		return nil
 	}
 
-	rawIdx, ok := probe["ledger_index"]
-	if !ok || isJSONNull(rawIdx) {
-		return nil
-	}
-	var li types.LedgerIndex
-	if err := json.Unmarshal(rawIdx, &li); err != nil {
-		return nil // fall through; downstream parse will catch malformed values
-	}
-	s := li.String()
-	switch s {
-	case "", "current", "closed", "validated":
-		return nil
-	}
-	seq, perr := strconv.ParseUint(s, 10, 32)
+	seq, perr := parseLedgerIndex(selector)
 	if perr != nil {
-		return nil // non-numeric, non-keyword: let the downstream layer surface its own error
+		return types.RPCErrorExpectedField("ledger_index", "string or number")
 	}
 	if l, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil || l == nil {
 		return types.RPCErrorLgrNotFound("ledgerNotFound")

@@ -59,6 +59,7 @@ type PathRequest struct {
 	convertAll       bool
 	maxPaths         int
 	searchLevel      int
+	domainID         *[32]byte
 }
 
 // IsValidAsset reports whether an amount carries an asset that path finding
@@ -107,12 +108,21 @@ func (pr *PathRequest) SetSearchLevel(level int) {
 	pr.searchLevel = level
 }
 
+// SetDomainID restricts pathfinding and liquidity calculation to one
+// permissioned domain.
+func (pr *PathRequest) SetDomainID(domainID *[32]byte) {
+	pr.domainID = domainID
+}
+
 // Execute runs the pathfinding algorithm and returns the result.
 // Reference: rippled PathRequest::doUpdate()
 func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 	cache := NewRippleLineCache(ledger)
 	parentCloseTime := ledgerParentCloseTime(ledger)
 	calculationOptions := newFlowCalculationSettings(ledger, parentCloseTime).options()
+	if pr.domainID != nil {
+		calculationOptions = append(calculationOptions, payment.WithDomainID(pr.domainID))
+	}
 
 	// Determine source currencies
 	srcCurrencies := pr.sourceCurrencies
@@ -166,12 +176,17 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 
 	// Compute destination currencies
 	destCurrencies := AccountDestCurrencies(pr.dstAccount, cache)
+	seenDestCurrencies := make(map[string]struct{})
 	for issue := range destCurrencies {
+		currency := issue.Currency
 		if issue.IsMPT {
-			result.DestinationCurrencies = append(result.DestinationCurrencies, mptutil.EncodeID(issue.MPTID))
-		} else {
-			result.DestinationCurrencies = append(result.DestinationCurrencies, issue.Currency)
+			currency = mptutil.EncodeID(issue.MPTID)
 		}
+		if _, exists := seenDestCurrencies[currency]; exists {
+			continue
+		}
+		seenDestCurrencies[currency] = struct{}{}
+		result.DestinationCurrencies = append(result.DestinationCurrencies, currency)
 	}
 
 	// Track previously found paths per source currency (mContext in rippled)
@@ -212,6 +227,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			pr.convertAll,
 			parentCloseTime,
 		)
+		pf.setDomainID(pr.domainID)
 
 		if !pf.FindPaths(pr.searchLevel) {
 			continue

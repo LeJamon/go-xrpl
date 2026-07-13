@@ -340,13 +340,13 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 				affected[destinationID] = struct{}{}
 			}
 
-			var txnSeq uint32
+			txnSeq := invalidTransactionIndex
 			if len(metaBlob) > 0 {
+				if txIndex, ok := tx.TransactionIndexFromMetadata(metaBlob); ok {
+					txnSeq = txIndex
+				}
 				metaHex := hex.EncodeToString(metaBlob)
 				if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
-					if v, ok := metaJSON["TransactionIndex"].(float64); ok {
-						txnSeq = uint32(v)
-					}
 					addMetaAffectedAccounts(metaJSON, affected)
 				}
 			}

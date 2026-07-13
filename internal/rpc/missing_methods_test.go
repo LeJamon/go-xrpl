@@ -1478,7 +1478,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Services:   services,
 		}
 
-		params := json.RawMessage(`{"vault_id": "0000000000000000000000000000000000000000000000000000000000000000"}`)
+		params := json.RawMessage(`{"vault_id": "0000000000000000000000000000000000000000000000000000000000000001"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
 		assert.Nil(t, result)

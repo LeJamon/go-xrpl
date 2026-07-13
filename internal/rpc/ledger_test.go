@@ -136,19 +136,27 @@ func TestLedgerBasicRequest(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("Default params returns current ledger", func(t *testing.T) {
+	t.Run("Default params return closed and open ledgers", func(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr, "Expected no error, got: %v", rpcErr)
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		assert.Contains(t, resp, "ledger")
-		assert.Contains(t, resp, "ledger_hash")
-		assert.Contains(t, resp, "ledger_index")
-		assert.Contains(t, resp, "validated")
-		// rippled defaults to the current (open) ledger when no ledger is
-		// specified (RPCHelpers.cpp:388-389), so validated is false.
-		assert.Equal(t, false, resp["validated"])
+		assert.Contains(t, resp, "closed")
+		assert.Contains(t, resp, "open")
+		assert.NotContains(t, resp, "ledger")
+		assert.Equal(t, true, resp["closed"].(map[string]any)["closed"])
+		assert.Equal(t, false, resp["open"].(map[string]any)["closed"])
+	})
+
+	t.Run("No selector ignores full permission gate and warns on type", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true,"type":"account"}`))
+		require.Nil(t, rpcErr)
+		resp := resultToMap(t, result)
+		assert.Contains(t, resp, "closed")
+		warnings := resp["warnings"].([]types.WarningObject)
+		require.Len(t, warnings, 1)
+		assert.Equal(t, 2004, warnings[0].ID)
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {
@@ -363,6 +371,72 @@ func TestLedgerFullOption(t *testing.T) {
 		assert.True(t, isMap, "With expand, transactions should be objects")
 		assert.Contains(t, txObj, "hash")
 	})
+}
+
+func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
+	tests := []struct {
+		name              string
+		closeTime         int64
+		expectedDelivered string
+	}{
+		{
+			name:              "at close-time cutoff",
+			closeTime:         446_000_000,
+			expectedDelivered: "unavailable",
+		},
+		{
+			name:              "after close-time cutoff",
+			closeTime:         446_000_001,
+			expectedDelivered: "100",
+		},
+	}
+
+	for _, tc := range tests {
+		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+			apiName := "api_v1"
+			metaKey := "metaData"
+			if apiVersion == types.ApiVersion2 {
+				apiName = "api_v2"
+				metaKey = "meta"
+			}
+			t.Run(tc.name+"/"+apiName, func(t *testing.T) {
+				txData, err := json.Marshal(handlers.StoredTransaction{
+					TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
+					Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+				})
+				require.NoError(t, err)
+
+				reader := newDefaultLedgerReader(4_594_094, true)
+				reader.closeTime = tc.closeTime
+				reader.transactions = []struct {
+					hash [32]byte
+					data []byte
+				}{
+					{hash: [32]byte{1}, data: txData},
+				}
+				mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+				mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+					require.Equal(t, uint32(4_594_094), seq)
+					return reader, nil
+				}
+				ctx := &types.RPCContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: apiVersion,
+					Services:   &types.ServiceContainer{Ledger: mock},
+				}
+				params := json.RawMessage(`{"ledger_index":4594094,"transactions":true,"expand":true}`)
+
+				result, rpcErr := (&handlers.LedgerMethod{}).Handle(ctx, params)
+				require.Nil(t, rpcErr)
+				response := result.(map[string]any)
+				ledger := response["ledger"].(map[string]any)
+				entry := ledger["transactions"].([]any)[0].(map[string]any)
+				meta := entry[metaKey].(map[string]any)
+				require.Equal(t, tc.expectedDelivered, meta["delivered_amount"])
+			})
+		}
+	}
 }
 
 // TestLedgerAccountsOption tests the accounts option

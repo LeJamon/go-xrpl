@@ -1,31 +1,37 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
+	"math/big"
 	"sort"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// GetAggregatePriceMethod handles the get_aggregate_price RPC method
 type GetAggregatePriceMethod struct{}
 
-// PriceDataPoint represents a single price data point with its update time
-type PriceDataPoint struct {
-	Price          float64
-	LastUpdateTime uint32
+type aggregatePriceAmount struct {
+	number state.XRPLNumber
+}
+
+type aggregatePricePoint struct {
+	price          aggregatePriceAmount
+	lastUpdateTime uint32
 }
 
 func (m *GetAggregatePriceMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	// Parse into raw map first for field-presence detection (matching rippled's
-	// isMember() checks which distinguish "absent" from "present but invalid").
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return nil, rpcErr
+	}
+
 	var raw map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &raw); err != nil {
@@ -36,60 +42,47 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RPCContext, params json.RawM
 		raw = make(map[string]json.RawMessage)
 	}
 
-	// rippled: !params.isMember(jss::oracles) -> missing_field_error
 	oraclesRaw, hasOracles := raw["oracles"]
 	if !hasOracles {
 		return nil, types.RPCErrorMissingField("oracles")
 	}
-	// rippled: !isArray() || size()==0 || size()>200 -> rpcORACLE_MALFORMED
 	var oracles []json.RawMessage
 	if err := json.Unmarshal(oraclesRaw, &oracles); err != nil {
-		// Not an array
 		return nil, types.RPCErrorOracleMalformed()
 	}
-	const maxOracles = 200
-	if len(oracles) == 0 || len(oracles) > maxOracles {
+	if len(oracles) == 0 || len(oracles) > 200 {
 		return nil, types.RPCErrorOracleMalformed()
 	}
 
-	// rippled: !params.isMember(jss::base_asset) -> missing_field_error
 	baseAssetRaw, hasBaseAsset := raw["base_asset"]
 	if !hasBaseAsset {
 		return nil, types.RPCErrorMissingField("base_asset")
 	}
-	// rippled: !params.isMember(jss::quote_asset) -> missing_field_error
 	quoteAssetRaw, hasQuoteAsset := raw["quote_asset"]
 	if !hasQuoteAsset {
 		return nil, types.RPCErrorMissingField("quote_asset")
 	}
 
-	// rippled: if present, must be valid uint; then if present, must be 1..25
-	const maxTrim = 25
 	var trimValue uint32
 	hasTrim := false
 	if trimRaw, ok := raw["trim"]; ok {
 		hasTrim = true
-		v, err := parseUintParam(trimRaw)
-		if err != nil {
+		value, err := parseUintParam(trimRaw)
+		if err != nil || value == 0 || value > 25 {
 			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
-		trimValue = v
-		if trimValue == 0 || trimValue > maxTrim {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
-		}
+		trimValue = value
 	}
 
-	// rippled: if present, must be valid uint
 	var timeThreshold uint32
-	if ttRaw, ok := raw["time_threshold"]; ok {
-		v, err := parseUintParam(ttRaw)
+	if thresholdRaw, ok := raw["time_threshold"]; ok {
+		value, err := parseUintParam(thresholdRaw)
 		if err != nil {
 			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
-		timeThreshold = v
+		timeThreshold = value
 	}
 
-	// rippled: empty or invalid currency -> rpcINVALID_PARAMS
 	baseAsset, err := parseCurrencyParam(baseAssetRaw)
 	if err != nil {
 		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
@@ -102,350 +95,450 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RPCContext, params json.RawM
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	// Parse the ledger specifier from the raw params
-	var ledgerSpec struct {
-		types.LedgerSpecifier
+	ledgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
 	}
-	if params != nil {
-		_ = json.Unmarshal(params, &ledgerSpec)
+	ledgerIndex, selectorErr := resolveLedgerSelector(ledgerSpec)
+	if selectorErr != nil {
+		return nil, selectorErr
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(ledgerSpec.LedgerSpecifier)
-	if selErr != nil {
-		return nil, selErr
+	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, ledgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
 	}
+	lookupFields := ledgerEntryResponseFields(targetLedger, lookupValidated)
 
-	// Collect prices from all oracles
-	var prices []PriceDataPoint
-
+	prices := make([]aggregatePricePoint, 0, len(oracles))
 	for _, oracleRaw := range oracles {
-		var oracleSpec map[string]any
+		var oracleSpec map[string]json.RawMessage
 		if err := json.Unmarshal(oracleRaw, &oracleSpec); err != nil {
-			return nil, types.RPCErrorOracleMalformed()
+			return nil, types.RPCErrorOracleMalformed().WithExtra(lookupFields)
 		}
-
-		// rippled: missing account or oracle_document_id -> rpcORACLE_MALFORMED
 		accountRaw, hasAccount := oracleSpec["account"]
-		docIDRaw, hasDocID := oracleSpec["oracle_document_id"]
-
-		if !hasAccount || !hasDocID {
-			return nil, types.RPCErrorOracleMalformed()
+		documentIDRaw, hasDocumentID := oracleSpec["oracle_document_id"]
+		if !hasAccount || !hasDocumentID {
+			return nil, types.RPCErrorOracleMalformed().WithExtra(lookupFields)
 		}
 
-		// rippled: invalid oracle_document_id (not uint) -> rpcINVALID_PARAMS
-		documentID, ok := parseOracleDocumentID(docIDRaw)
-		if !ok {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		documentID, err := parseUintParam(documentIDRaw)
+		if err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
-
-		// rippled: invalid account (not valid base58) -> rpcINVALID_PARAMS
-		accountStr, ok := accountRaw.(string)
-		if !ok {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		var account string
+		if err := json.Unmarshal(accountRaw, &account); err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
-		_, accountBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(accountStr)
-		if decodeErr != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+		if err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 		var accountID [20]byte
 		copy(accountID[:], accountBytes)
-
-		// Check for zero account (rippled rejects account->isZero())
-		allZero := true
-		for _, b := range accountID {
-			if b != 0 {
-				allZero = false
-				break
-			}
-		}
-		if allZero {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		if accountID == ([20]byte{}) {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.").WithExtra(lookupFields)
 		}
 
-		oracleKeylet := keylet.Oracle(accountID, documentID)
-		oracleEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, oracleKeylet.Key, ledgerIndex)
-		if lookupErr != nil {
+		entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Oracle(accountID, documentID).Key, ledgerIndex)
+		if err != nil || entry == nil {
+			continue
+		}
+		decoded, err := binarycodec.Decode(hex.EncodeToString(entry.Node))
+		if err != nil {
 			continue
 		}
 
-		oracleDecoded, decodeErr2 := binarycodec.Decode(hex.EncodeToString(oracleEntry.Node))
-		if decodeErr2 != nil {
-			continue
-		}
-
-		var lastUpdateTime uint32
-		if lut, ok := oracleDecoded["LastUpdateTime"]; ok {
-			switch v := lut.(type) {
-			case float64:
-				lastUpdateTime = uint32(v)
-			case int:
-				lastUpdateTime = uint32(v)
-			case uint32:
-				lastUpdateTime = v
+		iterateAggregatePriceData(ctx, decoded, func(node map[string]any) bool {
+			point, found := aggregatePriceFromNode(node, baseAsset, quoteAsset)
+			if found {
+				prices = append(prices, point)
 			}
-		}
-
-		// Find matching price data
-		priceDataSeries, ok2 := oracleDecoded["PriceDataSeries"].([]any)
-		if !ok2 {
-			continue
-		}
-
-		for _, pd := range priceDataSeries {
-			priceData, ok := pd.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			// Check if this matches the requested asset pair
-			ba, _ := priceData["BaseAsset"].(string)
-			qa, _ := priceData["QuoteAsset"].(string)
-
-			if ba != baseAsset || qa != quoteAsset {
-				continue
-			}
-
-			assetPrice, ok := priceData["AssetPrice"]
-			if !ok {
-				continue
-			}
-
-			var priceValue float64
-			switch v := assetPrice.(type) {
-			case float64:
-				priceValue = v
-			case int:
-				priceValue = float64(v)
-			case uint64:
-				priceValue = float64(v)
-			case string:
-				parsed, parseErr := strconv.ParseUint(v, 10, 64)
-				if parseErr != nil {
-					continue
-				}
-				priceValue = float64(parsed)
-			default:
-				continue
-			}
-
-			// Apply scale if present
-			if scale, ok := priceData["Scale"]; ok {
-				var scaleValue int
-				switch v := scale.(type) {
-				case float64:
-					scaleValue = int(v)
-				case int:
-					scaleValue = v
-				case uint8:
-					scaleValue = int(v)
-				}
-				priceValue = priceValue / math.Pow(10, float64(scaleValue))
-			}
-
-			prices = append(prices, PriceDataPoint{
-				Price:          priceValue,
-				LastUpdateTime: lastUpdateTime,
-			})
-		}
+			return found
+		})
 	}
 
-	// rippled: prices.empty() -> rpcOBJECT_NOT_FOUND
 	if len(prices) == 0 {
-		return nil, types.RPCErrorObjectNotFound("Object not found.")
+		return nil, types.RPCErrorObjectNotFound("The requested object was not found.").WithExtra(lookupFields)
 	}
 
-	// Find the latest update time
-	var latestTime uint32
-	for _, p := range prices {
-		if p.LastUpdateTime > latestTime {
-			latestTime = p.LastUpdateTime
+	latestTime := prices[0].lastUpdateTime
+	oldestTime := latestTime
+	for _, point := range prices[1:] {
+		if point.lastUpdateTime > latestTime {
+			latestTime = point.lastUpdateTime
+		}
+		if point.lastUpdateTime < oldestTime {
+			oldestTime = point.lastUpdateTime
 		}
 	}
-
-	// Filter by time threshold if specified
-	if timeThreshold > 0 {
-		var filtered []PriceDataPoint
-		// rippled: upperBound = latestTime > threshold ? (latestTime - threshold) : oldestTime
-		var oldestTime uint32 = math.MaxUint32
-		for _, p := range prices {
-			if p.LastUpdateTime < oldestTime {
-				oldestTime = p.LastUpdateTime
-			}
-		}
-		var upperBound uint32
+	if timeThreshold != 0 {
+		upperBound := oldestTime
 		if latestTime > timeThreshold {
 			upperBound = latestTime - timeThreshold
-		} else {
-			upperBound = oldestTime
 		}
 		if upperBound > oldestTime {
-			// Erase entries with LastUpdateTime <= upperBound (rippled erases
-			// from upper_bound(upperBound) to end() in the descending-sorted
-			// left map, which removes all entries with time < upperBound.
-			// Since we're using "strictly less than", we keep entries where
-			// time > upperBound — matching rippled's upper_bound semantics).
-			for _, p := range prices {
-				if p.LastUpdateTime > upperBound {
-					filtered = append(filtered, p)
+			filtered := prices[:0]
+			for _, point := range prices {
+				if point.lastUpdateTime >= upperBound {
+					filtered = append(filtered, point)
 				}
 			}
-		} else {
-			filtered = prices
+			prices = filtered
 		}
-		if len(filtered) == 0 {
-			return nil, types.RPCErrorInternal("Internal error.")
-		}
-		prices = filtered
 	}
 
-	// Sort prices by value for statistics
 	sort.Slice(prices, func(i, j int) bool {
-		return prices[i].Price < prices[j].Price
+		return prices[i].price.compare(prices[j].price) < 0
 	})
 
-	// Calculate statistics for entire set
-	entireMean, entireSD := calculateStats(prices)
-	entireSize := len(prices)
-
-	// Calculate median
-	median := calculateMedian(prices)
-
-	// Build response
-	response := map[string]any{
-		"time": latestTime,
-		"entire_set": map[string]any{
-			"mean":               fmt.Sprintf("%g", entireMean),
-			"size":               uint16(entireSize),
-			"standard_deviation": fmt.Sprintf("%g", entireSD),
-		},
-		"median": fmt.Sprintf("%g", median),
+	mean, standardDeviation := aggregatePriceStats(prices)
+	response := lookupFields
+	response["time"] = latestTime
+	response["entire_set"] = map[string]any{
+		"mean":               mean.text(),
+		"size":               uint16(len(prices)),
+		"standard_deviation": standardDeviation.String(),
 	}
+	response["median"] = aggregatePriceMedian(prices).text()
 
-	// Calculate trimmed set if requested
-	if hasTrim && trimValue > 0 {
+	if hasTrim {
 		trimCount := len(prices) * int(trimValue) / 100
-		trimmedPrices := prices[trimCount : len(prices)-trimCount]
-		trimmedMean, trimmedSD := calculateStats(trimmedPrices)
+		trimmed := prices[trimCount : len(prices)-trimCount]
+		trimmedMean, trimmedStandardDeviation := aggregatePriceStats(trimmed)
 		response["trimmed_set"] = map[string]any{
-			"mean":               fmt.Sprintf("%g", trimmedMean),
-			"size":               uint16(len(trimmedPrices)),
-			"standard_deviation": fmt.Sprintf("%g", trimmedSD),
+			"mean":               trimmedMean.text(),
+			"size":               uint16(len(trimmed)),
+			"standard_deviation": trimmedStandardDeviation.String(),
 		}
 	}
 
 	return response, nil
 }
 
-// parseUintParam parses a JSON value as a non-negative uint32.
-// Supports positive int, uint, and numeric string representations.
-// Matches rippled's validUInt lambda in GetAggregatePrice.cpp.
 func parseUintParam(raw json.RawMessage) (uint32, error) {
-	// Try as number first
-	var f float64
-	if err := json.Unmarshal(raw, &f); err == nil {
-		// Reject negative, non-integer, or NaN values
-		if f < 0 || f != math.Floor(f) || math.IsNaN(f) || math.IsInf(f, 0) {
-			return 0, fmt.Errorf("invalid uint")
-		}
-		return uint32(f), nil
-	}
-	// Try as string containing a number
-	var s string
-	if err := json.Unmarshal(raw, &s); err == nil {
-		v, err := strconv.ParseUint(s, 10, 32)
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		value, err := strconv.ParseUint(text, 10, 32)
 		if err != nil {
 			return 0, fmt.Errorf("invalid uint string")
 		}
-		return uint32(v), nil
+		return uint32(value), nil
 	}
-	return 0, fmt.Errorf("invalid uint type")
+
+	token := string(bytes.TrimSpace(raw))
+	negative := false
+	if len(token) > 0 && token[0] == '-' {
+		negative = true
+		token = token[1:]
+	}
+	if token == "" {
+		return 0, fmt.Errorf("invalid uint type")
+	}
+	for _, digit := range token {
+		if digit < '0' || digit > '9' {
+			return 0, fmt.Errorf("invalid uint type")
+		}
+	}
+	value, err := strconv.ParseUint(token, 10, 32)
+	if err != nil || negative && value != 0 {
+		return 0, fmt.Errorf("invalid uint")
+	}
+	return uint32(value), nil
 }
 
-// parseCurrencyParam parses and validates a currency code from a JSON raw value.
-// Returns the currency string or an error if invalid.
-// Matches rippled's getCurrency lambda in GetAggregatePrice.cpp.
 func parseCurrencyParam(raw json.RawMessage) (string, error) {
-	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", fmt.Errorf("not a string")
-	}
-	if s == "" {
-		return "", fmt.Errorf("empty currency")
-	}
-	if !keylet.IsValidCurrencyCode(s) {
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil || value == "" || !keylet.IsValidCurrencyCode(value) {
 		return "", fmt.Errorf("invalid currency")
 	}
-	return s, nil
+	return value, nil
 }
 
-// parseOracleDocumentID parses an oracle_document_id from a JSON-decoded interface value.
-// Returns (documentID, true) on success or (0, false) if the value is not a valid uint.
-func parseOracleDocumentID(v any) (uint32, bool) {
-	switch val := v.(type) {
-	case float64:
-		// Reject negative, non-integer, NaN
-		if val < 0 || val != math.Floor(val) || math.IsNaN(val) || math.IsInf(val, 0) {
-			return 0, false
+func iterateAggregatePriceData(ctx *types.RPCContext, initial map[string]any, visit func(map[string]any) bool) {
+	oracle := initial
+	chain := initial
+	isNew := false
+	for history := uint8(0); ; {
+		if oracle == nil || visit(oracle) || isNew {
+			return
 		}
-		return uint32(val), true
-	case int:
-		if val < 0 {
-			return 0, false
+		history++
+		if history > 3 {
+			return
 		}
-		return uint32(val), true
-	case uint32:
-		return val, true
-	case string:
-		// rippled: validUInt supports string representation
-		uv, err := strconv.ParseUint(val, 10, 32)
+
+		previousID, previousSequence, ok := aggregatePreviousTransaction(chain)
+		if !ok {
+			return
+		}
+		transaction, err := ctx.Services.Ledger.GetTransaction(previousID)
+		if err != nil || transaction == nil || transaction.LedgerIndex != previousSequence {
+			return
+		}
+		stored, err := decodeTxBlob(transaction.TxData)
 		if err != nil {
+			return
+		}
+
+		found := false
+		for _, affected := range affectedNodes(stored.Meta) {
+			_, inner := nodeParts(affected)
+			if nodeType(inner) != "Oracle" {
+				continue
+			}
+			chain = inner
+			oracle, isNew = inner["NewFields"].(map[string]any)
+			if isNew && history == 1 {
+				return
+			}
+			if !isNew {
+				oracle, _ = inner["FinalFields"].(map[string]any)
+			}
+			found = true
+			break
+		}
+		if !found {
+			return
+		}
+	}
+}
+
+func aggregatePreviousTransaction(node map[string]any) ([32]byte, uint32, bool) {
+	var hash [32]byte
+	hashText, ok := node["PreviousTxnID"].(string)
+	if !ok || len(hashText) != 64 {
+		return hash, 0, false
+	}
+	decoded, err := hex.DecodeString(hashText)
+	if err != nil {
+		return hash, 0, false
+	}
+	copy(hash[:], decoded)
+	sequence, ok := aggregateUint32(node["PreviousTxnLgrSeq"])
+	return hash, sequence, ok
+}
+
+func aggregatePriceFromNode(node map[string]any, baseAsset, quoteAsset string) (aggregatePricePoint, bool) {
+	lastUpdateTime, ok := aggregateUint32(node["LastUpdateTime"])
+	if !ok {
+		return aggregatePricePoint{}, false
+	}
+	series, ok := node["PriceDataSeries"].([]any)
+	if !ok {
+		return aggregatePricePoint{}, false
+	}
+	for _, rawPrice := range series {
+		priceData, ok := rawPrice.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nested, nestedOK := priceData["PriceData"].(map[string]any); nestedOK {
+			priceData = nested
+		}
+		base, _ := priceData["BaseAsset"].(string)
+		quote, _ := priceData["QuoteAsset"].(string)
+		if base != baseAsset || quote != quoteAsset {
+			continue
+		}
+		assetPrice, ok := aggregateAssetPrice(priceData["AssetPrice"])
+		if !ok {
+			continue
+		}
+		var scale uint32
+		if rawScale, present := priceData["Scale"]; present {
+			scale, ok = aggregateUint32(rawScale)
+			if !ok || scale > 255 {
+				continue
+			}
+		}
+		return aggregatePricePoint{
+			price:          newAggregatePriceAmount(int64(assetPrice), -int(scale)),
+			lastUpdateTime: lastUpdateTime,
+		}, true
+	}
+	return aggregatePricePoint{}, false
+}
+
+func aggregateAssetPrice(value any) (uint64, bool) {
+	switch typed := value.(type) {
+	case string:
+		price, err := strconv.ParseUint(typed, 16, 64)
+		return price, err == nil
+	case uint64:
+		return typed, true
+	case uint32:
+		return uint64(typed), true
+	case int:
+		return uint64(typed), typed >= 0
+	case float64:
+		if typed < 0 || typed > float64(^uint32(0)) || typed != float64(uint64(typed)) {
 			return 0, false
 		}
-		return uint32(uv), true
+		return uint64(typed), true
 	default:
 		return 0, false
 	}
 }
 
-// calculateStats calculates mean and standard deviation for a set of prices
-func calculateStats(prices []PriceDataPoint) (mean, sd float64) {
-	if len(prices) == 0 {
-		return 0, 0
-	}
-
-	// Calculate mean
-	var sum float64
-	for _, p := range prices {
-		sum += p.Price
-	}
-	mean = sum / float64(len(prices))
-
-	// Calculate standard deviation
-	if len(prices) > 1 {
-		var variance float64
-		for _, p := range prices {
-			diff := p.Price - mean
-			variance += diff * diff
+func aggregateUint32(value any) (uint32, bool) {
+	switch typed := value.(type) {
+	case uint32:
+		return typed, true
+	case uint8:
+		return uint32(typed), true
+	case int:
+		if typed < 0 || uint64(typed) > uint64(^uint32(0)) {
+			return 0, false
 		}
-		variance /= float64(len(prices) - 1)
-		sd = math.Sqrt(variance)
+		return uint32(typed), true
+	case float64:
+		if typed < 0 || typed > float64(^uint32(0)) || typed != float64(uint32(typed)) {
+			return 0, false
+		}
+		return uint32(typed), true
+	default:
+		return 0, false
 	}
-
-	return mean, sd
 }
 
-// calculateMedian calculates the median of sorted prices
-func calculateMedian(prices []PriceDataPoint) float64 {
-	n := len(prices)
-	if n == 0 {
-		return 0
+func newAggregatePriceAmount(mantissa int64, exponent int) aggregatePriceAmount {
+	return aggregatePriceAmountFromNumber(state.NewXRPLNumber(mantissa, exponent))
+}
+
+func aggregatePriceAmountFromNumber(number state.XRPLNumber) aggregatePriceAmount {
+	if number.IsZero() || number.Exponent() < state.MinExponent {
+		return aggregatePriceAmount{number: state.NewXRPLNumber(0, 0)}
+	}
+	if number.Exponent() > state.MaxExponent {
+		panic("aggregate price STAmount overflow")
+	}
+	return aggregatePriceAmount{number: number}
+}
+
+func (amount aggregatePriceAmount) add(other aggregatePriceAmount) aggregatePriceAmount {
+	return aggregatePriceAmountFromNumber(amount.number.Add(other.number))
+}
+
+func (amount aggregatePriceAmount) subtract(other aggregatePriceAmount) aggregatePriceAmount {
+	return aggregatePriceAmountFromNumber(amount.number.Sub(other.number))
+}
+
+func (amount aggregatePriceAmount) divide(other aggregatePriceAmount) aggregatePriceAmount {
+	if other.number.IsZero() {
+		panic("aggregate price STAmount division by zero")
+	}
+	if amount.number.IsZero() {
+		return amount
 	}
 
-	if n%2 == 0 {
-		return (prices[n/2-1].Price + prices[n/2].Price) / 2
+	numerator := new(big.Int).SetInt64(amount.number.Mantissa())
+	denominator := new(big.Int).SetInt64(other.number.Mantissa())
+	negative := numerator.Sign() != denominator.Sign()
+	numerator.Abs(numerator)
+	denominator.Abs(denominator)
+	numerator.Mul(numerator, big.NewInt(100_000_000_000_000_000))
+	numerator.Div(numerator, denominator)
+	numerator.Add(numerator, big.NewInt(5))
+	if negative {
+		numerator.Neg(numerator)
 	}
-	return prices[n/2].Price
+	return newAggregatePriceAmount(
+		numerator.Int64(),
+		amount.number.Exponent()-other.number.Exponent()-17,
+	)
+}
+
+func (amount aggregatePriceAmount) compare(other aggregatePriceAmount) int {
+	leftSign := amount.number.Signum()
+	rightSign := other.number.Signum()
+	if leftSign != rightSign {
+		if leftSign < rightSign {
+			return -1
+		}
+		return 1
+	}
+	if leftSign == 0 {
+		return 0
+	}
+	if amount.number.Exponent() != other.number.Exponent() {
+		if amount.number.Exponent() < other.number.Exponent() {
+			return -leftSign
+		}
+		return leftSign
+	}
+	leftMantissa := amount.number.Mantissa()
+	rightMantissa := other.number.Mantissa()
+	if leftMantissa < rightMantissa {
+		return -1
+	}
+	if leftMantissa > rightMantissa {
+		return 1
+	}
+	return 0
+}
+
+func (amount aggregatePriceAmount) text() string {
+	return amount.number.String()
+}
+
+func aggregatePriceStats(prices []aggregatePricePoint) (aggregatePriceAmount, state.XRPLNumber) {
+	mean := newAggregatePriceAmount(0, 0)
+	for _, point := range prices {
+		mean = mean.add(point.price)
+	}
+	mean = mean.divide(newAggregatePriceAmount(int64(len(prices)), 0))
+
+	standardDeviation := state.NewXRPLNumber(0, 0)
+	if len(prices) > 1 {
+		for _, point := range prices {
+			difference := point.price.subtract(mean).number
+			standardDeviation = standardDeviation.Add(difference.Mul(difference))
+		}
+		standardDeviation = aggregatePriceRoot2(
+			standardDeviation.Div(state.NewXRPLNumberFromInt(int64(len(prices) - 1))),
+		)
+	}
+	return mean, standardDeviation
+}
+
+func aggregatePriceMedian(prices []aggregatePricePoint) aggregatePriceAmount {
+	middle := len(prices) / 2
+	if len(prices)%2 != 0 {
+		return prices[middle].price
+	}
+	return prices[middle-1].price.add(prices[middle].price).divide(newAggregatePriceAmount(2, 0))
+}
+
+func aggregatePriceRoot2(value state.XRPLNumber) state.XRPLNumber {
+	one := state.NewXRPLNumberFromInt(1)
+	if value.Equal(one) || value.IsZero() {
+		return value
+	}
+	if value.Signum() < 0 {
+		panic("aggregate price Number root of negative value")
+	}
+
+	exponent := value.Exponent() + 16
+	if exponent%2 != 0 {
+		exponent++
+	}
+	scaled := state.NewXRPLNumber(value.Mantissa(), value.Exponent()-exponent)
+	a0 := state.NewXRPLNumberFromInt(18)
+	a1 := state.NewXRPLNumberFromInt(144)
+	a2 := state.NewXRPLNumberFromInt(-60)
+	denominator := state.NewXRPLNumberFromInt(105)
+	result := a2.Mul(scaled).Add(a1).Mul(scaled).Add(a0).Div(denominator)
+	two := state.NewXRPLNumberFromInt(2)
+	var previous, previousPrevious state.XRPLNumber
+	for {
+		previousPrevious = previous
+		previous = result
+		result = result.Add(scaled.Div(result)).Div(two)
+		if result.Equal(previous) || result.Equal(previousPrevious) {
+			break
+		}
+	}
+	return state.NewXRPLNumber(result.Mantissa(), result.Exponent()+exponent/2)
 }
 
 func (m *GetAggregatePriceMethod) RequiredRole() types.Role {

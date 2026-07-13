@@ -18,13 +18,15 @@ import (
 // mockLedgerServiceTx extends mockLedgerService with tx-specific behavior
 type mockLedgerServiceTx struct {
 	*mockLedgerService
-	transactions       map[string]*types.TransactionInfo
-	networkID          uint16
-	txLookupError      error
-	ledgerRangeError   error
-	completeLedgers    string
-	minAvailableLedger uint32
-	maxAvailableLedger uint32
+	transactions          map[string]*types.TransactionInfo
+	networkID             uint16
+	txLookupError         error
+	txSearchResult        types.TxSearchResult
+	ledgerRangeError      error
+	completeLedgers       string
+	minAvailableLedger    uint32
+	maxAvailableLedger    uint32
+	getLedgerBySequenceFn func(uint32) (types.LedgerReader, error)
 }
 
 func newMockLedgerServiceTx() *mockLedgerServiceTx {
@@ -49,6 +51,21 @@ func (m *mockLedgerServiceTx) GetTransaction(txHash [32]byte) (*types.Transactio
 	return nil, errors.New("transaction not found")
 }
 
+func (m *mockLedgerServiceTx) GetTransactionWithRange(_ context.Context, txHash [32]byte, _, _ uint32) (*types.TransactionInfo, types.TxSearchResult, error) {
+	txInfo, err := m.GetTransaction(txHash)
+	if err == nil {
+		return txInfo, types.TxSearchAll, nil
+	}
+	return nil, m.txSearchResult, err
+}
+
+func (m *mockLedgerServiceTx) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	if m.getLedgerBySequenceFn != nil {
+		return m.getLedgerBySequenceFn(seq)
+	}
+	return m.mockLedgerService.GetLedgerBySequence(seq)
+}
+
 func (m *mockLedgerServiceTx) ResolvedNetworkID() uint16 {
 	return m.networkID
 }
@@ -68,6 +85,89 @@ func (m *mockLedgerServiceTx) GetLedgerRange(ctx context.Context, minSeq, maxSeq
 func servicesForTx(mock *mockLedgerServiceTx) *types.ServiceContainer {
 	return &types.ServiceContainer{
 		Ledger: mock,
+	}
+}
+
+func TestTxDeliveredAmountHistoricalContext(t *testing.T) {
+	const txHash = "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+	tests := []struct {
+		name              string
+		ledgerSequence    uint32
+		closeTime         int64
+		serializedAmount  string
+		expectedDelivered string
+	}{
+		{
+			name:              "pre-cutoff ledger and close time",
+			ledgerSequence:    4_594_094,
+			closeTime:         446_000_000,
+			expectedDelivered: "unavailable",
+		},
+		{
+			name:              "ledger sequence cutoff",
+			ledgerSequence:    4_594_095,
+			expectedDelivered: "100",
+		},
+		{
+			name:              "post-cutoff close time",
+			ledgerSequence:    4_594_094,
+			closeTime:         446_000_001,
+			expectedDelivered: "100",
+		},
+		{
+			name:              "serialized amount before cutoffs",
+			ledgerSequence:    4_594_094,
+			closeTime:         446_000_000,
+			serializedAmount:  "40",
+			expectedDelivered: "40",
+		},
+	}
+
+	for _, tc := range tests {
+		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+			t.Run(fmt.Sprintf("%s/api_v%d", tc.name, apiVersion), func(t *testing.T) {
+				meta := map[string]any{"TransactionResult": "tesSUCCESS"}
+				if tc.serializedAmount != "" {
+					meta["DeliveredAmount"] = tc.serializedAmount
+				}
+				stored, err := json.Marshal(handlers.StoredTransaction{
+					TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
+					Meta:   meta,
+				})
+				require.NoError(t, err)
+
+				mock := newMockLedgerServiceTx()
+				mock.transactions[txHash] = &types.TransactionInfo{
+					TxData:      stored,
+					LedgerIndex: tc.ledgerSequence,
+					Validated:   true,
+				}
+				mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+					require.Equal(t, tc.ledgerSequence, seq)
+					return &mockLedgerReader{
+						seq:       seq,
+						closeTime: tc.closeTime,
+						closed:    true,
+						validated: true,
+					}, nil
+				}
+				ctx := &types.RPCContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: apiVersion,
+					Services:   servicesForTx(mock),
+				}
+
+				result, rpcErr := (&handlers.TxMethod{}).Handle(
+					ctx,
+					json.RawMessage(`{"transaction":"`+txHash+`"}`),
+				)
+				require.Nil(t, rpcErr)
+				response := result.(map[string]any)
+				responseMeta := response["meta"].(map[string]any)
+				require.Equal(t, tc.expectedDelivered, responseMeta["delivered_amount"])
+			})
+		}
 	}
 }
 
@@ -97,13 +197,13 @@ func TestTxMethodErrorValidation(t *testing.T) {
 		{
 			name:          "Missing transaction field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: transaction",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing transaction field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: transaction",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -175,8 +275,8 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"transaction": "",
 			},
-			expectedError: "Missing required parameter: transaction",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Transaction not found - valid hash format (txnNotFound)",
@@ -199,28 +299,37 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
+			name: "Ambiguous - empty transaction and null ctid are still present",
+			params: map[string]any{
+				"transaction": "",
+				"ctid":        nil,
+			},
+			expectedError: "Invalid parameters.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
 			name: "Invalid transaction type - integer",
 			params: map[string]any{
 				"transaction": 12345,
 			},
-			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - boolean",
 			params: map[string]any{
 				"transaction": true,
 			},
-			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - array",
 			params: map[string]any{
 				"transaction": []string{"hash1", "hash2"},
 			},
-			expectedError: "Invalid parameters",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 		{
 			name: "Invalid transaction type - object",
@@ -243,8 +352,8 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"transaction": nil,
 			},
-			expectedError: "Missing required parameter: transaction",
-			expectedCode:  types.RpcINVALID_PARAMS,
+			expectedError: "Not implemented.",
+			expectedCode:  types.RpcNOT_IMPL,
 		},
 	}
 
@@ -513,25 +622,12 @@ func TestTxMethodBinaryOption(t *testing.T) {
 // CTID (Concise Transaction ID) Tests
 // Based on rippled Transaction_test.cpp testCTIDValidation
 
-// EncodeCTID encodes ledger_seq, txn_index, and network_id into a CTID string
-// CTID format: C + ledger_seq (7 hex nibbles) + txn_index (4 hex nibbles) + network_id (4 hex nibbles) = 16 chars total
-func EncodeCTID(ledgerSeq uint32, txnIndex uint16, networkID uint16) (string, error) {
-	// Validate ledger_seq doesn't exceed 28 bits (0x0FFFFFFF)
-	if ledgerSeq > 0x0FFFFFFF {
-		return "", fmt.Errorf("ledger_seq exceeds maximum value (0x0FFFFFFF)")
+func encodeCTID(ledgerSeq, txnIndex, networkID uint32) (string, error) {
+	ctid, ok := handlers.EncodeCTID(ledgerSeq, txnIndex, networkID)
+	if !ok {
+		return "", errors.New("CTID component exceeds its encoded width")
 	}
-
-	// Build the CTID value:
-	// Bits 60-63: 0xC (marker)
-	// Bits 32-59: ledger_seq (28 bits)
-	// Bits 16-31: txn_index (16 bits)
-	// Bits 0-15: network_id (16 bits)
-	ctidValue := uint64(0xC)<<60 |
-		uint64(ledgerSeq)<<32 |
-		uint64(txnIndex)<<16 |
-		uint64(networkID)
-
-	return fmt.Sprintf("%016X", ctidValue), nil
+	return ctid, nil
 }
 
 // DecodeCTID decodes a CTID string into its components
@@ -578,8 +674,8 @@ func TestCTIDEncoding(t *testing.T) {
 	tests := []struct {
 		name       string
 		ledgerSeq  uint32
-		txnIndex   uint16
-		networkID  uint16
+		txnIndex   uint32
+		networkID  uint32
 		expected   string
 		shouldFail bool
 	}{
@@ -634,13 +730,23 @@ func TestCTIDEncoding(t *testing.T) {
 			networkID:  0,
 			shouldFail: true,
 		},
-		// Test case 3: txn_index is always valid (uint16 max is valid)
-		// Test case 4: network_id is always valid (uint16 max is valid)
+		{
+			name:       "Transaction index exceeds 16 bits",
+			ledgerSeq:  1,
+			txnIndex:   0x10000,
+			shouldFail: true,
+		},
+		{
+			name:       "Network ID exceeds 16 bits",
+			ledgerSeq:  1,
+			networkID:  0x10000,
+			shouldFail: true,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := EncodeCTID(tc.ledgerSeq, tc.txnIndex, tc.networkID)
+			result, err := encodeCTID(tc.ledgerSeq, tc.txnIndex, tc.networkID)
 
 			if tc.shouldFail {
 				assert.Error(t, err, "Expected encoding to fail")
@@ -829,7 +935,7 @@ func TestCTIDRoundTrip(t *testing.T) {
 		name := fmt.Sprintf("ledger=%d,txn=%d,net=%d", tc.ledgerSeq, tc.txnIndex, tc.networkID)
 		t.Run(name, func(t *testing.T) {
 			// Encode
-			encoded, err := EncodeCTID(tc.ledgerSeq, tc.txnIndex, tc.networkID)
+			encoded, err := encodeCTID(tc.ledgerSeq, uint32(tc.txnIndex), uint32(tc.networkID))
 			require.NoError(t, err)
 
 			// Decode
@@ -848,7 +954,7 @@ func TestCTIDRoundTrip(t *testing.T) {
 // Based on rippled Transaction_test.cpp CTID mixed case test
 func TestCTIDCaseInsensitive(t *testing.T) {
 	// Create a known CTID
-	original, err := EncodeCTID(100, 5, 11111)
+	original, err := encodeCTID(100, 5, 11111)
 	require.NoError(t, err)
 
 	// Test various case variations
@@ -928,7 +1034,7 @@ func TestCTIDWrongNetwork(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// Create a CTID for the specified network
-			ctid, err := EncodeCTID(100, 0, tc.ctidNetworkID)
+			ctid, err := encodeCTID(100, 0, uint32(tc.ctidNetworkID))
 			require.NoError(t, err)
 
 			// Decode and verify network ID
@@ -955,7 +1061,7 @@ func TestCTIDWrongNetwork(t *testing.T) {
 // Based on rippled Transaction_test.cpp network ID boundary tests (65535, 65536)
 func TestCTIDNetworkBoundary(t *testing.T) {
 	tests := []struct {
-		networkID    uint16
+		networkID    uint32
 		shouldEncode bool
 		description  string
 	}{
@@ -967,12 +1073,12 @@ func TestCTIDNetworkBoundary(t *testing.T) {
 		{21337, true, "Custom network 21337"},
 		{65534, true, "Network ID 65534"},
 		{65535, true, "Max network ID 65535 (0xFFFF)"},
-		// Note: uint16 cannot exceed 65535, so no need to test > 65535
+		{65536, false, "Network ID 65536 does not fit"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.description, func(t *testing.T) {
-			ctid, err := EncodeCTID(100, 0, tc.networkID)
+			ctid, err := encodeCTID(100, 0, tc.networkID)
 			if tc.shouldEncode {
 				assert.NoError(t, err)
 				assert.NotEmpty(t, ctid)
@@ -982,7 +1088,7 @@ func TestCTIDNetworkBoundary(t *testing.T) {
 				// Verify decode returns same network ID
 				_, _, decodedNetID, err := DecodeCTID(ctid)
 				require.NoError(t, err)
-				assert.Equal(t, tc.networkID, decodedNetID)
+				assert.Equal(t, uint16(tc.networkID), decodedNetID)
 			} else {
 				assert.Error(t, err)
 			}
@@ -1205,54 +1311,44 @@ func TestTxMethodInvalidLedgerRange(t *testing.T) {
 // TestTxMethodSearchedAllFlag tests the searched_all flag in response
 // Based on rippled Transaction_test.cpp testRangeRequest searched_all tests
 func TestTxMethodSearchedAllFlag(t *testing.T) {
-	// These tests document the expected behavior for searched_all flag
-	// Based on rippled's behavior:
-	// - searched_all: true when entire range was searched and tx not found
-	// - searched_all: false when search was incomplete (deleted ledger, etc.)
-	// - searched_all: not present when transaction was found
-
-	tests := []struct {
-		name                string
-		scenario            string
-		expectedSearchedAll *bool // nil means field should not be present
-	}{
-		{
-			name:                "Transaction found in range",
-			scenario:            "Transaction exists within min_ledger to max_ledger",
-			expectedSearchedAll: nil, // Not present when found
-		},
-		{
-			name:                "Transaction not found - all searched",
-			scenario:            "Transaction not in range, but all ledgers available",
-			expectedSearchedAll: boolPtr(true),
-		},
-		{
-			name:                "Transaction not found - incomplete search",
-			scenario:            "Transaction not in range, some ledgers missing/deleted",
-			expectedSearchedAll: boolPtr(false),
-		},
-		{
-			name:                "Found outside provided range",
-			scenario:            "Transaction found but in different ledger range",
-			expectedSearchedAll: boolPtr(false),
-		},
+	mock := newMockLedgerServiceTx()
+	method := &handlers.TxMethod{}
+	ctx := &types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   servicesForTx(mock),
 	}
+	const hash = "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+	params, err := json.Marshal(map[string]any{"transaction": hash, "min_ledger": 10, "max_ledger": 20})
+	require.NoError(t, err)
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Logf("Scenario: %s", tc.scenario)
-			if tc.expectedSearchedAll == nil {
-				t.Log("Expected: searched_all field not present")
-			} else {
-				t.Logf("Expected: searched_all = %v", *tc.expectedSearchedAll)
-			}
-		})
-	}
-}
+	t.Run("all transaction ledgers present", func(t *testing.T) {
+		mock.txSearchResult = types.TxSearchAll
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, true, rpcErr.Extra["searched_all"])
+	})
 
-// Helper function for bool pointer
-func boolPtr(b bool) *bool {
-	return &b
+	t.Run("transaction ledger missing", func(t *testing.T) {
+		mock.txSearchResult = types.TxSearchSome
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, false, rpcErr.Extra["searched_all"])
+	})
+
+	t.Run("found outside requested range", func(t *testing.T) {
+		storedData, marshalErr := json.Marshal(handlers.StoredTransaction{TxJSON: map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		}})
+		require.NoError(t, marshalErr)
+		mock.transactions[hash] = &types.TransactionInfo{TxData: storedData, LedgerIndex: 100, Validated: true}
+
+		result, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		assert.NotContains(t, result.(map[string]any), "searched_all")
+	})
 }
 
 // Response Field Tests
@@ -1321,13 +1417,14 @@ func TestTxMethodResponseFields(t *testing.T) {
 		// Check required response fields per rippled spec
 		assert.Contains(t, resp, "hash", "Response must include hash")
 		assert.Contains(t, resp, "ledger_index", "Response must include ledger_index")
-		assert.Contains(t, resp, "ledger_hash", "Response must include ledger_hash")
 		assert.Contains(t, resp, "validated", "Response must include validated")
+		assert.Equal(t, "C000006400000000", resp["ctid"])
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "close_time_iso")
 
 		// Verify field values
 		assert.Equal(t, validHash, resp["hash"])
 		assert.Equal(t, float64(100), resp["ledger_index"])
-		assert.Equal(t, expectedLedgerHash, resp["ledger_hash"])
 		assert.Equal(t, true, resp["validated"])
 
 		// Check transaction fields are present (for JSON mode)
@@ -1385,17 +1482,37 @@ func TestTxMethodResponseFields(t *testing.T) {
 		// Required fields in binary mode
 		assert.Contains(t, resp, "hash")
 		assert.Contains(t, resp, "ledger_index")
-		assert.Contains(t, resp, "ledger_hash")
 		assert.Contains(t, resp, "validated")
+		assert.Equal(t, "C000006400000000", resp["ctid"])
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "close_time_iso")
+		assert.NotContains(t, resp, "tx_blob")
 
 		// Binary-specific fields
-		if _, ok := resp["tx_blob"]; ok {
-			txBlob := resp["tx_blob"].(string)
-			assert.NotEmpty(t, txBlob, "tx_blob should not be empty")
-			// Verify it's valid hex
-			_, err := hex.DecodeString(txBlob)
-			assert.NoError(t, err, "tx_blob should be valid hex")
-		}
+		require.Contains(t, resp, "tx")
+		txBlob := resp["tx"].(string)
+		assert.NotEmpty(t, txBlob, "tx should not be empty")
+		_, err = hex.DecodeString(txBlob)
+		assert.NoError(t, err, "tx should be valid hex")
+	})
+
+	t.Run("API v2 binary response includes root CTID", func(t *testing.T) {
+		paramsJSON, err := json.Marshal(map[string]any{
+			"transaction": validHash,
+			"binary":      true,
+		})
+		require.NoError(t, err)
+
+		v2ctx := *ctx
+		v2ctx.ApiVersion = types.ApiVersion2
+		result, rpcErr := method.Handle(&v2ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]any)
+
+		assert.Equal(t, "C000006400000000", resp["ctid"])
+		assert.Contains(t, resp, "tx_blob")
+		assert.NotContains(t, resp, "tx")
+		assert.Equal(t, expectedLedgerHash, resp["ledger_hash"])
 	})
 
 	t.Run("Date field present for validated transaction", func(t *testing.T) {
@@ -1528,14 +1645,153 @@ func TestTxMethodApiVersions(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, paramsJSON)
 			require.Nil(t, rpcErr, "Should succeed for API version %d", version)
 			require.NotNil(t, result)
+			resp := result.(map[string]any)
+			assert.Equal(t, "C000006400000000", resp["ctid"])
 
-			// Note: API version 2+ may have different response format
-			// (tx_json instead of flat fields, close_time_iso, etc.)
 			if version > 1 {
-				t.Logf("API version %d may return tx_json wrapper and additional fields", version)
+				txJSON := resp["tx_json"].(map[string]any)
+				assert.Equal(t, resp["ctid"], txJSON["ctid"])
+			} else {
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "close_time_iso")
 			}
 		})
 	}
+}
+
+func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
+	const txHash = "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+	overrideNetworkID := uint32(21337)
+	tests := []struct {
+		name                 string
+		ledgerIndex          uint32
+		transactionIndex     uint32
+		serverNetworkID      uint32
+		transactionNetworkID *uint32
+		rootCTID             string
+		transactionCTID      string
+	}{
+		{
+			name:                 "transaction NetworkID overrides nested CTID only",
+			ledgerIndex:          100,
+			transactionIndex:     2,
+			serverNetworkID:      11111,
+			transactionNetworkID: &overrideNetworkID,
+			rootCTID:             "C000006400022B67",
+			transactionCTID:      "C000006400025359",
+		},
+		{
+			name:             "maximum network ID excludes root CTID",
+			ledgerIndex:      100,
+			transactionIndex: 2,
+			serverNetworkID:  0xFFFF,
+			transactionCTID:  "C00000640002FFFF",
+		},
+		{
+			name:             "maximum ledger index excludes root CTID",
+			ledgerIndex:      0x0FFFFFFF,
+			transactionIndex: 2,
+			serverNetworkID:  11111,
+			transactionCTID:  "CFFFFFFF00022B67",
+		},
+		{
+			name:             "maximum transaction index remains valid at root",
+			ledgerIndex:      100,
+			transactionIndex: 0xFFFF,
+			serverNetworkID:  11111,
+			rootCTID:         "C0000064FFFF2B67",
+			transactionCTID:  "C0000064FFFF2B67",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			txJSON := map[string]any{"TransactionType": "Payment"}
+			if tc.transactionNetworkID != nil {
+				txJSON["NetworkID"] = *tc.transactionNetworkID
+			}
+			stored, err := json.Marshal(handlers.StoredTransaction{
+				TxJSON: txJSON,
+				Meta: map[string]any{
+					"TransactionResult": "tesSUCCESS",
+					"TransactionIndex":  tc.transactionIndex,
+				},
+			})
+			require.NoError(t, err)
+
+			mock := newMockLedgerServiceTx()
+			mock.serverInfo.NetworkID = tc.serverNetworkID
+			mock.transactions[txHash] = &types.TransactionInfo{
+				TxData:      stored,
+				LedgerIndex: tc.ledgerIndex,
+				Validated:   true,
+				TxIndex:     tc.transactionIndex,
+			}
+			ctx := &types.RPCContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion2,
+				Services:   servicesForTx(mock),
+			}
+
+			result, rpcErr := (&handlers.TxMethod{}).Handle(
+				ctx,
+				json.RawMessage(`{"transaction":"`+txHash+`"}`),
+			)
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			if tc.rootCTID == "" {
+				assert.NotContains(t, response, "ctid")
+			} else {
+				assert.Equal(t, tc.rootCTID, response["ctid"])
+			}
+			responseTx := response["tx_json"].(map[string]any)
+			assert.Equal(t, tc.transactionCTID, responseTx["ctid"])
+		})
+	}
+
+	t.Run("API v1 preserves transaction CTID only in JSON mode when root is excluded", func(t *testing.T) {
+		stored, err := json.Marshal(handlers.StoredTransaction{
+			TxJSON: map[string]any{
+				"TransactionType": "Payment",
+				"NetworkID":       overrideNetworkID,
+			},
+			Meta: map[string]any{
+				"TransactionResult": "tesSUCCESS",
+				"TransactionIndex":  2,
+			},
+		})
+		require.NoError(t, err)
+
+		mock := newMockLedgerServiceTx()
+		mock.serverInfo.NetworkID = 0xFFFF
+		mock.transactions[txHash] = &types.TransactionInfo{
+			TxData:      stored,
+			LedgerIndex: 100,
+			Validated:   true,
+			TxIndex:     2,
+		}
+		ctx := &types.RPCContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForTx(mock),
+		}
+
+		result, rpcErr := (&handlers.TxMethod{}).Handle(
+			ctx,
+			json.RawMessage(`{"transaction":"`+txHash+`"}`),
+		)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, "C000006400025359", result.(map[string]any)["ctid"])
+
+		result, rpcErr = (&handlers.TxMethod{}).Handle(
+			ctx,
+			json.RawMessage(`{"transaction":"`+txHash+`","binary":true}`),
+		)
+		require.Nil(t, rpcErr)
+		assert.NotContains(t, result.(map[string]any), "ctid")
+	})
 }
 
 // CTID Lookup Tests (when implemented)
@@ -1595,6 +1851,94 @@ func TestTxMethodLookupByCTID(t *testing.T) {
 			if tc.expectError {
 				t.Logf("Expected error: %s", tc.errorType)
 			}
+		})
+	}
+}
+
+func TestTxMethodCTIDLookupUsesMetadataTransactionIndex(t *testing.T) {
+	reader := newDefaultLedgerReader(100, true)
+	firstData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{"TransactionType": "Payment", "Sequence": 1},
+		Meta:   map[string]any{"TransactionResult": "tesSUCCESS", "TransactionIndex": 9},
+	})
+	require.NoError(t, err)
+	secondData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{"TransactionType": "Payment", "Sequence": 2},
+		Meta:   map[string]any{"TransactionResult": "tesSUCCESS", "TransactionIndex": 3},
+	})
+	require.NoError(t, err)
+
+	firstHash := [32]byte{1}
+	secondHash := [32]byte{2}
+	reader.transactions = append(reader.transactions,
+		struct {
+			hash [32]byte
+			data []byte
+		}{hash: firstHash, data: firstData},
+		struct {
+			hash [32]byte
+			data []byte
+		}{hash: secondHash, data: secondData},
+	)
+
+	service := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	service.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+		require.Equal(t, uint32(100), seq)
+		return reader, nil
+	}
+	ctid, ok := handlers.EncodeCTID(100, 3, 0)
+	require.True(t, ok)
+	params, err := json.Marshal(map[string]any{"ctid": ctid})
+	require.NoError(t, err)
+	ctx := &types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: service},
+	}
+
+	result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	response := result.(map[string]any)
+	assert.Equal(t, strings.ToUpper(hex.EncodeToString(secondHash[:])), response["hash"])
+	assert.Equal(t, float64(2), response["Sequence"])
+}
+
+func TestTxMethodCTIDLookupSkipsMalformedLeaf(t *testing.T) {
+	reader := newDefaultLedgerReader(100, true)
+	var txHash [32]byte
+	txHash[0] = 1
+	reader.transactions = append(reader.transactions, struct {
+		hash [32]byte
+		data []byte
+	}{hash: txHash, data: []byte{0xFF}})
+
+	service := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	service.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+		if seq == 100 {
+			return reader, nil
+		}
+		return nil, errors.New("ledger not found")
+	}
+	services := &types.ServiceContainer{Ledger: service}
+	params, err := json.Marshal(map[string]any{
+		"ctid":   "C000006400000000",
+		"binary": true,
+	})
+	require.NoError(t, err)
+
+	for _, version := range []int{types.ApiVersion1, types.ApiVersion2} {
+		t.Run(fmt.Sprintf("API v%d", version), func(t *testing.T) {
+			ctx := &types.RPCContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: version,
+				Services:   services,
+			}
+			result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcTXN_NOT_FOUND, rpcErr.Code)
 		})
 	}
 }

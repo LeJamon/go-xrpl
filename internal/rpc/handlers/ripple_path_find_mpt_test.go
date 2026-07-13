@@ -48,7 +48,7 @@ func TestRipplePathFindRejectsMPTWithZeroIssuer(t *testing.T) {
 	}
 }
 
-func TestParseSourceCurrenciesMPTSendMaxIssuerReconciliation(t *testing.T) {
+func TestParseSourceCurrenciesMPTSendMaxMatchesIssuance(t *testing.T) {
 	var issuer, holder [20]byte
 	issuer[19] = 1
 	holder[19] = 2
@@ -59,14 +59,28 @@ func TestParseSourceCurrenciesMPTSendMaxIssuerReconciliation(t *testing.T) {
 		"source_currencies": json.RawMessage(`[{"mpt_issuance_id":"` + idString + `"}]`),
 	}
 
-	_, rpcErr := parseSourceCurrencies(probe, holder, &sendMax)
-	require.NotNil(t, rpcErr)
-	require.Equal(t, "srcIsrMalformed", rpcErr.ErrorString)
-
-	issues, rpcErr := parseSourceCurrencies(probe, issuer, &sendMax)
+	issues, rpcErr := parseSourceCurrencies(probe, holder, &sendMax)
 	require.Nil(t, rpcErr)
 	require.Len(t, issues, 1)
 	require.Equal(t, id, issues[0].MPTID)
+}
+
+func TestParseSourceCurrenciesIOUSendMaxKeepsSourceAndResolvedIssues(t *testing.T) {
+	var source, issuer [20]byte
+	source[19] = 2
+	issuer[19] = 3
+	sendMax := state.NewIssuedAmountFromFloat64(
+		10, "USD", state.EncodeAccountIDSafe(issuer),
+	)
+	probe := map[string]json.RawMessage{
+		"source_currencies": json.RawMessage(`[{"currency":"USD"}]`),
+	}
+
+	issues, rpcErr := parseSourceCurrencies(probe, source, &sendMax)
+	require.Nil(t, rpcErr)
+	require.Len(t, issues, 2)
+	require.Equal(t, issuer, issues[0].Issuer)
+	require.Equal(t, source, issues[1].Issuer)
 }
 
 func TestParseSourceCurrenciesAcceptsZeroMPTLiteral(t *testing.T) {

@@ -69,6 +69,10 @@ func normalizeObjectType(objType string) string {
 		return "FeeSettings"
 	case "hashes":
 		return "LedgerHashes"
+	case "loan":
+		return "Loan"
+	case "loan_broker":
+		return "LoanBroker"
 	case "mptoken":
 		return "MPToken"
 	case "mpt_issuance":

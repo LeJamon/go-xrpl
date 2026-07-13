@@ -334,6 +334,22 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
 	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
 
+	apiVersion := parseWebSocketAPIVersion(message)
+	dispatchCtx := wsConn.ctx
+	var cancel context.CancelFunc
+	if ws.timeout > 0 {
+		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
+		defer cancel()
+	}
+	rpcCtx := newRPCContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	if rpcErr := validateApiVersion(rpcCtx); rpcErr != nil {
+		ws.sendMalformedRequest(wsConn, cmdMap, id, rpcErr.ErrorString)
+		if ws.loadTracker != nil && !role.IsUnlimited() {
+			ws.loadTracker.Charge(clientIP, loadtrack.LoadMalformed)
+		}
+		return
+	}
+
 	// rippled accepts `method` as an alias for `command`, rejecting only when
 	// neither is present (or both are present strings that disagree) with a
 	// bare missingCommand token that echoes the original request, and charges
@@ -350,19 +366,14 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	cmd := types.WebSocketCommand{
 		Command: command,
 		ID:      id,
+		Request: make(map[string]any, len(cmdMap)),
 	}
+	maps.Copy(cmd.Request, cmdMap)
 
 	delete(cmdMap, "command")
 	delete(cmdMap, "method")
 	delete(cmdMap, "id")
-
-	var apiVersion int = types.DefaultApiVersion
-	if apiVer, exists := cmdMap["api_version"]; exists {
-		if ver, ok := apiVer.(float64); ok {
-			apiVersion = int(ver)
-		}
-		delete(cmdMap, "api_version")
-	}
+	delete(cmdMap, "api_version")
 
 	if len(cmdMap) > 0 {
 		paramsBytes, _ := json.Marshal(cmdMap)
@@ -370,13 +381,6 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
-	dispatchCtx := wsConn.ctx
-	var cancel context.CancelFunc
-	if ws.timeout > 0 {
-		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
-		defer cancel()
-	}
-	rpcCtx := newRPCContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 
 	// Handle subscription commands specially
 	switch cmd.Command {
@@ -402,6 +406,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 			return
 		}
 	}
+	request.ApiVersion = ctx.ApiVersion
 
 	// url requests are server-to-server (RPCSub) subscriptions: events go
 	// to the url's subscriber, not to this WebSocket connection.
@@ -495,17 +500,24 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 // Subcommands: "create" (start session), "close" (stop session), "status" (get current paths).
 // Reference: rippled PathFind.cpp
 func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
-	var sub struct {
-		Subcommand string `json:"subcommand"`
+	var params map[string]json.RawMessage
+	if len(cmd.Params) == 0 || json.Unmarshal(cmd.Params, &params) != nil {
+		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
+		return
 	}
-	if len(cmd.Params) > 0 {
-		if err := json.Unmarshal(cmd.Params, &sub); err != nil {
-			ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid parameters: "+err.Error()), cmd.ID)
-			return
-		}
+	rawSubcommand, exists := params["subcommand"]
+	if !exists {
+		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
+		return
 	}
+	var subcommand *string
+	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
+		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
+		return
+	}
+	wsConn.legacy.SetAPIVersion(ctx.ApiVersion)
 
-	switch sub.Subcommand {
+	switch *subcommand {
 	case "create":
 		ws.handlePathFindCreate(wsConn, ctx, cmd)
 	case "close":
@@ -713,7 +725,7 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 	result, rpcErr := dispatchMethod(ws.methodRegistry, ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, types.RPCErrorForbidden, wsLog())
 	opts := wsLoadWarningOpts(ctx)
 	if rpcErr != nil {
-		ws.sendErrorWithOptions(wsConn, rpcErr, cmd.ID, opts)
+		ws.sendErrorWithOptions(wsConn, webSocketErrorWithRequest(rpcErr, cmd.Request), cmd.ID, opts)
 		return
 	}
 	ws.sendResponseWithOptions(wsConn, types.WebSocketResponse{
@@ -723,6 +735,24 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		Result:     result,
 		ApiVersion: ctx.ApiVersion,
 	}, opts)
+}
+
+func webSocketErrorWithRequest(rpcErr *types.RPCError, request map[string]any) *types.RPCError {
+	if rpcErr == nil || request == nil {
+		return rpcErr
+	}
+	extra := make(map[string]any, len(rpcErr.Extra)+4)
+	maps.Copy(extra, rpcErr.Extra)
+	echo := make(map[string]any, len(request))
+	maps.Copy(echo, request)
+	redactCredentials(echo)
+	extra["request"] = echo
+	for _, key := range []string{"jsonrpc", "ripplerpc", "api_version"} {
+		if value, ok := request[key]; ok {
+			extra[key] = value
+		}
+	}
+	return rpcErr.WithExtra(extra)
 }
 
 // wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
@@ -774,6 +804,23 @@ func (ws *WebSocketServer) deliver(wsConn *WebSocketConnection, data []byte) {
 	}
 }
 
+func parseWebSocketAPIVersion(message []byte) int {
+	var request struct {
+		APIVersion json.RawMessage `json:"api_version"`
+	}
+	if err := json.Unmarshal(message, &request); err != nil {
+		return 0
+	}
+	if request.APIVersion == nil {
+		return types.DefaultApiVersion
+	}
+	var version int
+	if err := json.Unmarshal(request.APIVersion, &version); err != nil {
+		return 0
+	}
+	return version
+}
+
 // resolveWSCommand resolves the WS command name from the incoming JSON,
 // accepting `method` as an alias for `command` (ServerHandler.cpp:446-475).
 // ok is false — meaning the caller emits missingCommand — when neither is a
@@ -801,13 +848,17 @@ func resolveWSCommand(m map[string]any) (string, bool) {
 // (ServerHandler.cpp:452-468). Credentials in the echo are redacted — a
 // deliberate goxrpl superset of rippled's raw echo.
 func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, request map[string]any, id any) {
+	ws.sendMalformedRequest(wsConn, request, id, "missingCommand")
+}
+
+func (ws *WebSocketServer) sendMalformedRequest(wsConn *WebSocketConnection, request map[string]any, id any, errorToken string) {
 	echo := make(map[string]any, len(request))
 	maps.Copy(echo, request)
 	redactCredentials(echo)
 	resp := map[string]any{
 		"type":    "response",
 		"status":  "error",
-		"error":   "missingCommand",
+		"error":   errorToken,
 		"request": echo,
 	}
 	if id != nil {
@@ -822,7 +873,7 @@ func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, reque
 	}
 	data, err := json.Marshal(resp)
 	if err != nil {
-		wsLog().Error("Failed to marshal missingCommand response", "err", err)
+		wsLog().Error("Failed to marshal malformed WebSocket response", "err", err)
 		return
 	}
 	ws.deliver(wsConn, data)
@@ -835,24 +886,31 @@ func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.
 // sendErrorWithOptions writes an XRPL-format error: error fields are at top
 // level (not nested in result) per the WebSocket spec.
 func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RPCError, id any, opts *types.WebSocketResponseOptions) {
-	response := types.WebSocketResponse{
-		Type:   "response",
-		Status: "error",
-		ID:     id,
-		Error:  rpcErr.ErrorString,
+	response := make(map[string]any, len(rpcErr.Extra)+8)
+	maps.Copy(response, rpcErr.Extra)
+	response["type"] = "response"
+	response["status"] = "error"
+	response["error"] = rpcErr.ErrorString
+	if id != nil {
+		response["id"] = id
 	}
 	// Bare-token errors carry only `error` on the wire (rippled's direct
-	// jvResult[jss::error] path); leave error_code/error_message zero so
-	// omitempty drops them.
+	// jvResult[jss::error] path).
 	if !rpcErr.IsBareToken() {
-		response.ErrorCode = rpcErr.Code
-		response.ErrorMessage = rpcErr.Message
+		response["error_code"] = rpcErr.Code
+		response["error_message"] = rpcErr.Message
 	}
 
 	if opts != nil {
-		response.Warning = opts.Warning
-		response.Warnings = opts.Warnings
-		response.Forwarded = opts.Forwarded
+		if opts.Warning != "" {
+			response["warning"] = opts.Warning
+		}
+		if len(opts.Warnings) > 0 {
+			response["warnings"] = opts.Warnings
+		}
+		if opts.Forwarded {
+			response["forwarded"] = true
+		}
 	}
 
 	data, err := json.Marshal(response)

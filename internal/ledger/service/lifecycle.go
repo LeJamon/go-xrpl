@@ -109,6 +109,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	if s.eventCallback != nil {
 		event := &LedgerAcceptedEvent{
 			LedgerInfo:         ledgerInfo,
+			Ledger:             s.closedLedger,
 			TransactionResults: txResults,
 		}
 		s.dispatchLedgerEvent(event)
@@ -560,6 +561,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	if s.eventCallback != nil {
 		event := &LedgerAcceptedEvent{
 			LedgerInfo:         ledgerInfo,
+			Ledger:             s.closedLedger,
 			TransactionResults: txResults,
 		}
 		if promotedByDrain {
@@ -637,6 +639,12 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	}
 
 	if event != nil {
+		if event.LedgerInfo != nil {
+			event.LedgerInfo.Validated = true
+		}
+		for i := range event.TransactionResults {
+			event.TransactionResults[i].Validated = true
+		}
 		s.dispatchLedgerEvent(event)
 	}
 }
@@ -1021,6 +1029,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 		if s.eventCallback != nil {
 			event := &LedgerAcceptedEvent{
 				LedgerInfo:         ledgerInfo,
+				Ledger:             adopted,
 				TransactionResults: txResults,
 			}
 			if promotedByDrain {

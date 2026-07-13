@@ -3,89 +3,123 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // TxMethod handles the tx RPC method
 type TxMethod struct{}
 
 func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.TransactionParam
-		Binary    bool    `json:"binary,omitempty"`
-		MinLedger *uint32 `json:"min_ledger,omitempty"`
-		MaxLedger *uint32 `json:"max_ledger,omitempty"`
-		CTID      string  `json:"ctid,omitempty"`
-	}
-
 	// notEnabled takes precedence over any parameter validation, matching
 	// rippled's useTxTables() gate as the first statement of doTxJson.
 	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	var fields map[string]json.RawMessage
+	if params != nil {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
 	}
-
-	// Specifying both transaction and ctid is ambiguous and rejected,
-	// matching rippled doTxJson.
-	if request.Transaction != "" && request.CTID != "" {
+	transactionRaw, hasTransaction := fields["transaction"]
+	ctidRaw, hasCTID := fields["ctid"]
+	if hasTransaction && hasCTID {
 		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
-	// CTID lookup support
-	if request.CTID != "" && request.Transaction == "" {
-		ctidLedgerSeq, ctidTxIndex, ctidNetworkID, err := parseCTID(request.CTID)
-		if err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
+	var transaction, ctid string
+	var valid bool
+	switch {
+	case hasTransaction:
+		transaction, valid = jsonCppStringRaw(transactionRaw)
+		if !valid {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
-		// The CTID embeds a network id; reject the request when it does not match
-		// this node's network (Tx.cpp:313-321).
+	case hasCTID:
+		ctid, valid = jsonCppStringRaw(ctidRaw)
+		if !valid {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	default:
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+
+	var txHash [32]byte
+	var ctidLedgerSeq uint32
+	var ctidTxIndex uint16
+	if hasCTID {
+		var ctidNetworkID uint16
+		var err error
+		ctidLedgerSeq, ctidTxIndex, ctidNetworkID, err = parseCTID(ctid)
+		if err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
 		if nodeNet := ctx.Services.Ledger.GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
 			return nil, types.RPCErrorWrongNetwork(fmt.Sprintf(
 				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
 		}
-		return m.lookupByCTID(ctx, ctidLedgerSeq, ctidTxIndex, request.Binary)
-	}
-
-	if request.Transaction == "" {
-		return nil, types.RPCErrorInvalidParams("Missing required parameter: transaction")
-	}
-
-	// A search range is formed only when both min_ledger and max_ledger are
-	// present (a partial range is ignored, so a present 0 is a real bound, not
-	// "absent"); when both are given the range must be ordered and span at most
-	// 1000 ledgers (Tx.cpp:330-344, doTxHelp:75-93).
-	if request.MinLedger != nil && request.MaxLedger != nil {
-		minLedger, maxLedger := *request.MinLedger, *request.MaxLedger
-		if maxLedger < minLedger {
-			return nil, types.RPCErrorInvalidLgrRange()
+	} else {
+		txHashBytes, err := hex.DecodeString(transaction)
+		if err != nil || len(txHashBytes) != 32 {
+			return nil, types.RPCErrorNotImpl()
 		}
-		if maxLedger-minLedger > 1000 {
-			return nil, types.RPCErrorExcessiveLgrRange()
+		copy(txHash[:], txHashBytes)
+	}
+
+	binaryMode := false
+	if binaryRaw, ok := fields["binary"]; ok {
+		binaryMode = jsonCppBoolRaw(binaryRaw)
+	}
+
+	var rangeMin, rangeMax uint32
+	hasLedgerRange := false
+	if minRaw, hasMin := fields["min_ledger"]; hasMin {
+		if maxRaw, hasMax := fields["max_ledger"]; hasMax {
+			minLedger, minOK := txUint32Raw(minRaw)
+			maxLedger, maxOK := txUint32Raw(maxRaw)
+			if !minOK || !maxOK || maxLedger < minLedger {
+				return nil, types.RPCErrorInvalidLgrRange()
+			}
+			if maxLedger-minLedger > 1000 {
+				return nil, types.RPCErrorExcessiveLgrRange()
+			}
+			rangeMin, rangeMax, hasLedgerRange = minLedger, maxLedger, true
 		}
 	}
 
-	// Parse the transaction hash
-	txHashBytes, err := hex.DecodeString(request.Transaction)
-	if err != nil || len(txHashBytes) != 32 {
-		return nil, types.RPCErrorNotImpl()
+	if hasCTID {
+		return m.lookupByCTID(ctx, ctidLedgerSeq, ctidTxIndex, binaryMode)
 	}
 
-	var txHash [32]byte
-	copy(txHash[:], txHashBytes)
-
-	// Look up the transaction
-	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
-	if err != nil {
-		return nil, types.RPCErrorTxnNotFound("Transaction not found")
+	var txInfo *types.TransactionInfo
+	var searched types.TxSearchResult
+	var err error
+	if hasLedgerRange {
+		if ranged, ok := ctx.Services.Ledger.(types.RangedTransactionLookup); ok {
+			txInfo, searched, err = ranged.GetTransactionWithRange(ctx.Context, txHash, rangeMin, rangeMax)
+		} else {
+			txInfo, err = ctx.Services.Ledger.GetTransaction(txHash)
+		}
+	} else {
+		txInfo, err = ctx.Services.Ledger.GetTransaction(txHash)
+	}
+	if err != nil && !errors.Is(err, svcerr.ErrTxnNotFound) {
+		return nil, types.RPCErrorInternal("Internal error.")
+	}
+	if err != nil || txInfo == nil {
+		return nil, txNotFoundForSearch(hasLedgerRange, searched)
 	}
 	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
@@ -100,7 +134,44 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 		}
 	}
 
-	return m.buildResponse(ctx, storedTx, txInfo, strings.ToUpper(request.Transaction), closeTimeSec, request.Binary), nil
+	return m.buildResponse(ctx, storedTx, txInfo, strings.ToUpper(transaction), closeTimeSec, binaryMode), nil
+}
+
+func txNotFoundForSearch(hasRange bool, searched types.TxSearchResult) *types.RPCError {
+	err := types.RPCErrorTxnNotFound("Transaction not found.")
+	if !hasRange || searched == types.TxSearchUnknown {
+		return err
+	}
+	return err.WithExtra(map[string]any{
+		"searched_all": searched == types.TxSearchAll,
+	})
+}
+
+func txUint32Raw(raw json.RawMessage) (uint32, bool) {
+	value, err := decodeRawJSONValue(raw)
+	if err != nil {
+		return 0, false
+	}
+	switch value := value.(type) {
+	case nil:
+		return 0, true
+	case bool:
+		if value {
+			return 1, true
+		}
+		return 0, true
+	case json.Number:
+		number, err := value.Float64()
+		if err != nil || number < 0 || number > math.MaxUint32 {
+			return 0, false
+		}
+		return uint32(number), true
+	case string:
+		number, err := strconv.ParseUint(value, 10, 32)
+		return uint32(number), err == nil
+	default:
+		return 0, false
+	}
 }
 
 // buildResponse constructs the tx response, choosing v1 or v2 format based on ctx.ApiVersion.
@@ -112,11 +183,11 @@ func (m *TxMethod) buildResponse(
 	closeTimeSec int64,
 	binary bool,
 ) map[string]any {
+	networkID := ctx.Services.Ledger.GetServerInfo().NetworkID
 	if ctx.ApiVersion > 1 {
-		netID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
-		return m.buildResponseV2(storedTx, txInfo, hashStr, closeTimeSec, binary, netID)
+		return m.buildResponseV2(storedTx, txInfo, hashStr, closeTimeSec, binary, networkID)
 	}
-	return m.buildResponseV1(storedTx, txInfo, hashStr, closeTimeSec, binary)
+	return m.buildResponseV1(storedTx, txInfo, hashStr, closeTimeSec, binary, networkID)
 }
 
 // buildResponseV1 builds the legacy (API v1) response with flat tx fields on root.
@@ -126,13 +197,14 @@ func (m *TxMethod) buildResponseV1(
 	hashStr string,
 	closeTimeSec int64,
 	binary bool,
+	networkID uint32,
 ) map[string]any {
 	response := map[string]any{}
 
 	if binary {
 		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
 		if err == nil {
-			response["tx_blob"] = txBlob
+			response["tx"] = txBlob
 		}
 		if storedTx.Meta != nil {
 			metaBlob, err := binarycodec.Encode(storedTx.Meta)
@@ -141,23 +213,30 @@ func (m *TxMethod) buildResponseV1(
 			}
 		}
 	} else {
-		// Spread transaction fields flat on root
-		maps.Copy(response, storedTx.TxJSON)
+		maps.Copy(response, projectTransactionJSON(storedTx.TxJSON, "", 1))
+		if ctid, ok := transactionJSONCTID(storedTx.TxJSON, txInfo, networkID); ok {
+			response["ctid"] = ctid
+		}
 		if storedTx.Meta != nil {
-			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta)
+			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta, SyntheticMetadataContext{
+				LedgerSequence: txInfo.LedgerIndex,
+				CloseTime:      closeTimeSec,
+			})
 			response["meta"] = storedTx.Meta
 		}
 	}
 
 	response["hash"] = hashStr
-	response["inLedger"] = txInfo.LedgerIndex
-	response["ledger_index"] = txInfo.LedgerIndex
-	response["ledger_hash"] = txInfo.LedgerHash
+	if txInfo.LedgerIndex > 0 {
+		response["inLedger"] = txInfo.LedgerIndex
+		response["ledger_index"] = txInfo.LedgerIndex
+	}
 	response["validated"] = txInfo.Validated
+	if ctid, ok := txResultCTID(txInfo, networkID); ok {
+		response["ctid"] = ctid
+	}
 
 	if closeTimeSec > 0 {
-		closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-		response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
 		response["date"] = closeTimeSec
 	}
 
@@ -171,9 +250,10 @@ func (m *TxMethod) buildResponseV2(
 	hashStr string,
 	closeTimeSec int64,
 	binary bool,
-	networkID uint16,
+	networkID uint32,
 ) map[string]any {
 	response := map[string]any{}
+	var txJSON map[string]any
 
 	if binary {
 		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
@@ -187,21 +267,24 @@ func (m *TxMethod) buildResponseV2(
 			}
 		}
 	} else {
-		// Wrap transaction fields in tx_json
-		txJSON := make(map[string]any, len(storedTx.TxJSON)+3)
-		maps.Copy(txJSON, storedTx.TxJSON)
+		txJSON = projectTransactionJSON(storedTx.TxJSON, "", 2)
 		// date and ledger_index go inside tx_json for v2
-		txJSON["ledger_index"] = txInfo.LedgerIndex
-		if closeTimeSec > 0 {
-			txJSON["date"] = closeTimeSec
+		if txInfo.LedgerIndex > 0 {
+			txJSON["ledger_index"] = txInfo.LedgerIndex
+			if closeTimeSec > 0 {
+				txJSON["date"] = closeTimeSec
+			}
 		}
-		if txInfo.LedgerIndex > 0 && txInfo.TxIndex <= 0xFFFF && txInfo.LedgerIndex < 0x0FFFFFFF {
-			txJSON["ctid"] = encodeCTIDWithNetworkID(txInfo.LedgerIndex, uint16(txInfo.TxIndex), networkID)
+		if ctid, ok := transactionJSONCTID(storedTx.TxJSON, txInfo, networkID); ok {
+			txJSON["ctid"] = ctid
 		}
 		response["tx_json"] = txJSON
 
 		if storedTx.Meta != nil {
-			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta)
+			InjectSyntheticFields(storedTx.TxJSON, storedTx.Meta, SyntheticMetadataContext{
+				LedgerSequence: txInfo.LedgerIndex,
+				CloseTime:      closeTimeSec,
+			})
 			response["meta"] = storedTx.Meta
 		}
 	}
@@ -209,6 +292,9 @@ func (m *TxMethod) buildResponseV2(
 	// Root-level fields
 	response["hash"] = hashStr
 	response["validated"] = txInfo.Validated
+	if ctid, ok := txResultCTID(txInfo, networkID); ok {
+		response["ctid"] = ctid
+	}
 
 	if txInfo.LedgerHash != "" {
 		response["ledger_hash"] = txInfo.LedgerHash
@@ -229,29 +315,27 @@ func (m *TxMethod) buildResponseV2(
 func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RPCError) {
 	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
-		return nil, types.RPCErrorTxnNotFound("Transaction not found (ledger not available)")
+		return nil, types.RPCErrorTxnNotFound("Transaction not found.")
 	}
 
-	// Iterate transactions to find the one at the given index
 	var foundHash [32]byte
 	var foundData []byte
-	var currentIdx uint16
 	var found bool
 
 	ledger.ForEachTransaction(func(txHash [32]byte, txData []byte) bool {
-		if currentIdx == txIndex {
+		metadataIndex, ok := txcore.TransactionIndexFromTxWithMetaBlob(txData)
+		if ok && metadataIndex == uint32(txIndex) {
 			foundHash = txHash
 			foundData = make([]byte, len(txData))
 			copy(foundData, txData)
 			found = true
-			return false // stop iteration
+			return false
 		}
-		currentIdx++
 		return true
 	})
 
 	if !found {
-		return nil, types.RPCErrorTxnNotFound("Transaction not found at specified index")
+		return nil, types.RPCErrorTxnNotFound("Transaction not found.")
 	}
 
 	hashStr := strings.ToUpper(hex.EncodeToString(foundHash[:]))
@@ -264,13 +348,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex
 	return m.ctidResponse(ctx, storedTx, decodeErr, foundData, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
 }
 
-// ctidResponse shapes a CTID-lookup response by reusing buildResponse and then
-// applying the CTID-specific deltas: the root "ctid" (v1) / in-tx_json "ctid"
-// (v2) is grafted by buildResponse already; here we keep the root ledger fields
-// unconditionally present (a fetched closed ledger is always available even if
-// not yet validated), drop the v1 binary "inLedger"/"date" that the CTID format
-// omits, and preserve the raw-hex tx_blob fallback used when the stored blob
-// cannot be decoded.
+// ctidResponse applies the shape differences specific to CTID lookup.
 func (m *TxMethod) ctidResponse(
 	ctx *types.RPCContext,
 	storedTx StoredTransaction,
@@ -295,26 +373,17 @@ func (m *TxMethod) ctidResponse(
 	if decodeErr != nil {
 		tx = StoredTransaction{}
 	}
-	networkID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
 	response := m.buildResponse(ctx, tx, txInfo, hashStr, closeTimeSec, binary)
 
-	// The CTID format reports the containing ledger unconditionally, whereas
-	// buildResponseV2 gates these on validated. ledger_hash is always set by
-	// buildResponse; ledger_index and close_time_iso may be missing for an
-	// unvalidated ledger.
-	response["ledger_index"] = ledgerSeq
-	if closeTimeSec > 0 {
-		closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-		response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
-	}
-
 	if binary {
-		// buildResponseV1's "inLedger"/"date" and an empty Encode(nil) tx_blob
-		// have no CTID equivalent; on a decode failure CTID emits the raw blob.
-		delete(response, "inLedger")
-		delete(response, "date")
 		if decodeErr != nil {
-			response["tx_blob"] = strings.ToUpper(hex.EncodeToString(foundData))
+			delete(response, "tx")
+			delete(response, "tx_blob")
+			key := "tx"
+			if ctx.ApiVersion > 1 {
+				key = "tx_blob"
+			}
+			response[key] = strings.ToUpper(hex.EncodeToString(foundData))
 		}
 		return response
 	}
@@ -326,19 +395,27 @@ func (m *TxMethod) ctidResponse(
 			delete(response, "tx_json")
 			return response
 		}
-		if txJSON, ok := response["tx_json"].(map[string]any); ok {
-			// buildResponseV2 omits the ctid for ledger 0; the CTID lookup
-			// still reports it.
-			if ledgerSeq < 0x0FFFFFFF {
-				txJSON["ctid"] = encodeCTIDWithNetworkID(ledgerSeq, txIndex, networkID)
-			}
-		}
 		return response
 	}
 
-	// API v1 reports the CTID at the root; buildResponseV1 does not add it.
-	response["ctid"] = encodeCTIDWithNetworkID(ledgerSeq, txIndex, networkID)
 	return response
+}
+
+func transactionJSONCTID(txJSON map[string]any, txInfo *types.TransactionInfo, networkID uint32) (string, bool) {
+	if txInfo.LedgerIndex == 0 {
+		return "", false
+	}
+	if override, ok := jsonUint32(txJSON["NetworkID"]); ok {
+		networkID = override
+	}
+	return EncodeCTID(txInfo.LedgerIndex, txInfo.TxIndex, networkID)
+}
+
+func txResultCTID(txInfo *types.TransactionInfo, networkID uint32) (string, bool) {
+	if txInfo.LedgerIndex == 0 {
+		return "", false
+	}
+	return EncodeCTID(txInfo.LedgerIndex, txInfo.TxIndex, networkID)
 }
 
 // parseCTID decodes a CTID hex string to ledger sequence and tx index.

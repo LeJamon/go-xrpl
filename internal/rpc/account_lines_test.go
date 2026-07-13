@@ -61,10 +61,10 @@ func (m *mockAccountLinesLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockAccountLinesLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockAccountLinesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
 func (m *mockAccountLinesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -142,7 +142,7 @@ func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, ac
 func (m *mockAccountLinesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -203,13 +203,13 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -217,7 +217,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -225,7 +225,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.5,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -233,7 +233,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -241,8 +241,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			// Note: JSON null gets unmarshaled as empty string in Go, triggering missing parameter error
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -250,7 +249,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -258,7 +257,7 @@ func TestAccountLinesErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -486,9 +485,9 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 			},
 		},
 		{
-			// Test case from rippled: invalid ledger index string -> ledgerIndexMalformed
+			// Test case from rippled: invalid ledger index string -> invalidParams
 			// Based on lines 102-113 of AccountLines_test.cpp
-			name: "ledger_index: invalid string -> ledgerIndexMalformed",
+			name: "ledger_index: invalid string -> invalidParams",
 			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "nonsense",
@@ -498,7 +497,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = errors.New("ledger index malformed")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			// Test case from rippled: ledger not found for non-existent sequence
@@ -513,7 +512,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = errors.New("ledger not found")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcLGR_NOT_FOUND,
 		},
 		{
 			name: "ledger_hash: valid hash",
@@ -1091,6 +1090,8 @@ func TestAccountLinesResponseFields(t *testing.T) {
 					PeerAuthorized: true,
 					Freeze:         true,
 					FreezePeer:     true,
+					DeepFreeze:     true,
+					DeepFreezePeer: true,
 				},
 			},
 			LedgerIndex: 2,
@@ -1128,6 +1129,45 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		assert.Equal(t, true, line["peer_authorized"])
 		assert.Equal(t, true, line["freeze"])
 		assert.Equal(t, true, line["freeze_peer"])
+		assert.Equal(t, true, line["deep_freeze"])
+		assert.Equal(t, true, line["deep_freeze_peer"])
+	})
+
+	t.Run("ignore_default uses only queried-side reserve", func(t *testing.T) {
+		mock.accountLinesResult = &types.AccountLinesResult{
+			Account: validAccount,
+			Lines: []types.TrustLine{
+				{
+					Account:    peerAccount,
+					Balance:    "500",
+					Currency:   "USD",
+					Limit:      "1000",
+					NoRipple:   true,
+					HasReserve: false,
+				},
+				{
+					Account:    peerAccount,
+					Balance:    "0",
+					Currency:   "EUR",
+					Limit:      "0",
+					LimitPeer:  "0",
+					HasReserve: true,
+				},
+			},
+		}
+		mock.accountLinesErr = nil
+		paramsJSON, err := json.Marshal(map[string]any{
+			"account":        validAccount,
+			"ignore_default": true,
+		})
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		response := result.(map[string]any)
+		lines := response["lines"].([]map[string]any)
+		require.Len(t, lines, 1)
+		assert.Equal(t, "EUR", lines[0]["currency"])
 	})
 
 	t.Run("Multiple trust lines with different currencies", func(t *testing.T) {

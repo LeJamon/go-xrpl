@@ -15,7 +15,8 @@ import (
 // Rippled maintains an OrderBookDB; we build a lightweight equivalent
 // by scanning offers and AMMs on demand.
 type BookIndex struct {
-	ledger tx.LedgerView
+	ledger   tx.LedgerView
+	domainID *[32]byte
 	// byTakerPays maps an Issue (what the taker pays) to a list of Issues
 	// (what the taker gets) for all books that exist.
 	byTakerPays map[payment.Issue][]payment.Issue
@@ -28,6 +29,12 @@ func NewBookIndex(ledger tx.LedgerView) *BookIndex {
 		ledger:      ledger,
 		byTakerPays: make(map[payment.Issue][]payment.Issue),
 	}
+}
+
+func newBookIndexForDomain(ledger tx.LedgerView, domainID *[32]byte) *BookIndex {
+	index := NewBookIndex(ledger)
+	index.domainID = domainID
+	return index
 }
 
 // Build scans the ledger for all order books and AMMs and builds the book index.
@@ -62,10 +69,13 @@ func (bi *BookIndex) Build() {
 		switch state.EntryType(data) {
 		case "Offer":
 			offer, err := state.ParseLedgerOffer(data)
-			if err == nil {
+			if err == nil && bi.includesOffer(offer) {
 				addPair(issueFromAmount(offer.TakerPays), issueFromAmount(offer.TakerGets))
 			}
 		case "AMM":
+			if bi.domainID != nil {
+				break
+			}
 			pool, err := amm.ParseAMMData(data)
 			if err == nil {
 				asset1, valid1 := issueFromAsset(pool.Asset)
@@ -103,9 +113,16 @@ func (bi *BookIndex) IsBookToXRP(issue payment.Issue) bool {
 
 // BookExists checks whether a specific book directory exists in the ledger.
 func (bi *BookIndex) BookExists(takerPays, takerGets payment.Issue) bool {
-	base := keylet.BookBase(bookSide(takerPays), bookSide(takerGets), nil)
+	base := keylet.BookBase(bookSide(takerPays), bookSide(takerGets), bi.domainID)
 	next, _, ok, err := bi.ledger.Succ(base.Key)
 	return err == nil && ok && bytes.Equal(next[:24], base.Key[:24])
+}
+
+func (bi *BookIndex) includesOffer(offer *state.LedgerOffer) bool {
+	if bi.domainID != nil {
+		return offer.DomainID == *bi.domainID
+	}
+	return offer.DomainID == ([32]byte{}) || offer.AdditionalBookDirectory != ([32]byte{})
 }
 
 func bookSide(issue payment.Issue) keylet.BookSide {

@@ -51,21 +51,19 @@ func (m *AMMInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 		return nil, err
 	}
 
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	request.LedgerSpecifier = parsedLedgerSpec
 	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
 	if selErr != nil {
 		return nil, selErr
 	}
 
-	// rippled resolves the ledger before validating any parameter
-	// (AMMInfo.cpp:81-84), so an explicitly named missing/malformed ledger
-	// outranks every param error; the validated/current/closed shortcuts are
-	// always available from the service.
-	switch ledgerIndex {
-	case "current", "closed", "validated":
-	default:
-		if _, _, lerr := LookupLedger(ctx, request.LedgerSpecifier); lerr != nil {
-			return nil, lerr
-		}
+	ledger, lookupValidated, lookupErr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lookupErr != nil {
+		return nil, lookupErr
 	}
 
 	// For api_version < 3 the combination check runs before the per-field
@@ -250,15 +248,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	}
 
 	// Build final response
-	response := map[string]any{
-		"amm":          ammResult,
-		"ledger_index": ammEntry.LedgerIndex,
-		"validated":    ammEntry.Validated,
-	}
-
-	if ammEntry.LedgerHash != [32]byte{} {
-		response["ledger_hash"] = FormatLedgerHash(ammEntry.LedgerHash)
-	}
+	response := ledgerEntryResponseFields(ledger, lookupValidated)
+	response["amm"] = ammResult
 
 	return response, nil
 }

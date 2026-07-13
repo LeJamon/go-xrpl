@@ -96,6 +96,45 @@ func TestTxSyntheticMetadata(t *testing.T) {
 	}
 }
 
+func TestTxProjectsDeliverMax(t *testing.T) {
+	const txHash = "D2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	stored, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
+		Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+	})
+	require.NoError(t, err)
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+		t.Run("api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			mock := newMockLedgerServiceTx()
+			mock.transactions[txHash] = &types.TransactionInfo{
+				TxData:      stored,
+				LedgerIndex: 2,
+				Validated:   true,
+			}
+			ctx := &types.RPCContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   servicesForTx(mock),
+			}
+
+			result, rpcErr := (&handlers.TxMethod{}).Handle(ctx, json.RawMessage(`{"transaction":"`+txHash+`"}`))
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			responseTx := response
+			if apiVersion > 1 {
+				responseTx = response["tx_json"].(map[string]any)
+				require.NotContains(t, responseTx, "Amount")
+			} else {
+				require.Equal(t, "100", responseTx["Amount"])
+			}
+			require.Equal(t, "100", responseTx["DeliverMax"])
+			require.Equal(t, "100", response["meta"].(map[string]any)["delivered_amount"])
+		})
+	}
+}
+
 func TestAccountTxSyntheticMetadata(t *testing.T) {
 	_, _, txBlob, metaBlob, want := mptSyntheticRPCFixture(t)
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
@@ -255,5 +294,54 @@ func TestTransactionEntryDoesNotInjectSyntheticMetadata(t *testing.T) {
 				require.NotContains(t, responseMeta, tc.field)
 			})
 		}
+	}
+}
+
+func TestTransactionEntryProjectsDeliverMax(t *testing.T) {
+	const txHash = "C2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	stored, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
+		Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+	})
+	require.NoError(t, err)
+
+	mock := newMockLedgerServiceTE()
+	services := newTransactionEntryTestServices(mock)
+	mock.addLedger(newMockLedgerReaderTE(2))
+	mock.transactions[txHash] = &types.TransactionInfo{
+		TxData:      stored,
+		LedgerIndex: 2,
+		Validated:   true,
+	}
+
+	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+		t.Run("api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
+			ctx := &types.RPCContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: apiVersion,
+				Services:   services,
+			}
+			params := json.RawMessage(`{"tx_hash":"` + txHash + `","ledger_index":2}`)
+			result, rpcErr := (&handlers.TransactionEntryMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			responseTx := response["tx_json"].(map[string]any)
+			require.Equal(t, "100", responseTx["DeliverMax"])
+			if apiVersion > 1 {
+				require.NotContains(t, responseTx, "Amount")
+				require.Equal(t, txHash, response["hash"])
+				require.NotContains(t, responseTx, "hash")
+			} else {
+				require.Equal(t, "100", responseTx["Amount"])
+				require.Equal(t, txHash, responseTx["hash"])
+				require.NotContains(t, response, "hash")
+			}
+			metaKey := "metadata"
+			if apiVersion > 1 {
+				metaKey = "meta"
+			}
+			require.NotContains(t, response[metaKey].(map[string]any), "delivered_amount")
+		})
 	}
 }

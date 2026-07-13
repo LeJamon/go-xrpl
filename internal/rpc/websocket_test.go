@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -10,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestWebSocketServer_Close_JoinsHandlers verifies that Close blocks until
@@ -353,6 +357,42 @@ func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestWebSocketErrorPreservesExtraResultFields(t *testing.T) {
+	ws := NewWebSocketServer(time.Second, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	wsConn := &WebSocketConnection{
+		ctx:         ctx,
+		sendChannel: make(chan []byte, 1),
+	}
+	err := webSocketErrorWithRequest(types.RPCErrorInternal("test").WithExtra(map[string]any{
+		"ledger": map[string]any{"ledger_index": uint32(2)},
+		"queue_data": []any{
+			map[string]any{"account": "rExample"},
+		},
+	}), map[string]any{
+		"command":     "ledger",
+		"id":          7,
+		"api_version": 2,
+		"passphrase":  "secret",
+	})
+
+	ws.sendError(wsConn, err, 7)
+
+	var response map[string]any
+	require.NoError(t, json.Unmarshal(<-wsConn.sendChannel, &response))
+	assert.Equal(t, "error", response["status"])
+	assert.Equal(t, "internal", response["error"])
+	assert.EqualValues(t, types.RpcINTERNAL, response["error_code"])
+	assert.EqualValues(t, 7, response["id"])
+	assert.Contains(t, response, "ledger")
+	assert.Len(t, response["queue_data"], 1)
+	assert.EqualValues(t, 2, response["api_version"])
+	request := response["request"].(map[string]any)
+	assert.Equal(t, "ledger", request["command"])
+	assert.Equal(t, "<masked>", request["passphrase"])
 }
 
 // TestSetPingInterval guards the websocket_ping_frequency wiring: a

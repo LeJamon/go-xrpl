@@ -15,48 +15,72 @@ import (
 type AccountLinesMethod struct{ BaseHandler }
 
 func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		Peer          string `json:"peer,omitempty"`
-		IgnoreDefault bool   `json:"ignore_default,omitempty"`
-		types.PaginationParams
+	fields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	accountRaw, ok := fields["account"]
+	if !ok {
+		return nil, types.RPCErrorMissingField("account")
 	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	// Validate peer parameter if provided (rippled: rpcACT_MALFORMED)
-	if request.Peer != "" {
-		if !types.IsValidXRPLAddress(request.Peer) {
-			return nil, types.RPCErrorActMalformed("Malformed peer account.")
-		}
+	account, ok := rawJSONString(accountRaw)
+	if !ok {
+		return nil, types.RPCErrorInvalidField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	markerStr, mErr := markerString(request.Marker)
-	if mErr != nil {
-		return nil, mErr
+	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
+	}
+	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
+		return nil, accountErr
+	}
+	peer := ""
+	if peerRaw, ok := fields["peer"]; ok {
+		var valid bool
+		peer, valid = jsonCppStringRaw(peerRaw)
+		if !valid {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
+	if peer != "" && !types.IsValidClassicAddress(peer) {
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit, markerStr)
+	ignoreDefault := false
+	if ignoreRaw, ok := fields["ignore_default"]; ok {
+		ignoreDefault = jsonCppBoolRaw(ignoreRaw)
+	}
+	marker := ""
+	if markerRaw, ok := fields["marker"]; ok {
+		var valid bool
+		marker, valid = rawJSONString(markerRaw)
+		if !valid {
+			return nil, types.RPCErrorExpectedField("marker", "string")
+		}
+		if marker == "" {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
+	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
@@ -65,19 +89,16 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
 	}
 
-	// Filter out default-state trust lines when ignore_default is true
-	// In rippled, this checks if the line has the reserve flag set for the account's side.
-	// A line is in default state when: balance=0, limit=0, limit_peer=0, quality_in=0, quality_out=0, no flags set.
 	lines := result.Lines
-	if request.IgnoreDefault {
+	if ignoreDefault {
 		filtered := make([]types.TrustLine, 0, len(lines))
 		for _, line := range lines {
-			if isDefaultTrustLine(line) {
+			if !line.HasReserve {
 				continue
 			}
 			filtered = append(filtered, line)
@@ -116,15 +137,19 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		if line.FreezePeer {
 			entry["freeze_peer"] = true
 		}
+		if line.DeepFreeze {
+			entry["deep_freeze"] = true
+		}
+		if line.DeepFreezePeer {
+			entry["deep_freeze_peer"] = true
+		}
 		jsonLines = append(jsonLines, entry)
 	}
 
 	// Build response
-	response := map[string]any{
-		"account": result.Account,
-		"lines":   jsonLines,
-	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	response := ledgerEntryResponseFields(ledger, validated)
+	response["account"] = result.Account
+	response["lines"] = jsonLines
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
@@ -133,25 +158,4 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	}
 
 	return response, nil
-}
-
-// isDefaultTrustLine returns true if a trust line is in its default state
-// (zero balance, zero limits, no quality, no flags)
-func isDefaultTrustLine(line types.TrustLine) bool {
-	if line.Balance != "0" && line.Balance != "" {
-		return false
-	}
-	if line.Limit != "0" && line.Limit != "" {
-		return false
-	}
-	if line.LimitPeer != "0" && line.LimitPeer != "" {
-		return false
-	}
-	if line.QualityIn != 0 || line.QualityOut != 0 {
-		return false
-	}
-	if line.NoRipple || line.NoRipplePeer || line.Authorized || line.PeerAuthorized || line.Freeze || line.FreezePeer {
-		return false
-	}
-	return true
 }

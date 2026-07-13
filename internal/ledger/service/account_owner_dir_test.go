@@ -280,8 +280,8 @@ func TestAccountChannels_MarkerPagination(t *testing.T) {
 	}
 }
 
-// TestAccountDirMarkers_Invalid covers the malformed and stale marker tiers for
-// the owner-directory RPCs: both must surface as ErrInvalidMarker.
+// TestAccountDirMarkers_Invalid covers malformed markers shared by the
+// owner-directory RPCs.
 func TestAccountDirMarkers_Invalid(t *testing.T) {
 	svc := newOfferTestService(t)
 	aAddr, _ := addressFromBytes(t, 0x10)
@@ -297,14 +297,63 @@ func TestAccountDirMarkers_Invalid(t *testing.T) {
 		{"bad hex key", strings.Repeat("z", 64) + ",0"},
 		{"short key", "ABCD,0"},
 		{"bad page", strings.Repeat("AB", 32) + ",notanumber"},
-		{"key not in dir", strings.Repeat("AB", 32) + ",0"},
 		{"zero-shorthand key", "0,0"},
 	}
 	for _, tc := range cases {
-		t.Run("lines/"+tc.name, func(t *testing.T) {
-			_, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, tc.marker)
+		for name, query := range map[string]func() error{
+			"lines": func() error {
+				_, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, tc.marker)
+				return err
+			},
+			"offers": func() error {
+				_, err := svc.GetAccountOffers(context.Background(), aAddr, "current", 0, tc.marker)
+				return err
+			},
+			"channels": func() error {
+				_, err := svc.GetAccountChannels(context.Background(), aAddr, "", "current", 0, tc.marker)
+				return err
+			},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				if err := query(); !errors.Is(err, svcerr.ErrInvalidMarker) {
+					t.Fatalf("marker %q: want ErrInvalidMarker, got %v", tc.marker, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAccountOffers_MissingOrForeignMarker(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	queryAddr, _ := addressFromBytes(t, 0x20)
+	foreignAddr, _ := addressFromBytes(t, 0x40)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	insertAccountRoot(t, svc, queryAddr, 1_000_000_000_000, 0)
+	insertAccountRoot(t, svc, foreignAddr, 1_000_000_000_000, 0)
+
+	foreignKey := insertOffer(t, svc, foreignAddr, 1,
+		state.NewIssuedAmountFromFloat64(1, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+	markers := map[string]string{
+		"missing": strings.Repeat("AB", 32) + ",0",
+		"foreign": formatDirMarker(foreignKey, 0),
+	}
+	for name, marker := range markers {
+		t.Run(name, func(t *testing.T) {
+			_, err := svc.GetAccountOffers(context.Background(), queryAddr, "current", 0, marker)
+			if !errors.Is(err, svcerr.ErrStaleMarker) {
+				t.Fatalf("marker %q: want ErrStaleMarker, got %v", marker, err)
+			}
+
+			_, err = svc.GetAccountLines(context.Background(), queryAddr, "current", "", 0, marker)
 			if !errors.Is(err, svcerr.ErrInvalidMarker) {
-				t.Fatalf("marker %q: want ErrInvalidMarker, got %v", tc.marker, err)
+				t.Fatalf("account_lines marker %q: want ErrInvalidMarker, got %v", marker, err)
+			}
+			_, err = svc.GetAccountChannels(context.Background(), queryAddr, "", "current", 0, marker)
+			if !errors.Is(err, svcerr.ErrInvalidMarker) {
+				t.Fatalf("account_channels marker %q: want ErrInvalidMarker, got %v", marker, err)
 			}
 		})
 	}

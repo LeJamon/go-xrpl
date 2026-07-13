@@ -1836,7 +1836,7 @@ func TestBookOffersTakerXAddressRejected(t *testing.T) {
 // TestBookOffersLedgerHashBranches exercises the three rippled
 // RPC::lookupLedger outcomes for `ledger_hash` (BookOffers.cpp:45-49 →
 // LookupLedger):
-//   - malformed (non-hex or wrong length) → invalidParams "ledgerHashMalformed"
+//   - malformed (non-hex or wrong length) → field-specific invalidParams
 //   - well-formed but not found             → lgrNotFound "ledgerNotFound"
 //   - well-formed and found                 → falls through to per-field validation
 //
@@ -1872,7 +1872,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
 
-	t.Run("malformed ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
+	t.Run("malformed ledger_hash returns invalidParams", func(t *testing.T) {
 		// 63 hex chars (one short) — wrong length, hex.DecodeString won't even
 		// try (we return the message early on length mismatch).
 		params := map[string]any{
@@ -1890,8 +1890,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed",
-			"malformed length must surface ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("malformed ledger_hash pre-empts missing-field errors", func(t *testing.T) {
@@ -1906,10 +1905,10 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
-	t.Run("non-hex ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
+	t.Run("non-hex ledger_hash returns invalidParams", func(t *testing.T) {
 		// Length-64 but contains non-hex characters.
 		params := map[string]any{
 			"ledger_hash": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
@@ -1925,7 +1924,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "ledgerHashMalformed")
+		assert.Equal(t, "Invalid field 'ledger_hash', not hex string.", rpcErr.Message)
 	})
 
 	t.Run("valid ledger_hash not found returns lgrNotFound", func(t *testing.T) {

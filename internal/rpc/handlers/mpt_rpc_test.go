@@ -135,7 +135,7 @@ func TestComputeBookChangesPreservesLargeMPTVolumeAndRate(t *testing.T) {
 	require.Equal(t, aboveFloat64IntegerPrecision, change["volume_a"])
 	require.Equal(t, "1", change["volume_b"])
 	for _, field := range []string{"high", "low", "open", "close"} {
-		require.Equal(t, aboveFloat64IntegerPrecision, change[field], field)
+		require.Equal(t, aboveFloat64IntegerPrecision+"e0", change[field], field)
 	}
 }
 

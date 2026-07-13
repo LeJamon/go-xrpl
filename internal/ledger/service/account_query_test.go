@@ -237,8 +237,10 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 	insertAccountRoot(t, svc, aAddr, 1_000_000_000, 0)
 	insertAccountRoot(t, svc, bAddr, 1_000_000_000, 0)
 
-	// Low side sets NoRipple; high side sets Auth and Freeze.
-	flags := state.LsfLowNoRipple | state.LsfHighAuth | state.LsfHighFreeze
+	// Low side owns the reserve and sets NoRipple; high side sets Auth and
+	// Freeze. Both deep-freeze directions are present to pin perspective mapping.
+	flags := state.LsfLowReserve | state.LsfLowNoRipple | state.LsfHighAuth |
+		state.LsfHighFreeze | state.LsfLowDeepFreeze | state.LsfHighDeepFreeze
 	insertLineRaw(t, svc, aAddr, bAddr, "USD", "0", "100", "200", flags)
 
 	t.Run("low account perspective", func(t *testing.T) {
@@ -277,6 +279,12 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 		if !ln.FreezePeer {
 			t.Errorf("peer (high) froze → freeze_peer must be true (lsfHighFreeze)")
 		}
+		if !ln.HasReserve {
+			t.Errorf("low side reserve must map to HasReserve")
+		}
+		if !ln.DeepFreeze || !ln.DeepFreezePeer {
+			t.Errorf("deep freeze mapping = %v / %v, want true / true", ln.DeepFreeze, ln.DeepFreezePeer)
+		}
 	})
 
 	t.Run("high account perspective", func(t *testing.T) {
@@ -302,6 +310,12 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 		}
 		if !ln.Freeze {
 			t.Errorf("high side froze → freeze must be true (lsfHighFreeze)")
+		}
+		if ln.HasReserve {
+			t.Errorf("high side must not inherit the low side reserve")
+		}
+		if !ln.DeepFreeze || !ln.DeepFreezePeer {
+			t.Errorf("deep freeze mapping = %v / %v, want true / true", ln.DeepFreeze, ln.DeepFreezePeer)
 		}
 	})
 }

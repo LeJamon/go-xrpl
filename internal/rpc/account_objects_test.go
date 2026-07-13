@@ -447,6 +447,69 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 	})
 }
 
+func TestAccountObjectsTypeSelectionConformance(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	tests := []struct {
+		name        string
+		typeValue   any
+		wantType    string
+		wantMessage string
+	}{
+		{name: "canonical name is case insensitive", typeValue: "rIpPlEsTaTe", wantType: "state"},
+		{name: "lowercase canonical name is normalized", typeValue: "paychannel", wantType: "payment_channel"},
+		{name: "RPC name is accepted exactly", typeValue: "payment_channel", wantType: "payment_channel"},
+		{name: "loan broker canonical name is normalized", typeValue: "LoanBroker", wantType: "loan_broker"},
+		{name: "RPC name is case sensitive", typeValue: "Payment_Channel", wantMessage: "Invalid field 'type'."},
+		{name: "known non-account type is rejected", typeValue: "AMENDMENTS", wantMessage: "Invalid field 'type'."},
+		{name: "unknown type is rejected", typeValue: "unknown", wantMessage: "Invalid field 'type'."},
+		{name: "non-string type is rejected", typeValue: 1, wantMessage: "Invalid field 'type', not string."},
+		{name: "null type is rejected", typeValue: nil, wantMessage: "Invalid field 'type', not string."},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newAccountObjectsMock()
+			serviceCalled := false
+			capturedType := ""
+			mock.getAccountObjectsFn = func(account string, _ string, objectType string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
+				serviceCalled = true
+				capturedType = objectType
+				return &types.AccountObjectsResult{
+					Account:     account,
+					LedgerIndex: 2,
+					Validated:   true,
+				}, nil
+			}
+			ctx := &types.RPCContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newAccountObjectsTestServices(mock),
+			}
+
+			params, err := json.Marshal(map[string]any{
+				"account": account,
+				"type":    test.typeValue,
+			})
+			require.NoError(t, err)
+
+			_, rpcErr := (&handlers.AccountObjectsMethod{}).Handle(ctx, params)
+			if test.wantMessage != "" {
+				require.NotNil(t, rpcErr)
+				assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+				assert.Equal(t, test.wantMessage, rpcErr.Message)
+				assert.False(t, serviceCalled)
+				return
+			}
+
+			require.Nil(t, rpcErr)
+			assert.True(t, serviceCalled)
+			assert.Equal(t, test.wantType, capturedType)
+		})
+	}
+}
+
 // Test: deletion_blockers_only flag
 // Based on rippled AccountObjects_test.cpp testObjectTypes() – deletion_blockers_only
 
@@ -515,6 +578,107 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 		require.Nil(t, rpcErr, "Expected no RPC error")
 		require.NotNil(t, result)
 	})
+}
+
+func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	tests := []struct {
+		name            string
+		typePresent     bool
+		typeValue       any
+		wantServiceType string
+		wantObjectTypes []string
+	}{
+		{
+			name:            "no type returns the 3.2.0 blocker set",
+			wantObjectTypes: []string{"Check", "Vault"},
+		},
+		{
+			name:            "exact RPC name intersects blocker set",
+			typePresent:     true,
+			typeValue:       "check",
+			wantServiceType: "check",
+			wantObjectTypes: []string{"Check"},
+		},
+		{
+			name:        "canonical name bypasses validation but intersects to empty",
+			typePresent: true,
+			typeValue:   "Check",
+		},
+		{
+			name:        "non-blocker RPC name intersects to empty",
+			typePresent: true,
+			typeValue:   "offer",
+		},
+		{
+			name:        "unknown type bypasses validation and intersects to empty",
+			typePresent: true,
+			typeValue:   "unknown",
+		},
+		{
+			name:        "non-string type bypasses validation and intersects to empty",
+			typePresent: true,
+			typeValue:   1,
+		},
+		{
+			name:        "null type bypasses validation and intersects to empty",
+			typePresent: true,
+			typeValue:   nil,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newAccountObjectsMock()
+			capturedType := ""
+			mock.getAccountObjectsFn = func(account string, _ string, objectType string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
+				capturedType = objectType
+				return &types.AccountObjectsResult{
+					Account: account,
+					AccountObjects: []types.AccountObjectItem{
+						{Index: "01", LedgerEntryType: "Check"},
+						{Index: "02", LedgerEntryType: "Vault"},
+						{Index: "03", LedgerEntryType: "Offer"},
+						{Index: "04", LedgerEntryType: "Loan"},
+						{Index: "05", LedgerEntryType: "LoanBroker"},
+					},
+					LedgerIndex: 2,
+					Validated:   true,
+					Marker:      "next",
+				}, nil
+			}
+			ctx := &types.RPCContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   newAccountObjectsTestServices(mock),
+			}
+
+			request := map[string]any{
+				"account":                account,
+				"deletion_blockers_only": true,
+			}
+			if test.typePresent {
+				request["type"] = test.typeValue
+			}
+			params, err := json.Marshal(request)
+			require.NoError(t, err)
+
+			result, rpcErr := (&handlers.AccountObjectsMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, test.wantServiceType, capturedType)
+
+			response := result.(map[string]any)
+			objects := response["account_objects"].([]map[string]any)
+			objectTypes := make([]string, 0, len(objects))
+			for _, object := range objects {
+				objectTypes = append(objectTypes, object["LedgerEntryType"].(string))
+			}
+			assert.Equal(t, test.wantObjectTypes, objectTypes)
+			assert.Equal(t, "next", response["marker"])
+		})
+	}
 }
 
 // Test: Pagination with limit and marker
