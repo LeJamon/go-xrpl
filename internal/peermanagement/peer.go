@@ -885,6 +885,13 @@ func (p *Peer) readLoop(ctx context.Context) error {
 				p.IncBadData("compression-unnegotiated")
 				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
 			}
+		}
+
+		if !message.IsKnownMessageType(header.MessageType) {
+			continue
+		}
+
+		if header.Compressed {
 			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")

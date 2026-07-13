@@ -57,6 +57,7 @@ type mockValidatorList struct {
 
 func (m *mockValidatorList) PublisherCount() int                            { return 0 }
 func (m *mockValidatorList) Threshold() int                                 { return 0 }
+func (m *mockValidatorList) IsUNLBlocked() bool                             { return false }
 func (m *mockValidatorList) Publishers() []types.ValidatorListPublisherInfo { return nil }
 func (m *mockValidatorList) Sites() []types.ValidatorListSiteInfo           { return nil }
 func (m *mockValidatorList) TrustedMasterKeys() [][33]byte                  { return m.masterKeys }

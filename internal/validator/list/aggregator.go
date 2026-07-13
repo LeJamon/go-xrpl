@@ -236,6 +236,8 @@ type Aggregator struct {
 	// (ValidatorList.h:140-141 / ValidatorList.cpp:289).
 	threshold int
 
+	staticValidatorCount int
+
 	// onChange is invoked whenever the recomputed trusted set differs
 	// from the previously emitted one. Wired by Components.NewFromConfig
 	// to push into Adaptor.SetTrustedValidators.
@@ -332,12 +334,13 @@ type Aggregator struct {
 // optional; Defaults handle nil Logger / Clock / Manifests so the type
 // is usable in narrowly-scoped tests.
 type Config struct {
-	PublisherKeys []PublisherKey
-	SiteURIs      []string
-	Threshold     int
-	Manifests     *manifest.Cache
-	Clock         func() time.Time
-	Logger        *slog.Logger
+	PublisherKeys        []PublisherKey
+	SiteURIs             []string
+	Threshold            int
+	StaticValidatorCount int
+	Manifests            *manifest.Cache
+	Clock                func() time.Time
+	Logger               *slog.Logger
 }
 
 // New constructs an Aggregator from the operator-supplied config.
@@ -400,16 +403,17 @@ func New(cfg Config) (*Aggregator, error) {
 		return nil, fmt.Errorf("threshold %d exceeds publisher count %d", threshold, len(publishers))
 	}
 	return &Aggregator{
-		publishers:         publishers,
-		state:              state,
-		sites:              sites,
-		manifests:          cfg.Manifests,
-		threshold:          threshold,
-		clock:              clock,
-		logger:             logger,
-		peerSeq:            make(map[uint64]map[PublisherKey]uint32),
-		pendingCacheWrites: make(map[PublisherKey]pendingCacheWrite),
-		cacheWritten:       make(map[PublisherKey]uint64),
+		publishers:           publishers,
+		state:                state,
+		sites:                sites,
+		manifests:            cfg.Manifests,
+		threshold:            threshold,
+		staticValidatorCount: cfg.StaticValidatorCount,
+		clock:                clock,
+		logger:               logger,
+		peerSeq:              make(map[uint64]map[PublisherKey]uint32),
+		pendingCacheWrites:   make(map[PublisherKey]pendingCacheWrite),
+		cacheWritten:         make(map[PublisherKey]uint64),
 	}, nil
 }
 
@@ -430,6 +434,16 @@ func (a *Aggregator) OnChange(cb func(validators []consensus.NodeID, masterKeys 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.onChange = cb
+}
+
+func (a *Aggregator) SetStaticValidatorCount(count int) {
+	if count < 0 {
+		count = 0
+	}
+	a.mu.Lock()
+	a.staticValidatorCount = count
+	a.recomputeAndEmitLocked()
+	a.mu.Unlock()
 }
 
 // PublisherCount returns the number of configured publishers in the
@@ -1155,9 +1169,8 @@ func (a *Aggregator) IsListed(node consensus.NodeID) bool {
 
 // recomputeAndEmitLocked walks the per-publisher state, computes the
 // union of validators present in at least `threshold` publishers' lists,
-// and — if the result differs from the last emitted set — invokes the
-// OnChange callback with sorted NodeID and master-key slices ready for
-// Adaptor.SetTrustedValidators.
+// and invokes OnChange when either the trusted set or UNL-blocked state
+// changes.
 //
 // Caller MUST hold a.mu. The OnChange callback runs under the lock; the
 // adaptor.SetTrustedValidators path takes a different mutex so the
@@ -1223,12 +1236,12 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	// empty union always wins, matching rippled's ordering (clear at line 2006,
 	// then set at 2100). Single Store so lock-free IsUNLBlocked never sees a
 	// transient.
-	if len(trusted) == 0 {
+	if len(trusted) == 0 && a.staticValidatorCount == 0 {
 		blocked = true
 	}
-	a.unlBlocked.Store(blocked)
+	blockedChanged := a.unlBlocked.Swap(blocked) != blocked
 
-	if slices.Equal(trusted, a.lastEmitted) {
+	if slices.Equal(trusted, a.lastEmitted) && !blockedChanged {
 		return
 	}
 	a.lastEmitted = trusted

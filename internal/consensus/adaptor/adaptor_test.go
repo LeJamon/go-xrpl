@@ -219,6 +219,10 @@ func TestSetTrustedValidators_AtomicSwap(t *testing.T) {
 
 	got := a.GetTrustedValidators()
 	assert.ElementsMatch(t, next, got, "GetTrustedValidators reflects new set")
+	gotMasters := a.GetTrustedMasterKeys()
+	assert.Equal(t, masterKeys, gotMasters, "GetTrustedMasterKeys reflects new set")
+	gotMasters[0] = [33]byte{0xFF}
+	assert.Equal(t, masterKeys, a.GetTrustedMasterKeys(), "GetTrustedMasterKeys returns a copy")
 	assert.True(t, a.IsTrusted(consensus.NodeID{0x04}), "newly added is trusted")
 	assert.False(t, a.IsTrusted(consensus.NodeID{0x02}), "removed is no longer trusted")
 	assert.Equal(t, 4, a.GetQuorum(), "quorum recomputes: ceil(0.8*5) = 4")
@@ -234,6 +238,17 @@ func TestSetTrustedValidators_AtomicSwap(t *testing.T) {
 	a.SetTrustedValidators(nil, nil)
 	assert.Empty(t, a.GetTrustedValidators())
 	assert.Equal(t, 0, a.GetQuorum(), "empty trusted set → quorum 0 (no gate)")
+}
+
+func TestNewRetainsTrustedMasterKeysWithoutLocalIdentity(t *testing.T) {
+	validators := []consensus.NodeID{{0x01}, {0x02}}
+	masterKeys := [][33]byte{{0x02, 0xAA}, {0x02, 0xBB}}
+	a := New(Config{
+		Validators:          validators,
+		ValidatorMasterKeys: masterKeys,
+	})
+
+	assert.Equal(t, masterKeys, a.GetTrustedMasterKeys())
 }
 
 func TestTxSetCreateAndLookup(t *testing.T) {

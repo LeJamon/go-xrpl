@@ -39,6 +39,31 @@ func TestStup_MergeValidators_OverlappingSets(t *testing.T) {
 	assert.Len(t, masters, 1)
 }
 
+func TestStartupIncludeLocalValidator(t *testing.T) {
+	master := [33]byte{0x02, 0xAA}
+	identity := &ValidatorIdentity{
+		MasterKey: master,
+		NodeID:    consensus.CalcNodeID(master),
+	}
+
+	ids, masters := includeLocalValidator(nil, nil, identity)
+	require.Equal(t, []consensus.NodeID{identity.NodeID}, ids)
+	require.Equal(t, [][33]byte{master}, masters)
+
+	ids, masters = includeLocalValidator(ids, masters, identity)
+	require.Len(t, ids, 1)
+	require.Len(t, masters, 1)
+	configuredIDs, configuredMasters := excludeLocalValidator(ids, masters, identity)
+	require.Empty(t, configuredIDs)
+	require.Empty(t, configuredMasters)
+
+	c := &Components{Adaptor: &Adaptor{identity: identity}}
+	effectiveIDs, effectiveMasters := c.snapshotEffectiveStatic()
+	require.Equal(t, []consensus.NodeID{identity.NodeID}, effectiveIDs)
+	require.Equal(t, [][33]byte{master}, effectiveMasters)
+	require.Empty(t, c.StaticTrustedMasterKeys())
+}
+
 func TestStup_MergeValidators_EmptyInputs(t *testing.T) {
 	ids, masters := mergeValidators(nil, nil, nil, nil)
 	assert.Empty(t, ids)
