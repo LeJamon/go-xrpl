@@ -137,9 +137,7 @@ type Adaptor struct {
 	// unlBlocked reports the validator-list aggregator's UNL lock-down flag.
 	// Wired at startup when publisher lists are configured; nil (no
 	// publishers) means never blocked. Written once before the engine
-	// starts, then only read. The underlying aggregator read is lock-free
-	// (atomic) so the consensus bow-out can poll it while holding the engine
-	// lock without an agg-mu -> e.mu ABBA against onTrustChanged.
+	// starts, then only read.
 	unlBlocked func() bool
 	// quorumUnavailable reports whether publisher availability makes a safe
 	// validation quorum unachievable. It is distinct from the consensus

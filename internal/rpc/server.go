@@ -555,7 +555,6 @@ func makeBatchJSONError(code int, message string) map[string]any {
 	}
 }
 
-// batchMalformedElement builds the reply for a method-less batch element.
 func batchMalformedElement(elem map[string]any, message string) map[string]any {
 	r := make(map[string]any, len(elem)+1)
 	maps.Copy(r, elem)
@@ -564,8 +563,6 @@ func batchMalformedElement(elem map[string]any, message string) map[string]any {
 	return r
 }
 
-// batchForbiddenElement builds the reply for a batch element whose admin-only
-// command is refused for a non-admin caller.
 func batchForbiddenElement(elem map[string]any) map[string]any {
 	r := make(map[string]any, len(elem)+1)
 	maps.Copy(r, elem)
@@ -574,8 +571,6 @@ func batchForbiddenElement(elem map[string]any) map[string]any {
 	return r
 }
 
-// batchOverloadedElement builds the reply for a batch element whose caller is
-// over its per-IP resource budget.
 func batchOverloadedElement(elem map[string]any) map[string]any {
 	r := make(map[string]any, len(elem)+1)
 	maps.Copy(r, elem)

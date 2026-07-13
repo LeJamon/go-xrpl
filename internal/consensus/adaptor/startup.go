@@ -537,7 +537,6 @@ func consensusServerState(opMode consensus.OperatingMode, mode consensus.Mode, v
 	return opMode.String()
 }
 
-// snapshotStatic returns deep copies of the current static validator set.
 func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
 	c.trustMergeMu.Lock()
 	defer c.trustMergeMu.Unlock()

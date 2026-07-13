@@ -596,11 +596,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
 	// within a round or two rather than only on the aggregator's 30s tick
-	// (rippled recomputes via updateTrusted at every ledger close). It runs
-	// async — inline would deadlock, since the refresh's OnChange fan-out
-	// re-enters e.mu via onTrustChanged — so this round reads the flag as of
-	// the previous refresh and the next round sees the fresh value. No-op
-	// without publisher lists.
+	// (rippled recomputes via updateTrusted at every ledger close).
 	e.adaptor.RefreshUNLState()
 
 	// Voluntary bow-out: an expired validator list means our trust view is

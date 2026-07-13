@@ -512,14 +512,6 @@ func (a *Adaptor) SetUNLRefreshFunc(fn func()) {
 // view (promote rotations, latch/clear the lock-down flag) so the consensus
 // bow-out reacts to an expiring list within a round or two instead of only on
 // the standalone refresh tick. No-op without publisher lists.
-//
-// Runs on a background goroutine, deliberately NOT inline: the refresh takes
-// the aggregator lock and its OnChange fan-out reaches onTrustChanged ->
-// Engine.refreshTrustedSet, which locks e.mu. The caller holds e.mu at round
-// start, so an inline call would self-deadlock (e.mu is not reentrant) and, on
-// the ticker goroutine, ABBA against it. The bow-out reads the sticky flag
-// lock-free via IsUNLBlocked; the single-flight guard drops overlapping
-// refreshes so a slow tick can't pile up goroutines.
 func (a *Adaptor) RefreshUNLState() {
 	if a.refreshUNL == nil {
 		return
