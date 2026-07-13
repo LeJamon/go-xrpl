@@ -230,8 +230,6 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	// Persistence runs on the async worker; barrier before asserting.
 	svc.FlushPersists()
 
-	// Both adopted transactions must now be retrievable from the DB with their
-	// metadata TransactionIndex preserved in the stored metadata blob.
 	for wantID, wantTxnIndex := range map[[32]byte]uint32{id1: 0, id2: 1} {
 		var dbHash relationaldb.Hash
 		copy(dbHash[:], wantID[:])

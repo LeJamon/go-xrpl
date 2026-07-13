@@ -280,8 +280,6 @@ func TestAccountChannels_MarkerPagination(t *testing.T) {
 	}
 }
 
-// TestAccountDirMarkers_Invalid covers malformed markers shared by the
-// owner-directory RPCs.
 func TestAccountDirMarkers_Invalid(t *testing.T) {
 	svc := newOfferTestService(t)
 	aAddr, _ := addressFromBytes(t, 0x10)

@@ -776,8 +776,6 @@ func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets(types.SubAccounts, accounts), data)
 }
 
-// BroadcastToAccountsVersioned sends the API-specific transaction shape to
-// affected-account subscribers.
 func (sm *Manager) BroadcastToAccountsVersioned(v1, v2 []byte, accounts []string) {
 	deliverVersioned(sm.collectAccountTargets(types.SubAccounts, accounts), v1, v2)
 }
@@ -788,8 +786,6 @@ func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets(types.SubAccountsProposed, accounts), data)
 }
 
-// BroadcastToAccountsProposedVersioned sends the API-specific accepted
-// transaction shape to matching real-time account subscribers.
 func (sm *Manager) BroadcastToAccountsProposedVersioned(v1, v2 []byte, accounts []string) {
 	deliverVersioned(sm.collectAccountTargets(types.SubAccountsProposed, accounts), v1, v2)
 }
@@ -852,8 +848,6 @@ func (sm *Manager) BroadcastToOrderBooks(data []byte, books []types.OrderBookSpe
 	deliver(sm.collectOrderBookTargets(books), data)
 }
 
-// BroadcastToOrderBookVersioned sends the API-specific transaction shape to
-// matching order-book subscribers.
 func (sm *Manager) BroadcastToOrderBookVersioned(v1, v2 []byte, takerGets, takerPays types.CurrencySpec) {
 	sm.BroadcastToOrderBooksVersioned(v1, v2, []types.OrderBookSpec{{TakerGets: takerGets, TakerPays: takerPays}})
 }

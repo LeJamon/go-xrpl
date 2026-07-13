@@ -67,7 +67,6 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine the ledger after shared selector validation.
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -181,7 +180,6 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		}
 	}
 
-	// Add queue data if requested (only for current/open ledger — validated above)
 	if queue {
 		response["queue_data"] = buildAccountQueueData(ctx.Services, canonicalAccount)
 	}

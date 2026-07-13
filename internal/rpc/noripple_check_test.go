@@ -634,7 +634,6 @@ func TestNoRippleCheckTransactionsFieldValidationAPIv2(t *testing.T) {
 		Services:   services,
 	}
 
-	// In API v2, transactions must be a boolean, not a string.
 	params := `{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "role": "user", "transactions": "true"}`
 
 	resp, err := method.Handle(ctx, []byte(params))

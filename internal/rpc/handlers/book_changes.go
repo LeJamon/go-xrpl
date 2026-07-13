@@ -112,8 +112,6 @@ func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Resolve the target ledger through the shared lookup: default to current,
-	// thread ledger_hash, and reject malformed selectors.
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr

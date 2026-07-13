@@ -1111,7 +1111,6 @@ func parseAccountNFTMarker(marker string) ([32]byte, bool, error) {
 	return markerID, true, nil
 }
 
-// GetAccountNFTs retrieves NFTs owned by an account.
 func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountNFTsResult, error) {
 		accountKey := keylet.Account(accountID)

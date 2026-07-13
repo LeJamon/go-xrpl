@@ -7,8 +7,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// TestResolveLedgerSelector covers selector conflicts, exact hash validation,
-// legacy ledger interpretation, and the default current ledger.
 func TestResolveLedgerSelector(t *testing.T) {
 	const validHash = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
 

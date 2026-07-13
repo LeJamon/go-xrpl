@@ -611,7 +611,6 @@ func IsValidClassicAddress(address string) bool {
 	return addresscodec.IsValidClassicAddress(address)
 }
 
-// BookMatches checks whether a subscription names an affected order book.
 func BookMatches(book BookRequest, spec OrderBookSpec) bool {
 	var bookGets, bookPays struct {
 		Currency      string `json:"currency"`

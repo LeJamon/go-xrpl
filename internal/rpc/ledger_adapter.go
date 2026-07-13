@@ -804,7 +804,6 @@ func (a *LedgerServiceAdapter) GetAccountCurrencies(ctx context.Context, account
 	}, nil
 }
 
-// GetAccountNFTs retrieves NFTs owned by an account
 func (a *LedgerServiceAdapter) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
 	result, err := a.svc.GetAccountNFTs(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {

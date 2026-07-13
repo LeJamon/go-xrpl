@@ -342,7 +342,6 @@ func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex
 	return m.ctidResponse(ctx, storedTx, decodeErr, foundData, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
 }
 
-// ctidResponse applies the shape differences specific to CTID lookup.
 func (m *TxMethod) ctidResponse(
 	ctx *types.RPCContext,
 	storedTx StoredTransaction,

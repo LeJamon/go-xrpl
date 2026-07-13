@@ -29,8 +29,6 @@ func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays t
 	return nil, errors.New("not implemented")
 }
 
-// GetLedgerByHash mirrors the rippled BookOffers.cpp lookupLedger path.
-// A custom resolver lets tests distinguish found and missing hashes.
 func (m *bookOffersMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	if m.getLedgerByHashFn != nil {
 		return m.getLedgerByHashFn(hash)

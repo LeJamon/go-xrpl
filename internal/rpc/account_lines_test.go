@@ -485,7 +485,6 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 			},
 		},
 		{
-			// Test case from rippled: invalid ledger index string -> invalidParams
 			// Based on lines 102-113 of AccountLines_test.cpp
 			name: "ledger_index: invalid string -> invalidParams",
 			params: map[string]any{

@@ -11,7 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLedgerEntryLedgerSelectorValidation covers ledgerFromRequest validation.
 func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)

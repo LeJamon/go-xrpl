@@ -1063,8 +1063,6 @@ func TestLedgerEntryMethodMetadata(t *testing.T) {
 	})
 }
 
-// Entry Type Conflict Tests
-
 // TestLedgerEntryTypePriority verifies that multiple selectors are rejected.
 func TestLedgerEntryTypePriority(t *testing.T) {
 	mock := newMockLedgerEntryService()
