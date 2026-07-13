@@ -262,7 +262,7 @@ Target: `v3.0.0`. Behavioral oracle: clean local rippled `3.2.0` worktree at
       vet, lint, and the broad repository test gate.
 - [x] Review the full diff for correctness, concurrency, failure paths, and test
       coverage; record exact verification results below.
-- [ ] Commit only intentional files, push the issue branch, and open a PR with
+- [x] Commit only intentional files, push the issue branch, and open a PR with
       base `v3.0.0` and `Fixes #1302`.
 
 ## Review
@@ -276,3 +276,5 @@ Verification: focused package tests and race suites pass; `just vet`,
 `just build-all`, and `just lint` pass with zero issues. `go test ./...` passes
 all packages except the existing `internal/testing/conformance` Vault, Batch,
 and XChain backlog, which is outside this diff.
+
+PR: https://github.com/LeJamon/go-xrpl/pull/1319
