@@ -628,7 +628,12 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		}
 		txn.SetRawBytes(dtx.TxBytes)
 
-		result := engine.Apply(txn)
+		var result tx.ApplyResult
+		if txn.TxType().IsPseudoTransaction() {
+			result = engine.ApplyPseudo(txn)
+		} else {
+			result = engine.Apply(txn)
+		}
 
 		// R6b.2a: compare engine-generated meta against the peer-supplied
 		// meta so operators can see when our engine drifts from rippled's

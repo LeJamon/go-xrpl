@@ -292,38 +292,32 @@ func (e *Engine) consumeTicket(st *applyState, table *applystate.ApplyStateTable
 	return ter.TesSUCCESS
 }
 
-// invokeApply dispatches to the per-tx-type Apply() implementation. Any panic
-// raised inside the per-tx Apply() — most commonly an arithmetic overflow from
-// IOUAmount / XRPLNumber operating on adversarial peer-supplied ledger data —
-// is recovered and turned into tefEXCEPTION.
-//
-// Reference: rippled applySteps.cpp:447-466 doApply() wraps invoke_apply(ctx)
-// in `try { ... } catch (std::exception const&) { return {tefEXCEPTION, false}; }`.
-// tefEXCEPTION is a tef* code, so the transaction is NOT applied to the ledger:
-// no fee is charged, no sequence is consumed, and no metadata is emitted. The
-// caller at doApply() returns immediately on tef* via the `!IsSuccess() &&
-// !IsTec()` branch.
-//
-// Returning tecINTERNAL here would diverge from rippled because tec* commits
-// fee+seq+meta to the ledger, producing a different account_hash on the same
-// adversarial input → consensus fork.
-func (e *Engine) invokeApply(st *applyState) (result ter.Result) {
-	defer func() {
-		if r := recover(); r != nil {
-			e.logger.Error("transaction Apply() panic recovered, returning tefEXCEPTION",
-				"txHash", fmt.Sprintf("%x", st.txHash), "panic", r)
-			result = ter.TefEXCEPTION
-		}
-	}()
-	return e.invokeApplyInner(st)
+func (e *Engine) invokeApply(st *applyState) ter.Result {
+	return e.invokeApplySafely(st.txHash, func() ter.Result {
+		return e.invokeApplyInner(st)
+	})
 }
 
-// invokeApplyInner is the body of invokeApply, separated so the panic-recovery
-// defer in invokeApply does not have to walk back through the dispatch.
+// invokeApplySafely is the shared panic boundary for normal and pseudo Apply.
+// A recovered panic becomes tefEXCEPTION, so tracked changes are not committed.
+func (e *Engine) invokeApplySafely(txHash [32]byte, apply func() ter.Result) (result ter.Result) {
+	completed := false
+	result = ter.TefEXCEPTION
+	defer func() {
+		recovered := recover()
+		if !completed {
+			e.logger.Error("transaction Apply() panic recovered, returning tefEXCEPTION",
+				"txHash", fmt.Sprintf("%x", txHash), "panic", recovered)
+		}
+	}()
+	result = apply()
+	completed = true
+	return result
+}
+
 func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 	sigWithMaster := txcore.SignedWithMasterKey(e.config.SkipSignatureVerification, st.common)
 
-	// All transaction types implement Appliable
 	ctx := &txcore.ApplyContext{
 		View:             st.table,
 		Account:          st.account,
@@ -341,7 +335,7 @@ func (e *Engine) invokeApplyInner(st *applyState) ter.Result {
 	if appliable, ok := st.tx.(txcore.Appliable); ok {
 		return appliable.Apply(ctx)
 	}
-	return ter.TesSUCCESS
+	return ter.TefINTERNAL
 }
 
 // isReapplyOnRetryTec reports whether a tec returned from doApply must still be
