@@ -751,6 +751,13 @@ type TransactionSubmitter interface {
 	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
+// TransactionRulesSource provides the amendment rules used to admit a
+// transaction to the current open ledger. Handlers that validate before
+// submission or simulation use this optional facet to match the engine.
+type TransactionRulesSource interface {
+	TransactionRules() *amendment.Rules
+}
+
 // AccountQuerier provides account-related read operations.
 type AccountQuerier interface {
 	GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfo, error)

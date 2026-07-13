@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -27,6 +28,7 @@ type bookChange struct {
 	Low            *big.Float
 	Open           *big.Float
 	Close          *big.Float
+	Domain         string
 }
 
 // LedgerWithTransactions is the minimal ledger surface the
@@ -58,7 +60,13 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 	}
 	changes := collectBookChanges(l)
 	changesArr := make([]map[string]any, 0, len(changes))
-	for _, bc := range changes {
+	keys := make([]string, 0, len(changes))
+	for key := range changes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		bc := changes[key]
 		change := map[string]any{
 			"volume_a": formatBigFloat(bc.VolumeA),
 			"volume_b": formatBigFloat(bc.VolumeB),
@@ -76,6 +84,9 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 			change["mpt_issuance_id_b"] = bc.MPTIssuanceIDB
 		} else {
 			change["currency_b"] = bc.CurrencyB
+		}
+		if bc.Domain != "" {
+			change["domain"] = bc.Domain
 		}
 		changesArr = append(changesArr, change)
 	}
@@ -257,6 +268,8 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 				mptA = finalPays.mptIssuanceID
 				mptB = finalGets.mptIssuanceID
 			}
+			domain, _ := finalFields["DomainID"].(string)
+			domain = strings.ToUpper(domain)
 
 			bc, exists := changes[pairKey]
 			if !exists {
@@ -271,6 +284,7 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 					High:           new(big.Float).Set(rate),
 					Low:            new(big.Float).Set(rate),
 					Close:          new(big.Float).Set(rate),
+					Domain:         domain,
 				}
 				changes[pairKey] = bc
 			} else {
@@ -281,6 +295,7 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 					bc.Low.Set(rate)
 				}
 				bc.Close.Set(rate)
+				bc.Domain = domain
 			}
 
 			// Accumulate volumes (absolute values)

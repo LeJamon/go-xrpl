@@ -35,6 +35,7 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 		true, // partial payment allowed (to measure liquidity)
 		false,
 		[32]byte{}, 0,
+		pf.calculationOptions()...,
 	)
 
 	// Calculate remaining amount needed after default path
@@ -139,6 +140,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 		pf.convertAll,
 		false,
 		[32]byte{}, 0,
+		pf.calculationOptions()...,
 	)
 
 	if rc.Result != ter.TesSUCCESS {
@@ -156,7 +158,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 		if !remaining.IsZero() && !remaining.IsNegative() {
 			remainingAmt := payment.FromEitherAmount(remaining)
 			extraRC := payment.RippleCalculate(
-				pf.ledger,
+				rc.Sandbox,
 				pf.srcAccount, pf.dstAccount,
 				remainingAmt,
 				&pf.srcAmount,
@@ -165,6 +167,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 				true, // partial payment to measure total liquidity
 				false,
 				[32]byte{}, 0,
+				pf.calculationOptions()...,
 			)
 			if extraRC.Result == ter.TesSUCCESS {
 				totalLiquidity = totalLiquidity.Add(extraRC.ActualOut)

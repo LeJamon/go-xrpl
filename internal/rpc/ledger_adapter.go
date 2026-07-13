@@ -31,6 +31,7 @@ type LedgerServiceAdapter struct {
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
 var _ types.OwnerDirectoryReader = (*LedgerServiceAdapter)(nil)
 var _ types.TxTablesProvider = (*LedgerServiceAdapter)(nil)
+var _ types.TransactionRulesSource = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
@@ -968,6 +969,12 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		}
 	}
 	return out, nil
+}
+
+// TransactionRules returns the rules used by the ledger service for the
+// current open ledger.
+func (a *LedgerServiceAdapter) TransactionRules() *amendment.Rules {
+	return a.svc.TransactionRules()
 }
 
 func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {

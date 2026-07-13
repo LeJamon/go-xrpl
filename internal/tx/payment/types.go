@@ -156,7 +156,7 @@ func GetIssue(amt tx.Amount) Issue {
 
 func decodeMPTID(value string) ([24]byte, bool) {
 	var id [24]byte
-	b, err := hex.DecodeString(strings.TrimSpace(value))
+	b, err := hex.DecodeString(value)
 	if err != nil || len(b) != len(id) {
 		return id, false
 	}

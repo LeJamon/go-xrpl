@@ -694,6 +694,14 @@ func rulesFromLedger(parent *ledger.Ledger, logger xrpllog.Logger) *amendment.Ru
 	return rules
 }
 
+// TransactionRules returns the amendment rules used for transactions entering
+// the current open ledger.
+func (s *Service) TransactionRules() *amendment.Rules {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return rulesFromLedger(s.closedLedger, s.logger)
+}
+
 // SubmitOpenLedgerTx routes a tx blob through the persistent OpenLedger view and
 // returns the per-tx classification (ResultFailure before Start).
 //

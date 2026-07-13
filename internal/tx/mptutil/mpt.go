@@ -50,7 +50,7 @@ type ownerCountHook interface {
 
 func DecodeID(value string) ([24]byte, error) {
 	var id [24]byte
-	b, err := hex.DecodeString(strings.TrimSpace(value))
+	b, err := hex.DecodeString(value)
 	if err != nil || len(b) != len(id) {
 		return id, ErrInvalidID
 	}
@@ -845,25 +845,25 @@ func mptokensV2Enabled(view state.LedgerView) bool {
 	return rules != nil && rules.MPTokensV2Enabled()
 }
 
-// MultiplyRate applies an MPT transfer rate, rounding positive values upward.
+// MultiplyRate applies an MPT transfer rate, rounding to nearest, even on a tie.
 // The boolean is false when the result cannot be represented as an int64.
 func MultiplyRate(amount int64, rate uint32) (int64, bool) {
 	if amount == 0 || rate == RateOne {
 		return amount, true
 	}
-	return scaleRate(amount, uint64(rate), uint64(RateOne), true)
+	return scaleRate(amount, uint64(rate), uint64(RateOne))
 }
 
-// DivideRate removes an MPT transfer rate, rounding positive values downward.
+// DivideRate removes an MPT transfer rate, rounding to nearest, even on a tie.
 // The boolean is false when the result cannot be represented as an int64.
 func DivideRate(amount int64, rate uint32) (int64, bool) {
 	if amount == 0 || rate == RateOne {
 		return amount, true
 	}
-	return scaleRate(amount, uint64(RateOne), uint64(rate), false)
+	return scaleRate(amount, uint64(RateOne), uint64(rate))
 }
 
-func scaleRate(amount int64, numeratorFactor, denominatorValue uint64, roundUp bool) (int64, bool) {
+func scaleRate(amount int64, numeratorFactor, denominatorValue uint64) (int64, bool) {
 	if denominatorValue == 0 {
 		return 0, false
 	}
@@ -872,10 +872,15 @@ func scaleRate(amount int64, numeratorFactor, denominatorValue uint64, roundUp b
 	quotient, remainder := new(big.Int), new(big.Int)
 	quotient.QuoRem(numerator, denominator, remainder)
 	if remainder.Sign() != 0 {
-		if roundUp && amount >= 0 {
-			quotient.Add(quotient, big.NewInt(1))
-		} else if !roundUp && amount < 0 {
-			quotient.Sub(quotient, big.NewInt(1))
+		twiceRemainder := new(big.Int).Lsh(new(big.Int).Abs(remainder), 1)
+		comparison := twiceRemainder.Cmp(denominator)
+		magnitude := new(big.Int).Abs(new(big.Int).Set(quotient))
+		if comparison > 0 || comparison == 0 && magnitude.Bit(0) == 1 {
+			if numerator.Sign() > 0 {
+				quotient.Add(quotient, big.NewInt(1))
+			} else {
+				quotient.Sub(quotient, big.NewInt(1))
+			}
 		}
 	}
 	if !quotient.IsInt64() {

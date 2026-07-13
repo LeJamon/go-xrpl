@@ -2,7 +2,9 @@ package rpc
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -191,8 +193,8 @@ func TestParseAndCreateSession_AcceptsZeroMPTSourceLiteral(t *testing.T) {
 func TestPathFindPersistentConvertAllResponseShape(t *testing.T) {
 	const id = "00000004AE123A8556F3CF91154711376AFB0F894F832B3D"
 	session := &PathFindSession{
-		convertAll:   true,
-		dstAmountRaw: json.RawMessage(`{"mpt_issuance_id":"` + id + `","value":"-1"}`),
+		convertAll: true,
+		dstAmount:  state.NewMPTAmountWithIssuanceID(-1, "", id),
 	}
 	result := &pathfinder.PathRequestResult{
 		DestinationCurrencies: []string{"USD", "XRP"},
@@ -222,4 +224,99 @@ func TestPathFindPersistentConvertAllResponseShape(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, id, destinationAmount["mpt_issuance_id"])
 	require.Equal(t, "25", destinationAmount["value"])
+}
+
+func TestPathFindPersistentResponseStateTransitions(t *testing.T) {
+	const (
+		account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		id      = "00000004AE123A8556F3CF91154711376AFB0F894F832B3D"
+	)
+	session := &PathFindSession{
+		convertAll:    true,
+		dstAmount:     state.NewMPTAmountWithIssuanceID(-1, "", strings.ToLower(id)),
+		srcAccountStr: account,
+		dstAccountStr: account,
+		id:            "request-1",
+	}
+	result := &pathfinder.PathRequestResult{
+		Alternatives: []pathfinder.PathAlternative{{
+			SourceAmount:      state.NewXRPAmountFromInt(10),
+			DestinationAmount: state.NewMPTAmountWithIssuanceID(25, "", id),
+		}},
+	}
+
+	create := session.storeResultLocked(result, false)
+	require.False(t, create.FullReply)
+	require.Empty(t, create.Type)
+	require.Empty(t, create.Status)
+	require.False(t, create.Closed)
+	var createJSON map[string]any
+	require.NoError(t, json.Unmarshal(mustMarshalPathFindEvent(t, create), &createJSON))
+	require.NotContains(t, createJSON, "type")
+	destination := createJSON["destination_amount"].(map[string]any)
+	require.Equal(t, id, destination["mpt_issuance_id"])
+	require.Equal(t, "-1", destination["value"])
+	fastStatus := session.Status()
+	require.False(t, fastStatus.FullReply)
+	require.Equal(t, "success", fastStatus.Status)
+
+	update := session.storeResultLocked(result, true)
+	require.True(t, update.FullReply)
+	require.Equal(t, "path_find", update.Type)
+	require.Empty(t, session.lastStatus.Type)
+
+	status := session.Status()
+	require.True(t, status.FullReply)
+	require.Empty(t, status.Type)
+	require.Equal(t, "success", status.Status)
+	require.False(t, status.Closed)
+
+	closed := session.Close()
+	require.True(t, closed.FullReply)
+	require.Empty(t, closed.Type)
+	require.Equal(t, "success", closed.Status)
+	require.True(t, closed.Closed)
+}
+
+func TestPathFindCloseDoesNotWaitForInFlightExecution(t *testing.T) {
+	session := &PathFindSession{}
+	executeStarted := make(chan struct{})
+	releaseExecute := make(chan struct{})
+	executeDone := make(chan struct{})
+
+	go func() {
+		defer close(executeDone)
+		session.executeAndStore(func() *pathfinder.PathRequestResult {
+			close(executeStarted)
+			<-releaseExecute
+			return &pathfinder.PathRequestResult{}
+		}, true)
+	}()
+	<-executeStarted
+
+	closeResult := make(chan *PathFindEvent, 1)
+	go func() {
+		closeResult <- session.Close()
+	}()
+
+	select {
+	case event := <-closeResult:
+		require.True(t, event.Closed)
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for the in-flight pathfinding calculation")
+	}
+
+	close(releaseExecute)
+	select {
+	case <-executeDone:
+	case <-time.After(time.Second):
+		t.Fatal("pathfinding calculation did not finish after release")
+	}
+}
+
+func mustMarshalPathFindEvent(t *testing.T, event *PathFindEvent) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(event)
+	require.NoError(t, err)
+	return encoded
 }

@@ -72,6 +72,46 @@ func (m *mockLedgerReaderBC) ForEachTransaction(fn func([32]byte, []byte) bool) 
 	return nil
 }
 
+func addBookChangesTransaction(t *testing.T, ledger *mockLedgerReaderBC, affectedNodes []any) {
+	t.Helper()
+	blob, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: map[string]any{"TransactionType": "Payment"},
+		Meta:   map[string]any{"AffectedNodes": affectedNodes},
+	})
+	require.NoError(t, err)
+	var hash [32]byte
+	hash[31] = byte(len(ledger.txs) + 1)
+	ledger.txs[hash] = blob
+}
+
+func bookChangesOfferNode(currency, issuer, domain string) map[string]any {
+	finalFields := map[string]any{
+		"TakerGets": "0",
+		"TakerPays": map[string]any{
+			"currency": currency,
+			"issuer":   issuer,
+			"value":    "0",
+		},
+	}
+	if domain != "" {
+		finalFields["DomainID"] = domain
+	}
+	return map[string]any{
+		"ModifiedNode": map[string]any{
+			"LedgerEntryType": "Offer",
+			"FinalFields":     finalFields,
+			"PreviousFields": map[string]any{
+				"TakerGets": "10",
+				"TakerPays": map[string]any{
+					"currency": currency,
+					"issuer":   issuer,
+					"value":    "10",
+				},
+			},
+		},
+	}
+}
+
 // mockLedgerServiceBC extends mockLedgerService with book_changes-specific behavior.
 type mockLedgerServiceBC struct {
 	*mockLedgerService
@@ -257,6 +297,52 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 	changes, ok := resp["changes"].([]any)
 	require.True(t, ok, "changes must be an array")
 	assert.Empty(t, changes, "changes should be empty when no offers modified")
+}
+
+func TestBookChangesDomainAndOrdering(t *testing.T) {
+	const (
+		issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		domain = "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+	)
+
+	t.Run("permissioned offer emits canonical domain", func(t *testing.T) {
+		ledger := newMockLedgerReaderBC(2)
+		addBookChangesTransaction(t, ledger, []any{
+			bookChangesOfferNode("USD", issuer, domain),
+		})
+
+		result := handlers.ComputeBookChanges(ledger)
+		changes := result["changes"].([]map[string]any)
+		require.Len(t, changes, 1)
+		assert.Equal(t, strings.ToUpper(domain), changes[0]["domain"])
+	})
+
+	t.Run("last fill clears an earlier domain", func(t *testing.T) {
+		ledger := newMockLedgerReaderBC(2)
+		addBookChangesTransaction(t, ledger, []any{
+			bookChangesOfferNode("USD", issuer, domain),
+			bookChangesOfferNode("USD", issuer, ""),
+		})
+
+		result := handlers.ComputeBookChanges(ledger)
+		changes := result["changes"].([]map[string]any)
+		require.Len(t, changes, 1)
+		assert.NotContains(t, changes[0], "domain")
+	})
+
+	t.Run("changes follow canonical pair-key order", func(t *testing.T) {
+		ledger := newMockLedgerReaderBC(2)
+		addBookChangesTransaction(t, ledger, []any{
+			bookChangesOfferNode("USD", issuer, ""),
+			bookChangesOfferNode("EUR", issuer, ""),
+		})
+
+		result := handlers.ComputeBookChanges(ledger)
+		changes := result["changes"].([]map[string]any)
+		require.Len(t, changes, 2)
+		assert.Equal(t, "EUR."+issuer, changes[0]["currency_b"])
+		assert.Equal(t, "USD."+issuer, changes[1]["currency_b"])
+	})
 }
 
 // TestBookChangesResponseStructure tests that the response contains the expected fields:

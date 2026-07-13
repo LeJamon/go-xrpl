@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -39,6 +40,7 @@ type mockLedgerServiceSimulate struct {
 	lastSeqHasTicket     bool
 	feeAutofillCallCount int
 	seqAutofillCallCount int
+	transactionRules     *amendment.Rules
 }
 
 func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
@@ -53,7 +55,12 @@ func newMockLedgerServiceSimulate() *mockLedgerServiceSimulate {
 		},
 		autofillSeq:       1,
 		currentNetworkFee: 10,
+		transactionRules:  amendment.EmptyRules(),
 	}
+}
+
+func (m *mockLedgerServiceSimulate) TransactionRules() *amendment.Rules {
+	return m.transactionRules
 }
 
 func (m *mockLedgerServiceSimulate) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
@@ -497,6 +504,50 @@ func TestSimulateMethod_SuccessfulSimulation(t *testing.T) {
 	assert.Equal(t, validAccountAddress, txJSON["Account"])
 	assert.Equal(t, "", txJSON["SigningPubKey"])
 	assert.Equal(t, "", txJSON["TxnSignature"])
+}
+
+func TestSimulateMethod_MPTokensV2UsesCurrentRules(t *testing.T) {
+	const (
+		amountID  = "000000010000000000000000000000000000000000000001"
+		sendMaxID = "000000020000000000000000000000000000000000000002"
+	)
+
+	mock := newMockLedgerServiceSimulate()
+	mock.transactionRules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureMPTokensV1).
+		Enable(amendment.FeatureMPTokensV2).
+		Build()
+	ctx := &types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+	params := map[string]any{
+		"tx_json": map[string]any{
+			"TransactionType": "Payment",
+			"Account":         validAccountAddress,
+			"Destination":     "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
+			"Amount": map[string]any{
+				"mpt_issuance_id": amountID,
+				"value":           "10",
+			},
+			"SendMax": map[string]any{
+				"mpt_issuance_id": sendMaxID,
+				"value":           "20",
+			},
+			"Paths": []any{
+				[]any{map[string]any{"mpt_issuance_id": amountID}},
+			},
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SimulateMethod{}).Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
 }
 
 func TestSimulateMethod_SrcActMalformed(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
@@ -57,6 +58,38 @@ type Pathfinder struct {
 	pathsOutCount map[payment.Issue]int
 
 	parentCloseTime uint32
+	calculation     flowCalculationSettings
+}
+
+type flowCalculationSettings struct {
+	parentCloseTime     uint32
+	fixReducedOffersV2  bool
+	fixAMMv1_1          bool
+	fixAMMv1_2          bool
+	fixAMMOverflowOffer bool
+	openLedger          bool
+}
+
+func newFlowCalculationSettings(ledger tx.LedgerView, parentCloseTime uint32) flowCalculationSettings {
+	settings := flowCalculationSettings{parentCloseTime: parentCloseTime}
+	if rules := ledger.Rules(); rules != nil {
+		settings.fixReducedOffersV2 = rules.Enabled(amendment.FeatureFixReducedOffersV2)
+		settings.fixAMMv1_1 = rules.Enabled(amendment.FeatureFixAMMv1_1)
+		settings.fixAMMv1_2 = rules.Enabled(amendment.FeatureFixAMMv1_2)
+		settings.fixAMMOverflowOffer = rules.Enabled(amendment.FeatureFixAMMOverflowOffer)
+	}
+	if openView, ok := ledger.(interface{ IsOpen() bool }); ok {
+		settings.openLedger = openView.IsOpen()
+	}
+	return settings
+}
+
+func (s flowCalculationSettings) options() []payment.RippleCalculateOption {
+	return []payment.RippleCalculateOption{
+		payment.WithAmendments(s.parentCloseTime, s.fixReducedOffersV2),
+		payment.WithAMMAmendments(s.fixAMMv1_1, s.fixAMMv1_2, s.fixAMMOverflowOffer),
+		payment.WithOpenLedger(s.openLedger),
+	}
 }
 
 // NewPathfinder creates a new pathfinder for the given payment parameters.
@@ -131,7 +164,12 @@ func NewPathfinderForIssue(
 	if len(parentCloseTime) > 0 {
 		pf.parentCloseTime = parentCloseTime[0]
 	}
+	pf.calculation = newFlowCalculationSettings(ledger, pf.parentCloseTime)
 	return pf
+}
+
+func (pf *Pathfinder) calculationOptions() []payment.RippleCalculateOption {
+	return pf.calculation.options()
 }
 
 // CompletePaths returns the discovered complete paths.
@@ -545,8 +583,16 @@ func (pf *Pathfinder) addMPTAccountLinks(
 	if pathHasSeenIssue(currentPath, issuer, endIssue) {
 		return
 	}
-	funds, result := mptutil.Funds(pf.ledger, endIssue.MPTID, endAccount, true)
-	if result != ter.TesSUCCESS || funds <= 0 {
+	var asset *PathFindMPT
+	for _, candidate := range pf.cache.GetMPTs(endAccount) {
+		if candidate.ID == endIssue.MPTID {
+			candidateCopy := candidate
+			asset = &candidateCopy
+			break
+		}
+	}
+	if asset == nil || asset.ZeroBalance || asset.MaxedOut ||
+		mptutil.RequireAuthAt(pf.ledger, endIssue.MPTID, issuer, false, pf.parentCloseTime) != ter.TesSUCCESS {
 		return
 	}
 	if toDestination && samePathfindingAsset(endIssue, dstIssue) {
@@ -558,8 +604,10 @@ func (pf *Pathfinder) addMPTAccountLinks(
 	newPath := make([]payment.PathStep, len(currentPath), len(currentPath)+1)
 	copy(newPath, currentPath)
 	newPath = append(newPath, payment.PathStep{
-		Account: state.EncodeAccountIDSafe(issuer),
-		Type:    0x01,
+		Account:       state.EncodeAccountIDSafe(issuer),
+		Issuer:        state.EncodeAccountIDSafe(issuer),
+		MPTIssuanceID: mptutil.EncodeID(endIssue.MPTID),
+		Type:          0x01,
 	})
 	*incompletePaths = append(*incompletePaths, newPath)
 }
@@ -664,8 +712,11 @@ func (pf *Pathfinder) addBookLinks(
 				newPath2 := make([]payment.PathStep, len(newPath), len(newPath)+1)
 				copy(newPath2, newPath)
 				newPath2 = append(newPath2, payment.PathStep{
-					Account: issuerStr,
-					Type:    0x01, // typeAccount
+					Account:       issuerStr,
+					Currency:      bookStep.Currency,
+					Issuer:        issuerStr,
+					MPTIssuanceID: bookStep.MPTIssuanceID,
+					Type:          0x01, // typeAccount
 				})
 				*incompletePaths = append(*incompletePaths, newPath2)
 			}
@@ -937,7 +988,7 @@ func pathHasSeenIssue(path []payment.PathStep, account [20]byte, issue payment.I
 	for _, step := range path {
 		if step.Account == acctStr {
 			if issue.IsMPT {
-				return step.MPTIssuanceID == "" || strings.EqualFold(step.MPTIssuanceID, mptutil.EncodeID(issue.MPTID))
+				return strings.EqualFold(step.MPTIssuanceID, mptutil.EncodeID(issue.MPTID))
 			}
 			stepCurrency := step.Currency
 			if stepCurrency == "" {

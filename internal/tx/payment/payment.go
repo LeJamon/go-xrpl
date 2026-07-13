@@ -115,8 +115,7 @@ func (p *Payment) GetDomainID() (*[32]byte, bool) {
 // RequiredAmendments returns amendments required for this transaction. These
 // mirror rippled's checkExtraFeatures gates (sfCredentialIDs → featureCredentials,
 // sfDomainID → featurePermissionedDEX), which the engine evaluates before the
-// flags mask. The MPT gate is NOT here: rippled evaluates it inside the preflight
-// body, AFTER the mask, so it lives in PreflightWithRules.
+// flags mask. The MPT gate is evaluated in PreflightWithRules after the mask.
 func (p *Payment) RequiredAmendments() [][32]byte {
 	var amendments [][32]byte
 	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
@@ -132,7 +131,7 @@ func (p *Payment) RequiredAmendments() [][32]byte {
 // preflight0 position. An MPT-denominated Amount uses the restricted MPTokensV1
 // mask until MPTokensV2 enables the regular payment flag surface.
 func (p *Payment) GetFlagsMask(rules *amendment.Rules) uint32 {
-	if p.Amount.IsMPT() && !rules.MPTokensV2Enabled() {
+	if p.Amount.IsMPT() && (rules == nil || !rules.MPTokensV2Enabled()) {
 		return tfMPTPaymentMask
 	}
 	return tfPaymentMask
@@ -281,6 +280,9 @@ func isLegalNet(a tx.Amount) bool {
 	return uint64(d) <= maxNativeDrops
 }
 
+// equalTokens mirrors rippled equalTokens: two IOU tokens are equal iff their
+// currencies match (issuer ignored); two MPT tokens iff their issuances match;
+// two native amounts are always equal; any cross-kind pair is unequal.
 func equalTokens(src, dst tx.Amount) bool {
 	switch {
 	case src.IsNative() && dst.IsNative():
@@ -304,19 +306,24 @@ func equalTokens(src, dst tx.Amount) bool {
 // credential code.
 // Reference: rippled Payment.cpp:282-378
 func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	// Reference: rippled Payment.cpp:296-346
 	if destID, err := state.DecodeAccountID(p.Destination); err == nil {
 		destAccount, destExists := state.ReadAccountRoot(view, destID)
 		if !destExists {
+			// A non-native delivered amount cannot create the account.
 			if !p.Amount.IsNative() {
 				return ter.TecNO_DST
 			}
+			// A partial payment may not fund a new account on an open ledger.
 			if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
 				return ter.TelNO_DST_PARTIAL
 			}
+			// The delivered amount must cover the account reserve.
 			if uint64(p.Amount.Drops()) < config.ReserveBase {
 				return ter.TecNO_DST_INSUF_XRP
 			}
 		} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+			// A newly-formed account is exempt — it has no way to set the flag.
 			return ter.TecDST_TAG_NEEDED
 		}
 	}
@@ -444,7 +451,7 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) ter.Result {
 	hasSendMax := p.SendMax != nil
 	ripple := (hasPaths || hasSendMax || !p.Amount.IsNative()) && (!isDstMPT || mpTokensV2)
 	if ripple {
-		return p.applyIOUPayment(ctx)
+		return p.applyFlowPayment(ctx)
 	}
 	if isDstMPT {
 		return p.applyMPTPayment(ctx)

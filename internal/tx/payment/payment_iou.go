@@ -10,13 +10,12 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// checkIOUDestPreamble runs the Apply-phase destination preamble for IOU and
+// checkFlowDestPreamble runs the Apply-phase destination preamble for IOU and
 // cross-currency (ripple) payments: deposit-authorization / deposit-preauth.
 // The destination-tag and credential-validity checks run earlier, in Preclaim.
 // Reference: rippled Payment.cpp:429-465 (ripple == true).
-func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) ter.Result {
-	// An account requiring authorization can receive an IOU/ripple payment only
-	// if it is the destination itself or has deposit-preauthorized the sender.
+func (p *Payment) checkFlowDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) ter.Result {
+	// A flow payment must satisfy the destination's deposit authorization.
 	// The check runs regardless of the destination's flags so that expired
 	// credentials are removed (tecEXPIRED).
 	// Reference: rippled Payment.cpp ripple destination preamble (verifyDepositPreauth).
@@ -26,10 +25,10 @@ func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [2
 	return ter.TesSUCCESS
 }
 
-// applyIOUPayment applies payments routed through Flow, including IOU,
+// applyFlowPayment applies payments routed through Flow, including IOU,
 // cross-currency, and MPTokensV2 payments.
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp
-func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
+func (p *Payment) applyFlowPayment(ctx *tx.ApplyContext) ter.Result {
 	// Validate the amount
 	if p.Amount.IsZero() {
 		return ter.TemBAD_AMOUNT
@@ -49,11 +48,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TemDST_NEEDED
 	}
 
-	// For cross-currency payments where Amount is XRP, we always need the flow engine
-	// (no issuer to decode, no direct IOU path possible)
 	if p.Amount.IsNative() {
-		// Cross-currency: Amount=XRP with SendMax=IOU or paths
-		// Always requires the flow engine
 		return p.applyRipplePayment(ctx, senderAccountID, destAccountID)
 	}
 
@@ -83,7 +78,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	if result := p.checkIOUDestPreamble(ctx, senderAccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
+	if result := p.checkFlowDestPreamble(ctx, senderAccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -102,7 +97,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	return p.applyIOUPaymentWithPaths(ctx, senderAccountID, destAccountID)
+	return p.applyFlowPaymentWithPaths(ctx, senderAccountID, destAccountID)
 }
 
 // applyRipplePayment handles cross-currency payments where Amount is XRP but
@@ -162,7 +157,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 
 		// A freshly created account carries no flags, so destination-tag and
 		// deposit-authorization checks do not apply.
-		return p.applyIOUPaymentWithPaths(ctx, senderID, destID)
+		return p.applyFlowPaymentWithPaths(ctx, senderID, destID)
 	}
 
 	destData, err := ctx.View.Read(destKey)
@@ -174,7 +169,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		return ter.TefINTERNAL
 	}
 
-	if result := p.checkIOUDestPreamble(ctx, senderID, destID, destAccount); result != ter.TesSUCCESS {
+	if result := p.checkFlowDestPreamble(ctx, senderID, destID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -188,13 +183,12 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		return ter.TefINTERNAL
 	}
 
-	return p.applyIOUPaymentWithPaths(ctx, senderID, destID)
+	return p.applyFlowPaymentWithPaths(ctx, senderID, destID)
 }
 
-// applyIOUPaymentWithPaths handles IOU payments that require path finding using the Flow Engine.
-// This is the main entry point for cross-currency payments and payments with explicit paths.
+// applyFlowPaymentWithPaths executes RippleCalculate and applies its sandbox.
 // Reference: rippled/src/xrpld/app/paths/RippleCalc.cpp
-func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID [20]byte) ter.Result {
+func (p *Payment) applyFlowPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID [20]byte) ter.Result {
 	// Determine payment flags
 	flags := p.GetFlags()
 	partialPayment := (flags & PaymentFlagPartialPayment) != 0

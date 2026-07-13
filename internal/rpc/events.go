@@ -226,13 +226,15 @@ type OrderBookChangeEvent struct {
 // PathFindEvent represents path finding results
 // This is sent in response to path_find create requests
 type PathFindEvent struct {
-	Type               string            `json:"type"`                // "path_find"
+	Type               string            `json:"type,omitempty"`      // "path_find" on pushed updates
 	ID                 any               `json:"id,omitempty"`        // Request ID
 	SourceAccount      string            `json:"source_account"`      // Source account
 	DestinationAccount string            `json:"destination_account"` // Destination account
 	DestinationAmount  json.RawMessage   `json:"destination_amount"`  // Amount to deliver
 	FullReply          bool              `json:"full_reply"`          // Whether this is a full reply
 	Alternatives       []PathAlternative `json:"alternatives"`        // Alternative paths found
+	Status             string            `json:"status,omitempty"`
+	Closed             bool              `json:"closed,omitempty"`
 }
 
 // PathAlternative represents a single path alternative

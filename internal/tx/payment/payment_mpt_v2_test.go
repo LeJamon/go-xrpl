@@ -1,13 +1,94 @@
 package payment
 
 import (
+	"context"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/stretchr/testify/require"
 )
+
+func paymentMPTV2ApplyRules() *amendment.Rules {
+	return amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		Enable(amendment.FeatureMPTokensV2).
+		Build()
+}
+
+func TestPaymentMPTokensV1PreclaimChecksDestination(t *testing.T) {
+	var issuer [20]byte
+	issuer[19] = 1
+	id := keylet.MakeMPTID(1, issuer)
+	p := NewPayment("rAlice", state.EncodeAccountIDSafe([20]byte{19: 2}),
+		state.NewMPTAmountWithIssuanceID(10, state.EncodeAccountIDSafe(issuer), mptutil.EncodeID(id)))
+
+	result := p.Preclaim(newPaymentMockLedgerView(), tx.EngineConfig{
+		Rules: paymentMPTV1Rules(),
+	})
+	require.Equal(t, ter.TecNO_DST, result)
+}
+
+func TestPaymentApplyRoutesMPTokensV2ThroughFlow(t *testing.T) {
+	var issuer, source, destination [20]byte
+	issuer[19] = 4
+	source[19] = 2
+	destination[19] = 3
+	id := keylet.MakeMPTID(1, issuer)
+	idHex := mptutil.EncodeID(id)
+	rules := paymentMPTV2ApplyRules()
+	view := newPaymentMockLedgerView()
+	view.rules = rules
+	for _, account := range [][20]byte{issuer, source, destination} {
+		view.createAccount(account, 100_000_000, 0)
+	}
+	putMPTIssuance(t, view, id, 100, 0)
+	putMPTHolding(t, view, id, source, 100)
+	putMPTHolding(t, view, id, destination, 0)
+
+	accountRaw, err := view.Read(keylet.Account(source))
+	require.NoError(t, err)
+	account, err := state.ParseAccountRoot(accountRaw)
+	require.NoError(t, err)
+	amount := state.NewMPTAmountWithIssuanceID(10, state.EncodeAccountIDSafe(issuer), idHex)
+	p := NewPayment(state.EncodeAccountIDSafe(source), state.EncodeAccountIDSafe(destination), amount)
+	p.Paths = [][]PathStep{{{Account: state.EncodeAccountIDSafe(issuer)}}}
+	p.SetNoDirectRipple()
+	require.NoError(t, p.PreflightWithRules(rules))
+
+	ctx := &tx.ApplyContext{
+		View:      view,
+		Account:   account,
+		AccountID: source,
+		Config: tx.EngineConfig{
+			ReserveBase:      10_000_000,
+			ReserveIncrement: 2_000_000,
+			LedgerSequence:   1,
+			Rules:            rules,
+		},
+		Metadata: &tx.Metadata{},
+		Log:      xrpllog.Discard(),
+		Ctx:      context.Background(),
+	}
+	result := p.Apply(ctx)
+	require.Equal(t, ter.TesSUCCESS, result)
+	outstanding, balances := readMPTAmounts(t, view, id, source, destination)
+	require.Equal(t, uint64(100), outstanding)
+	require.Equal(t, []uint64{90, 10}, balances)
+
+	noPath := NewPayment(state.EncodeAccountIDSafe(source), state.EncodeAccountIDSafe(destination), amount)
+	noPath.SetNoDirectRipple()
+	require.NoError(t, noPath.PreflightWithRules(rules))
+	require.Equal(t, ter.TemRIPPLE_EMPTY, noPath.Apply(ctx))
+	outstanding, balances = readMPTAmounts(t, view, id, source, destination)
+	require.Equal(t, uint64(100), outstanding)
+	require.Equal(t, []uint64{90, 10}, balances)
+}
 
 const (
 	paymentMPTIDA        = "00000000000000000000000000000000000000000000000A"

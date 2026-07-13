@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
@@ -234,9 +235,8 @@ func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]by
 // addBookDir creates a book directory entry so BookExists can find it.
 func addBookDir(t *testing.T, ledger *mockLedgerView, takerPays, takerGets payment.Issue) {
 	t.Helper()
-	paysCurr := keylet.CurrencyBytes(takerPays.Currency)
-	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
-	k := keylet.BookDir(paysCurr, takerPays.Issuer, getsCurr, takerGets.Issuer)
+	base := keylet.BookBase(bookSide(takerPays), bookSide(takerGets), nil)
+	k := keylet.Quality(base, 1)
 
 	dir := &state.DirectoryNode{
 		RootIndex: k.Key,
@@ -1299,6 +1299,101 @@ func TestFindPaths_XRPToIOU_ThroughOfferBook(t *testing.T) {
 	// With the offer present, the BookIndex should discover the XRP->USD book.
 	paths := pf.CompletePaths()
 	t.Logf("Found %d complete paths for XRP->USD", len(paths))
+}
+
+func TestGetPathLiquidityDoesNotReuseConsumedOffer(t *testing.T) {
+	ledger := newMockLedger()
+	alice := testAccountID(1)
+	bob := testAccountID(2)
+	gw := testAccountID(3)
+	owner := testAccountID(4)
+	gwAddr := testAccountAddress(gw)
+
+	for _, account := range [][20]byte{alice, bob, gw, owner} {
+		addAccount(t, ledger, account, 10_000_000_000, 0)
+	}
+
+	low, high := bob, gw
+	if compareAccountIDs(low, high) > 0 {
+		low, high = high, low
+	}
+	addRippleState(t, ledger, low, high, "USD", 0, 1_000, 1_000, 0)
+
+	low, high = owner, gw
+	if compareAccountIDs(low, high) > 0 {
+		low, high = high, low
+	}
+	ownerBalance := float64(60)
+	if low != owner {
+		ownerBalance = -ownerBalance
+	}
+	addRippleState(t, ledger, low, high, "USD", ownerBalance, 1_000, 1_000, 0)
+
+	takerPays := state.NewXRPAmountFromInt(60_000_000)
+	takerGets := state.NewIssuedAmountFromFloat64(60, "USD", gwAddr)
+	inIssue := payment.Issue{Currency: "XRP"}
+	outIssue := payment.Issue{Currency: "USD", Issuer: gw}
+	quality := payment.QualityFromAmounts(payment.ToEitherAmount(takerPays), payment.ToEitherAmount(takerGets))
+	dirKey := keylet.Quality(keylet.BookBase(bookSide(inIssue), bookSide(outIssue), nil), quality.Value)
+	offerKey := keylet.Offer(owner, 1).Key
+	offer := &state.LedgerOffer{
+		Account:       testAccountAddress(owner),
+		Sequence:      1,
+		TakerPays:     takerPays,
+		TakerGets:     takerGets,
+		BookDirectory: dirKey.Key,
+	}
+	offerData, err := state.SerializeLedgerOffer(offer)
+	require.NoError(t, err)
+	ledger.entries[offerKey] = offerData
+	dirData, err := state.SerializeDirectoryNode(&state.DirectoryNode{
+		RootIndex: dirKey.Key,
+		Indexes:   [][32]byte{offerKey},
+	}, true)
+	require.NoError(t, err)
+	ledger.entries[dirKey.Key] = dirData
+
+	dstAmount := state.NewIssuedAmountFromFloat64(100, "USD", gwAddr)
+	pf := NewPathfinder(
+		ledger,
+		NewRippleLineCache(ledger),
+		alice,
+		bob,
+		dstAmount,
+		state.NewXRPAmountFromInt(1_000_000_000),
+		"XRP",
+		[20]byte{},
+		false,
+	)
+	path := []payment.PathStep{{Currency: "USD", Issuer: gwAddr, Type: 0x30}}
+	liquidity, _, ok := pf.getPathLiquidity(
+		path,
+		state.NewIssuedAmountFromFloat64(10, "USD", gwAddr),
+	)
+
+	require.True(t, ok)
+	require.Zero(t, liquidity.Compare(payment.ToEitherAmount(takerGets)))
+}
+
+func TestShouldRetryWithFullLiquidityPath(t *testing.T) {
+	tests := []struct {
+		name   string
+		result ter.Result
+		want   bool
+	}{
+		{name: "no line", result: ter.TerNO_LINE, want: true},
+		{name: "partial path", result: ter.TecPATH_PARTIAL, want: true},
+		{name: "success", result: ter.TesSUCCESS},
+		{name: "dry path", result: ter.TecPATH_DRY},
+		{name: "no authorization", result: ter.TecNO_AUTH},
+		{name: "bad path", result: ter.TemBAD_PATH},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, shouldRetryWithFullLiquidityPath(test.result))
+		})
+	}
 }
 
 // Test 15: PathRank sorting

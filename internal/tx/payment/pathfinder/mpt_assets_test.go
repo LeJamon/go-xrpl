@@ -1,10 +1,14 @@
 package pathfinder
 
 import (
+	"encoding/hex"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -64,6 +68,109 @@ func TestMPTBookPathStep(t *testing.T) {
 	require.Equal(t, mptutil.EncodeID(id), step.MPTIssuanceID)
 	require.Equal(t, state.EncodeAccountIDSafe(mptutil.Issuer(id)), step.Issuer)
 	require.True(t, pathHasSeenBookIssue([]payment.PathStep{step}, issue))
+}
+
+func TestBookIndexIncludesAMMLiquidityInBothDirections(t *testing.T) {
+	ledger := newMockLedger()
+	issuerA := testAccountID(0x61)
+	issuerB := testAccountID(0x62)
+	idA := keylet.MakeMPTID(1, issuerA)
+	idB := keylet.MakeMPTID(2, issuerB)
+	xrp := tx.Asset{Currency: "XRP"}
+	usd := tx.Asset{Currency: "USD", Issuer: state.EncodeAccountIDSafe(issuerA)}
+	mptA := tx.Asset{MPTIssuanceID: mptutil.EncodeID(idA)}
+	mptB := tx.Asset{MPTIssuanceID: mptutil.EncodeID(idB)}
+
+	addPathfinderAMM(t, ledger, testAccountID(0x63), xrp, mptA, 1)
+	addPathfinderAMM(t, ledger, testAccountID(0x64), usd, mptA, 2)
+	addPathfinderAMM(t, ledger, testAccountID(0x65), mptA, mptB, 3)
+
+	index := NewBookIndex(ledger)
+	xrpIssue := payment.Issue{Currency: "XRP"}
+	usdIssue := payment.Issue{Currency: "USD", Issuer: issuerA}
+	mptAIssue := payment.NewMPTIssue(idA)
+	mptBIssue := payment.NewMPTIssue(idB)
+	require.Contains(t, index.GetBooksByTakerPays(xrpIssue), mptAIssue)
+	require.Contains(t, index.GetBooksByTakerPays(mptAIssue), xrpIssue)
+	require.Contains(t, index.GetBooksByTakerPays(usdIssue), mptAIssue)
+	require.Contains(t, index.GetBooksByTakerPays(mptAIssue), usdIssue)
+	require.Contains(t, index.GetBooksByTakerPays(mptAIssue), mptBIssue)
+	require.Contains(t, index.GetBooksByTakerPays(mptBIssue), mptAIssue)
+}
+
+func TestMPTAccountLinksRejectMaxedIssuanceAndRetainAsset(t *testing.T) {
+	ledger := newMockLedger()
+	issuer := testAccountID(0x71)
+	holder := testAccountID(0x72)
+	destination := testAccountID(0x73)
+	for _, account := range [][20]byte{issuer, holder, destination} {
+		addAccount(t, ledger, account, 10_000_000, 0)
+	}
+	id := addPathfinderMPTIssuance(t, ledger, issuer, 1, 100, 100)
+	addPathfinderMPToken(t, ledger, holder, id, 5)
+	issue := payment.NewMPTIssue(id)
+	pf := &Pathfinder{
+		ledger:           ledger,
+		cache:            NewRippleLineCache(ledger),
+		effectiveDst:     destination,
+		parentCloseTime:  1,
+		pathsOutCount:    make(map[payment.Issue]int),
+		completePathKeys: make(map[string]struct{}),
+	}
+
+	var incomplete [][]payment.PathStep
+	pf.addMPTAccountLinks(nil, &incomplete, 0, holder, issue, false, payment.Issue{Currency: "XRP"})
+	require.Empty(t, incomplete)
+
+	issuance, _, result := mptutil.ReadIssuance(ledger, id)
+	require.True(t, result.IsSuccess())
+	issuance.OutstandingAmount = 99
+	raw, err := state.SerializeMPTokenIssuance(issuance)
+	require.NoError(t, err)
+	require.NoError(t, ledger.Update(keylet.MPTIssuance(id), raw))
+	pf.cache = NewRippleLineCache(ledger)
+	pf.addMPTAccountLinks(nil, &incomplete, 0, holder, issue, false, payment.Issue{Currency: "XRP"})
+	require.Len(t, incomplete, 1)
+	require.Equal(t, mptutil.EncodeID(id), incomplete[0][0].MPTIssuanceID)
+	require.Equal(t, state.EncodeAccountIDSafe(issuer), incomplete[0][0].Issuer)
+
+	require.True(t, pathHasSeenIssue(incomplete[0], issuer, issue))
+	otherID := keylet.MakeMPTID(2, issuer)
+	require.False(t, pathHasSeenIssue(incomplete[0], issuer, payment.NewMPTIssue(otherID)))
+	require.False(t, pathHasSeenIssue([]payment.PathStep{{Account: state.EncodeAccountIDSafe(issuer)}}, issuer, issue))
+}
+
+func TestIsValidAssetRejectsBadCurrency(t *testing.T) {
+	issuer := state.EncodeAccountIDSafe(testAccountID(0x81))
+	require.False(t, IsValidAsset(state.NewIssuedAmountFromFloat64(1, tx.BadCurrency, issuer)))
+	require.True(t, IsValidAsset(state.NewXRPAmountFromInt(1)))
+	require.True(t, IsValidAsset(state.NewIssuedAmountFromFloat64(1, "USD", issuer)))
+}
+
+type configuredPathfinderLedger struct {
+	*mockLedgerView
+	rules *amendment.Rules
+	open  bool
+}
+
+func (l *configuredPathfinderLedger) Rules() *amendment.Rules { return l.rules }
+func (l *configuredPathfinderLedger) IsOpen() bool            { return l.open }
+
+func TestFlowCalculationSettingsUseLedgerRulesAndTiming(t *testing.T) {
+	rules := amendment.NewRules([][32]byte{
+		amendment.FeatureFixReducedOffersV2,
+		amendment.FeatureFixAMMv1_1,
+		amendment.FeatureFixAMMv1_2,
+		amendment.FeatureFixAMMOverflowOffer,
+	})
+	ledger := &configuredPathfinderLedger{mockLedgerView: newMockLedger(), rules: rules, open: true}
+	settings := newFlowCalculationSettings(ledger, 1234)
+	require.Equal(t, uint32(1234), settings.parentCloseTime)
+	require.True(t, settings.fixReducedOffersV2)
+	require.True(t, settings.fixAMMv1_1)
+	require.True(t, settings.fixAMMv1_2)
+	require.True(t, settings.fixAMMOverflowOffer)
+	require.True(t, settings.openLedger)
 }
 
 func TestSamePathfindingAssetPreservesIOURippling(t *testing.T) {
@@ -180,4 +287,43 @@ func addPathfinderMPToken(
 	k := keylet.MPTokenByID(id, holder)
 	ledger.entries[k.Key] = data
 	ensureOwnerDirContains(t, ledger, holder, k.Key)
+}
+
+func addPathfinderAMM(
+	t *testing.T,
+	ledger *mockLedgerView,
+	account [20]byte,
+	asset1, asset2 tx.Asset,
+	seed byte,
+) {
+	t.Helper()
+	encoded, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType": "AMM",
+		"Account":         state.EncodeAccountIDSafe(account),
+		"Asset":           pathfinderAssetJSON(asset1),
+		"Asset2":          pathfinderAssetJSON(asset2),
+		"LPTokenBalance": map[string]any{
+			"value":    "1",
+			"currency": "03FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+			"issuer":   state.EncodeAccountIDSafe(account),
+		},
+		"OwnerNode": "0",
+		"Flags":     uint32(0),
+	})
+	require.NoError(t, err)
+	raw, err := hex.DecodeString(encoded)
+	require.NoError(t, err)
+	var id [32]byte
+	id[31] = seed
+	ledger.entries[keylet.AMMByID(id).Key] = raw
+}
+
+func pathfinderAssetJSON(asset tx.Asset) map[string]any {
+	if asset.IsMPT() {
+		return map[string]any{"mpt_issuance_id": asset.MPTIssuanceID}
+	}
+	if asset.IsNative() {
+		return map[string]any{"currency": "XRP"}
+	}
+	return map[string]any{"currency": asset.Currency, "issuer": asset.Issuer}
 }
