@@ -313,6 +313,13 @@ checks use the canonical encodings, and aggregate-price/path-find validation was
 corrected. Strict CI lint, repository lint, build, vet, and whitespace checks
 pass on the remediation tree; the fixes await a new exact-head CI run.
 
+The next core run exposed failures previously masked by package panics. A stored
+transaction projection omitted its API v1 hash and was fixed; the remaining
+account, book, deposit-authorized, WebSocket, and simulate failures were stale
+ledger-selection or response-decoding fixtures and were aligned with rippled
+3.2.0. Strict lint, repository lint, build, vet, and whitespace checks pass on
+this second remediation tree.
+
 # Issue #1303 — trust-layer visibility and forward compatibility
 
 Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`

@@ -29,20 +29,8 @@ func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays t
 	return nil, errors.New("not implemented")
 }
 
-// GetLedgerBySequence shadows the base mock's "not implemented" so a numeric
-// ledger_index within the in-memory window resolves cleanly. Seqs above the
-// current open ledger still surface lgrNotFound, which is what the M2
-// "future ledger" pre-check coverage relies on.
-func (m *bookOffersMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	if seq == 0 || seq > m.currentLedgerIndex {
-		return nil, errors.New("ledger not found")
-	}
-	return &stubLedgerReader{seq: seq}, nil
-}
-
-// GetLedgerByHash mirrors the rippled BookOffers.cpp:45-49 pre-resolve path.
-// Returns a stub reader when the test installs a custom `getLedgerByHashFn`,
-// otherwise reports "not found" so unmatched hashes surface lgrNotFound.
+// GetLedgerByHash mirrors the rippled BookOffers.cpp lookupLedger path.
+// A custom resolver lets tests distinguish found and missing hashes.
 func (m *bookOffersMock) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	if m.getLedgerByHashFn != nil {
 		return m.getLedgerByHashFn(hash)
@@ -54,26 +42,6 @@ func newBookOffersMock() *bookOffersMock {
 	return &bookOffersMock{
 		mockLedgerService: newMockLedgerService(),
 	}
-}
-
-// stubLedgerReader is a minimal types.LedgerReader used only to let the
-// book_offers handler's M2 lookupLedger pre-check succeed in unit tests.
-type stubLedgerReader struct{ seq uint32 }
-
-func (s *stubLedgerReader) Sequence() uint32            { return s.seq }
-func (s *stubLedgerReader) Hash() [32]byte              { return [32]byte{} }
-func (s *stubLedgerReader) ParentHash() [32]byte        { return [32]byte{} }
-func (s *stubLedgerReader) IsClosed() bool              { return true }
-func (s *stubLedgerReader) IsValidated() bool           { return true }
-func (s *stubLedgerReader) TotalDrops() uint64          { return 0 }
-func (s *stubLedgerReader) CloseTime() int64            { return 0 }
-func (s *stubLedgerReader) CloseTimeResolution() uint32 { return 0 }
-func (s *stubLedgerReader) CloseFlags() uint8           { return 0 }
-func (s *stubLedgerReader) ParentCloseTime() int64      { return 0 }
-func (s *stubLedgerReader) TxMapHash() [32]byte         { return [32]byte{} }
-func (s *stubLedgerReader) StateMapHash() [32]byte      { return [32]byte{} }
-func (s *stubLedgerReader) ForEachTransaction(func(txHash [32]byte, txData []byte) bool) error {
-	return nil
 }
 
 // newBookOffersTestServices builds a *types.ServiceContainer wrapping the mock.
@@ -828,6 +796,9 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 // ("validated") query emits ledger_hash + ledger_index.
 func TestBookOffersLedgerShape(t *testing.T) {
 	mock := newBookOffersMock()
+	mock.currentLedgerIndex = 9
+	mock.closedLedgerIndex = 8
+	mock.validatedLedgerIndex = 8
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
@@ -1365,10 +1336,9 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.Contains(t, rpcErr.LogDetail(), "Failed to get book offers")
 }
 
-// TestBookOffersMarkerPassthrough exercises the handler's marker handling:
-// the request marker is forwarded to GetBookOffers, an emitted response
-// marker is surfaced in the JSON, and an absent marker is omitted.
-func TestBookOffersMarkerPassthrough(t *testing.T) {
+// TestBookOffersMarkerIgnored mirrors rippled's active getBookPage path, which
+// accepts the marker member but does not use it or emit pagination fields.
+func TestBookOffersMarkerIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1401,30 +1371,12 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
-	assert.Equal(t, reqMarker, capturedMarker)
+	assert.Empty(t, capturedMarker)
 	assert.Equal(t, uint32(7), capturedLimit)
 	resp, ok := result.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, respMarker, resp["marker"])
-	// Paginated response pairs marker with limit echo (account_offers
-	// convention, AccountOffers.cpp:172-176).
-	assert.Equal(t, uint32(7), resp["limit"], "paginated response must echo limit alongside marker")
-
-	// Verify the inverse: when the service emits no marker, the response
-	// contains neither a marker nor a limit key.
-	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-		return &types.BookOffersResult{LedgerIndex: 6, Offers: []types.BookOffer{}, Validated: true}, nil
-	}
-	delete(params, "marker")
-	paramsJSON, err = json.Marshal(params)
-	require.NoError(t, err)
-	result, rpcErr = method.Handle(ctx, paramsJSON)
-	require.Nil(t, rpcErr)
-	resp = result.(map[string]any)
-	_, hasMarker := resp["marker"]
-	assert.False(t, hasMarker, "response must omit marker when service returned none")
-	_, hasLimit := resp["limit"]
-	assert.False(t, hasLimit, "response must omit limit when no marker is emitted")
+	assert.NotContains(t, resp, "marker")
+	assert.NotContains(t, resp, "limit")
 }
 
 // TestBookOffersStaleMarkerMapping: a well-formed marker pointing at an entry
@@ -1473,9 +1425,9 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
 }
 
-// TestBookOffersMarkerValidation checks that the handler rejects malformed
-// markers before invoking the service.
-func TestBookOffersMarkerValidation(t *testing.T) {
+// TestBookOffersMarkerValuesIgnored verifies that malformed marker values are
+// also ignored, as they are by rippled's active getBookPage implementation.
+func TestBookOffersMarkerValuesIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1485,11 +1437,10 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
-	// Fail the test if the service is reached: every case below must
-	// short-circuit inside the handler.
-	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
-		t.Fatalf("service must not be called for invalid markers")
-		return nil, nil
+	var capturedMarker string
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, marker string, _ bool) (*types.BookOffersResult, error) {
+		capturedMarker = marker
+		return &types.BookOffersResult{Offers: []types.BookOffer{}}, nil
 	}
 
 	cases := []struct {
@@ -1502,6 +1453,7 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			capturedMarker = "not called"
 			params := map[string]any{
 				"taker_pays": map[string]any{"currency": "XRP"},
 				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
@@ -1510,9 +1462,9 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 			paramsJSON, err := json.Marshal(params)
 			require.NoError(t, err)
 			result, rpcErr := method.Handle(ctx, paramsJSON)
-			assert.Nil(t, result)
-			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.Message, "marker")
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Empty(t, capturedMarker)
 		})
 	}
 }
@@ -1864,7 +1816,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	}
 	mock.getLedgerByHashFn = func(hash [32]byte) (types.LedgerReader, error) {
 		if hash == foundHash {
-			return &stubLedgerReader{seq: 2}, nil
+			return &mockLedgerReader{seq: 2, hash: foundHash, closed: true, validated: true}, nil
 		}
 		return nil, errors.New("ledger not found")
 	}

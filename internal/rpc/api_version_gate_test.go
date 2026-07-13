@@ -189,7 +189,12 @@ func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	return ws
 }
 
-func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) types.WebSocketResponse {
+type wsTestResponse struct {
+	types.WebSocketResponse
+	ApiVersion json.RawMessage `json:"api_version,omitempty"`
+}
+
+func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) wsTestResponse {
 	t.Helper()
 	conn, closeConn := openWSConnection(t, ws)
 	defer closeConn()
@@ -212,7 +217,7 @@ func openWSConnection(t *testing.T, ws *WebSocketServer) (*websocket.Conn, func(
 	}
 }
 
-func wsConnectionRoundTrip(t *testing.T, conn *websocket.Conn, request string) types.WebSocketResponse {
+func wsConnectionRoundTrip(t *testing.T, conn *websocket.Conn, request string) wsTestResponse {
 	t.Helper()
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(request)); err != nil {
 		t.Fatalf("write: %v", err)
@@ -222,7 +227,7 @@ func wsConnectionRoundTrip(t *testing.T, conn *websocket.Conn, request string) t
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	var resp types.WebSocketResponse
+	var resp wsTestResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("unmarshal response: %v\nraw: %s", err, string(raw))
 	}
@@ -271,8 +276,8 @@ func TestApiVersion_WS_UnspecifiedDefaultsToV1(t *testing.T) {
 	if resp.Status != "success" {
 		t.Fatalf("WS ping status = %q, want success", resp.Status)
 	}
-	if resp.ApiVersion != types.ApiVersion1 {
-		t.Fatalf("WS unspecified api_version resolved to %d, want %d", resp.ApiVersion, types.ApiVersion1)
+	if got := string(resp.ApiVersion); got != "1" {
+		t.Fatalf("WS unspecified api_version resolved to %s, want %d", got, types.ApiVersion1)
 	}
 }
 

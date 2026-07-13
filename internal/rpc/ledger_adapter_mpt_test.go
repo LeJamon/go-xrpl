@@ -27,6 +27,8 @@ func TestRPCBookAmountMPT(t *testing.T) {
 func TestLedgerServiceAdapterSimulatePreservesCurrentLedgerCloseTime(t *testing.T) {
 	svc, err := service.New(service.DefaultConfig())
 	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+	t.Cleanup(svc.Stop)
 
 	txJSON := []byte(`{"TransactionType":"AccountSet","Account":"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh","Fee":"10","Sequence":1,"SigningPubKey":""}`)
 	result, err := NewLedgerServiceAdapter(svc).SimulateTransaction(txJSON)

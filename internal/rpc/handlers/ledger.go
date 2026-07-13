@@ -606,7 +606,7 @@ func expandStoredTransaction(
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
-		maps.Copy(txEntry, projectTransactionJSON(storedTx.TxJSON, "", apiVersion))
+		maps.Copy(txEntry, projectTransactionJSON(storedTx.TxJSON, hashStr, apiVersion))
 		if storedTx.Meta != nil {
 			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
 			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)

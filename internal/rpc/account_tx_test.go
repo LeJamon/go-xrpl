@@ -556,11 +556,11 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 
 		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
 			assert.Equal(t, int64(1), ledgerMin)
-			assert.Equal(t, int64(3), ledgerMax)
+			assert.Equal(t, int64(2), ledgerMax)
 			return &types.AccountTxResult{
 				Account:      account,
 				LedgerMin:    1,
-				LedgerMax:    3,
+				LedgerMax:    2,
 				Limit:        200,
 				Transactions: []types.AccountTransaction{},
 				Validated:    true,
@@ -586,7 +586,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, float64(1), resp["ledger_index_min"])
-		assert.Equal(t, float64(3), resp["ledger_index_max"])
+		assert.Equal(t, float64(2), resp["ledger_index_max"])
 	})
 }
 
@@ -1671,10 +1671,9 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 	require.Len(t, txs, 1)
 
 	tx0 := txs[0].(map[string]any)
-	// Hash should always be present regardless of decode success
-	assert.Contains(t, tx0, "hash")
+	txJSON := tx0["tx"].(map[string]any)
 	expectedHash := strings.ToUpper(hex.EncodeToString(txHash[:]))
-	assert.Equal(t, expectedHash, tx0["hash"])
+	assert.Equal(t, expectedHash, txJSON["hash"])
 }
 
 // Service Error Propagation Tests

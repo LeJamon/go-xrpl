@@ -602,29 +602,34 @@ func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
 			wantObjectTypes: []string{"Check"},
 		},
 		{
-			name:        "canonical name bypasses validation but intersects to empty",
-			typePresent: true,
-			typeValue:   "Check",
+			name:            "canonical name bypasses validation but intersects to empty",
+			typePresent:     true,
+			typeValue:       "Check",
+			wantObjectTypes: []string{},
 		},
 		{
-			name:        "non-blocker RPC name intersects to empty",
-			typePresent: true,
-			typeValue:   "offer",
+			name:            "non-blocker RPC name intersects to empty",
+			typePresent:     true,
+			typeValue:       "offer",
+			wantObjectTypes: []string{},
 		},
 		{
-			name:        "unknown type bypasses validation and intersects to empty",
-			typePresent: true,
-			typeValue:   "unknown",
+			name:            "unknown type bypasses validation and intersects to empty",
+			typePresent:     true,
+			typeValue:       "unknown",
+			wantObjectTypes: []string{},
 		},
 		{
-			name:        "non-string type bypasses validation and intersects to empty",
-			typePresent: true,
-			typeValue:   1,
+			name:            "non-string type bypasses validation and intersects to empty",
+			typePresent:     true,
+			typeValue:       1,
+			wantObjectTypes: []string{},
 		},
 		{
-			name:        "null type bypasses validation and intersects to empty",
-			typePresent: true,
-			typeValue:   nil,
+			name:            "null type bypasses validation and intersects to empty",
+			typePresent:     true,
+			typeValue:       nil,
+			wantObjectTypes: []string{},
 		},
 	}
 
@@ -904,7 +909,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 			"Default ledger_index should be 'current'")
 	})
 
-	t.Run("ledger not found returns internal error", func(t *testing.T) {
+	t.Run("ledger not found returns ledger not found error", func(t *testing.T) {
 		mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
 			return nil, errors.New("ledger not found")
 		}
@@ -919,7 +924,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 }
 

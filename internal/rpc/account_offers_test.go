@@ -494,10 +494,10 @@ func TestAccountOffersResponseFields(t *testing.T) {
 		assert.Equal(t, validAccount, resp["account"])
 
 		// Verify validated flag
-		assert.Equal(t, true, resp["validated"])
+		assert.Equal(t, false, resp["validated"])
 
 		// Verify ledger_current_index
-		assert.Equal(t, float64(2), resp["ledger_current_index"])
+		assert.Equal(t, float64(3), resp["ledger_current_index"])
 
 		// Verify offers is an array
 		offersArr, ok := resp["offers"].([]any)
