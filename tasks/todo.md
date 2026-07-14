@@ -485,3 +485,47 @@ PR: https://github.com/LeJamon/go-xrpl/pull/1319
   transaction-level regressions.
 
 PR: https://github.com/LeJamon/go-xrpl/pull/1324
+
+# AMMCreate replay default-field conformance
+
+Target: `origin/v3.0.0` at
+`13080bc66fe678314f7633f65caf36f3737e3564`. Behavioral oracle: clean local
+rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Trace AMMCreate construction of the AMM and both RippleState objects.
+- [x] Compare all conditionally present fields with rippled 3.2.0 and its tests.
+- [x] Reproduce the XRP `Asset` and zero trust-line node field divergences.
+- [x] Implement the minimal metadata-reconstruction fix and audit adjacent
+      AMMCreate default fields.
+- [x] Run focused AMM and serialization tests, transaction tests, vet, lint,
+      and build.
+- [x] Review the final diff and record exact results below.
+
+## Review
+
+- Root cause: AMMCreate and RippleState serialization already match rippled.
+  Rippled stores required XRP AMM assets and explicitly written zero
+  `LowNode`/`HighNode` values in the SLE, but omits them from
+  `CreatedNode.NewFields` because their serialized values are defaults. Replay
+  reconstruction was treating those deliberately partial NewFields as the
+  complete object.
+- Fix: restore default XRP for either required AMM asset slot and restore absent
+  zero node hints for newly created RippleState objects before re-encoding.
+- Rippled 3.2.0 references checked: `AMMCreate.cpp`, `ApplyStateTable.cpp`,
+  `RippleStateHelpers.cpp`, `STIssue.cpp`, `STInteger.h`, and the AMM/RippleState
+  ledger-entry formats.
+- Regression coverage: byte-level CreatedNode reconstruction for XRP/IOU and
+  XRP/MPT AMMs, both XRP/IOU trust lines, and end-to-end AMMCreate metadata
+  omission behavior.
+- Passed: replaytool tests; all AMM transaction and integration tests; all
+  `internal/tx/...` tests; focused race tests; `just vet`; required and advisory
+  golangci-lint configurations; `just build-all`; `git diff --check`.
+- Full `go test ./... -count=1 -timeout 15m` passed every package except the
+  existing conformance corpus failures under Vault, XChain, and XChainSim,
+  which are listed in `scripts/conformance-out-of-scope.txt`.
+- The original ledger 3025006 replay was not rerun because its VM database is
+  not present locally; the supplied field-level divergence is covered directly
+  by the byte-level reconstruction tests.
