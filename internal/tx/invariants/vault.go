@@ -1,42 +1,13 @@
 package invariants
 
-// vault.go — ValidVault invariant, ported from rippled InvariantCheck.cpp
-// (ValidVault) at the 3.1.3 state.
-//
-// It reconciles the balance movements of a single-asset-vault transaction: a
-// deposit trades assets for freshly minted shares, a withdrawal and a clawback
-// trade shares back for assets, and a set touches neither. The checker verifies
-// that the asset movement, the share issuance movement, and the vault's own
-// AssetsTotal / AssetsAvailable / LossUnrealized totals all agree, that the
-// vault's immutable data never changes, and that only loan transactions may move
-// LossUnrealized. Balance deltas are rounded to the coarsest asset scale before
-// comparison so IOU dust cannot trip the check.
-//
-// Enforcement mirrors rippled: the numeric machinery always runs when a vault
-// object is touched, but a detected violation only fails the transaction when
-// featureSingleAssetVault is enabled (`return !enforce`). Vault objects can only
-// exist under SingleAssetVault, so in practice enforce is always true here.
-//
-// Asset-balance reconciliation scope. rippled looks up a vault asset movement at
-// keylet::line(account, assetIssuer) for an IOU — the trust line between the
-// account and the asset's issuer, because rippled's vault moves the asset by
-// rippling through the issuer (accountSend → rippleSend). go-xrpl's vault
-// transactors instead credit a direct account↔pseudo trust line, so an IOU
-// movement lands at a different ledger key. That is a pre-existing divergence in
-// the vault asset-movement path, not in this checker; until it is aligned, the
-// asset-balance delta reconciliation here runs only for integral assets (native
-// XRP and MPT), where go-xrpl and rippled agree on the ledger key. The
-// structural, bounds, and share-issuance invariants run for every asset type.
-
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"math/big"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -55,11 +26,12 @@ const vvMaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
 
 // vvAsset is a vault's underlying asset: native XRP, an MPT, or an IOU.
 type vvAsset struct {
-	isXRP    bool
-	isMPT    bool
-	mptID    [24]byte
-	currency string
-	issuer   [20]byte // IOU issuer
+	isXRP       bool
+	isMPT       bool
+	mptID       [24]byte
+	currency    string
+	issuer      [20]byte // IOU issuer
+	numberScale state.MantissaScale
 }
 
 func (a vvAsset) integral() bool { return a.isXRP || a.isMPT }
@@ -87,7 +59,49 @@ func (a vvAsset) scaleOf(n state.XRPLNumber) int {
 
 // round snaps n to this asset's precision at the given decimal scale.
 func (a vvAsset) round(n state.XRPLNumber, scale int) state.XRPLNumber {
-	return n.RoundToAssetScale(a.integral(), scale, state.RoundToNearest)
+	return a.roundMode(n, scale, state.RoundToNearest)
+}
+
+func (a vvAsset) roundMode(n state.XRPLNumber, scale int, mode state.RoundingMode) state.XRPLNumber {
+	if a.integral() || n.IsZero() {
+		return n.RoundToAssetScale(a.integral(), scale, mode)
+	}
+
+	iou := state.NewIssuedAmountFromValueRounded(
+		n.Mantissa(), n.Exponent(), a.currency, state.AccountOneAddress, mode)
+	if iou.Exponent() >= scale {
+		return state.NewXRPLNumberScaled(
+			iou.Mantissa(), iou.Exponent(), a.numberScale, state.RoundToNearest)
+	}
+
+	// Round the canonical IOU coefficient to the requested decimal exponent.
+	divisor := new(big.Int).Exp(
+		big.NewInt(10), big.NewInt(int64(scale-iou.Exponent())), nil)
+	mantissa := big.NewInt(iou.Mantissa())
+	negative := mantissa.Sign() < 0
+	mantissa.Abs(mantissa)
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(mantissa, divisor, remainder)
+
+	increment := false
+	switch mode {
+	case state.RoundDownward:
+		increment = negative && remainder.Sign() != 0
+	case state.RoundUpward:
+		increment = !negative && remainder.Sign() != 0
+	case state.RoundToNearest:
+		twiceRemainder := new(big.Int).Lsh(new(big.Int).Set(remainder), 1)
+		cmp := twiceRemainder.Cmp(divisor)
+		increment = cmp > 0 || cmp == 0 && quotient.Bit(0) == 1
+	}
+	if increment {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if negative {
+		quotient.Neg(quotient)
+	}
+	return state.NewXRPLNumberScaled(
+		quotient.Int64(), scale, a.numberScale, state.RoundToNearest)
 }
 
 func (a vvAsset) makeDelta(before, after state.XRPLNumber) vvDelta {
@@ -130,7 +144,14 @@ func checkValidVault(tx Transaction, result Result, fee uint64, entries []Invari
 		return nil
 	}
 
-	c := &vvChecker{deltas: map[[32]byte]vvDelta{}, view: view, fee: fee, txType: tx.TxType(), rules: rules}
+	c := &vvChecker{
+		deltas:      map[[32]byte]vvDelta{},
+		view:        view,
+		fee:         fee,
+		txType:      tx.TxType(),
+		rules:       rules,
+		numberScale: vvNumberScale(rules),
+	}
 	if flat, err := tx.Flatten(); err == nil {
 		c.flat = flat
 	}
@@ -161,13 +182,13 @@ type vvChecker struct {
 	flat        map[string]any
 	txAccountID [20]byte
 	rules       *amendment.Rules
+	numberScale state.MantissaScale
 }
 
 // vaultMinScale is the decimal scale that balance deltas round to before the
 // deposit/withdraw reconciliation. Post-fixCleanup3_2_0 it is simply the
 // posterior AssetsTotal scale; pre-amendment it is the coarsest scale across the
-// supplied deltas. The two agree for the integral (XRP/MPT) assets this
-// reconciliation runs on, where the scale is always zero.
+// supplied deltas.
 func (c *vvChecker) vaultMinScale(vaultAsset vvAsset, afterVault vvVault, deltas ...vvDelta) int {
 	if c.rules != nil && c.rules.FixCleanup3_2_0Enabled() {
 		return vaultAsset.scaleOf(afterVault.assetsTotal)
@@ -180,7 +201,7 @@ func (c *vvChecker) vaultMinScale(vaultAsset vvAsset, afterVault vvVault, deltas
 // reconciles.
 func (c *vvChecker) visit(entries []InvariantEntry) {
 	for _, e := range entries {
-		delta := vvZero()
+		delta := vvZero(c.numberScale)
 		scale := 0
 		sign := 0
 
@@ -188,22 +209,22 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 			if bf, err := decodeEntry(e.Before); err == nil {
 				switch e.EntryType {
 				case "Vault":
-					if v, ok := vvMakeVault(bf, e.Key); ok {
+					if v, ok := vvMakeVault(bf, e.Key, c.numberScale); ok {
 						c.beforeVault = append(c.beforeVault, v)
 					}
 				case "MPTokenIssuance":
 					c.beforeShares = append(c.beforeShares, vvMakeShares(bf))
-					delta = vvNumFromU64(vvU64(bf, "OutstandingAmount"))
+					delta = vvNumFromU64(vvU64(bf, "OutstandingAmount"), c.numberScale)
 					scale, sign = 0, 1
 				case "MPToken":
-					delta = vvNumFromU64(vvU64(bf, "MPTAmount"))
+					delta = vvNumFromU64(vvU64(bf, "MPTAmount"), c.numberScale)
 					scale, sign = 0, -1
 				case "AccountRoot":
-					delta = vvNumFromI64(vvI64(bf, "Balance"))
+					delta = vvNumFromI64(vvI64(bf, "Balance"), c.numberScale)
 					scale, sign = 0, -1
 				case "RippleState":
 					amt := vvBalanceAmount(bf)
-					delta = vvNumFromAmount(amt)
+					delta = vvNumFromAmount(amt, c.numberScale)
 					scale, sign = amt.Exponent(), -1
 				}
 			}
@@ -213,22 +234,22 @@ func (c *vvChecker) visit(entries []InvariantEntry) {
 			if af, err := decodeEntry(e.After); err == nil {
 				switch e.EntryType {
 				case "Vault":
-					if v, ok := vvMakeVault(af, e.Key); ok {
+					if v, ok := vvMakeVault(af, e.Key, c.numberScale); ok {
 						c.afterVault = append(c.afterVault, v)
 					}
 				case "MPTokenIssuance":
 					c.afterShares = append(c.afterShares, vvMakeShares(af))
-					delta = delta.Sub(vvNumFromU64(vvU64(af, "OutstandingAmount")))
+					delta = delta.Sub(vvNumFromU64(vvU64(af, "OutstandingAmount"), c.numberScale))
 					scale, sign = 0, 1
 				case "MPToken":
-					delta = delta.Sub(vvNumFromU64(vvU64(af, "MPTAmount")))
+					delta = delta.Sub(vvNumFromU64(vvU64(af, "MPTAmount"), c.numberScale))
 					scale, sign = 0, -1
 				case "AccountRoot":
-					delta = delta.Sub(vvNumFromI64(vvI64(af, "Balance")))
+					delta = delta.Sub(vvNumFromI64(vvI64(af, "Balance"), c.numberScale))
 					scale, sign = 0, -1
 				case "RippleState":
 					amt := vvBalanceAmount(af)
-					delta = delta.Sub(vvNumFromAmount(amt))
+					delta = delta.Sub(vvNumFromAmount(amt, c.numberScale))
 					if amt.Exponent() > scale {
 						scale = amt.Exponent()
 					}
@@ -278,7 +299,7 @@ func (c *vvChecker) deltaAssetsTxAccount(vaultAsset vvAsset) (vvDelta, bool) {
 	if d, present := c.flatAccountID("Delegate"); present && d != c.txAccountID {
 		return ret, ok
 	}
-	ret.delta = ret.delta.Add(vvNumFromI64(int64(c.fee)))
+	ret.delta = ret.delta.Add(vvNumFromI64(int64(c.fee), c.numberScale))
 	if ret.delta.IsZero() {
 		return vvDelta{}, false
 	}
@@ -508,10 +529,8 @@ func (c *vvChecker) finalizeSet(afterVault vvVault, updatedShares vvShares, befo
 	beforeVault := c.beforeVault[0]
 	vaultAsset := afterVault.asset
 
-	if vaultAsset.integral() {
-		if _, moved := c.deltaAssets(vaultAsset, afterVault.pseudoID); moved {
-			return "set must not change vault balance"
-		}
+	if _, moved := c.deltaAssets(vaultAsset, afterVault.pseudoID); moved {
+		return "set must not change vault balance"
 	}
 	if beforeVault.assetsTotal.Cmp(afterVault.assetsTotal) != 0 {
 		return "set must not change assets outstanding"
@@ -532,10 +551,8 @@ func (c *vvChecker) finalizeDeposit(afterVault vvVault, updatedShares vvShares) 
 	beforeVault := c.beforeVault[0]
 	vaultAsset := afterVault.asset
 
-	if vaultAsset.integral() {
-		if msg := c.reconcileDepositAssets(beforeVault, afterVault, vaultAsset); msg != "" {
-			return msg
-		}
+	if msg := c.reconcileDepositAssets(beforeVault, afterVault, vaultAsset); msg != "" {
+		return msg
 	}
 
 	if afterVault.assetsMaximum.Signum() > 0 && afterVault.assetsTotal.Cmp(afterVault.assetsMaximum) > 0 {
@@ -572,7 +589,7 @@ func (c *vvChecker) reconcileDepositAssets(beforeVault, afterVault vvVault, vaul
 
 	vaultDeltaAssets := vaultAsset.round(maybeVaultDeltaAssets.delta, minScale)
 	txAmt, _ := c.flatAmount("Amount")
-	txAmount := vaultAsset.round(vvNumFromAmount(txAmt), minScale)
+	txAmount := vaultAsset.round(vvNumFromAmount(txAmt, c.numberScale), minScale)
 
 	if vaultDeltaAssets.Cmp(txAmount) > 0 {
 		return "deposit must not change vault balance by more than deposited amount"
@@ -613,10 +630,8 @@ func (c *vvChecker) finalizeWithdraw(afterVault vvVault) string {
 	beforeVault := c.beforeVault[0]
 	vaultAsset := afterVault.asset
 
-	if vaultAsset.integral() {
-		if msg := c.reconcileWithdrawAssets(beforeVault, afterVault, vaultAsset); msg != "" {
-			return msg
-		}
+	if msg := c.reconcileWithdrawAssets(beforeVault, afterVault, vaultAsset); msg != "" {
+		return msg
 	}
 
 	accountDeltaShares, sok := c.deltaShares(afterVault, c.txAccountID)
@@ -675,11 +690,19 @@ func (c *vvChecker) reconcileWithdrawAssets(beforeVault, afterVault vvVault, vau
 		}
 		localMinScale := max(minScale, vvCoarsestScale(destinationDelta))
 		roundedDestinationDelta := vaultAsset.round(destinationDelta.delta, localMinScale)
-		if roundedDestinationDelta.Signum() <= 0 {
+		tolerateZeroDelta := c.rules != nil && c.rules.FixCleanup3_2_0Enabled() && !vaultAsset.integral()
+		invalidDestinationDelta := roundedDestinationDelta.Signum() <= 0
+		if tolerateZeroDelta {
+			invalidDestinationDelta = roundedDestinationDelta.Signum() < 0
+		}
+		if invalidDestinationDelta {
 			return "withdrawal must increase destination balance"
 		}
 		localPseudoDeltaAssets := vaultAsset.round(vaultPseudoDeltaAssets, localMinScale)
-		if localPseudoDeltaAssets.Negate().Cmp(roundedDestinationDelta) != 0 {
+		destroyedAssets := maybeVaultDeltaAssets.delta.Negate().Sub(destinationDelta.delta)
+		destroyedIsSubULP := tolerateZeroDelta &&
+			vaultAsset.roundMode(destroyedAssets, destinationDelta.scale, state.RoundDownward).IsZero()
+		if !destroyedIsSubULP && localPseudoDeltaAssets.Negate().Cmp(roundedDestinationDelta) != 0 {
 			return "withdrawal must change vault and destination balance by equal amount"
 		}
 	}
@@ -707,10 +730,8 @@ func (c *vvChecker) finalizeClawback(afterVault vvVault, beforeShares *vvShares)
 		}
 	}
 
-	if vaultAsset.integral() {
-		if msg := c.reconcileClawbackAssets(beforeVault, afterVault, vaultAsset); msg != "" {
-			return msg
-		}
+	if msg := c.reconcileClawbackAssets(beforeVault, afterVault, vaultAsset); msg != "" {
+		return msg
 	}
 
 	holderID, _ := c.flatAccountID("Holder")
@@ -737,7 +758,7 @@ func (c *vvChecker) reconcileClawbackAssets(beforeVault, afterVault vvVault, vau
 	if ok {
 		totalDelta := vaultAsset.makeDelta(beforeVault.assetsTotal, afterVault.assetsTotal)
 		availableDelta := vaultAsset.makeDelta(beforeVault.assetsAvailable, afterVault.assetsAvailable)
-		minScale := vvCoarsestScale(maybeVaultDeltaAssets, totalDelta, availableDelta)
+		minScale := c.vaultMinScale(vaultAsset, afterVault, maybeVaultDeltaAssets, totalDelta, availableDelta)
 		vaultDeltaAssets := vaultAsset.round(maybeVaultDeltaAssets.delta, minScale)
 		if vaultDeltaAssets.Signum() >= 0 {
 			return "clawback must decrease vault balance"
@@ -767,27 +788,39 @@ func (c *vvChecker) findShares(list []vvShares, shareMPTID [24]byte) (vvShares, 
 
 // --- decode + numeric helpers ---
 
-func vvZero() state.XRPLNumber {
-	return state.NewXRPLNumberScaled(0, 0, state.MantissaScaleLarge, state.RoundToNearest)
+func vvZero(scale state.MantissaScale) state.XRPLNumber {
+	return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
 }
 
-func vvNumFromI64(v int64) state.XRPLNumber {
-	return state.NewXRPLNumberScaled(v, 0, state.MantissaScaleLarge, state.RoundToNearest)
+func vvNumberScale(rules *amendment.Rules) state.MantissaScale {
+	if rules == nil {
+		return state.MantissaScaleForRulesWithFix(false, false, false, false)
+	}
+	return state.MantissaScaleForRulesWithFix(
+		true,
+		rules.Enabled(amendment.FeatureSingleAssetVault),
+		rules.Enabled(amendment.FeatureLendingProtocol),
+		rules.FixCleanup3_2_0Enabled(),
+	)
 }
 
-func vvNumFromU64(v uint64) state.XRPLNumber {
-	return vvNumFromI64(int64(v))
+func vvNumFromI64(v int64, scale state.MantissaScale) state.XRPLNumber {
+	return state.NewXRPLNumberScaled(v, 0, scale, state.RoundToNearest)
 }
 
-func vvNumFromAmount(a state.Amount) state.XRPLNumber {
+func vvNumFromU64(v uint64, scale state.MantissaScale) state.XRPLNumber {
+	return vvNumFromI64(int64(v), scale)
+}
+
+func vvNumFromAmount(a state.Amount, scale state.MantissaScale) state.XRPLNumber {
 	if a.IsNative() {
-		return vvNumFromI64(a.Drops())
+		return vvNumFromI64(a.Drops(), scale)
 	}
 	if a.IsMPT() {
 		n, _ := strconv.ParseInt(a.Value(), 10, 64)
-		return vvNumFromI64(n)
+		return vvNumFromI64(n, scale)
 	}
-	return state.NewXRPLNumberScaled(a.Mantissa(), a.Exponent(), state.MantissaScaleLarge, state.RoundToNearest)
+	return state.NewXRPLNumberScaled(a.Mantissa(), a.Exponent(), scale, state.RoundToNearest)
 }
 
 // vvCoarsestScale returns the largest scale among the deltas, or 0 when none.
@@ -810,13 +843,13 @@ func vvMPTIDIssuer(id [24]byte) [20]byte {
 	return issuer
 }
 
-func vvMakeVault(m map[string]any, key [32]byte) (vvVault, bool) {
+func vvMakeVault(m map[string]any, key [32]byte, scale state.MantissaScale) (vvVault, bool) {
 	v := vvVault{key: key}
 	am, ok := m["Asset"].(map[string]any)
 	if !ok {
 		return v, false
 	}
-	v.asset = vvAssetFromMap(am)
+	v.asset = vvAssetFromMap(am, scale)
 	pseudo, err := state.DecodeAccountID(vvStr(m, "Account"))
 	if err != nil {
 		return v, false
@@ -828,16 +861,16 @@ func vvMakeVault(m map[string]any, key [32]byte) (vvVault, bool) {
 	if b, herr := hex.DecodeString(vvStr(m, "ShareMPTID")); herr == nil && len(b) == 24 {
 		copy(v.shareMPTID[:], b)
 	}
-	v.assetsTotal = vvNumber(m, "AssetsTotal")
-	v.assetsAvailable = vvNumber(m, "AssetsAvailable")
-	v.assetsMaximum = vvNumber(m, "AssetsMaximum")
-	v.lossUnrealized = vvNumber(m, "LossUnrealized")
+	v.assetsTotal = vvNumber(m, "AssetsTotal", scale)
+	v.assetsAvailable = vvNumber(m, "AssetsAvailable", scale)
+	v.assetsMaximum = vvNumber(m, "AssetsMaximum", scale)
+	v.lossUnrealized = vvNumber(m, "LossUnrealized", scale)
 	return v, true
 }
 
-func vvAssetFromMap(m map[string]any) vvAsset {
+func vvAssetFromMap(m map[string]any, scale state.MantissaScale) vvAsset {
 	if mptID, ok := m["mpt_issuance_id"].(string); ok {
-		a := vvAsset{isMPT: true}
+		a := vvAsset{isMPT: true, numberScale: scale}
 		if b, err := hex.DecodeString(mptID); err == nil && len(b) == 24 {
 			copy(a.mptID[:], b)
 		}
@@ -846,9 +879,9 @@ func vvAssetFromMap(m map[string]any) vvAsset {
 	cur, _ := m["currency"].(string)
 	iss, _ := m["issuer"].(string)
 	if isNativeXRPCurrency(cur) && iss == "" {
-		return vvAsset{isXRP: true}
+		return vvAsset{isXRP: true, numberScale: scale}
 	}
-	a := vvAsset{currency: cur}
+	a := vvAsset{currency: cur, numberScale: scale}
 	if id, err := state.DecodeAccountID(iss); err == nil {
 		a.issuer = id
 	}
@@ -936,20 +969,17 @@ func vvI64(m map[string]any, key string) int64 {
 	return 0
 }
 
-func vvNumber(m map[string]any, key string) state.XRPLNumber {
-	return vvParseNumber(vvStr(m, key))
+func vvNumber(m map[string]any, key string, scale state.MantissaScale) state.XRPLNumber {
+	return vvParseNumber(vvStr(m, key), scale)
 }
 
-func vvParseNumber(s string) state.XRPLNumber {
+func vvParseNumber(s string, scale state.MantissaScale) state.XRPLNumber {
 	if s == "" || s == "0" {
-		return vvZero()
+		return vvZero(scale)
 	}
-	num := &types.Number{}
-	b, err := num.FromJSON(s)
-	if err != nil || len(b) < 12 {
-		return vvZero()
+	number, err := state.ParseXRPLNumber(s, scale, state.RoundToNearest)
+	if err != nil {
+		return vvZero(scale)
 	}
-	mant := int64(binary.BigEndian.Uint64(b[:8]))
-	exp := int32(binary.BigEndian.Uint32(b[8:12]))
-	return state.NewXRPLNumberScaled(mant, int(exp), state.MantissaScaleLarge, state.RoundToNearest)
+	return number
 }

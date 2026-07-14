@@ -42,8 +42,10 @@ package state
 // crashes from a peer-fed amount overflow.
 
 import (
+	"fmt"
 	"math/big"
 	"math/bits"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -66,30 +68,42 @@ const (
 	// MantissaScaleSmall is the historical IOU range [10^15, 10^16-1]. It is the
 	// zero value, so the unscaled constructors default to it.
 	MantissaScaleSmall MantissaScale = iota
+	// MantissaScaleLargeLegacy uses the large range while preserving the
+	// historical rounding behavior at math.MaxInt64.
+	MantissaScaleLargeLegacy
 	// MantissaScaleLarge is the [10^18, 10^19-1] range that represents every
-	// int64 value exactly, used under SingleAssetVault / LendingProtocol.
+	// int64 value exactly, with the cusp-rounding fix enabled.
 	MantissaScaleLarge
 )
 
 // params returns the (min, max) normalized mantissa and the rangeLog (log10 of
 // min) for the scale.
 func (s MantissaScale) params() (minM, maxM uint64, rangeLog int) {
-	if s == MantissaScaleLarge {
+	if s != MantissaScaleSmall {
 		return 1_000_000_000_000_000_000, 9_999_999_999_999_999_999, 18
 	}
 	return 1_000_000_000_000_000, 9_999_999_999_999_999, 15
 }
 
-// MantissaScaleForRules returns the mantissa scale rippled installs for a
-// transaction: large when no rules are in effect, or when SingleAssetVault or
-// LendingProtocol is enabled; small otherwise. Callers derive the booleans from
-// *amendment.Rules at the transaction boundary and thread the result explicitly,
-// rather than mutating a process-wide global.
-func MantissaScaleForRules(hasRules, singleAssetVault, lendingProtocol bool) MantissaScale {
-	if !hasRules || singleAssetVault || lendingProtocol {
+// MantissaScaleForRulesWithFix selects the exact rippled Number range. The
+// large range predates the cusp-rounding fix, so amendment-enabled ledgers use
+// LargeLegacy until fixCleanup3_2_0 is enabled. With no Rules context rippled
+// uses the corrected Large range.
+func MantissaScaleForRulesWithFix(hasRules, singleAssetVault, lendingProtocol, fixCleanup320 bool) MantissaScale {
+	if !hasRules {
 		return MantissaScaleLarge
 	}
-	return MantissaScaleSmall
+	if !singleAssetVault && !lendingProtocol {
+		return MantissaScaleSmall
+	}
+	if fixCleanup320 {
+		return MantissaScaleLarge
+	}
+	return MantissaScaleLargeLegacy
+}
+
+func (s MantissaScale) cuspRoundingFixEnabled() bool {
+	return s == MantissaScaleLarge
 }
 
 // Package-level switchover flag, the Go equivalent of rippled's per-thread
@@ -155,6 +169,8 @@ func (g *xrplGuard) pop() uint {
 	return d
 }
 
+func (g *xrplGuard) setDropped() { g.xbit = true }
+
 // round returns the rounding direction: 1 up, -1 down, 0 exactly half.
 func (g *xrplGuard) round(mode RoundingMode) int {
 	if mode == RoundTowardsZero {
@@ -214,6 +230,42 @@ func NewXRPLNumberRounded(mantissa int64, exponent int, mode RoundingMode) XRPLN
 // NewXRPLNumberScaled creates a Number in the given scale, normalized under mode.
 func NewXRPLNumberScaled(mantissa int64, exponent int, scale MantissaScale, mode RoundingMode) XRPLNumber {
 	return newNumber(mantissa, exponent, scale, mode)
+}
+
+var xrplNumberPattern = regexp.MustCompile(`^([-+]?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+
+// ParseXRPLNumber parses the canonical decimal/scientific NUMBER syntax and
+// normalizes it directly in scale. It does not pass through the codec's legacy
+// small-scale parser, so large-scale transaction arithmetic retains its digits.
+func ParseXRPLNumber(value string, scale MantissaScale, mode RoundingMode) (number XRPLNumber, err error) {
+	match := xrplNumberPattern.FindStringSubmatch(value)
+	if match == nil {
+		return XRPLNumber{}, fmt.Errorf("invalid Number %q", value)
+	}
+
+	magnitude, parseErr := strconv.ParseUint(match[2]+match[3], 10, 64)
+	if parseErr != nil {
+		return XRPLNumber{}, fmt.Errorf("invalid Number %q: %w", value, parseErr)
+	}
+	exponent := -int64(len(match[3]))
+	if match[4] != "" {
+		parsed, parseErr := strconv.ParseInt(match[4], 10, 32)
+		if parseErr != nil {
+			return XRPLNumber{}, fmt.Errorf("invalid Number %q: %w", value, parseErr)
+		}
+		exponent += parsed
+	}
+	if int64(int(exponent)) != exponent {
+		return XRPLNumber{}, fmt.Errorf("invalid Number %q: exponent out of range", value)
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			number = XRPLNumber{}
+			err = fmt.Errorf("invalid Number %q: %v", value, recovered)
+		}
+	}()
+	return normalizeFromBig(match[1] == "-", new(big.Int).SetUint64(magnitude), int(exponent), scale, mode), nil
 }
 
 // NewXRPLNumberFromInt creates a small-scale Number from a plain integer.
@@ -343,10 +395,17 @@ func bringIntoRange(negative *bool, m *uint64, e *int, minM uint64) {
 
 // doRoundUp applies the guard's round-up decision and re-ranges (rippled
 // Guard::doRoundUp). It panics on exponent overflow.
-func (g *xrplGuard) doRoundUp(negative *bool, m *uint64, e *int, minM, maxM uint64, mode RoundingMode, loc string) {
+func (g *xrplGuard) doRoundUp(negative *bool, m *uint64, e *int, minM, maxM uint64, fixCusp bool, mode RoundingMode, loc string) {
 	if r := g.round(mode); r == 1 || (r == 0 && (*m&1) == 1) {
+		if fixCusp && (*m >= maxM || *m >= xrplNumMaxRep) {
+			g.push(uint(*m % 10))
+			*m /= 10
+			*e++
+			g.doRoundUp(negative, m, e, minM, maxM, fixCusp, mode, loc)
+			return
+		}
 		*m++
-		if *m > maxM || *m > xrplNumMaxRep {
+		if !fixCusp && (*m > maxM || *m > xrplNumMaxRep) {
 			*m /= 10
 			*e++
 		}
@@ -412,7 +471,7 @@ func (n *XRPLNumber) normalize(mode RoundingMode) {
 		m /= 10
 		e++
 	}
-	g.doRoundUp(&neg, &m, &e, minM, maxM, mode, "XRPLNumber::normalize overflow")
+	g.doRoundUp(&neg, &m, &e, minM, maxM, n.scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::normalize overflow")
 	n.negative = neg
 	n.mantissa = m
 	n.exponent = e
@@ -473,7 +532,7 @@ func (n XRPLNumber) AddRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 		} else {
 			xm = lo
 		}
-		g.doRoundUp(&xn, &xm, &xe, minM, maxM, mode, "XRPLNumber::addition overflow")
+		g.doRoundUp(&xn, &xm, &xe, minM, maxM, n.scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::addition overflow")
 	} else {
 		// Different sign: subtract magnitudes.
 		if xm > ym {
@@ -530,7 +589,7 @@ func (n XRPLNumber) MulRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 		ze++
 	}
 	xm := zm.Uint64()
-	g.doRoundUp(&zn, &xm, &ze, minM, maxM, mode, "XRPLNumber::multiplication overflow")
+	g.doRoundUp(&zn, &xm, &ze, minM, maxM, n.scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::multiplication overflow")
 
 	r := XRPLNumber{negative: zn, mantissa: xm, exponent: ze, scale: n.scale}
 	r.normalize(mode)
@@ -548,46 +607,44 @@ func (n XRPLNumber) DivRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 	if n.IsZero() {
 		return n
 	}
-	small := n.scale == MantissaScaleSmall
 	zn := n.negative != y.negative
 
-	// Shift by 10^17 (small) / 10^19 (large) gives the most precision without
-	// overflowing the 128-bit intermediate or the cast back.
-	var f *big.Int
-	if small {
-		f = new(big.Int).SetUint64(100_000_000_000_000_000)
-	} else {
-		f = new(big.Int).SetUint64(10_000_000_000_000_000_000)
-	}
+	// The first stage always uses 10^17. Large scales then retain five more
+	// decimal places from the remainder before normalization.
+	f := new(big.Int).SetUint64(100_000_000_000_000_000)
 	dmu := new(big.Int).SetUint64(y.mantissa)
 	numerator := new(big.Int).Mul(new(big.Int).SetUint64(n.mantissa), f)
 
 	zm := new(big.Int)
 	remainder := new(big.Int)
 	zm.QuoRem(numerator, dmu, remainder)
-	ze := n.exponent - y.exponent
-	if small {
-		ze -= 17
-	} else {
-		ze -= 19
+	ze := n.exponent - y.exponent - 17
+	dropped := false
+
+	if n.scale != MantissaScaleSmall && remainder.Sign() != 0 {
+		correctionFactor := big.NewInt(100_000)
+		partialNumerator := new(big.Int).Mul(remainder, correctionFactor)
+		correction := new(big.Int).Quo(new(big.Int).Set(partialNumerator), dmu)
+		if correction.Sign() != 0 {
+			zm.Mul(zm, correctionFactor)
+			zm.Add(zm, correction)
+			ze -= 5
+		}
+		if n.scale.cuspRoundingFixEnabled() {
+			dropped = new(big.Int).Rem(partialNumerator, dmu).Sign() != 0
+		}
 	}
 
-	if !small && remainder.Sign() != 0 {
-		// Fold three extra digits of precision (the correctionFactor) into the
-		// quotient before rounding, then divide back out via the exponent.
-		correction := new(big.Int).Mul(remainder, big.NewInt(1000))
-		correction.Quo(correction, dmu)
-		zm.Mul(zm, big.NewInt(1000))
-		zm.Add(zm, correction)
-		ze -= 3
-	}
-
-	return normalizeFromBig(zn, zm, ze, n.scale, mode)
+	return normalizeFromBigDropped(zn, zm, ze, n.scale, mode, dropped)
 }
 
 // normalizeFromBig normalizes a big.Int mantissa (the Div intermediate can
 // exceed 64 bits) into an XRPLNumber (rippled doNormalize for uint128).
 func normalizeFromBig(negative bool, m *big.Int, e int, scale MantissaScale, mode RoundingMode) XRPLNumber {
+	return normalizeFromBigDropped(negative, m, e, scale, mode, false)
+}
+
+func normalizeFromBigDropped(negative bool, m *big.Int, e int, scale MantissaScale, mode RoundingMode, dropped bool) XRPLNumber {
 	z := XRPLNumber{scale: scale}
 	if m.Sign() == 0 {
 		return z.zero()
@@ -607,6 +664,9 @@ func normalizeFromBig(negative bool, m *big.Int, e int, scale MantissaScale, mod
 	var g xrplGuard
 	if negative {
 		g.setNegative()
+	}
+	if dropped {
+		g.setDropped()
 	}
 	for mm.Cmp(bigMaxM) > 0 {
 		if e >= xrplNumMaxExponent {
@@ -628,7 +688,7 @@ func normalizeFromBig(negative bool, m *big.Int, e int, scale MantissaScale, mod
 		e++
 	}
 	mu := mm.Uint64()
-	g.doRoundUp(&negative, &mu, &e, minM, maxM, mode, "XRPLNumber::normalize overflow")
+	g.doRoundUp(&negative, &mu, &e, minM, maxM, scale.cuspRoundingFixEnabled(), mode, "XRPLNumber::normalize overflow")
 	return XRPLNumber{negative: negative, mantissa: mu, exponent: e, scale: scale}
 }
 
@@ -685,7 +745,7 @@ func normalizeInRange(negative *bool, m *uint64, e *int, minM, maxM uint64) {
 		*m /= 10
 		*e++
 	}
-	g.doRoundUp(negative, m, e, minM, maxM, RoundToNearest, "XRPLNumber::normalize overflow")
+	g.doRoundUp(negative, m, e, minM, maxM, false, RoundToNearest, "XRPLNumber::normalize overflow")
 }
 
 // ToIOUAmountValue converts to IOUAmountValue, clamping the wider exponent range

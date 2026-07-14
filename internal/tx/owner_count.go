@@ -24,6 +24,11 @@ func confineOwnerCount(current uint32, adjustment int) uint32 {
 	return current - uint32(-adjustment)
 }
 
+// ConfineOwnerCount applies rippled's saturating OwnerCount arithmetic.
+func ConfineOwnerCount(current uint32, adjustment int) uint32 {
+	return confineOwnerCount(current, adjustment)
+}
+
 // AdjustOwnerCount adjusts an account's OwnerCount by delta on a LedgerView
 // without updating PreviousTxn fields.
 // Returns an error if the account cannot be read or serialized.

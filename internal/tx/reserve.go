@@ -24,7 +24,7 @@ func (c EngineConfig) ReserveForNewObject(currentOwnerCount uint32) uint64 {
 	if currentOwnerCount < 2 {
 		return 0
 	}
-	return c.AccountReserve(currentOwnerCount + 1)
+	return c.AccountReserve(ConfineOwnerCount(currentOwnerCount, 1))
 }
 
 // CanCreateNewObject reports whether priorBalance (balance before fee deduction)

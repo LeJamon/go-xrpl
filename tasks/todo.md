@@ -445,18 +445,18 @@ and XChain backlog, which is outside this diff.
 
 PR: https://github.com/LeJamon/go-xrpl/pull/1319
 
-# Issue #1323 — v3.0.0 VaultCreate replay divergence
+# Issue #1323 — v3.0.0 Vault replay and transaction conformance
 
 ## Plan
 
 - [x] Rebase the work on a clean branch from `origin/v3.0.0`.
 - [x] Check pseudo-account, Vault, and directory behavior against local rippled 3.2.0.
-- [x] Diagnose every object in the ledger 3025004 replay finding.
-- [x] Omit default-zero `AssetsMaximum` from newly created Vault SLEs.
-- [x] Restore metadata-omitted required fields and correct Vault/MPT issuance directory reconstruction.
-- [x] Add focused engine and replay reconstruction regressions.
-- [x] Run focused tests, broader replay/Vault tests, vet, lint, and build.
-- [x] Review the final diff, commit, push, and open a draft PR against `v3.0.0`.
+- [x] Diagnose every object in the supplied replay findings, including ledger 3025004 and the offer-directory divergences.
+- [x] Audit all six Vault transactions and shared helpers against rippled 3.2.0.
+- [x] Implement the 22 NUMBER, validation, authorization, rounding, reserve, holding, and cleanup corrections.
+- [x] Add focused transaction, invariant, parser, serialization, and replay reconstruction regressions.
+- [x] Run focused tests, transaction suites, race tests, full build, vet, lint, and repository tests.
+- [x] Complete independent read-only conformance reviews of NUMBER/invariants, create/set/delete, and deposit/withdraw/clawback.
 
 ## Review
 
@@ -464,13 +464,24 @@ PR: https://github.com/LeJamon/go-xrpl/pull/1319
 - Checked protocol behavior against a clean local rippled 3.2.0 worktree at
   `3c43f4614f87965298773279ff5b85d4c56c637b`.
 - Confirmed that pseudo-account `Balance` and `Sequence`, the XRP Vault `Asset`,
-  and both directory memberships in the VM finding are valid rippled state.
-  The real engine divergence is the serialized default-zero `AssetsMaximum`.
-- Added byte-level replay reconstruction coverage for the ledger 3025004 object
-  layout and lifecycle coverage for create/set/reset of `AssetsMaximum`.
-- Focused replay/Vault tests, race tests, `just vet`, `just lint`, and
-  `just build-all` pass.
-- `go test ./...` passes outside the existing `internal/testing/conformance`
-  Batch, Vault, and XChain backlog; those unrelated scenarios remain failing.
+  and both directory memberships in the VM finding are valid rippled state. The
+  original engine divergence is the serialized default-zero `AssetsMaximum`.
+- Corrected fix-aware large/legacy NUMBER arithmetic and serialization, asset
+  association, Vault invariant reconciliation, JSON field presence, and
+  malformed `AssetsMaximum` parsing.
+- Matched rippled behavior across VaultCreate, VaultSet, VaultDelete,
+  VaultDeposit, VaultWithdraw, and VaultClawback, including TER precedence,
+  private-domain and MPT authorization, freeze/lock inheritance, share/asset
+  rounding, reserve boundaries, owner counts, and ledger-object cleanup.
+- Added byte-level reconstruction coverage for ledger 3025004 plus focused
+  regressions for every independently identified discrepancy.
+- `go test ./internal/tx/... ./internal/testing/vault -count=1`, focused race
+  tests, `just vet`, `just lint`, and `just build-all` pass.
+- `go test ./... -count=1` passes every package except the existing generated
+  `internal/testing/conformance` Vault, Batch, and XChain backlog. The focused
+  Vault integration and transaction suites pass.
+- A local replay was not rerun because this machine does not contain the VM's
+  replay database; the supplied findings are covered with byte-level and
+  transaction-level regressions.
 
 PR: https://github.com/LeJamon/go-xrpl/pull/1324
