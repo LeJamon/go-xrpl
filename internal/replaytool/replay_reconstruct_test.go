@@ -304,6 +304,153 @@ func TestReconstructFromMeta_CreatedOfferDefaults(t *testing.T) {
 	}
 }
 
+func TestApplyAffectedNode_AMMCreateDefaults(t *testing.T) {
+	const (
+		ammIndex   = "00000000000000000000000000000000000000000000000000000000000000A0"
+		line1Index = "00000000000000000000000000000000000000000000000000000000000000A1"
+		line2Index = "00000000000000000000000000000000000000000000000000000000000000A2"
+	)
+
+	stateMap := putAll(t, nil)
+	deltas := map[[32]byte]*dirDelta{}
+	deletedDirs := map[[32]byte]bool{}
+	txHash := mustIndex(t, testTxHashHex)
+
+	asset2 := map[string]any{
+		"currency": "USD",
+		"issuer":   testAccount,
+	}
+	lpTokens := map[string]any{
+		"value":    "1000",
+		"currency": "039C99CD9AB0B70B32ECDA51EAAE471625608EA2",
+		"issuer":   testAccount,
+	}
+	ammNode := map[string]any{"CreatedNode": map[string]any{
+		"LedgerEntryType": "AMM",
+		"LedgerIndex":     ammIndex,
+		"NewFields": map[string]any{
+			"Account":        testAccount,
+			"LPTokenBalance": lpTokens,
+			"Asset2":         asset2,
+		},
+	}}
+
+	lineFields := func(currency string) map[string]any {
+		return map[string]any{
+			"Flags": uint32(0x00110000),
+			"Balance": map[string]any{
+				"value":    "10",
+				"currency": currency,
+				"issuer":   state.AccountOneAddress,
+			},
+			"LowLimit": map[string]any{
+				"value":    "0",
+				"currency": currency,
+				"issuer":   testAccount,
+			},
+			"HighLimit": map[string]any{
+				"value":    "0",
+				"currency": currency,
+				"issuer":   state.AccountOneAddress,
+			},
+		}
+	}
+	line1Fields := lineFields("USD")
+	line2Fields := lineFields("EUR")
+	line1Node := map[string]any{"CreatedNode": map[string]any{
+		"LedgerEntryType": "RippleState",
+		"LedgerIndex":     line1Index,
+		"NewFields":       line1Fields,
+	}}
+	line2Node := map[string]any{"CreatedNode": map[string]any{
+		"LedgerEntryType": "RippleState",
+		"LedgerIndex":     line2Index,
+		"NewFields":       line2Fields,
+	}}
+
+	for _, node := range []map[string]any{ammNode, line1Node, line2Node} {
+		if err := applyAffectedNode(stateMap, node, txHash, testLedgerSeq, deltas, deletedDirs); err != nil {
+			t.Fatalf("applyAffectedNode: %v", err)
+		}
+	}
+
+	wantAMM := map[string]any{
+		"LedgerEntryType":   "AMM",
+		"Account":           testAccount,
+		"Flags":             0,
+		"LPTokenBalance":    lpTokens,
+		"Asset":             map[string]any{"currency": "XRP"},
+		"Asset2":            asset2,
+		"OwnerNode":         "0",
+		"PreviousTxnID":     testTxHashHex,
+		"PreviousTxnLgrSeq": testLedgerSeq,
+	}
+	assertEntryBytes(t, stateMap, mustIndex(t, ammIndex), encodeSLE(t, wantAMM), "AMM")
+
+	for _, line := range []struct {
+		index  string
+		fields map[string]any
+	}{
+		{line1Index, line1Fields},
+		{line2Index, line2Fields},
+	} {
+		want := copyFields(line.fields)
+		want["LedgerEntryType"] = "RippleState"
+		want["LowNode"] = "0"
+		want["HighNode"] = "0"
+		want["PreviousTxnID"] = testTxHashHex
+		want["PreviousTxnLgrSeq"] = testLedgerSeq
+		assertEntryBytes(t, stateMap, mustIndex(t, line.index), encodeSLE(t, want), "RippleState")
+	}
+}
+
+func TestApplyAffectedNode_AMMAsset2Default(t *testing.T) {
+	const index = "00000000000000000000000000000000000000000000000000000000000000AB"
+	asset := map[string]any{
+		"mpt_issuance_id": "BAADF00DBAADF00DBAADF00DBAADF00DBAADF00DBAADF00D",
+	}
+	lpTokens := map[string]any{
+		"value":    "1000",
+		"currency": "039C99CD9AB0B70B32ECDA51EAAE471625608EA2",
+		"issuer":   testAccount,
+	}
+	node := map[string]any{"CreatedNode": map[string]any{
+		"LedgerEntryType": "AMM",
+		"LedgerIndex":     index,
+		"NewFields": map[string]any{
+			"Account":        testAccount,
+			"LPTokenBalance": lpTokens,
+			"Asset":          asset,
+		},
+	}}
+	stateMap := putAll(t, nil)
+
+	err := applyAffectedNode(
+		stateMap,
+		node,
+		mustIndex(t, testTxHashHex),
+		testLedgerSeq,
+		map[[32]byte]*dirDelta{},
+		map[[32]byte]bool{},
+	)
+	if err != nil {
+		t.Fatalf("applyAffectedNode: %v", err)
+	}
+
+	want := map[string]any{
+		"LedgerEntryType":   "AMM",
+		"Account":           testAccount,
+		"Flags":             0,
+		"LPTokenBalance":    lpTokens,
+		"Asset":             asset,
+		"Asset2":            map[string]any{"currency": "XRP"},
+		"OwnerNode":         "0",
+		"PreviousTxnID":     testTxHashHex,
+		"PreviousTxnLgrSeq": testLedgerSeq,
+	}
+	assertEntryBytes(t, stateMap, mustIndex(t, index), encodeSLE(t, want), "AMM")
+}
+
 // TestReconstructFromMeta_DirectoryIndexes covers the directory-page path, whose
 // sfIndexes is sMD_Never and so absent from metadata: an owner directory (kept
 // sorted) gains a created Ticket, and an order-book directory (insertion-ordered)
