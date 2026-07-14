@@ -360,7 +360,11 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 	if v.AssetsMaximum != nil {
-		vd.AssetsMaximum = *v.AssetsMaximum
+		maximum, nerr := vaultNumber(*v.AssetsMaximum)
+		if nerr != nil {
+			return ter.TefINTERNAL
+		}
+		vd.AssetsMaximum = numberToString(maximum)
 	}
 	vaultBytes, err := serializeVault(vd)
 	if err != nil {

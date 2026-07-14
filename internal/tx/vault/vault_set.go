@@ -196,7 +196,7 @@ func (v *VaultSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		if newMax.Signum() != 0 && newMax.Cmp(total) < 0 {
 			return ter.TecLIMIT_EXCEEDED
 		}
-		vd.AssetsMaximum = *v.AssetsMaximum
+		vd.AssetsMaximum = numberToString(newMax)
 	}
 
 	if v.DomainID != "" {
