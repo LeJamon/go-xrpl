@@ -107,6 +107,9 @@ func (v *VaultDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 	if perr != nil {
 		return ter.TefINTERNAL
 	}
+	if issuance.Issuer != vd.Account {
+		return ter.TecNO_PERMISSION
+	}
 	if issuance.OutstandingAmount != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
@@ -128,22 +131,34 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
+	asset := vaultAssetOf(vd)
+	assetDelta, res := removeDeleteAssetHolding(ctx, vd.Account, asset)
+	if res != ter.TesSUCCESS {
+		return res
+	}
+
 	pseudo, perr := tx.ReadAccountRoot(ctx.View, vd.Account)
 	if perr != nil || pseudo == nil {
 		return ter.TefBAD_LEDGER
 	}
-	asset := vaultAssetOf(vd)
-
-	// Remove the pseudo-account's asset holding.
-	assetDelta, res := removeVaultAssetHolding(ctx, vd.Account, asset)
-	if res != ter.TesSUCCESS {
-		return res
+	if assetDelta < 0 {
+		decrement := uint32(-assetDelta)
+		if pseudo.OwnerCount >= decrement {
+			pseudo.OwnerCount -= decrement
+		} else {
+			pseudo.OwnerCount = 0
+		}
+	} else {
+		pseudo.OwnerCount += uint32(assetDelta)
 	}
-	pseudo.OwnerCount = uint32(int32(pseudo.OwnerCount) + assetDelta)
 
-	// Remove the owner's (kept) share MPToken, if any.
-	if res := removeEmptyShareMPToken(ctx, ctx.AccountID, vd.ShareMPTID); res != ter.TesSUCCESS && res != ter.TecHAS_OBLIGATIONS {
-		return res
+	ownerShareKey := keylet.MPTokenByID(vd.ShareMPTID, ctx.AccountID)
+	if exists, e := ctx.View.Exists(ownerShareKey); e != nil {
+		return ter.TefINTERNAL
+	} else if exists {
+		if res := removeEmptyShareMPToken(ctx, ctx.AccountID, vd.ShareMPTID); res != ter.TesSUCCESS {
+			return res
+		}
 	}
 
 	// Destroy the share issuance.
@@ -162,12 +177,36 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if pseudo.OwnerCount > 0 {
 		pseudo.OwnerCount--
 	}
+	pseudoData, serr := state.SerializeAccountRoot(pseudo)
+	if serr != nil {
+		return ter.TefINTERNAL
+	}
+	if e := ctx.View.Update(keylet.Account(vd.Account), pseudoData); e != nil {
+		return ter.TefINTERNAL
+	}
 	if e := ctx.View.Erase(shareKey); e != nil {
 		return ter.TefINTERNAL
 	}
 
-	// The pseudo-account must now be empty; destroy it.
-	if pseudo.Balance != 0 || pseudo.OwnerCount != 0 {
+	if exists, e := ctx.View.Exists(keylet.OwnerDir(vd.Account)); e != nil {
+		return ter.TefINTERNAL
+	} else if exists {
+		return ter.TecHAS_OBLIGATIONS
+	}
+
+	pseudo, perr = tx.ReadAccountRoot(ctx.View, vd.Account)
+	if perr != nil || pseudo == nil || pseudo.VaultID != vaultKey.Key {
+		return ter.TefBAD_LEDGER
+	}
+	if pseudo.Balance != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
+	if pseudo.OwnerCount != 0 {
+		return ter.TecHAS_OBLIGATIONS
+	}
+	if exists, e := ctx.View.Exists(keylet.OwnerDir(vd.Account)); e != nil {
+		return ter.TefINTERNAL
+	} else if exists {
 		return ter.TecHAS_OBLIGATIONS
 	}
 	if e := ctx.View.Erase(keylet.Account(vd.Account)); e != nil {
@@ -177,7 +216,11 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Remove the vault from the owner's directory and erase it. The owner is
 	// credited back the vault + pseudo-account it was charged for at create
 	// (rippled adjustOwnerCount(owner, -2)).
-	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(ctx.AccountID), vd.OwnerNode, vaultKey.Key, false); e != nil || !r.Success {
+	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(vd.Owner), vd.OwnerNode, vaultKey.Key, false); e != nil || !r.Success {
+		return ter.TefBAD_LEDGER
+	}
+	owner, oerr := tx.ReadAccountRoot(ctx.View, vd.Owner)
+	if oerr != nil || owner == nil {
 		return ter.TefBAD_LEDGER
 	}
 	if ctx.Account.OwnerCount >= 2 {
@@ -190,4 +233,78 @@ func (v *VaultDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
+}
+
+func removeDeleteAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
+	if !asset.IsMPT() {
+		if isNativeAsset(asset) {
+			account, err := tx.ReadAccountRoot(ctx.View, accountID)
+			if err != nil || account == nil {
+				return 0, ter.TecINTERNAL
+			}
+			if account.Balance != 0 {
+				return 0, ter.TecHAS_OBLIGATIONS
+			}
+			return 0, ter.TesSUCCESS
+		}
+
+		issuerID, err := state.DecodeAccountID(asset.Issuer)
+		if err != nil {
+			return 0, ter.TefINTERNAL
+		}
+		lineData, err := ctx.View.Read(keylet.Line(accountID, issuerID, asset.Currency))
+		if err != nil {
+			return 0, ter.TefINTERNAL
+		}
+		if lineData == nil {
+			if accountID == issuerID {
+				return 0, ter.TesSUCCESS
+			}
+			return 0, ter.TecOBJECT_NOT_FOUND
+		}
+		line, err := state.ParseRippleState(lineData)
+		if err != nil {
+			return 0, ter.TefINTERNAL
+		}
+		if accountID != issuerID && line.Balance.Signum() != 0 {
+			return 0, ter.TecHAS_OBLIGATIONS
+		}
+		if account, err := tx.ReadAccountRoot(ctx.View, accountID); err != nil || account == nil {
+			return 0, ter.TecINTERNAL
+		}
+		return removeVaultAssetHolding(ctx, accountID, asset)
+	}
+
+	mptID, ok := assetMPTID(asset)
+	if !ok {
+		return 0, ter.TefINTERNAL
+	}
+	tokenKey := keylet.MPTokenByID(mptID, accountID)
+	token, err := readMPToken(ctx.View, tokenKey)
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if token == nil {
+		if accountID == mptIDIssuer(mptID) {
+			return 0, ter.TesSUCCESS
+		}
+		return 0, ter.TecOBJECT_NOT_FOUND
+	}
+	if token.MPTAmount != 0 || (ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3) &&
+		token.LockedAmount != nil && *token.LockedAmount != 0) {
+		return 0, ter.TecHAS_OBLIGATIONS
+	}
+	if account, err := tx.ReadAccountRoot(ctx.View, accountID); err != nil || account == nil {
+		return 0, ter.TecINTERNAL
+	}
+	if r, e := state.DirRemove(ctx.View, keylet.OwnerDir(accountID), token.OwnerNode, tokenKey.Key, false); e != nil || !r.Success {
+		return 0, ter.TecINTERNAL
+	}
+	if err := tx.AdjustOwnerCount(ctx.View, accountID, -1); err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if err := ctx.View.Erase(tokenKey); err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	return 0, ter.TesSUCCESS
 }

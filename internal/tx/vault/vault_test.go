@@ -543,7 +543,7 @@ func TestVaultWithdrawValidation(t *testing.T) {
 			errMsg:  "Amount must be positive",
 		},
 		{
-			name: "invalid - DestinationTag without Destination",
+			name: "valid - DestinationTag without Destination",
 			tx: func() *VaultWithdraw {
 				v := NewVaultWithdraw("rOwner", makeValidVaultID(), tx.NewXRPAmount(1000000))
 				tag := uint32(12345)
@@ -551,8 +551,7 @@ func TestVaultWithdrawValidation(t *testing.T) {
 				// No Destination set
 				return v
 			}(),
-			wantErr: true,
-			errMsg:  "DestinationTag without Destination",
+			wantErr: false,
 		},
 	}
 

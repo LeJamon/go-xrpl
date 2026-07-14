@@ -1,12 +1,17 @@
 package vault
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
@@ -16,9 +21,7 @@ import (
 //
 // The NUMBER fields (AssetsTotal/AssetsAvailable/AssetsMaximum/LossUnrealized)
 // are held as their canonical decimal/scientific string; an empty string means
-// the field is absent (soeDEFAULT zero). This is the local Number seam noted in
-// the PR body — a shared state.Number helper can replace the string carriage
-// later without touching call sites.
+// the field is absent (soeDEFAULT zero).
 type vaultData struct {
 	Owner            [20]byte
 	Account          [20]byte // pseudo-account
@@ -56,6 +59,10 @@ func (v *vaultData) assetToIssueMap() map[string]any {
 // soeDEFAULT fields (the NUMBER totals, Scale, Data) are omitted when zero to
 // match rippled's STObject serialization.
 func serializeVault(v *vaultData) ([]byte, error) {
+	return serializeVaultForRules(v, nil)
+}
+
+func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error) {
 	ownerAddr, err := state.EncodeAccountID(v.Owner)
 	if err != nil {
 		return nil, fmt.Errorf("encode owner: %w", err)
@@ -102,16 +109,81 @@ func serializeVault(v *vaultData) ([]byte, error) {
 		obj["PreviousTxnLgrSeq"] = v.PreviousTxnLgrSeq
 	}
 
-	hexStr, err := binarycodec.Encode(obj)
-	if err != nil {
-		return nil, fmt.Errorf("encode vault: %w", err)
+	return encodeVaultObject(obj, vaultNumberScale(rules))
+}
+
+func encodeVaultObject(obj map[string]any, scale state.MantissaScale) ([]byte, error) {
+	defs := definitions.Get()
+	fields := make([]*definitions.FieldInstance, 0, len(obj))
+	for name := range obj {
+		field, err := defs.FieldInstanceByName(name)
+		if err != nil {
+			return nil, fmt.Errorf("encode vault field %s: %w", name, err)
+		}
+		fields = append(fields, field)
 	}
-	return hex.DecodeString(hexStr)
+	sort.Slice(fields, func(i, j int) bool { return fields[i].Ordinal < fields[j].Ordinal })
+
+	serializer := serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec())
+	for _, field := range fields {
+		if !field.IsSerialized {
+			continue
+		}
+		value := obj[field.FieldName]
+		var encoded []byte
+		var err error
+		if field.Type == "Number" {
+			s, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("encode vault field %s: expected Number string", field.FieldName)
+			}
+			encoded, err = encodeVaultNumber(s, scale)
+		} else {
+			serializedType := types.SerializedTypeFor(field.Type)
+			if serializedType == nil {
+				return nil, fmt.Errorf("encode vault field %s: unknown type %s", field.FieldName, field.Type)
+			}
+			if field.FieldName == "LedgerEntryType" {
+				name, ok := value.(string)
+				if !ok {
+					return nil, fmt.Errorf("encode vault field %s: expected ledger entry type string", field.FieldName)
+				}
+				code, err := defs.LedgerEntryTypeCode(name)
+				if err != nil {
+					return nil, fmt.Errorf("encode vault field %s: %w", field.FieldName, err)
+				}
+				value = int(code)
+			}
+			encoded, err = serializedType.FromJSON(value)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("encode vault field %s: %w", field.FieldName, err)
+		}
+		if err := serializer.WriteFieldAndValue(*field, encoded); err != nil {
+			return nil, fmt.Errorf("encode vault field %s: %w", field.FieldName, err)
+		}
+	}
+	return serializer.Bytes(), nil
+}
+
+func encodeVaultNumber(s string, scale state.MantissaScale) ([]byte, error) {
+	number, err := state.ParseXRPLNumber(s, scale, state.RoundToNearest)
+	if err != nil {
+		return nil, err
+	}
+	encoded := make([]byte, 12)
+	binary.BigEndian.PutUint64(encoded[:8], uint64(number.Mantissa()))
+	binary.BigEndian.PutUint32(encoded[8:], uint32(int32(number.Exponent())))
+	return encoded, nil
 }
 
 // parseVault decodes a vault ledger entry via the canonical ledgerfields
 // decoder and maps it onto vaultData.
 func parseVault(data []byte) (*vaultData, error) {
+	numberFields, err := readVaultNumberFields(data)
+	if err != nil {
+		return nil, err
+	}
 	lv := &ledgerfields.Vault{}
 	if err := lv.Decode(data); err != nil {
 		return nil, err
@@ -123,10 +195,10 @@ func parseVault(data []byte) (*vaultData, error) {
 		Scale:            uint8(lv.Scale),
 		Flags:            lv.Flags,
 		Data:             lv.Data,
-		AssetsTotal:      normalizeNumberString(lv.AssetsTotal),
-		AssetsAvailable:  normalizeNumberString(lv.AssetsAvailable),
-		AssetsMaximum:    normalizeNumberString(lv.AssetsMaximum),
-		LossUnrealized:   normalizeNumberString(lv.LossUnrealized),
+		AssetsTotal:      numberFields["AssetsTotal"],
+		AssetsAvailable:  numberFields["AssetsAvailable"],
+		AssetsMaximum:    numberFields["AssetsMaximum"],
+		LossUnrealized:   numberFields["LossUnrealized"],
 	}
 
 	if id, err := state.DecodeAccountID(lv.Owner); err == nil {
@@ -162,12 +234,44 @@ func parseVault(data []byte) (*vaultData, error) {
 	return vd, nil
 }
 
-// normalizeNumberString coerces a decoded NUMBER value ("0" or a decimal /
-// scientific string) into vaultData's convention: "" for zero, else the string.
-func normalizeNumberString(v any) string {
-	s, ok := v.(string)
-	if !ok || s == "" || s == "0" {
-		return ""
+func readVaultNumberFields(data []byte) (map[string]string, error) {
+	parser := serdes.NewBinaryParser(data, definitions.Get())
+	fields := make(map[string]string, 4)
+	for parser.HasMore() {
+		field, err := parser.ReadField()
+		if err != nil {
+			return nil, fmt.Errorf("decode vault field: %w", err)
+		}
+		if field.Type == "Number" {
+			encoded, err := parser.ReadBytes(12)
+			if err != nil {
+				return nil, fmt.Errorf("decode vault field %s: %w", field.FieldName, err)
+			}
+			mantissa := int64(binary.BigEndian.Uint64(encoded[:8]))
+			if mantissa != 0 {
+				exponent := int(int32(binary.BigEndian.Uint32(encoded[8:])))
+				fields[field.FieldName] = fmt.Sprintf("%de%d", mantissa, exponent)
+			}
+			continue
+		}
+
+		serializedType := types.SerializedTypeFor(field.Type)
+		if serializedType == nil {
+			return nil, fmt.Errorf("decode vault field %s: unknown type %s", field.FieldName, field.Type)
+		}
+		if field.IsVLEncoded {
+			length, err := parser.ReadVariableLength()
+			if err != nil {
+				return nil, fmt.Errorf("decode vault field %s length: %w", field.FieldName, err)
+			}
+			if _, err := serializedType.ToJSON(parser, length); err != nil {
+				return nil, fmt.Errorf("decode vault field %s: %w", field.FieldName, err)
+			}
+			continue
+		}
+		if _, err := serializedType.ToJSON(parser); err != nil {
+			return nil, fmt.Errorf("decode vault field %s: %w", field.FieldName, err)
+		}
 	}
-	return s
+	return fields, nil
 }

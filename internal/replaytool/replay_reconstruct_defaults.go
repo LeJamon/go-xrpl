@@ -63,8 +63,9 @@ type requiredField struct {
 // Hash256 = zero, empty array) AND it is metadata-eligible (rippled only drops
 // default fields that would otherwise be emitted into NewFields). sfFlags is
 // soeREQUIRED on every type (a common field), so every type carries Flags: 0.
-// Fields that are never at default-zero on creation (Account, Sequence,
-// BookDirectory, RootIndex, non-native Balance, ...) are excluded, as are
+// Fields that are never at default-zero on creation (Account, ordinary account
+// Sequence and non-native Balance, BookDirectory, RootIndex, ...) are excluded,
+// as are
 // soeOPTIONAL/soeDEFAULT fields, the never-in-metadata fields PreviousTxnID/Seq
 // (handled by threading) and Indexes, and LedgerEntryType (carried at the node
 // level).
@@ -79,6 +80,8 @@ type requiredField struct {
 // fillBookDirectoryDefaults.
 var requiredDefaults = map[string][]requiredField{
 	"AccountRoot": {
+		{Name: "Sequence", Value: 0},
+		{Name: "Balance", Value: "0"},
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerCount", Value: 0},
 	},
@@ -193,6 +196,7 @@ var requiredDefaults = map[string][]requiredField{
 	"Vault": {
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerNode", Value: "0"},
+		{Name: "Asset", Value: map[string]any{"currency": "XRP"}},
 	},
 }
 

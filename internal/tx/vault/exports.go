@@ -242,7 +242,10 @@ func UpdateVaultTotals(ctx *tx.ApplyContext, vaultKey keylet.Keylet, assetsTotal
 	vd.AssetsTotal = assetsTotal
 	vd.AssetsAvailable = assetsAvailable
 	vd.LossUnrealized = lossUnrealized
-	data, serr := serializeVault(vd)
+	if err := associateVaultAsset(vd, ctx.Rules()); err != nil {
+		return ter.TefINTERNAL
+	}
+	data, serr := serializeVaultForRules(vd, ctx.Rules())
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
