@@ -25,15 +25,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
-	if selErr != nil {
-		return nil, selErr
-	}
 	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
-	ledgerIndex = strconv.FormatUint(uint64(targetLedger.Sequence()), 10)
+	ledgerIndex := strconv.FormatUint(uint64(targetLedger.Sequence()), 10)
 	fields := make(map[string]json.RawMessage)
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {

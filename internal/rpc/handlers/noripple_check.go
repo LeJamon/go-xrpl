@@ -63,15 +63,11 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
-	if selErr != nil {
-		return nil, selErr
-	}
 	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
-	ledgerIndex = strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	response := ledgerEntryResponseFields(ledger, validated)
 	if transactions {
 		response["transactions"] = []map[string]any{}

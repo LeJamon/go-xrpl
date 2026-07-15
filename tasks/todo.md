@@ -300,6 +300,8 @@ Target: `v3.0.0`. Protocol oracle: local rippled tag `3.2.0`
       behavioral parity.
 - [x] Correct confirmed transaction lookup, RPC/gRPC response, selector,
       credential, channel, CTID, and compatibility regressions.
+- [x] Eliminate the pending-validation lock inversion exposed by sibling-ledger
+      recovery and pin ancestry resolution outside the validation tracker lock.
 - [ ] Commit and push the conformance corrections; require green CI at the exact
       reviewed remote head.
 - [ ] Run the separate AI-comment cleanup phase and require green CI at the exact
