@@ -68,6 +68,7 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
 // deprecated username/password members. The caller has already verified the
 // admin role.
 func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RPCContext, request types.SubscriptionRequest) (map[string]any, *types.RPCError) {
+	request.ApiVersion = ctx.ApiVersion
 	sub, rpcErr := r.findOrCreate(request)
 	if rpcErr != nil {
 		return nil, rpcErr

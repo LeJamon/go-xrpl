@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -26,15 +25,17 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		types.LedgerSpecifier
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
-	// Resolve the target ledger through the shared lookup (rippled
-	// RPC::lookupLedger): defaults to current, threads ledger_hash, and emits
-	// rippled's ledgerHashMalformed / ledgerIndexMalformed / ledgerNotFound.
+	// Resolve the target ledger through the shared lookup. Omitted selectors
+	// default to current and explicit hashes are threaded through verbatim.
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	request.LedgerSpecifier = parsedLedgerSpec
 	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
 	if lerr != nil {
 		return nil, lerr

@@ -43,12 +43,12 @@ func isThreadedType(entryType string) bool {
 	return true
 }
 
-// requiredField is one soeREQUIRED ledger-entry field whose STObject default (a
+// createdField is one ledger-entry field whose STObject default (a
 // "zero" that rippled's isDefault() reports true) is omitted from a CreatedNode's
-// NewFields, even though the real serialized SLE always carries it. Value is the
-// form binarycodec.Encode accepts for that zero, identical to the bytes
+// NewFields, even though the real serialized SLE carries it. Value is the form
+// binarycodec.Encode accepts for that zero, identical to the bytes
 // binarycodec.Decode would have produced had the field been present.
-type requiredField struct {
+type createdField struct {
 	Name  string
 	Value any
 }
@@ -63,22 +63,26 @@ type requiredField struct {
 // Hash256 = zero, empty array) AND it is metadata-eligible (rippled only drops
 // default fields that would otherwise be emitted into NewFields). sfFlags is
 // soeREQUIRED on every type (a common field), so every type carries Flags: 0.
-// Fields that are never at default-zero on creation (Account, Sequence,
-// BookDirectory, RootIndex, non-native Balance, ...) are excluded, as are
+// Fields that are never at default-zero on creation (Account, ordinary account
+// Sequence and non-native Balance, BookDirectory, RootIndex, ...) are excluded,
+// as are
 // soeOPTIONAL/soeDEFAULT fields, the never-in-metadata fields PreviousTxnID/Seq
 // (handled by threading) and Indexes, and LedgerEntryType (carried at the node
 // level).
 //
 // Representations: UInt32 -> int(0); UInt64 -> "0" (lowercase hex, no leading
-// zeros, == binarycodec UInt64.ToJSON); native Amount -> "0" (drops).
+// zeros, == binarycodec UInt64.ToJSON); native Amount -> "0" (drops); Issue ->
+// {"currency":"XRP"}.
 //
 // DirectoryNode deliberately carries only Flags: its Indexes (sMD_Never) never
 // appears in metadata and is reconstructed from object membership instead (see
 // replay_reconstruct_dir.go); RootIndex (sMD_Always) is always already present;
 // the soeOPTIONAL book fields a book directory drops are restored by
 // fillBookDirectoryDefaults.
-var requiredDefaults = map[string][]requiredField{
+var requiredDefaults = map[string][]createdField{
 	"AccountRoot": {
+		{Name: "Sequence", Value: 0},
+		{Name: "Balance", Value: "0"},
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerCount", Value: 0},
 	},
@@ -163,6 +167,8 @@ var requiredDefaults = map[string][]requiredField{
 	"AMM": {
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerNode", Value: "0"},
+		{Name: "Asset", Value: map[string]any{"currency": "XRP"}},
+		{Name: "Asset2", Value: map[string]any{"currency": "XRP"}},
 	},
 	"MPTokenIssuance": {
 		{Name: "Flags", Value: 0},
@@ -193,15 +199,31 @@ var requiredDefaults = map[string][]requiredField{
 	"Vault": {
 		{Name: "Flags", Value: 0},
 		{Name: "OwnerNode", Value: "0"},
+		{Name: "Asset", Value: map[string]any{"currency": "XRP"}},
 	},
 }
 
-// fillRequiredDefaults adds every soeREQUIRED default-zero field for entryType
-// that obj does not already carry. A soeREQUIRED field absent from a CreatedNode's
-// NewFields is, by rippled's rule, at its default — so re-adding the default zero
-// is exact.
-func fillRequiredDefaults(obj map[string]any, entryType string) {
+// explicitlyCreatedDefaults lists optional fields that the sole creation path
+// always writes, including when their value is zero. CreatedNode.NewFields drops
+// those zero values, but the canonical SLE retains the explicitly present field.
+var explicitlyCreatedDefaults = map[string][]createdField{
+	"RippleState": {
+		{Name: "LowNode", Value: "0"},
+		{Name: "HighNode", Value: "0"},
+	},
+}
+
+// fillCreatedDefaults restores both required default-zero fields and optional
+// defaults that the entry's constructor always writes. An absent field in
+// CreatedNode.NewFields is therefore known to carry the listed default in the
+// canonical SLE.
+func fillCreatedDefaults(obj map[string]any, entryType string) {
 	for _, f := range requiredDefaults[entryType] {
+		if _, present := obj[f.Name]; !present {
+			obj[f.Name] = f.Value
+		}
+	}
+	for _, f := range explicitlyCreatedDefaults[entryType] {
 		if _, present := obj[f.Name]; !present {
 			obj[f.Name] = f.Value
 		}

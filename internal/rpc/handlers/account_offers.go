@@ -14,39 +14,58 @@ import (
 type AccountOffersMethod struct{ BaseHandler }
 
 func (m *AccountOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		types.PaginationParams
+	fields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	accountRaw, ok := fields["account"]
+	if !ok {
+		return nil, types.RPCErrorMissingField("account")
 	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
+	account, ok := rawJSONString(accountRaw)
+	if !ok {
+		return nil, types.RPCErrorInvalidField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	markerStr, mErr := markerString(request.Marker)
-	if mErr != nil {
-		return nil, mErr
+	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
+	}
+	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
+		return nil, accountErr
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountOffers, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit, markerStr)
+	marker := ""
+	if markerRaw, ok := fields["marker"]; ok {
+		var valid bool
+		marker, valid = rawJSONString(markerRaw)
+		if !valid {
+			return nil, types.RPCErrorExpectedField("marker", "string")
+		}
+		if marker == "" {
+			return nil, types.RPCErrorInvalidField("marker")
+		}
+	}
+
+	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
@@ -57,15 +76,16 @@ func (m *AccountOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RPCErrorInvalidField("marker")
 		}
+		if errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
 	}
 
 	// Build response
-	response := map[string]any{
-		"account": result.Account,
-		"offers":  result.Offers,
-	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
+	response := ledgerEntryResponseFields(ledger, validated)
+	response["account"] = result.Account
+	response["offers"] = result.Offers
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

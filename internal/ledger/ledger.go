@@ -100,12 +100,20 @@ type Ledger struct {
 
 	// Drops destroyed in this ledger (transaction fees)
 	dropsDestroyed drops.XRPAmount
+
+	// rules is fixed while an open ledger applies transactions and is replaced
+	// with the resulting amendment state when that ledger closes.
+	rules *amendment.Rules
 }
 
 // NewOpen creates a new open ledger based on a parent ledger
 func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 	if parent == nil {
 		return nil, errors.New("parent ledger cannot be nil")
+	}
+	parentRules, err := parent.loadRules()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load parent amendment rules: %w", err)
 	}
 
 	stateMap, err := parent.stateMap.SnapshotMutable()
@@ -134,6 +142,8 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		Drops:               parent.header.Drops,
 		// Hash, TxHash, AccountHash will be set when closed
 	}
+	stateMap.SetLedgerSeq(newLedgerSeq)
+	txMap.SetLedgerSeq(newLedgerSeq)
 
 	return &Ledger{
 		stateMap:       stateMap,
@@ -142,6 +152,7 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 		fees:           parent.fees,
 		state:          StateOpen,
 		dropsDestroyed: 0,
+		rules:          parentRules,
 	}, nil
 }
 
@@ -152,12 +163,16 @@ func FromGenesis(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) *Ledger {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
+	rules, _ := loadAmendmentsFromSHAMap(stateMap)
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
 		header:   hdr,
 		fees:     fees,
 		state:    StateValidated, // Genesis is immediately validated
+		rules:    rules,
 	}
 }
 
@@ -168,14 +183,35 @@ func NewFromHeader(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
-) *Ledger {
+) (*Ledger, error) {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
+	if stateMap == nil {
+		return nil, errors.New("state map cannot be nil")
+	}
+	if txMap == nil {
+		return nil, errors.New("transaction map cannot be nil")
+	}
+	immutableState, err := stateMap.SnapshotImmutable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to snapshot state map: %w", err)
+	}
+	immutableTx, err := txMap.SnapshotImmutable()
+	if err != nil {
+		return nil, fmt.Errorf("failed to snapshot transaction map: %w", err)
+	}
+	rules, err := loadAmendmentsFromSHAMap(immutableState)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
+	}
 	return &Ledger{
-		stateMap: stateMap,
-		txMap:    txMap,
+		stateMap: immutableState,
+		txMap:    immutableTx,
 		header:   hdr,
 		fees:     fees,
 		state:    StateValidated,
-	}
+		rules:    rules,
+	}, nil
 }
 
 // NewOpenWithHeader creates an open ledger with the exact header values provided
@@ -185,13 +221,29 @@ func NewOpenWithHeader(
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
-) *Ledger {
+) (*Ledger, error) {
+	setMapLedgerSeq(stateMap, hdr.LedgerIndex)
+	setMapLedgerSeq(txMap, hdr.LedgerIndex)
+	if stateMap == nil {
+		return nil, errors.New("state map cannot be nil")
+	}
+	rules, err := loadAmendmentsFromSHAMap(stateMap)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load amendment rules: %w", err)
+	}
 	return &Ledger{
 		stateMap: stateMap,
 		txMap:    txMap,
 		header:   hdr,
 		fees:     fees,
 		state:    StateOpen,
+		rules:    rules,
+	}, nil
+}
+
+func setMapLedgerSeq(sm *shamap.SHAMap, seq uint32) {
+	if sm != nil {
+		sm.SetLedgerSeq(seq)
 	}
 }
 
@@ -439,10 +491,13 @@ func (l *Ledger) AdoptState(src *Ledger) error {
 	src.mu.RUnlock()
 
 	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state != StateOpen {
+		return ErrLedgerImmutable
+	}
 	l.stateMap = stateMap
 	l.txMap = txMap
 	l.dropsDestroyed = dropsDestroyed
-	l.mu.Unlock()
 	return nil
 }
 
@@ -501,9 +556,27 @@ func (l *Ledger) TxExists(txID [32]byte) bool {
 	return exists
 }
 
-// Rules returns nil — the base ledger doesn't carry amendment rules.
+// Rules returns the transaction rules fixed for this ledger. A malformed or
+// unavailable Amendments entry returns nil; ledger construction and close paths
+// surface the underlying error instead of silently disabling amendments.
 func (l *Ledger) Rules() *amendment.Rules {
-	return nil
+	rules, _ := l.loadRules()
+	return rules
+}
+
+func (l *Ledger) loadRules() (*amendment.Rules, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.rules != nil {
+		return l.rules, nil
+	}
+
+	rules, err := loadAmendmentsFromSHAMap(l.stateMap)
+	if err != nil {
+		return nil, err
+	}
+	l.rules = rules
+	return rules, nil
 }
 
 // LedgerSeq aliases Sequence for the ReadView interface.
@@ -527,6 +600,11 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	if l.dropsDestroyed < 0 || uint64(l.dropsDestroyed) > l.header.Drops {
 		return fmt.Errorf("ledger: drops underflow closing ledger %d: destroyed %d exceeds total %d",
 			l.header.LedgerIndex, int64(l.dropsDestroyed), l.header.Drops)
+	}
+
+	rules, err := loadAmendmentsFromSHAMap(l.stateMap)
+	if err != nil {
+		return fmt.Errorf("failed to load amendment rules: %w", err)
 	}
 
 	// Update LedgerHashes skiplist before making state immutable.
@@ -561,6 +639,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 
 	l.header.Hash = calculateLedgerHash(l.header)
 
+	l.rules = rules
 	l.state = StateClosed
 
 	return nil
@@ -621,6 +700,7 @@ func (l *Ledger) Snapshot() (*Ledger, error) {
 		header:   l.header,
 		fees:     l.fees,
 		state:    l.state,
+		rules:    l.rules,
 	}, nil
 }
 
@@ -646,6 +726,7 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 		fees:           l.fees,
 		state:          l.state,
 		dropsDestroyed: l.dropsDestroyed,
+		rules:          l.rules,
 	}, nil
 }
 
@@ -768,12 +849,42 @@ func (l *Ledger) TxMapSnapshot() (*shamap.SHAMap, error) {
 	return l.txMap.SnapshotMutable()
 }
 
-// SetStateMapFamily sets the Family on the state map, enabling backed mode
-// with lazy loading and efficient snapshots.
+func (l *Ledger) StoreStateDirty(store func([]shamap.FlushEntry) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap == nil {
+		return nil
+	}
+	return l.stateMap.StoreDirty(store)
+}
+
+func (l *Ledger) StoreTransactionDirty(store func([]shamap.FlushEntry) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.txMap == nil {
+		return nil
+	}
+	return l.txMap.StoreDirty(store)
+}
+
+// SetSHAMapFamily backs both ledger maps with the same node family.
+func (l *Ledger) SetSHAMapFamily(family shamap.Family) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.stateMap != nil {
+		l.stateMap.SetFamily(family)
+	}
+	if l.txMap != nil {
+		l.txMap.SetFamily(family)
+	}
+}
+
 func (l *Ledger) SetStateMapFamily(family shamap.Family) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.stateMap.SetFamily(family)
+	if l.stateMap != nil {
+		l.stateMap.SetFamily(family)
+	}
 }
 
 func (l *Ledger) SerializeHeader() []byte {

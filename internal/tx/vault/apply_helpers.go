@@ -3,11 +3,13 @@ package vault
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -35,7 +37,10 @@ func mptIDIssuer(id [24]byte) [20]byte {
 // absent.
 func readMPTIssuance(view tx.LedgerView, id [24]byte) (*state.MPTokenIssuanceData, error) {
 	data, err := view.Read(keylet.MPTIssuance(id))
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
 		return nil, nil
 	}
 	return state.ParseMPTokenIssuance(data)
@@ -64,6 +69,24 @@ func canAddHolding(view tx.LedgerView, asset tx.Asset) ter.Result {
 	return ter.TesSUCCESS
 }
 
+func canTransfer(view tx.LedgerView, asset tx.Asset, from, to [20]byte, waiveMPTCanTransfer bool) ter.Result {
+	return mptutil.CanTransferAsset(view, asset, from, to, waiveMPTCanTransfer)
+}
+
+func requireAuth(view tx.LedgerView, asset tx.Asset, account [20]byte, authType mptutil.AuthType, parentCloseTime uint32) ter.Result {
+	return mptutil.RequireAssetAuthAt(view, asset, account, authType, parentCloseTime)
+}
+
+func checkFrozen(view tx.LedgerView, asset tx.Asset, account [20]byte) ter.Result {
+	if !mptutil.IsAssetFrozen(view, asset, account) {
+		return ter.TesSUCCESS
+	}
+	if asset.IsMPT() {
+		return ter.TecLOCKED
+	}
+	return ter.TecFROZEN
+}
+
 // addEmptyMPTHolding creates a zero-balance MPToken for accountID under the MPT
 // asset (nothing when the account is the issuer). Returns the owner-count delta.
 func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
@@ -71,12 +94,23 @@ func addEmptyMPTHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset
 	if !ok {
 		return 0, ter.TefINTERNAL
 	}
-	if mptIDIssuer(id) == accountID {
-		return 0, ter.TesSUCCESS
+	issuance, err := readMPTIssuance(ctx.View, id)
+	if err != nil || issuance == nil {
+		return 0, ter.TefINTERNAL
+	}
+	if issuance.Flags&entry.LsfMPTLocked != 0 {
+		return 0, ter.TefINTERNAL
 	}
 	tokenKey := keylet.MPTokenByID(id, accountID)
-	if exists, _ := ctx.View.Exists(tokenKey); exists {
+	exists, err := ctx.View.Exists(tokenKey)
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if exists {
 		return 0, ter.TecDUPLICATE
+	}
+	if issuance.Issuer == accountID {
+		return 0, ter.TesSUCCESS
 	}
 	token := &state.MPTokenData{Account: accountID, MPTokenIssuanceID: id}
 	dir, err := state.DirInsert(ctx.View, keylet.OwnerDir(accountID), tokenKey.Key, false, func(d *state.DirectoryNode) {
@@ -224,15 +258,22 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 	}
 
 	lineKey := keylet.Line(issuerID, accountID, asset.Currency)
-	if exists, _ := ctx.View.Exists(lineKey); exists {
+	exists, err := ctx.View.Exists(lineKey)
+	if err != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if exists {
 		return 0, ter.TecDUPLICATE
 	}
 
-	holder, err := tx.ReadAccountRoot(ctx.View, accountID)
-	if err != nil || holder == nil {
-		return 0, ter.TefINTERNAL
+	holder := ctx.Account
+	if accountID != ctx.AccountID {
+		holder, err = tx.ReadAccountRoot(ctx.View, accountID)
+		if err != nil || holder == nil {
+			return 0, ter.TefINTERNAL
+		}
 	}
-	if ctx.PriorBalance() < ctx.AccountReserve(holder.OwnerCount+1) {
+	if ctx.PriorBalance() < ctx.AccountReserve(tx.ConfineOwnerCount(holder.OwnerCount, 1)) {
 		return 0, ter.TecNO_LINE_INSUF_RESERVE
 	}
 
@@ -261,7 +302,10 @@ func addEmptyHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (
 // (nil, nil) when the entry does not exist.
 func readVault(view AssetReadView, vaultKey keylet.Keylet) (*vaultData, error) {
 	data, err := view.Read(vaultKey)
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
 		return nil, nil
 	}
 	return parseVault(data)
@@ -270,7 +314,10 @@ func readVault(view AssetReadView, vaultKey keylet.Keylet) (*vaultData, error) {
 // readMPToken reads and parses an MPToken, returning (nil, nil) when absent.
 func readMPToken(view tx.LedgerView, tokenKey keylet.Keylet) (*state.MPTokenData, error) {
 	data, err := view.Read(tokenKey)
-	if err != nil || len(data) == 0 {
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
 		return nil, nil
 	}
 	return state.ParseMPToken(data)
@@ -331,7 +378,7 @@ func ensureHolderMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID [24
 	}
 
 	if isSubmitter {
-		ctx.Account.OwnerCount++
+		ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)
 	} else if err := tx.AdjustOwnerCount(ctx.View, holderID, 1); err != nil {
 		return ter.TefINTERNAL
 	}
@@ -480,64 +527,138 @@ func assetMatches(amount tx.Amount, vd *vaultData) bool {
 // accountHolds(shFULL_BALANCE): the full XRP or trust-line balance, treated as
 // effectively unbounded when the account is the asset's issuer.
 func spendableAsset(view tx.LedgerView, config tx.EngineConfig, accountID [20]byte, asset tx.Asset) (state.XRPLNumber, error) {
+	scale := vaultNumberScale(config.Rules)
+	zero := func() state.XRPLNumber {
+		return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
+	}
 	if isNativeAsset(asset) {
 		ar, err := tx.ReadAccountRoot(view, accountID)
 		if err != nil || ar == nil {
-			return state.NewXRPLNumber(0, 0), err
+			return zero(), err
 		}
-		reserve := config.AccountReserve(ar.OwnerCount)
+		reserve := uint64(0)
+		if !ar.IsPseudoAccount() {
+			reserve = config.AccountReserve(ar.OwnerCount)
+		}
 		liquid := int64(ar.Balance) - int64(reserve)
 		if liquid < 0 {
 			liquid = 0
 		}
-		return state.NewXRPLNumber(liquid, 0), nil
+		return state.NewXRPLNumberScaled(liquid, 0, scale, state.RoundToNearest), nil
 	}
 
 	if asset.IsMPT() {
 		id, ok := assetMPTID(asset)
 		if !ok {
-			return state.NewXRPLNumber(0, 0), nil
+			return zero(), nil
 		}
 		if mptIDIssuer(id) == accountID {
-			iss, _ := readMPTIssuance(view, id)
+			iss, err := readMPTIssuance(view, id)
+			if err != nil {
+				return zero(), err
+			}
 			if iss == nil {
-				return state.NewXRPLNumber(0, 0), nil
+				return zero(), nil
 			}
 			maxAmt := entry.MaxMPTokenAmount
 			if iss.MaximumAmount != nil {
 				maxAmt = *iss.MaximumAmount
 			}
-			return state.NewXRPLNumber(int64(maxAmt-iss.OutstandingAmount), 0), nil
+			if iss.OutstandingAmount >= maxAmt {
+				return zero(), nil
+			}
+			return state.NewXRPLNumberScaled(int64(maxAmt-iss.OutstandingAmount), 0, scale, state.RoundToNearest), nil
 		}
-		return state.NewXRPLNumber(int64(holderMPTBalance(view, id, accountID)), 0), nil
+		return state.NewXRPLNumberScaled(int64(holderMPTBalance(view, id, accountID)), 0, scale, state.RoundToNearest), nil
 	}
 
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
-		return state.NewXRPLNumber(0, 0), err
+		return zero(), err
 	}
 	if accountID == issuerID {
 		// The issuer's spendable balance is effectively unbounded.
-		return state.NewXRPLNumber(9999999999999999, 80), nil
+		return state.NewXRPLNumberScaled(9999999999999999, 80, scale, state.RoundToNearest), nil
 	}
 
 	lineData, rerr := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
-	if rerr != nil || lineData == nil {
-		return state.NewXRPLNumber(0, 0), nil
+	if rerr != nil {
+		return zero(), rerr
+	}
+	if lineData == nil {
+		return zero(), nil
 	}
 	rs, perr := state.ParseRippleState(lineData)
 	if perr != nil {
-		return state.NewXRPLNumber(0, 0), perr
+		return zero(), perr
 	}
-	bal, berr := vaultNumber(rs.Balance.Value())
+	bal, berr := vaultNumberScaled(rs.Balance.Value(), scale)
 	if berr != nil {
-		return state.NewXRPLNumber(0, 0), berr
+		return zero(), berr
 	}
-	// Balance is stored in the low account's terms; negate for the high account.
+	var oppositeLimit state.Amount
 	if bytes.Compare(accountID[:], issuerID[:]) > 0 {
 		bal = bal.Negate()
+		oppositeLimit = rs.LowLimit
+	} else {
+		oppositeLimit = rs.HighLimit
 	}
-	return bal, nil
+	limit, err := vaultNumberScaled(oppositeLimit.Value(), scale)
+	if err != nil {
+		return zero(), err
+	}
+	return bal.Add(limit), nil
+}
+
+func actualAssetHolding(view tx.LedgerView, accountID [20]byte, asset tx.Asset, rules *amendment.Rules) (state.XRPLNumber, error) {
+	scale := vaultNumberScale(rules)
+	zero := func() state.XRPLNumber {
+		return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
+	}
+	if isNativeAsset(asset) {
+		account, err := tx.ReadAccountRoot(view, accountID)
+		if err != nil || account == nil {
+			return zero(), err
+		}
+		return state.NewXRPLNumberScaled(int64(account.Balance), 0, scale, state.RoundToNearest), nil
+	}
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return zero(), fmt.Errorf("invalid MPT issuance ID")
+		}
+		if mptIDIssuer(id) == accountID {
+			return state.NewXRPLNumberScaled(9999999999999999, 80, scale, state.RoundToNearest), nil
+		}
+		return state.NewXRPLNumberScaled(int64(holderMPTBalance(view, id, accountID)), 0, scale, state.RoundToNearest), nil
+	}
+
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return zero(), err
+	}
+	if accountID == issuerID {
+		return state.NewXRPLNumberScaled(9999999999999999, 80, scale, state.RoundToNearest), nil
+	}
+	lineData, err := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
+	if err != nil {
+		return zero(), err
+	}
+	if lineData == nil {
+		return zero(), nil
+	}
+	line, err := state.ParseRippleState(lineData)
+	if err != nil {
+		return zero(), err
+	}
+	balance, err := vaultNumberScaled(line.Balance.Value(), scale)
+	if err != nil {
+		return zero(), err
+	}
+	if bytes.Compare(accountID[:], issuerID[:]) > 0 {
+		balance = balance.Negate()
+	}
+	return balance, nil
 }
 
 // sendAssetToVault transfers assetsN of the vault asset from the submitter
@@ -693,12 +814,35 @@ func holderMPTBalance(view tx.LedgerView, shareMPTID [24]byte, holderID [20]byte
 	return token.MPTAmount
 }
 
-// removeVaultAssetHolding deletes the pseudo-account's trust line for an IOU
-// vault asset (XRP needs no holding). Returns the owner-count delta to apply to
-// the pseudo-account.
+// removeVaultAssetHolding removes an empty XRP, IOU, or MPT holding. It returns
+// the owner-count delta the caller must apply to accountID; owner counts for the
+// other side of an IOU line are adjusted here.
 func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.Asset) (int32, ter.Result) {
 	if isNativeAsset(asset) {
+		account, err := tx.ReadAccountRoot(ctx.View, accountID)
+		if err != nil || account == nil {
+			return 0, ter.TecINTERNAL
+		}
+		if account.Balance != 0 {
+			return 0, ter.TecHAS_OBLIGATIONS
+		}
 		return 0, ter.TesSUCCESS
+	}
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return 0, ter.TefINTERNAL
+		}
+		tokenKey := keylet.MPTokenByID(id, accountID)
+		existed, err := ctx.View.Exists(tokenKey)
+		if err != nil {
+			return 0, ter.TefINTERNAL
+		}
+		result := mptutil.RemoveHolding(ctx.View, id, accountID, false)
+		if result != ter.TesSUCCESS || !existed {
+			return 0, result
+		}
+		return -1, ter.TesSUCCESS
 	}
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
@@ -709,28 +853,49 @@ func removeVaultAssetHolding(ctx *tx.ApplyContext, accountID [20]byte, asset tx.
 	}
 	lineKey := keylet.Line(accountID, issuerID, asset.Currency)
 	data, rerr := ctx.View.Read(lineKey)
-	if rerr != nil || data == nil {
-		return 0, ter.TesSUCCESS
+	if rerr != nil {
+		return 0, ter.TefINTERNAL
+	}
+	if data == nil {
+		return 0, ter.TecOBJECT_NOT_FOUND
 	}
 	rs, perr := state.ParseRippleState(data)
 	if perr != nil {
 		return 0, ter.TefINTERNAL
+	}
+	if rs.Balance.Signum() != 0 {
+		return 0, ter.TecHAS_OBLIGATIONS
 	}
 
 	lowID, highID := accountID, issuerID
 	if bytes.Compare(accountID[:], issuerID[:]) > 0 {
 		lowID, highID = issuerID, accountID
 	}
-	if res, e := state.DirRemove(ctx.View, keylet.OwnerDir(lowID), rs.LowNode, lineKey.Key, false); e != nil || !res.Success {
-		return 0, ter.TefBAD_LEDGER
+	delta := int32(0)
+	adjust := func(owner [20]byte) ter.Result {
+		if owner == accountID {
+			delta--
+			return ter.TesSUCCESS
+		}
+		if err := tx.AdjustOwnerCount(ctx.View, owner, -1); err != nil {
+			return ter.TefINTERNAL
+		}
+		return ter.TesSUCCESS
 	}
-	if res, e := state.DirRemove(ctx.View, keylet.OwnerDir(highID), rs.HighNode, lineKey.Key, false); e != nil || !res.Success {
-		return 0, ter.TefBAD_LEDGER
+	if rs.Flags&state.LsfLowReserve != 0 {
+		if result := adjust(lowID); result != ter.TesSUCCESS {
+			return 0, result
+		}
 	}
-	if e := ctx.View.Erase(lineKey); e != nil {
-		return 0, ter.TefINTERNAL
+	if rs.Flags&state.LsfHighReserve != 0 {
+		if result := adjust(highID); result != ter.TesSUCCESS {
+			return 0, result
+		}
 	}
-	return -1, ter.TesSUCCESS
+	if result := tx.TrustDelete(ctx.View, lineKey, lowID, highID, rs.LowNode, rs.HighNode); result != ter.TesSUCCESS {
+		return 0, result
+	}
+	return delta, ter.TesSUCCESS
 }
 
 // removeEmptyShareMPToken deletes a holder's share MPToken when its balance is
@@ -754,7 +919,7 @@ func removeEmptyShareMPToken(ctx *tx.ApplyContext, holderID [20]byte, shareMPTID
 		return ter.TecHAS_OBLIGATIONS
 	}
 	if res, derr := state.DirRemove(ctx.View, keylet.OwnerDir(holderID), token.OwnerNode, tokenKey.Key, false); derr != nil || !res.Success {
-		return ter.TefINTERNAL
+		return ter.TecINTERNAL
 	}
 	if eerr := ctx.View.Erase(tokenKey); eerr != nil {
 		return ter.TefINTERNAL
@@ -780,6 +945,13 @@ func mintShares(ctx *tx.ApplyContext, shareMPTID [24]byte, holderID [20]byte, sh
 	issuance, perr := state.ParseMPTokenIssuance(issData)
 	if perr != nil {
 		return ter.TefINTERNAL
+	}
+	maximum := entry.MaxMPTokenAmount
+	if issuance.MaximumAmount != nil {
+		maximum = *issuance.MaximumAmount
+	}
+	if shares > maximum || issuance.OutstandingAmount > maximum-shares {
+		return ter.TecPATH_DRY
 	}
 	issuance.OutstandingAmount += shares
 	newIss, serr := state.SerializeMPTokenIssuance(issuance)

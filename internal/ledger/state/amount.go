@@ -279,6 +279,12 @@ func (v IOUAmountValue) String() string {
 	return result
 }
 
+// NumberString matches rippled's to_string(IOUAmount) under the large Number
+// scale used by 3.2 RPC threads.
+func (v IOUAmountValue) NumberString() string {
+	return NewXRPLNumberScaled(v.mantissa, v.exponent, MantissaScaleLarge, RoundToNearest).String()
+}
+
 // Amount represents either XRP (as drops), an issued currency amount, or an MPT amount.
 // Matches rippled's STAmount which can hold any asset type (XRP, IOU, or MPT).
 type Amount struct {

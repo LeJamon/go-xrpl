@@ -13,43 +13,42 @@ import (
 type NoRippleCheckMethod struct{ BaseHandler }
 
 func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
-		Role         string `json:"role,omitempty"` // "gateway" or "user"
-		Transactions bool   `json:"transactions,omitempty"`
-		Limit        uint32 `json:"limit,omitempty"`
+	rawFields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	accountRaw, hasAccount := rawFields["account"]
+	if !hasAccount {
+		return nil, types.RPCErrorMissingField("account")
 	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	// rippled: missing_field_error("role")
-	if request.Role == "" {
+	roleRaw, hasRole := rawFields["role"]
+	if !hasRole {
 		return nil, types.RPCErrorMissingField("role")
 	}
-
-	// rippled: invalid_field_error("role")
-	if request.Role != "gateway" && request.Role != "user" {
+	account, validAccount := rawJSONString(accountRaw)
+	if !validAccount {
+		return nil, types.RPCErrorInvalidField("account")
+	}
+	role, validRole := jsonCppStringRaw(roleRaw)
+	if !validRole || (role != "gateway" && role != "user") {
 		return nil, types.RPCErrorInvalidField("role")
 	}
 
-	// API v2+ requires transactions to be a boolean
-	// Reference: NoRippleCheck.cpp lines 95-99
-	if ctx.ApiVersion > 1 && params != nil {
-		var rawParams map[string]json.RawMessage
-		if err := json.Unmarshal(params, &rawParams); err == nil {
-			if txField, ok := rawParams["transactions"]; ok {
-				var boolVal bool
-				if err := json.Unmarshal(txField, &boolVal); err != nil {
-					return nil, types.RPCErrorInvalidField("transactions")
-				}
+	limit, limitErr := ReadLimitField(params, LimitNoRippleCheck, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
+
+	transactions := false
+	if transactionsRaw, ok := rawFields["transactions"]; ok {
+		if ctx.ApiVersion > 1 {
+			var valid bool
+			transactions, valid = rawJSONBool(transactionsRaw)
+			if !valid {
+				return nil, types.RPCErrorInvalidField("transactions")
 			}
+		} else {
+			transactions = jsonCppBoolRaw(transactionsRaw)
 		}
 	}
 
@@ -59,24 +58,33 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 
 	// Determine ledger index to use. rippled's lookupLedger defaults to the
 	// open ("current") ledger in the absence of ledger_index/ledger_hash.
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	// Apply limit clamping matching rippled's readLimitField with noRippleCheck tuning
-	limit, limitErr := ReadLimitField(params, LimitNoRippleCheck, ctx.Unlimited)
-	if limitErr != nil {
-		return nil, limitErr
+	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	response := ledgerEntryResponseFields(ledger, validated)
+	if transactions {
+		response["transactions"] = []map[string]any{}
+	}
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(response)
 	}
 
 	result, err := ctx.Services.Ledger.GetNoRippleCheck(
 		ctx.Context,
-		request.Account,
-		request.Role,
+		account,
+		role,
 		ledgerIndex,
 		limit,
-		request.Transactions,
+		transactions,
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
@@ -92,9 +100,6 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format
-	response := map[string]any{}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
-
 	// Problems is always present (may be empty array)
 	// Reference: NoRippleCheck.cpp line 123: result["problems"] = Json::arrayValue
 	if result.Problems != nil {
@@ -106,7 +111,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// When transactions=true, rippled always includes the transactions array
 	// even if empty. Reference: NoRippleCheck.cpp line 108:
 	//   jvTransactions = transactions ? (result[jss::transactions] = Json::arrayValue) : dummy;
-	if request.Transactions {
+	if transactions {
 		if len(result.Transactions) > 0 {
 			transactions := make([]map[string]any, len(result.Transactions))
 			for i, tx := range result.Transactions {

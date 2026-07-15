@@ -84,26 +84,13 @@ func (m *ServerInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	}
 
 	info := buildServerInfo(ctx, true)
-
-	response := map[string]any{
-		"info": info,
+	if warnings := buildServerWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
+		info["warnings"] = warnings
 	}
-	if warnings := buildAmendmentWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
-		response["warnings"] = warnings
-	}
-
-	return response, nil
+	return map[string]any{"info": info}, nil
 }
 
-// buildAmendmentWarnings surfaces the rippled-conformant amendment warnings:
-// warnRPC_AMENDMENT_BLOCKED (1002) when the node is blocked, and
-// warnRPC_UNSUPPORTED_MAJORITY (1001) — with the projected activation date —
-// when an unsupported amendment is holding majority. Mirrors
-// NetworkOPsImp::getServerInfo (NetworkOPs.cpp:2644-2676): the blocked warning is
-// emitted to all callers, while the unsupported-majority warning is admin-only and
-// suppressed while blocked (rippled's `admin && isAmendmentWarned()`, where
-// isAmendmentWarned() == !amendmentBlocked_ && amendmentWarned_).
-func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []types.WarningObject {
+func buildServerWarnings(services *types.ServiceContainer, isAdmin bool) []types.WarningObject {
 	if services == nil || services.Ledger == nil {
 		return nil
 	}
@@ -114,6 +101,12 @@ func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []ty
 		warnings = append(warnings, types.WarningObject{
 			ID:      types.WarningAmendmentBlocked,
 			Message: "This server is amendment blocked, and must be updated to be able to stay in sync with the network.",
+		})
+	}
+	if services.ValidatorList != nil && services.ValidatorList.IsUNLBlocked() {
+		warnings = append(warnings, types.WarningObject{
+			ID:      types.WarningExpiredValidatorList,
+			Message: "This server has an expired validator list. validators.txt may be incorrectly configured or some [validator_list_sites] may be unreachable.",
 		})
 	}
 
@@ -209,6 +202,12 @@ func buildServerInfo(ctx *types.RPCContext, human bool) map[string]any {
 	// (human) and server_state (machine) like rippled's shared getServerInfo.
 	if ctx.IsAdmin {
 		info["pubkey_validator"] = resolveValidatorPubKey(services)
+		validatorList := resolveValidatorListSnapshot(services, time.Now())
+		if human {
+			info["validator_list"] = validatorList.summary
+		} else {
+			info["validator_list_expires"] = validatorList.expires
+		}
 	}
 
 	// hostid: only in human mode (server_info), matching rippled

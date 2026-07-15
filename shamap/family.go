@@ -13,3 +13,16 @@ type Family interface {
 	// StoreBatch persists a batch of serialized nodes.
 	StoreBatch(ctx context.Context, entries []FlushEntry) error
 }
+
+type fullBelowCacheProvider interface {
+	FullBelowCache() *FullBelowCache
+}
+
+func familyFullBelowCache(family Family) *FullBelowCache {
+	if provider, ok := family.(fullBelowCacheProvider); ok {
+		if cache := provider.FullBelowCache(); cache != nil {
+			return cache
+		}
+	}
+	return NewFullBelowCache()
+}

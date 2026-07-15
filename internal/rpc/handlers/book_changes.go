@@ -4,10 +4,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -22,12 +24,12 @@ type bookChange struct {
 	CurrencyB      string
 	MPTIssuanceIDA string
 	MPTIssuanceIDB string
-	VolumeA        *big.Float
-	VolumeB        *big.Float
-	High           *big.Float
-	Low            *big.Float
-	Open           *big.Float
-	Close          *big.Float
+	VolumeA        state.Amount
+	VolumeB        state.Amount
+	High           state.Amount
+	Low            state.Amount
+	Open           state.Amount
+	Close          state.Amount
 	Domain         string
 }
 
@@ -68,12 +70,12 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 	for _, key := range keys {
 		bc := changes[key]
 		change := map[string]any{
-			"volume_a": formatBigFloat(bc.VolumeA),
-			"volume_b": formatBigFloat(bc.VolumeB),
-			"high":     formatBigFloat(bc.High),
-			"low":      formatBigFloat(bc.Low),
-			"open":     formatBigFloat(bc.Open),
-			"close":    formatBigFloat(bc.Close),
+			"volume_a": formatBookAmount(bc.VolumeA),
+			"volume_b": formatBookAmount(bc.VolumeB),
+			"high":     bc.High.IOU().NumberString(),
+			"low":      bc.Low.IOU().NumberString(),
+			"open":     bc.Open.IOU().NumberString(),
+			"close":    bc.Close.IOU().NumberString(),
 		}
 		if bc.MPTIssuanceIDA != "" {
 			change["mpt_issuance_id_a"] = bc.MPTIssuanceIDA
@@ -110,10 +112,11 @@ func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Resolve the target ledger through the shared lookup (rippled
-	// RPC::lookupLedger): defaults to current, threads ledger_hash, and rejects
-	// a malformed numeric ledger_index with ledgerIndexMalformed instead of
-	// silently falling back.
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	request.LedgerSpecifier = parsedLedgerSpec
 	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
 	if lerr != nil {
 		return nil, lerr
@@ -147,8 +150,7 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 		// to cancel a prior offer). Reference: rippled BookChanges.h lines 67-81
 		var offerCancel *uint32
 		if txType == "OfferCancel" || txType == "OfferCreate" {
-			if offerSeqVal, ok := storedTx.TxJSON["OfferSequence"].(float64); ok {
-				v := uint32(offerSeqVal)
+			if v, ok := jsonUint32(storedTx.TxJSON["OfferSequence"]); ok {
 				offerCancel = &v
 			}
 		}
@@ -194,8 +196,8 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 			// Sequence matches the tx's OfferSequence field.
 			// Reference: rippled BookChanges.h lines 112-115
 			if nodeType == "DeletedNode" && offerCancel != nil {
-				if offerSeq, ok := finalFields["Sequence"].(float64); ok {
-					if uint32(offerSeq) == *offerCancel {
+				if offerSeq, ok := jsonUint32(finalFields["Sequence"]); ok {
+					if offerSeq == *offerCancel {
 						continue
 					}
 				}
@@ -214,8 +216,14 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 			// Reference: rippled BookChanges.h lines 119-122
 			// deltaGets = finalFields.TakerGets - previousFields.TakerGets
 			// deltaPays = finalFields.TakerPays - previousFields.TakerPays
-			deltaGets := new(big.Float).Sub(finalGets.value, prevGets.value)
-			deltaPays := new(big.Float).Sub(finalPays.value, prevPays.value)
+			deltaGets, err := finalGets.value.SubUniversal(prevGets.value)
+			if err != nil {
+				continue
+			}
+			deltaPays, err := finalPays.value.SubUniversal(prevPays.value)
+			if err != nil {
+				continue
+			}
 
 			// Determine currency pair ordering.
 			// Reference: rippled BookChanges.h lines 124-131
@@ -232,7 +240,7 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 				noswap = g < p
 			}
 
-			var first, second *big.Float
+			var first, second state.Amount
 			var pairKey string
 			if noswap {
 				first = deltaGets
@@ -244,16 +252,18 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 				pairKey = p + "|" + g
 			}
 
-			if second.Sign() == 0 {
+			if second.IsZero() {
 				continue
 			}
 
-			// rate = first / second (matching rippled's divide)
-			rate := new(big.Float).Quo(first, second)
+			rate := state.DivideNoIssue(first, second)
 
-			// Take absolute values for volume accumulation
-			absFirst := new(big.Float).Abs(first)
-			absSecond := new(big.Float).Abs(second)
+			if first.IsNegative() {
+				first = first.Negate()
+			}
+			if second.IsNegative() {
+				second = second.Negate()
+			}
 
 			// Determine currency labels for output
 			var currA, currB, mptA, mptB string
@@ -278,29 +288,35 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 					CurrencyB:      currB,
 					MPTIssuanceIDA: mptA,
 					MPTIssuanceIDB: mptB,
-					VolumeA:        new(big.Float),
-					VolumeB:        new(big.Float),
-					Open:           new(big.Float).Set(rate),
-					High:           new(big.Float).Set(rate),
-					Low:            new(big.Float).Set(rate),
-					Close:          new(big.Float).Set(rate),
+					VolumeA:        first,
+					VolumeB:        second,
+					Open:           rate,
+					High:           rate,
+					Low:            rate,
+					Close:          rate,
 					Domain:         domain,
 				}
 				changes[pairKey] = bc
 			} else {
-				if rate.Cmp(bc.High) > 0 {
-					bc.High.Set(rate)
+				volumeA, err := bc.VolumeA.AddUniversal(first)
+				if err != nil {
+					continue
 				}
-				if rate.Cmp(bc.Low) < 0 {
-					bc.Low.Set(rate)
+				volumeB, err := bc.VolumeB.AddUniversal(second)
+				if err != nil {
+					continue
 				}
-				bc.Close.Set(rate)
+				bc.VolumeA = volumeA
+				bc.VolumeB = volumeB
+				if rate.Compare(bc.High) > 0 {
+					bc.High = rate
+				}
+				if rate.Compare(bc.Low) < 0 {
+					bc.Low = rate
+				}
+				bc.Close = rate
 				bc.Domain = domain
 			}
-
-			// Accumulate volumes (absolute values)
-			bc.VolumeA.Add(bc.VolumeA, absFirst)
-			bc.VolumeB.Add(bc.VolumeB, absSecond)
 		}
 
 		return true
@@ -311,7 +327,7 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 
 // parsedAmount holds a parsed amount with its currency info
 type parsedAmount struct {
-	value         *big.Float
+	value         state.Amount
 	currency      string
 	issuer        string
 	mptIssuanceID string
@@ -326,35 +342,55 @@ func parseAmount(raw any) *parsedAmount {
 
 	switch v := raw.(type) {
 	case string:
-		// XRP drops
-		drops, ok := new(big.Float).SetString(v)
-		if !ok {
+		drops, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
 			return nil
 		}
-		return &parsedAmount{value: drops, currency: "XRP", isXRP: true}
+		return &parsedAmount{value: state.NewXRPAmountFromInt(drops), currency: "XRP", isXRP: true}
+	case json.Number:
+		drops, err := strconv.ParseInt(v.String(), 10, 64)
+		if err != nil {
+			return nil
+		}
+		return &parsedAmount{value: state.NewXRPAmountFromInt(drops), currency: "XRP", isXRP: true}
 	case float64:
+		const maxExactFloatInteger = 1 << 53
+		if math.Trunc(v) != v || v < -maxExactFloatInteger || v > maxExactFloatInteger {
+			return nil
+		}
+		drops, err := strconv.ParseInt(strconv.FormatFloat(v, 'f', -1, 64), 10, 64)
+		if err != nil {
+			return nil
+		}
 		return &parsedAmount{
-			value:    new(big.Float).SetFloat64(v),
+			value:    state.NewXRPAmountFromInt(drops),
 			currency: "XRP",
 			isXRP:    true,
 		}
 	case map[string]any:
-		// IOU amount
 		valStr, _ := v["value"].(string)
 		if valStr == "" {
-			return nil
-		}
-		val, ok := new(big.Float).SetString(valStr)
-		if !ok {
 			return nil
 		}
 		currency, _ := v["currency"].(string)
 		issuer, _ := v["issuer"].(string)
 		mptIssuanceID, _ := v["mpt_issuance_id"].(string)
 		if mptIssuanceID != "" {
-			return &parsedAmount{value: val, mptIssuanceID: strings.ToUpper(mptIssuanceID)}
+			value, err := strconv.ParseInt(valStr, 10, 64)
+			if err != nil {
+				return nil
+			}
+			mptIssuanceID = strings.ToUpper(mptIssuanceID)
+			return &parsedAmount{
+				value:         state.NewMPTAmountWithIssuanceID(value, "", mptIssuanceID),
+				mptIssuanceID: mptIssuanceID,
+			}
 		}
-		return &parsedAmount{value: val, currency: currency, issuer: issuer}
+		value, err := state.NewIssuedAmountFromDecimalString(valStr, currency, issuer)
+		if err != nil {
+			return nil
+		}
+		return &parsedAmount{value: value, currency: currency, issuer: issuer}
 	}
 
 	return nil
@@ -369,21 +405,14 @@ func formatCurrencyKey(amt *parsedAmount) string {
 		return amt.mptIssuanceID
 	}
 	if amt.issuer != "" {
-		return fmt.Sprintf("%s.%s", amt.currency, amt.issuer)
+		return fmt.Sprintf("%s/%s", amt.issuer, amt.currency)
 	}
 	return amt.currency
 }
 
-// formatBigFloat formats a big.Float as a string, removing trailing zeros.
-// Precision tracks IEEE 754 double (16 significant digits) so the rendered
-// IOU values match rippled's STAmount::iou() → STAmount::getText() shape
-// for typical inputs (BookChanges.h emits via to_string(STAmount::iou())).
-func formatBigFloat(f *big.Float) string {
-	if f == nil {
-		return "0"
+func formatBookAmount(amount state.Amount) string {
+	if amount.IsNative() || amount.IsMPT() {
+		return amount.Value()
 	}
-	if integer, accuracy := f.Int(nil); accuracy == big.Exact {
-		return integer.String()
-	}
-	return f.Text('f', 16)
+	return amount.IOU().NumberString()
 }

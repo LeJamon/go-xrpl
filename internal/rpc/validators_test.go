@@ -115,6 +115,31 @@ func TestValidatorsDisabledQuorumUsesRippledWireValue(t *testing.T) {
 	assert.Equal(t, float64(math.MaxUint32), resp["validation_quorum"])
 }
 
+func TestValidatorsUsesEffectiveTrustedKeys(t *testing.T) {
+	const localKey = "nLocalValidator"
+	services := &types.ServiceContainer{
+		Ledger: newMockLedgerService(),
+		LocalStaticTrustedKeysBase58: func() []string {
+			return nil
+		},
+		TrustedValidatorKeysBase58: func() []string {
+			return []string{localKey}
+		},
+	}
+
+	result, rpcErr := (&handlers.ValidatorsMethod{}).Handle(&types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}, nil)
+	require.Nil(t, rpcErr)
+
+	resp := result.(map[string]any)
+	assert.Equal(t, []string{localKey}, resp["trusted_validator_keys"])
+	assert.Equal(t, []string{}, resp["local_static_keys"])
+}
+
 // TestValidatorsAdminOnly tests that the validators method requires admin role.
 // Reference: rippled ValidatorRPC_test.cpp testPrivileges — non-admin requests
 // return HTTP 403 / null result for "validators" and "validator_list_sites".

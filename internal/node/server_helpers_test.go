@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
@@ -46,6 +47,10 @@ func TestCurrencySpecFromAmount(t *testing.T) {
 	iou := map[string]interface{}{"currency": "USD", "issuer": "rIssuer", "value": "10"}
 	if got := currencySpecFromAmount(iou); got.Currency != "USD" || got.Issuer != "rIssuer" {
 		t.Errorf("iou amount = %+v", got)
+	}
+	mpt := map[string]interface{}{"mpt_issuance_id": "ABCDEF", "value": "10"}
+	if got := currencySpecFromAmount(mpt); got.MPTIssuanceID != "ABCDEF" || got.Currency != "" || got.Issuer != "" {
+		t.Errorf("mpt amount = %+v", got)
 	}
 	// Anything else is empty.
 	if got := currencySpecFromAmount(nil); got.Currency != "" || got.Issuer != "" {
@@ -139,6 +144,33 @@ func TestExtractBookPairsFromTxData(t *testing.T) {
 	}
 }
 
+func TestExtractBookPairsFromMetadataUsesAffectedNodeFields(t *testing.T) {
+	const (
+		issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+		mptID  = "00000001C4F149B6F2A4B6A4C4A01C1570C4A040A3D9B221"
+	)
+	domain := strings.Repeat("A", 64)
+	meta := []byte(`{"AffectedNodes":[` +
+		`{"ModifiedNode":{"LedgerEntryType":"Offer","PreviousFields":{"TakerGets":{"mpt_issuance_id":"` + mptID + `","value":"10"},"TakerPays":"20","DomainID":"` + domain + `"},"FinalFields":{"TakerGets":{"currency":"BAD","issuer":"` + issuer + `","value":"1"},"TakerPays":"1"}}},` +
+		`{"CreatedNode":{"LedgerEntryType":"Offer","NewFields":{"TakerGets":{"currency":"USD","issuer":"` + issuer + `","value":"2"},"TakerPays":"3"},"FinalFields":{"TakerGets":{"currency":"BAD","issuer":"` + issuer + `","value":"1"},"TakerPays":"1"}}},` +
+		`{"DeletedNode":{"LedgerEntryType":"Offer","NewFields":{"TakerGets":{"currency":"BAD","issuer":"` + issuer + `","value":"1"},"TakerPays":"1"},"FinalFields":{"TakerGets":"4","TakerPays":{"currency":"EUR","issuer":"` + issuer + `","value":"5"}}}}` +
+		`]}`)
+
+	books := extractBookPairsFromMetadata(meta)
+	if len(books) != 3 {
+		t.Fatalf("got %d books, want 3: %+v", len(books), books)
+	}
+	if books[0].TakerGets.MPTIssuanceID != mptID || books[0].TakerPays.Currency != "XRP" || books[0].Domain != domain {
+		t.Errorf("modified book = %+v", books[0])
+	}
+	if books[1].TakerGets.Currency != "USD" || books[1].TakerGets.Issuer != issuer || books[1].TakerPays.Currency != "XRP" {
+		t.Errorf("created book = %+v", books[1])
+	}
+	if books[2].TakerGets.Currency != "XRP" || books[2].TakerPays.Currency != "EUR" || books[2].TakerPays.Issuer != issuer {
+		t.Errorf("deleted book = %+v", books[2])
+	}
+}
+
 func TestToCleanerStatus(t *testing.T) {
 	in := cleaner.Status{
 		State:          "running",
@@ -179,8 +211,41 @@ func TestBuildProposedTxEvent_NoBlob(t *testing.T) {
 	if ev.EngineResult != "tesSUCCESS" || ev.LedgerCurrentIndex != 7 {
 		t.Errorf("unexpected event: %+v", ev)
 	}
-	if ev.Account != "" || string(ev.Transaction) != "{}" {
-		t.Errorf("no-blob event should carry empty account/tx: %+v", ev)
+	if string(ev.Transaction) != "{}" {
+		t.Errorf("no-blob event should carry empty tx: %+v", ev)
+	}
+}
+
+func TestBuildProposedTxEventCarriesHashAndOwnerFunds(t *testing.T) {
+	blobHex, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "OfferCreate",
+		"Account":         "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59",
+		"TakerGets":       "1",
+		"TakerPays":       "2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := hex.DecodeString(blobHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txHash := [32]byte{0xAB, 0xCD}
+	event := buildProposedTxEvent(service.SubmittedTxEvent{
+		RawBlob:    blob,
+		TxHash:     txHash,
+		OwnerFunds: "123",
+	})
+
+	if event.Hash != strings.ToUpper(hex.EncodeToString(txHash[:])) {
+		t.Fatalf("hash = %q", event.Hash)
+	}
+	var txJSON map[string]any
+	if err := json.Unmarshal(event.Transaction, &txJSON); err != nil {
+		t.Fatal(err)
+	}
+	if txJSON["owner_funds"] != "123" {
+		t.Fatalf("owner_funds = %v", txJSON["owner_funds"])
 	}
 }
 
@@ -332,16 +397,21 @@ func TestAcceptedLedgerView_Populated(t *testing.T) {
 // TestNodeStoreCacheParams guards the node_db cache_size / cache_age
 // wiring into the node-object cache.
 func TestNodeStoreCacheParams(t *testing.T) {
-	size, age := nodeStoreCacheParams(config.NodeDBConfig{})
+	size, age := nodeStoreCacheParams(config.NodeDBConfig{}, "")
 	if size != defaultNodeCacheSize || age != defaultNodeCacheAge {
 		t.Errorf("defaults = (%d, %v), want (%d, %v)", size, age, defaultNodeCacheSize, defaultNodeCacheAge)
 	}
 
-	size, age = nodeStoreCacheParams(config.NodeDBConfig{CacheSize: 16384, CacheAge: 5})
+	size, age = nodeStoreCacheParams(config.NodeDBConfig{CacheSize: 16384, CacheAge: 5}, "tiny")
 	if size != 16384 {
 		t.Errorf("cache size = %d, want 16384", size)
 	}
 	if age != 5*time.Minute {
 		t.Errorf("cache age = %v, want 5m", age)
+	}
+
+	size, age = nodeStoreCacheParams(config.NodeDBConfig{}, "huge")
+	if size != 8_388_608 || age != 900*time.Minute {
+		t.Errorf("huge profile = (%d, %v)", size, age)
 	}
 }

@@ -85,6 +85,23 @@ func servicesForServerInfo(mock *mockLedgerServiceServerInfo) *types.ServiceCont
 	}
 }
 
+type serverInfoValidatorList struct {
+	publisherCount int
+	threshold      int
+	blocked        bool
+	publishers     []types.ValidatorListPublisherInfo
+}
+
+func (v *serverInfoValidatorList) PublisherCount() int { return v.publisherCount }
+func (v *serverInfoValidatorList) Threshold() int      { return v.threshold }
+func (v *serverInfoValidatorList) IsUNLBlocked() bool  { return v.blocked }
+func (v *serverInfoValidatorList) Publishers() []types.ValidatorListPublisherInfo {
+	return v.publishers
+}
+func (v *serverInfoValidatorList) Sites() []types.ValidatorListSiteInfo      { return nil }
+func (v *serverInfoValidatorList) TrustedMasterKeys() [][33]byte             { return nil }
+func (v *serverInfoValidatorList) ListedValidators() []types.ListedValidator { return nil }
+
 // Response Field Tests
 // Based on rippled ServerInfo_test.cpp testServerInfo()
 
@@ -1627,4 +1644,87 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		state := resp["state"].(map[string]any)
 		assert.Equal(t, want, state["pubkey_validator"])
 	})
+}
+
+func TestServerInfoValidatorListVisibility(t *testing.T) {
+	rippleExpiry := uint32(time.Now().Unix()-protocol.RippleEpochUnix) + 3600
+	expiryUnix := int64(rippleExpiry) + protocol.RippleEpochUnix
+	validatorList := &serverInfoValidatorList{
+		publisherCount: 1,
+		threshold:      1,
+		publishers: []types.ValidatorListPublisherInfo{{
+			ExpirationUnix: expiryUnix,
+		}},
+	}
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.ValidatorList = validatorList
+
+	infoFor := func(t *testing.T, admin bool) map[string]any {
+		t.Helper()
+		result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RPCContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+			IsAdmin:    admin,
+		}, nil)
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["info"].(map[string]any)
+	}
+
+	assert.NotContains(t, infoFor(t, false), "validator_list")
+	adminInfo := infoFor(t, true)
+	summary := adminInfo["validator_list"].(map[string]any)
+	assert.Equal(t, 1, summary["count"])
+	assert.Equal(t, "active", summary["status"])
+	assert.Equal(t, time.Unix(expiryUnix, 0).UTC().Format("2006-Jan-02 15:04:05 UTC"), summary["expiration"])
+	assert.NotContains(t, summary, "validator_list_threshold")
+
+	stateFor := func(t *testing.T, admin bool) map[string]any {
+		t.Helper()
+		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(&types.RPCContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+			IsAdmin:    admin,
+		}, nil)
+		require.Nil(t, rpcErr)
+		return result.(map[string]any)["state"].(map[string]any)
+	}
+
+	assert.NotContains(t, stateFor(t, false), "validator_list_expires")
+	assert.Equal(t, rippleExpiry, stateFor(t, true)["validator_list_expires"])
+}
+
+func TestServerInfoExpiredValidatorListWarningIsPublic(t *testing.T) {
+	mock := newMockLedgerServiceServerInfo()
+	services := servicesForServerInfo(mock)
+	services.ValidatorList = &serverInfoValidatorList{blocked: true}
+	result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}, nil)
+	require.Nil(t, rpcErr)
+
+	info := result.(map[string]any)["info"].(map[string]any)
+	warnings := info["warnings"].([]types.WarningObject)
+	require.Len(t, warnings, 1)
+	assert.Equal(t, types.WarningExpiredValidatorList, warnings[0].ID)
+	assert.Equal(t, "This server has an expired validator list. validators.txt may be incorrectly configured or some [validator_list_sites] may be unreachable.", warnings[0].Message)
+
+	result, rpcErr = (&handlers.ServerStateMethod{}).Handle(&types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}, nil)
+	require.Nil(t, rpcErr)
+	state := result.(map[string]any)["state"].(map[string]any)
+	warnings = state["warnings"].([]types.WarningObject)
+	require.Len(t, warnings, 1)
+	assert.Equal(t, types.WarningExpiredValidatorList, warnings[0].ID)
 }

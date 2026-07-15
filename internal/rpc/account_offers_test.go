@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -68,13 +69,13 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -82,7 +83,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -90,7 +91,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 1.1,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -98,7 +99,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -106,7 +107,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": nil,
 			},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -114,7 +115,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": map[string]any{"nested": "value"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -122,7 +123,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -493,10 +494,10 @@ func TestAccountOffersResponseFields(t *testing.T) {
 		assert.Equal(t, validAccount, resp["account"])
 
 		// Verify validated flag
-		assert.Equal(t, true, resp["validated"])
+		assert.Equal(t, false, resp["validated"])
 
 		// Verify ledger_current_index
-		assert.Equal(t, float64(2), resp["ledger_current_index"])
+		assert.Equal(t, float64(3), resp["ledger_current_index"])
 
 		// Verify offers is an array
 		offersArr, ok := resp["offers"].([]any)
@@ -1058,10 +1059,9 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 	}
 }
 
-// TestAccountOffersLedgerHashThreading verifies the M1 fix on PR #870: a
-// ledger_hash query is threaded verbatim to the service (so it resolves the
-// named ledger), ledger_hash takes precedence over ledger_index when both are
-// supplied, and an unknown hash surfaces as lgrNotFound rather than internal.
+// TestAccountOffersLedgerHashThreading verifies that a ledger_hash query is
+// threaded verbatim, conflicting selectors are rejected, and an unknown hash
+// surfaces as lgrNotFound rather than internal.
 func TestAccountOffersLedgerHashThreading(t *testing.T) {
 	const validAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const hashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
@@ -1090,11 +1090,10 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		assert.Equal(t, hashHex, seenSelector, "service must receive the hash as its selector")
 	})
 
-	t.Run("hash wins over ledger_index", func(t *testing.T) {
+	t.Run("conflicting selectors are rejected", func(t *testing.T) {
 		mock := newAccountOffersMock()
-		var seenSelector string
 		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-			seenSelector = ledgerIndex
+			t.Fatal("service must not be called for conflicting selectors")
 			return &types.AccountOffersResult{Account: account, Offers: []types.AccountOffer{}}, nil
 		}
 
@@ -1103,9 +1102,11 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 			"ledger_hash":  hashHex,
 			"ledger_index": "validated",
 		})
-		_, rpcErr := method.Handle(ctx(mock), params)
-		require.Nil(t, rpcErr)
-		assert.Equal(t, hashHex, seenSelector, "ledger_hash must win over ledger_index")
+		result, rpcErr := method.Handle(ctx(mock), params)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified.", rpcErr.Message)
 	})
 
 	t.Run("unknown hash → lgrNotFound", func(t *testing.T) {
@@ -1232,7 +1233,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 		})
 	}
 
-	t.Run("Empty string triggers missing parameter", func(t *testing.T) {
+	t.Run("Empty string is malformed", func(t *testing.T) {
 		params := map[string]any{
 			"account": "",
 		}
@@ -1243,7 +1244,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
 	})
 }
 
@@ -1261,6 +1262,37 @@ func TestAccountOffersServiceError(t *testing.T) {
 	}
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	markerParams, err := json.Marshal(map[string]any{
+		"account": validAccount,
+		"marker":  strings.Repeat("AB", 32) + ",0",
+	})
+	require.NoError(t, err)
+
+	t.Run("Malformed marker", func(t *testing.T) {
+		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+			return nil, svcerr.ErrInvalidMarker
+		}
+
+		result, rpcErr := method.Handle(ctx, markerParams)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
+	})
+
+	t.Run("Missing or foreign marker", func(t *testing.T) {
+		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+			return nil, svcerr.ErrStaleMarker
+		}
+
+		result, rpcErr := method.Handle(ctx, markerParams)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
+	})
 
 	t.Run("Internal service error", func(t *testing.T) {
 		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {

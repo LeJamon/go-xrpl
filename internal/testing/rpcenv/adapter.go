@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
@@ -344,7 +345,7 @@ func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string,
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32) (*types.AccountNFTsResult, error) {
+func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -421,4 +422,16 @@ func (r *ledgerReaderAdapter) StateMapHash() [32]byte {
 
 func (r *ledgerReaderAdapter) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error {
 	return r.l.ForEachTransaction(fn)
+}
+
+func (r *ledgerReaderAdapter) GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error) {
+	return r.l.GetTransaction(txHash)
+}
+
+func (r *ledgerReaderAdapter) LedgerAmendmentRules() *amendment.Rules {
+	rules, err := ledger.LoadAmendmentsFromLedger(r.l)
+	if err != nil || rules == nil {
+		return amendment.EmptyRules()
+	}
+	return rules
 }

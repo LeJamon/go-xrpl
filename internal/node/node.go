@@ -42,6 +42,10 @@ import (
 	googlegrpc "google.golang.org/grpc"
 )
 
+type minimumOnlineFloorFunc func() uint32
+
+func (f minimumOnlineFloorFunc) MinimumOnline() uint32 { return f() }
+
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
 // extracted from the CLI so flag parsing and node wiring stay separable.
@@ -73,6 +77,10 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	db, repoManager, err = setupStorage(appConfig, serverLog)
 	if err != nil {
 		return err
+	}
+	var nodeFamily *shamap.NodeStoreFamily
+	if db != nil {
+		nodeFamily = shamap.NewNodeStoreFamily(db)
 	}
 
 	// Load genesis configuration from config file path (if set)
@@ -141,6 +149,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		Standalone:   standalone,
 		NetworkID:    uint32(networkID),
 		NodeStore:    db,
+		SHAMapFamily: nodeFamily,
+		FastLoad:     appConfig.NodeDB.FastLoad,
 		RelationalDB: repoManager,
 		Logger:       rootLogger,
 		Table:        amendmentTable,
@@ -180,6 +190,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		appConfig.NodeDB.IsAdvisoryDeleteEnabled(),
 		appConfig.LocalStateDir(),
 	); asErr != nil {
+		if appConfig.NodeDB.IsOnlineDeleteEnabled() {
+			return fmt.Errorf("load online-delete state: %w", asErr)
+		}
 		serverLog.Warn("Failed to load advisory-delete state", "err", asErr)
 	} else {
 		services.AdvisoryDeleteState = advisoryStore
@@ -204,16 +217,47 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 					},
 					serverLog,
 				)
+				minimumOnline := rotator.MinimumOnline()
+				if minimumOnline == 0 && repoManager != nil {
+					minSeq, minErr := repoManager.Ledger().GetMinLedgerSeq(context.Background())
+					if minErr != nil {
+						return fmt.Errorf("load online-delete minimum ledger: %w", minErr)
+					}
+					if minSeq != nil {
+						minimumOnline = uint32(*minSeq)
+						if err := rotator.SetMinimumOnlineFloor(minimumOnline); err != nil {
+							return fmt.Errorf("persist online-delete minimum ledger: %w", err)
+						}
+					}
+				}
+				if minimumOnline > 0 {
+					nodeFamily.SetMinimumLedgerSeq(minimumOnline)
+				}
+				rotator.SetStateRefresh(
+					ledgerService.RefreshValidatedState,
+					nodeFamily.SetMinimumLedgerSeq,
+					nodeFamily.BeginPrune,
+				)
 				rotator.Start()
-				// Clamp complete_ledgers to the deletion boundary so
-				// server_info never advertises ledgers rotation reclaimed.
-				ledgerService.SetMinimumOnlineFunc(rotator.MinimumOnline)
 				serverLog.Info("Online delete enabled",
 					"online_delete", appConfig.NodeDB.OnlineDelete,
 					"advisory_delete", appConfig.NodeDB.IsAdvisoryDeleteEnabled())
 			} else {
 				serverLog.Warn("online_delete configured but node store backend does not support pruning")
 			}
+		}
+	}
+	retentionFloor := func() uint32 {
+		floor := uint32(appConfig.NodeDB.EarliestSeq)
+		if rotator != nil && rotator.MinimumOnline() > floor {
+			floor = rotator.MinimumOnline()
+		}
+		return floor
+	}
+	if appConfig.NodeDB.EarliestSeq > 0 || rotator != nil {
+		ledgerService.SetMinimumOnlineFunc(retentionFloor)
+		if nodeFamily != nil {
+			nodeFamily.SetMinimumLedgerSeq(retentionFloor())
 		}
 	}
 
@@ -295,8 +339,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	// store is configured (standalone / RPC-only). The RPC's own availability
 	// is then gated on network/sync state, as in rippled, not on storage.
 	var cleanerFamily shamap.Family
-	if db != nil {
-		cleanerFamily = shamap.NewNodeStoreFamily(db)
+	if nodeFamily != nil {
+		cleanerFamily = nodeFamily
 	} else {
 		memFamily := shamap.NewMemoryNodeStoreFamily()
 		cleanerFamily = memFamily
@@ -331,20 +375,37 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// interface nil when rotation is off so the disabled path is unchanged
 		// (a typed-nil *Rotator would be a non-nil interface).
 		var floor adaptor.MinimumOnlineFloor
-		if rotator != nil {
-			floor = rotator
+		if appConfig.NodeDB.EarliestSeq > 0 || rotator != nil {
+			floor = minimumOnlineFloorFunc(retentionFloor)
 		}
 		consensusComponents, compErr = adaptor.NewFromConfig(appConfig, ledgerService, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
+		if rotator != nil {
+			ageThreshold := 60 * time.Second
+			if appConfig.NodeDB.AgeThresholdSeconds > 0 {
+				ageThreshold = time.Duration(appConfig.NodeDB.AgeThresholdSeconds) * time.Second
+			}
+			recoveryWait := 5 * time.Second
+			if appConfig.NodeDB.RecoveryWaitSeconds > 0 {
+				recoveryWait = time.Duration(appConfig.NodeDB.RecoveryWaitSeconds) * time.Second
+			}
+			rotator.SetHealthCheck(func() bool {
+				if consensusComponents.Adaptor.GetOperatingMode() != consensus.OpModeFull {
+					return false
+				}
+				validated := ledgerService.GetValidatedLedger()
+				return validated != nil && time.Since(validated.CloseTime()) <= ageThreshold
+			}, recoveryWait)
+		}
 
 		// Back inbound acquisitions with the node store before Start launches the
 		// router loop, so the family is published before any acquisition reads it
 		// (issue #1158).
-		if db != nil {
+		if nodeFamily != nil {
 			if router := consensusComponents.Router; router != nil {
-				router.SetAcquisitionFamily(shamap.NewNodeStoreFamily(db))
+				router.SetAcquisitionFamily(nodeFamily)
 			}
 		}
 
@@ -564,8 +625,19 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// Bind to the live accessor (not a boot-time copy) so a SIGHUP
 		// reload of the [validators] stanza is visible to the RPC.
 		componentsRef := consensusComponents
+		adaptorRef := consensusComponents.Adaptor
 		services.LocalStaticTrustedKeysBase58 = func() []string {
 			masters := componentsRef.StaticTrustedMasterKeys()
+			out := make([]string, 0, len(masters))
+			for _, mk := range masters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
+		services.TrustedValidatorKeysBase58 = func() []string {
+			masters := adaptorRef.GetTrustedMasterKeys()
 			out := make([]string, 0, len(masters))
 			for _, mk := range masters {
 				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
@@ -578,10 +650,10 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
 			// `signing_keys` only surfaces master→signing pairs for
 			// masters present in keyListings_, i.e. validators listed
-			// by at least one publisher or pinned in the local
-			// [validators] stanza. Without this filter we would leak
-			// every gossiped manifest, including ones unrelated to any
-			// trusted publisher.
+			// by at least one publisher, pinned in the local
+			// [validators] stanza, or used as the local identity. Without
+			// this filter we would leak every gossiped manifest, including
+			// ones unrelated to any trusted publisher.
 			vlAgg := consensusComponents.ValidatorList
 			services.SigningKeysBase58 = func() map[string]string {
 				snap := mc.MasterToSigning()
@@ -589,11 +661,14 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 					return nil
 				}
 				listed := make(map[[33]byte]struct{})
-				for _, mk := range componentsRef.StaticTrustedMasterKeys() {
+				for _, mk := range adaptorRef.GetTrustedMasterKeys() {
 					listed[mk] = struct{}{}
 				}
 				if vlAgg != nil {
 					for _, p := range vlAgg.PublisherSnapshot() {
+						if p.Status != validatorlist.StatusAvailable {
+							continue
+						}
 						for _, mk := range p.Validators {
 							listed[mk] = struct{}{}
 						}
@@ -616,7 +691,6 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 				return out
 			}
 		}
-		adaptorRef := consensusComponents.Adaptor
 		services.NegativeUNLBase58 = func() []string {
 			masters := adaptorRef.GetNegativeUNLMasters()
 			if len(masters) == 0 {
@@ -724,12 +798,6 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		}
 	}
 
-	// pubProposedTransaction → transactions_proposed / accounts_proposed
-	// (NetworkOPs.cpp:1535-1544 → 3054-3090 → 3550-3611). The service
-	// only fires this callback for applied submissions and supplies the
-	// full mentioned-accounts set, so the fan-out matches rippled's
-	// pubProposedAccountTransaction which iterates every account
-	// referenced by the tx (source, destination, regular key, signers).
 	ledgerService.SetSubmittedTxCallback(func(ev service.SubmittedTxEvent) {
 		publisher.PublishProposedTransaction(
 			buildProposedTxEvent(ev),
@@ -754,7 +822,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// callback fires from both the standalone accept path and the
 		// consensus SetValidatedLedger path, so the rotator sees every
 		// validated sequence. Notify never blocks.
-		rotator.Notify(event.LedgerInfo.Sequence)
+		if rotator != nil {
+			rotator.Notify(event.LedgerInfo.Sequence)
+		}
 
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
@@ -774,24 +844,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		ledgerHashStr := upperHex(event.LedgerInfo.Hash[:])
-
 		for _, txResult := range event.TransactionResults {
-			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
-			engineResult := metaTransactionResult(metaJSON)
-
-			txEvent := &rpc.TransactionEvent{
-				Type:                "transaction",
-				EngineResult:        engineResult,
-				EngineResultCode:    0,
-				EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
-				LedgerIndex:         txResult.LedgerIndex,
-				LedgerHash:          ledgerHashStr,
-				Transaction:         txJSON,
-				Meta:                metaJSON,
-				Hash:                upperHex(txResult.TxHash[:]),
-				Validated:           txResult.Validated,
-			}
+			txEvent, engineResult := buildValidatedTransactionEvent(txResult, event, uint32(networkID))
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 
 			// Per-book delivery is tesSUCCESS-only — rippled gates
@@ -806,19 +860,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			if len(pairs) == 0 {
 				continue
 			}
-			for _, pair := range pairs {
-				ev := &rpc.OrderBookChangeEvent{
-					Type:        "transaction",
-					Status:      "closed",
-					LedgerIndex: txResult.LedgerIndex,
-					LedgerHash:  ledgerHashStr,
-					LedgerTime:  ledgerTime,
-					Transaction: txJSON,
-					Meta:        metaJSON,
-					Validated:   txResult.Validated,
-				}
-				publisher.PublishOrderBookChange(ev, pair.takerGets, pair.takerPays)
-			}
+			publisher.PublishOrderBookChange(txEvent, pairs)
 		}
 
 		// pubBookChanges → book_changes aggregate stream
@@ -1013,7 +1055,7 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 		if err != nil {
 			return nil, nil, fmt.Errorf("storage backend: %w", err)
 		}
-		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB)
+		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB, cfg.NodeSize)
 		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
 		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
 			"cache_size", cacheSize, "cache_age", cacheTTL)
@@ -1239,19 +1281,36 @@ const (
 // Node-object cache defaults applied when the operator leaves node_db
 // cache_size / cache_age unset.
 const (
-	defaultNodeCacheSize = 10000
-	defaultNodeCacheAge  = 10 * time.Minute
+	defaultNodeCacheSize = 2_097_152
+	defaultNodeCacheAge  = 90 * time.Minute
 )
 
 // nodeStoreCacheParams maps node_db cache_size (entries) and cache_age
 // (minutes) onto the node-object cache parameters, substituting the
 // built-in defaults for unset (zero) values.
-func nodeStoreCacheParams(n config.NodeDBConfig) (int, time.Duration) {
-	size := defaultNodeCacheSize
+func nodeStoreCacheParams(n config.NodeDBConfig, nodeSize string) (int, time.Duration) {
+	profiles := map[string]struct {
+		size int
+		age  time.Duration
+	}{
+		"tiny":   {262_144, 30 * time.Minute},
+		"small":  {524_288, 60 * time.Minute},
+		"medium": {2_097_152, 90 * time.Minute},
+		"large":  {4_194_304, 120 * time.Minute},
+		"huge":   {8_388_608, 900 * time.Minute},
+	}
+	if nodeSize == "" {
+		nodeSize = "medium"
+	}
+	profile, ok := profiles[nodeSize]
+	if !ok {
+		profile = profiles["medium"]
+	}
+	size := profile.size
 	if n.CacheSize > 0 {
 		size = n.CacheSize
 	}
-	age := defaultNodeCacheAge
+	age := profile.age
 	if n.CacheAge > 0 {
 		age = time.Duration(n.CacheAge) * time.Minute
 	}
@@ -1414,7 +1473,7 @@ func doShutdown(
 	}
 
 	// Drain and join the persistence worker before closing its stores, so
-	// queued validated-ledger persists become durable instead of being
+	// queued ledger persists become durable instead of being
 	// abandoned (and so no StoreBatch races kvDB.Close). Ordered after the
 	// consensus components stop, so no new ledger closes past this point.
 	if ledgerService != nil {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -22,13 +21,14 @@ func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 }
 
 func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
-	// An amendment-blocked node is never more than connected: it cannot
-	// build correct ledgers, so it must not claim to be synced.
-	if mode > consensus.OpModeConnected && a.IsAmendmentBlocked() {
-		mode = consensus.OpModeConnected
-	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// A blocked node is never more than connected: it cannot safely
+	// participate in consensus, so it must not claim to be synced.
+	if mode > consensus.OpModeConnected && (a.IsAmendmentBlocked() || a.IsUNLBlocked()) {
+		mode = consensus.OpModeConnected
+	}
 	a.operatingMode = mode
 	if a.stateAcct != nil {
 		// Held under a.mu so the field and the accounting transition share one
@@ -302,6 +302,11 @@ func (a *Adaptor) ancestorOf(ledger consensus.Ledger, targetSeq uint32) consensu
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
+	if a.ledgerService.NeedsInitialSync() {
+		if _, err := a.ledgerService.GetLedgerByHash(hash); err != nil {
+			a.sender.CheckTracking(seq)
+		}
+	}
 	a.ledgerService.SetValidatedLedger(seq, hash)
 	a.refreshRemoteFee(ledgerID)
 	a.logger.Info("Ledger fully validated",
@@ -362,36 +367,6 @@ func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {
 // NeedsInitialSync returns true if the node hasn't yet adopted a ledger from peers.
 func (a *Adaptor) NeedsInitialSync() bool {
 	return a.ledgerService.NeedsInitialSync()
-}
-
-// AdoptLedgerFromHeader adopts a peer's ledger from a serialized header.
-func (a *Adaptor) AdoptLedgerFromHeader(headerData []byte) error {
-	h, err := header.DeserializePrefixedHeader(headerData, true)
-	if err != nil {
-		// Try without prefix (some responses omit it)
-		h, err = header.DeserializeHeader(headerData, true)
-		if err != nil {
-			return fmt.Errorf("deserialize header: %w", err)
-		}
-	}
-
-	if err := a.ledgerService.AdoptLedgerHeader(h); err != nil {
-		return fmt.Errorf("adopt ledger: %w", err)
-	}
-
-	// Transition to Tracking mode — the router manages the Full transition
-	// once we verify our LCL matches the network.
-	a.SetOperatingMode(consensus.OpModeTracking)
-
-	// Tell peers about the jump so their tallies replace whatever LCL they
-	// last recorded for us.
-	a.broadcastSwitchedLedger(h.LedgerIndex, h.Hash[:], h.ParentHash[:])
-
-	a.logger.Info("Adopted peer ledger",
-		"seq", h.LedgerIndex,
-		"hash", fmt.Sprintf("%x", h.Hash[:8]),
-	)
-	return nil
 }
 
 func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {

@@ -121,3 +121,38 @@ func TestAMM_SortOrder_XRPCurrencyTie_KeepsOriginalOrder(t *testing.T) {
 			k1.Key, k2.Key)
 	}
 }
+
+func TestXChainClaimKeyletsHashRawBridgeFields(t *testing.T) {
+	var bridge XChainBridge
+	for i := range bridge.LockingDoor {
+		bridge.LockingDoor[i] = byte(i + 1)
+		bridge.LockingIssuer[i] = byte(i + 0x21)
+		bridge.IssuingDoor[i] = byte(i + 0x41)
+	}
+	copy(bridge.LockingCurrency[12:], []byte("USD"))
+
+	const sequence = uint64(0x0102030405060708)
+	tests := []struct {
+		name     string
+		actual   [32]byte
+		expected string
+	}{
+		{
+			"claim",
+			XChainClaimID(bridge, sequence).Key,
+			"25e9bb7665ffbf5e0529daa2719490c7f3cb492f2e0c293e97084f6e39e691d7",
+		},
+		{
+			"create account claim",
+			XChainCreateAccountClaimID(bridge, sequence).Key,
+			"165772e2dacbb6c064392e074876561376e06d10e5c3e860e5ac47fbf21063a2",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if actual := hex.EncodeToString(tc.actual[:]); actual != tc.expected {
+				t.Fatalf("unexpected XChain key: got %s, want %s", actual, tc.expected)
+			}
+		})
+	}
+}

@@ -102,7 +102,12 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	rd := NewReplayDelta([32]byte{}, 7, parent, nil)
 	rd.mu.Lock()
 	rd.state = StateComplete
-	rd.result = ledger.NewFromHeader(resHdr, nil, nil, parent.GetFees())
+	stateMap, err := parent.StateMapSnapshot()
+	require.NoError(t, err)
+	txMap, err := parent.TxMapSnapshot()
+	require.NoError(t, err)
+	rd.result, err = ledger.NewFromHeader(resHdr, stateMap, txMap, parent.GetFees())
+	require.NoError(t, err)
 	// Purposely-malformed TxBytes — distinguishable per index so the
 	// returned error tells us which tx Apply tried first.
 	rd.txs = []DecodedTx{
@@ -112,7 +117,7 @@ func TestReplayDelta_Apply_OrderedByIndex(t *testing.T) {
 	}
 	rd.mu.Unlock()
 
-	_, err := rd.Apply(tx.EngineConfig{})
+	_, err = rd.Apply(tx.EngineConfig{})
 	require.Error(t, err)
 	// Apply should have hit the index=0 (Hash 0xA0...) tx first; its
 	// 8-byte hash prefix is a0000000_00000000.

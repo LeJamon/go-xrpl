@@ -637,6 +637,12 @@ func RPCErrorUnknownOption(message string) *RPCError {
 	return e
 }
 
+func RPCErrorMalformedRequestBare() *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "malformedRequest", "malformedRequest", "")
+	e.bareToken = true
+	return e
+}
+
 // RPCErrorSrcActMissing returns an error when the source account is not provided
 // (matches rippled rpcSRC_ACT_MISSING, code 66, token "srcActMissing").
 func RPCErrorSrcActMissing(message string) *RPCError {

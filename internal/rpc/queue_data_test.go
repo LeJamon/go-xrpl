@@ -191,7 +191,8 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 
 	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	method := &handlers.LedgerMethod{}
-	paramsJSON, _ := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
+	paramsJSON, err := json.Marshal(map[string]any{"ledger_index": "current", "queue": true})
+	require.NoError(t, err)
 
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	require.Nil(t, rpcErr)
@@ -211,9 +212,84 @@ func TestLedgerQueueData_RealQueue(t *testing.T) {
 	assert.EqualValues(t, 20, entry["LastLedgerSequence"])
 	// Never-retried tx omits last_result (rippled std::optional gate).
 	assert.NotContains(t, entry, "last_result")
-	// API v1 nests the tx body under "tx" with the hash.
-	tx := entry["tx"].(map[string]any)
-	assert.Equal(t, "AB00000000000000000000000000000000000000000000000000000000000000", tx["hash"])
+	assert.Equal(t, "AB00000000000000000000000000000000000000000000000000000000000000", entry["tx"])
+
+	ctx.ApiVersion = types.ApiVersion2
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	entry = resultToMap(t, result)["queue_data"].([]any)[0].(map[string]any)
+	assert.NotContains(t, entry, "tx")
+	assert.Equal(t, "AB00000000000000000000000000000000000000000000000000000000000000", entry["hash"])
+
+	paramsJSON, err = json.Marshal(map[string]any{"queue": true})
+	require.NoError(t, err)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	assert.NotContains(t, resultToMap(t, result), "queue_data")
+
+	paramsJSON, err = json.Marshal(map[string]any{"ledger_index": "", "queue": true})
+	require.NoError(t, err)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	assert.Contains(t, resultToMap(t, result), "queue_data")
+
+	paramsJSON = json.RawMessage(`{"ledger_index":null,"queue":true}`)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+
+	paramsJSON = json.RawMessage(`{"queue":"yes","ledger_hash":"","ledger_index":1}`)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "Invalid parameters.", rpcErr.Message)
+
+	paramsJSON = json.RawMessage(`{"ledger_index":1.5,"queue":true}`)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "Invalid field 'ledger_index', not string or number.", rpcErr.Message)
+
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"ledger_index":1.0,"queue":true}`),
+		json.RawMessage(`{"ledger_index":1e3,"queue":true}`),
+	} {
+		result, rpcErr = method.Handle(ctx, raw)
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Invalid field 'ledger_index', not string or number.", rpcErr.Message)
+	}
+
+	paramsJSON = json.RawMessage(`{"ledger_index":-0,"queue":true}`)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+}
+
+func TestLedgerQueueDataRejectsClosedLedger(t *testing.T) {
+	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	reader := newDefaultLedgerReader(2, true)
+	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+		return reader, nil
+	}
+	services := &types.ServiceContainer{
+		Ledger:      mock,
+		QueueAllTxs: func() []types.QueuedTxInfo { return nil },
+	}
+	paramsJSON, err := json.Marshal(map[string]any{"ledger_index": 2, "queue": true})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.LedgerMethod{}).Handle(&types.RPCContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}, paramsJSON)
+
+	require.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 // TestLedgerQueueData_EmptyOmitted verifies an empty TxQ yields no queue_data

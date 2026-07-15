@@ -67,8 +67,8 @@ func TestStore_PersistenceRoundTrip(t *testing.T) {
 	if _, err := s.SetCanDelete(900); err != nil {
 		t.Fatalf("SetCanDelete: %v", err)
 	}
-	if err := s.SetLastRotated(800); err != nil {
-		t.Fatalf("SetLastRotated: %v", err)
+	if err := s.SetRotation(800, 501); err != nil {
+		t.Fatalf("SetRotation: %v", err)
 	}
 
 	// Reopen from the same dir; state must survive.
@@ -81,6 +81,9 @@ func TestStore_PersistenceRoundTrip(t *testing.T) {
 	}
 	if got := reopened.GetLastRotated(); got != 800 {
 		t.Fatalf("reloaded lastRotated = %d, want 800", got)
+	}
+	if got := reopened.GetMinimumOnline(); got != 501 {
+		t.Fatalf("reloaded minimumOnline = %d, want 501", got)
 	}
 
 	// The state file lives under database_path.

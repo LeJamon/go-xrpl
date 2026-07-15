@@ -270,6 +270,15 @@ func TestRipplePathFind_ParseErrors(t *testing.T) {
 	})
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
+
+	result, rpcErr = env.RPC("ripple_path_find", map[string]any{
+		"source_account":      alice.Address,
+		"destination_account": bob.Address,
+		"destination_amount":  usd5,
+		"domain":              "0",
+	})
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
 }
 
 // TestRipplePathFind_LedgerChecks covers PathRequest::isValid: source must

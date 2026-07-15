@@ -127,6 +127,17 @@ func (a *Adaptor) GetTrustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
 	return a.trustedValidatorsAndQuorum()
 }
 
+func (a *Adaptor) GetTrustedMasterKeys() [][33]byte {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	result := make([][33]byte, len(a.trustedMasterKeys))
+	copy(result, a.trustedMasterKeys)
+	return result
+}
+
 // SetTrustedValidators atomically replaces the operator-trusted validator set.
 //
 // validators and masterKeys are index-aligned and MUST be the same length; a
@@ -181,6 +192,9 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	// releasing a.mu to avoid lock nesting.
 	if a.trustedVotes != nil {
 		a.trustedVotes.TrustChanged(vCopy)
+	}
+	if a.IsUNLBlocked() && a.GetOperatingMode() > consensus.OpModeConnected {
+		a.SetOperatingMode(consensus.OpModeConnected)
 	}
 	if onTrustChanged != nil {
 		onTrustChanged(vCopy, quorum)

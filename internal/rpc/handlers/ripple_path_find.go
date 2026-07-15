@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"sort"
-	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -64,6 +63,21 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, types.RPCErrorInvalidParams("Invalid parameters: " + err.Error())
 		}
 	}
+	ledgerSpec, hasLedgerSelector, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	var view types.LedgerStateView
+	var meta *pathFindLedgerMeta
+	standalone := ctx != nil && ctx.Services != nil && ctx.Services.Ledger != nil &&
+		ctx.Services.Ledger.GetServerInfo().Standalone
+	usesLookup := hasLedgerSelector || standalone
+	if usesLookup {
+		view, meta, rpcErr = resolvePathFindLedger(ctx, ledgerSpec, true)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+	}
 
 	// Field validation follows rippled PathRequest::parseJson order exactly.
 	rawSrc, ok := probe["source_account"]
@@ -118,28 +132,31 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		return nil, rpcErr
 	}
 
-	// rippled parses domain as a hex uint256 (PathRequest::parseJson) and
-	// threads it into PermissionedDEX-restricted pathfinding. go-xrpl's
-	// pathfinder has no domain support, so a valid domain reports
-	// notSupported rather than silently returning unrestricted paths.
+	var domainID *[32]byte
 	if rawDomain, ok := probe["domain"]; ok {
 		var domainStr string
 		if err := json.Unmarshal(rawDomain, &domainStr); err != nil {
 			return nil, types.RPCErrorDomainMalformed("Domain is malformed.")
 		}
-		if decoded, err := hex.DecodeString(domainStr); err != nil || len(decoded) != 32 {
-			return nil, types.RPCErrorDomainMalformed("Domain is malformed.")
+		domainID = new([32]byte)
+		if domainStr != "0" {
+			decoded, err := hex.DecodeString(domainStr)
+			if err != nil || len(decoded) != 32 {
+				return nil, types.RPCErrorDomainMalformed("Domain is malformed.")
+			}
+			copy(domainID[:], decoded)
 		}
-		return nil, types.RPCErrorNotSupported("domain-restricted pathfinding is not supported")
 	}
 
 	// Ledger selection: an explicit ledger_hash/ledger_index resolves a
 	// specific ledger and merges its metadata into the response, mirroring
 	// rippled's RPC::lookupLedger merge; otherwise the closed ledger is used
 	// with no ledger fields in the reply.
-	view, meta, rpcErr := resolvePathFindLedger(ctx, probe)
-	if rpcErr != nil {
-		return nil, rpcErr
+	if !usesLookup {
+		view, meta, rpcErr = resolvePathFindLedger(ctx, types.LedgerSpecifier{}, false)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
 	}
 
 	// Existence checks. Reference: rippled PathRequest::isValid.
@@ -153,7 +170,15 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if !convertAll {
-			_, reserveBase, _ := ctx.Services.Ledger.GetCurrentFees()
+			feeData, feeErr := view.Read(keylet.Fees())
+			if feeErr != nil {
+				return nil, types.RPCErrorInternal("Internal error.")
+			}
+			fees, feeErr := state.ParseFeeSettings(feeData)
+			if feeErr != nil {
+				return nil, types.RPCErrorInternal("Internal error.")
+			}
+			reserveBase := fees.GetReserveBase()
 			if dstAmount.Drops() < int64(reserveBase) {
 				return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 			}
@@ -162,6 +187,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 
 	// Run pathfinding at the production search level (rippled PATH_SEARCH).
 	pr := pathfinder.NewPathRequest(srcAccount, dstAccount, dstAmount, sendMax, srcCurrencies, convertAll)
+	pr.SetDomainID(domainID)
 	result := pr.Execute(view)
 	if result.SourceCurrencyOverflow {
 		return nil, types.RPCErrorInternal("Internal error.")
@@ -293,13 +319,11 @@ func parseSourceCurrencies(
 		}
 		rawCurrency, hasCurrency := fields["currency"]
 		rawMPT, hasMPT := fields["mpt_issuance_id"]
-		if hasCurrency == hasMPT {
+		_, hasIssuer := fields["issuer"]
+		if hasCurrency == hasMPT || hasMPT && hasIssuer {
 			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		if hasMPT {
-			if _, hasIssuer := fields["issuer"]; hasIssuer {
-				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
-			}
 			var mptID string
 			if err := json.Unmarshal(rawMPT, &mptID); err != nil {
 				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
@@ -312,9 +336,6 @@ func parseSourceCurrencies(
 			if sendMax != nil {
 				if !issue.Equal(sendMaxIssue) {
 					continue
-				}
-				if sendMaxIssue.Issuer != srcAccount {
-					return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
 				}
 			}
 			add(issue)
@@ -367,6 +388,9 @@ func parseSourceCurrencies(
 			} else {
 				add(payment.Issue{Currency: currency, Issuer: srcAccount})
 			}
+			if !isXRPCur {
+				add(payment.Issue{Currency: currency, Issuer: srcAccount})
+			}
 			continue
 		}
 
@@ -386,21 +410,26 @@ type pathFindLedgerMeta struct {
 }
 
 // resolvePathFindLedger selects the ledger to run pathfinding on. With no
-// ledger_hash/ledger_index the closed ledger is used (rippled's pathfinding
-// default) and no metadata is reported.
+// selector the closed ledger is used and no metadata is reported.
 func resolvePathFindLedger(
 	ctx *types.RPCContext,
-	probe map[string]json.RawMessage,
+	spec types.LedgerSpecifier,
+	hasSelector bool,
 ) (types.LedgerStateView, *pathFindLedgerMeta, *types.RPCError) {
-	if rawHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawHash) {
-		var hashStr string
-		if err := json.Unmarshal(rawHash, &hashStr); err != nil {
-			return nil, nil, types.RPCErrorInvalidParams("ledgerHashMalformed")
+	if !hasSelector {
+		view, err := ctx.Services.Ledger.GetClosedLedgerView()
+		if err != nil {
+			return nil, nil, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 		}
-		rawBytes, err := hex.DecodeString(hashStr)
-		if err != nil || len(rawBytes) != 32 {
-			return nil, nil, types.RPCErrorInvalidParams("ledgerHashMalformed")
-		}
+		return view, nil, nil
+	}
+
+	selector, selectorErr := resolveLedgerSelector(spec)
+	if selectorErr != nil {
+		return nil, nil, selectorErr
+	}
+	if len(selector) == 64 {
+		rawBytes, _ := hex.DecodeString(selector)
 		var h [32]byte
 		copy(h[:], rawBytes)
 		src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
@@ -412,61 +441,39 @@ func resolvePathFindLedger(
 			return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		}
 		return view, &pathFindLedgerMeta{
+			current:   !reader.IsClosed(),
 			seq:       reader.Sequence(),
 			hash:      reader.Hash(),
 			validated: reader.IsValidated(),
 		}, nil
 	}
 
-	if rawIdx, ok := probe["ledger_index"]; ok && !isJSONNull(rawIdx) {
-		var li types.LedgerIndex
-		if err := json.Unmarshal(rawIdx, &li); err != nil {
-			return nil, nil, types.RPCErrorInvalidParams("ledgerIndexMalformed")
-		}
-		selector := li.String()
-		switch selector {
-		case "", "current", "closed", "validated":
-			view, err := ctx.Services.Ledger.GetClosedLedgerView()
-			if err != nil {
-				return nil, nil, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
-			}
-			info := ctx.Services.Ledger.GetServerInfo()
-			if selector == "current" {
-				return view, &pathFindLedgerMeta{
-					current: true,
-					seq:     ctx.Services.Ledger.GetCurrentLedgerIndex(),
-				}, nil
-			}
-			return view, &pathFindLedgerMeta{
-				seq:       info.ClosedLedgerSeq,
-				hash:      info.ClosedLedgerHash,
-				validated: info.HaveValidated && info.ValidatedLedgerSeq == info.ClosedLedgerSeq,
-			}, nil
-		}
-		seq, perr := strconv.ParseUint(selector, 10, 32)
-		if perr != nil {
-			return nil, nil, types.RPCErrorInvalidParams("ledgerIndexMalformed")
-		}
-		src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
-		if !ok {
-			return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		view, reader, lerr := src.GetLedgerViewBySeq(uint32(seq))
-		if lerr != nil || view == nil {
-			return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return view, &pathFindLedgerMeta{
-			seq:       reader.Sequence(),
-			hash:      reader.Hash(),
-			validated: reader.IsValidated(),
-		}, nil
+	seq := uint32(0)
+	switch selector {
+	case "current":
+		seq = ctx.Services.Ledger.GetCurrentLedgerIndex()
+	case "closed":
+		seq = ctx.Services.Ledger.GetClosedLedgerIndex()
+	case "validated":
+		seq = ctx.Services.Ledger.GetValidatedLedgerIndex()
+	default:
+		parsed, _ := parseLedgerIndex(selector)
+		seq = uint32(parsed)
 	}
-
-	view, err := ctx.Services.Ledger.GetClosedLedgerView()
-	if err != nil {
-		return nil, nil, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
+	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
+	if !ok {
+		return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 	}
-	return view, nil, nil
+	view, reader, lerr := src.GetLedgerViewBySeq(seq)
+	if lerr != nil || view == nil || reader == nil {
+		return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+	}
+	return view, &pathFindLedgerMeta{
+		current:   !reader.IsClosed(),
+		seq:       reader.Sequence(),
+		hash:      reader.Hash(),
+		validated: reader.IsValidated(),
+	}, nil
 }
 
 // formatAmountJSON formats an Amount for JSON output, matching rippled's
