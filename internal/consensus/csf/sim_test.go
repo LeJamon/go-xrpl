@@ -3,6 +3,8 @@ package csf
 import (
 	"testing"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // TestStandalone tests a single peer running consensus.
@@ -39,17 +41,15 @@ func TestStandalone(t *testing.T) {
 }
 
 // fastParms returns consensus parameters suitable for quick testing.
-func fastParms() ConsensusParms {
-	return ConsensusParms{
+func fastParms() consensus.Timing {
+	return consensus.Timing{
 		LedgerIdleInterval: 500 * time.Millisecond,
 		LedgerGranularity:  10 * time.Millisecond,
 		LedgerMinConsensus: 100 * time.Millisecond,
 		LedgerMaxConsensus: 500 * time.Millisecond,
 		LedgerMinClose:     50 * time.Millisecond,
-		LedgerMaxClose:     500 * time.Millisecond,
 		ProposeFreshness:   1 * time.Second,
 		ProposeInterval:    50 * time.Millisecond,
-		MinConsensusTime:   100 * time.Millisecond,
 	}
 }
 

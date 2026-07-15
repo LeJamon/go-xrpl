@@ -343,3 +343,29 @@ func TestMessageTypeString(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodeFrame(t *testing.T) {
+	msg := &Ping{PType: PingTypePing, Seq: 42}
+	frame, err := EncodeFrame(msg)
+	if err != nil {
+		t.Fatalf("EncodeFrame: %v", err)
+	}
+	payload, err := Encode(msg)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	want, err := BuildWireMessage(msg.Type(), payload)
+	if err != nil {
+		t.Fatalf("BuildWireMessage: %v", err)
+	}
+	if !bytes.Equal(frame, want) {
+		t.Fatalf("EncodeFrame = %x, want %x", frame, want)
+	}
+	header, err := DecodeHeader(frame)
+	if err != nil {
+		t.Fatalf("DecodeHeader: %v", err)
+	}
+	if header.MessageType != TypePing {
+		t.Fatalf("message type = %v, want %v", header.MessageType, TypePing)
+	}
+}

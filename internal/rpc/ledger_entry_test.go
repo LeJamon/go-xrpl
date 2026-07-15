@@ -22,6 +22,7 @@ type mockLedgerEntryService struct {
 	ledgerEntryResult *types.LedgerEntryResult
 	ledgerEntryErr    error
 	lastRequestedKey  [32]byte
+	lastLedgerIndex   string
 }
 
 func newMockLedgerEntryService() *mockLedgerEntryService {
@@ -44,6 +45,7 @@ func newMockLedgerEntryService() *mockLedgerEntryService {
 
 func (m *mockLedgerEntryService) GetLedgerEntry(_ context.Context, entryKey [32]byte, ledgerIndex string) (*types.LedgerEntryResult, error) {
 	m.lastRequestedKey = entryKey
+	m.lastLedgerIndex = ledgerIndex
 	if m.ledgerEntryErr != nil {
 		return nil, m.ledgerEntryErr
 	}
@@ -780,6 +782,9 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 			expectError: false,
 			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "index")
+				assert.Equal(t, float64(3), resp["ledger_current_index"])
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_index")
 			},
 		},
 		{
@@ -867,8 +872,11 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 			},
 			expectError: false,
 			validateResp: func(t *testing.T, resp map[string]any) {
-				// Should default to validated and succeed
+				assert.Equal(t, "current", mock.lastLedgerIndex)
 				assert.Contains(t, resp, "index")
+				assert.Equal(t, float64(3), resp["ledger_current_index"])
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_index")
 			},
 		},
 	}

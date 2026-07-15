@@ -72,6 +72,14 @@ type ValidationHistorian interface {
 	GetJSONTrie() map[string]any
 }
 
+// ValidationQuorumRechecker is an optional historian capability used when a
+// ledger arrives after its validation quorum notification. It snapshots the
+// filtered validations and quorum together and atomically rearms a rejected
+// ledger so a later validation can notify again.
+type ValidationQuorumRechecker interface {
+	RecheckFullyValidated(ledgerID LedgerID, seq uint32) ([]*Validation, int, bool)
+}
+
 // WireableAdaptor is an optional extension engine wires after constructing its
 // ValidationTracker. Implementers emit NegativeUNL pseudo-txs; others (e.g.
 // test mocks) simply skip NegativeUNL voting.
@@ -98,12 +106,12 @@ type ValidationRelayPolicy interface {
 	RelayUntrustedValidations() bool
 }
 
-// TrustChangeNotifier is an optional Adaptor extension: implementers invoke
-// the registered callback after every runtime UNL mutation so the engine can
-// promote stored validations from newly-trusted validators immediately rather
-// than at the next accepted ledger.
+// TrustChangeNotifier is an optional Adaptor extension: registration publishes
+// the current snapshot, then implementers invoke the callback after every
+// runtime UNL mutation so the engine can promote stored validations from
+// newly-trusted validators immediately rather than at the next accepted ledger.
 type TrustChangeNotifier interface {
-	OnTrustChanged(fn func())
+	OnTrustChanged(fn func(trusted []NodeID, quorum int))
 }
 
 // Adaptor is composed of the narrower per-subsystem interfaces below; depend
@@ -248,6 +256,13 @@ type TrustOracle interface {
 
 	// GetQuorum returns the number of validators needed for consensus.
 	GetQuorum() int
+
+	// GetTrustedValidatorsAndQuorum returns one consistent trust snapshot.
+	GetTrustedValidatorsAndQuorum() ([]NodeID, int)
+
+	// IsQuorumUnavailable reports whether publisher availability or an
+	// in-flight trust transition makes finality unsafe.
+	IsQuorumUnavailable() bool
 
 	// GetNegativeUNL returns validators on the negative-UNL: still trusted for
 	// message acceptance but excluded from quorum counts.

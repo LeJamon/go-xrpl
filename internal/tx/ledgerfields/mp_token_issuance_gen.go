@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // MPTokenIssuance is the typed representation of a MPTokenIssuance ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type MPTokenIssuance struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Issuer            string // AccountID (base58)
 	Sequence          uint32
 	TransferFee       int
@@ -57,16 +62,204 @@ const (
 	mptokenissuanceBitPreviousTxnLgrSeq
 )
 
+// SetIssuer assigns Issuer and updates its serialized presence.
+func (m *MPTokenIssuance) SetIssuer(value string) {
+	m.Issuer = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitIssuer
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (m *MPTokenIssuance) SetSequence(value uint32) {
+	m.Sequence = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitSequence
+}
+
+// SetTransferFee assigns TransferFee and updates its serialized presence.
+func (m *MPTokenIssuance) SetTransferFee(value uint16) {
+	m.TransferFee = int(value)
+	m.dirty = true
+	if value == 0 {
+		m.present &^= mptokenissuanceBitTransferFee
+		return
+	}
+	m.present |= mptokenissuanceBitTransferFee
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (m *MPTokenIssuance) SetOwnerNode(value string) {
+	m.OwnerNode = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitOwnerNode
+}
+
+// SetAssetScale assigns AssetScale and updates its serialized presence.
+func (m *MPTokenIssuance) SetAssetScale(value uint8) {
+	m.AssetScale = int(value)
+	m.dirty = true
+	if value == 0 {
+		m.present &^= mptokenissuanceBitAssetScale
+		return
+	}
+	m.present |= mptokenissuanceBitAssetScale
+}
+
+// SetMaximumAmount assigns MaximumAmount and updates its serialized presence.
+func (m *MPTokenIssuance) SetMaximumAmount(value string) {
+	m.MaximumAmount = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitMaximumAmount
+}
+
+// SetOutstandingAmount assigns OutstandingAmount and updates its serialized presence.
+func (m *MPTokenIssuance) SetOutstandingAmount(value string) {
+	m.OutstandingAmount = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitOutstandingAmount
+}
+
+// SetLockedAmount assigns LockedAmount and updates its serialized presence.
+func (m *MPTokenIssuance) SetLockedAmount(value string) {
+	m.LockedAmount = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitLockedAmount
+}
+
+// SetMPTokenMetadata assigns MPTokenMetadata and updates its serialized presence.
+func (m *MPTokenIssuance) SetMPTokenMetadata(value string) {
+	m.MPTokenMetadata = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitMPTokenMetadata
+}
+
+// SetDomainID assigns DomainID and updates its serialized presence.
+func (m *MPTokenIssuance) SetDomainID(value string) {
+	m.DomainID = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitDomainID
+}
+
+// SetMutableFlags assigns MutableFlags and updates its serialized presence.
+func (m *MPTokenIssuance) SetMutableFlags(value uint32) {
+	m.MutableFlags = value
+	m.dirty = true
+	if value == 0 {
+		m.present &^= mptokenissuanceBitMutableFlags
+		return
+	}
+	m.present |= mptokenissuanceBitMutableFlags
+}
+
+// SetReferenceHolding assigns ReferenceHolding and updates its serialized presence.
+func (m *MPTokenIssuance) SetReferenceHolding(value string) {
+	m.ReferenceHolding = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitReferenceHolding
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (m *MPTokenIssuance) SetFlags(value uint32) {
+	m.Flags = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (m *MPTokenIssuance) SetPreviousTxnID(value string) {
+	m.PreviousTxnID = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (m *MPTokenIssuance) SetPreviousTxnLgrSeq(value uint32) {
+	m.PreviousTxnLgrSeq = value
+	m.dirty = true
+	m.present |= mptokenissuanceBitPreviousTxnLgrSeq
+}
+
+func (m *MPTokenIssuance) validateRequired() error {
+	if m.decoded && !m.dirty {
+		return nil
+	}
+	if m.present&mptokenissuanceBitIssuer == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Issuer is not set")
+	}
+	if m.present&mptokenissuanceBitSequence == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Sequence is not set")
+	}
+	if m.present&mptokenissuanceBitOwnerNode == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field OwnerNode is not set")
+	}
+	if m.present&mptokenissuanceBitOutstandingAmount == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field OutstandingAmount is not set")
+	}
+	if m.present&mptokenissuanceBitFlags == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Flags is not set")
+	}
+	return nil
+}
+
+func (m *MPTokenIssuance) validateDecoded() error {
+	if m.present&mptokenissuanceBitIssuer == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Issuer is missing")
+	}
+	if m.present&mptokenissuanceBitSequence == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Sequence is missing")
+	}
+	if m.present&mptokenissuanceBitTransferFee != 0 && m.TransferFee == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field TransferFee is explicitly set")
+	}
+	if m.present&mptokenissuanceBitOwnerNode == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field OwnerNode is missing")
+	}
+	if m.present&mptokenissuanceBitAssetScale != 0 && m.AssetScale == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field AssetScale is explicitly set")
+	}
+	if m.present&mptokenissuanceBitOutstandingAmount == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field OutstandingAmount is missing")
+	}
+	if m.present&mptokenissuanceBitMutableFlags != 0 && m.MutableFlags == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field MutableFlags is explicitly set")
+	}
+	if m.present&mptokenissuanceBitFlags == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Flags is missing")
+	}
+	if m.present&mptokenissuanceBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field PreviousTxnID is missing")
+	}
+	if m.present&mptokenissuanceBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (m *MPTokenIssuance) Decode(data []byte) error {
+	return m.decode(data, false)
+}
+
+func (m *MPTokenIssuance) decodeLegacy(data []byte) error {
+	return m.decode(data, true)
+}
+
+func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 	*m = MPTokenIssuance{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: MPTokenIssuance: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -76,7 +269,10 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 126 {
+					return fmt.Errorf("ledgerfields: MPTokenIssuance: LedgerEntryType is %d, want 126", val)
+				}
+				sawLedgerEntryType = true
 			case 4:
 				m.TransferFee = val
 				m.present |= mptokenissuanceBitTransferFee
@@ -195,6 +391,13 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: MPTokenIssuance: missing LedgerEntryType")
+	}
+	m.decoded = true
+	if !legacy {
+		return m.validateDecoded()
 	}
 	return nil
 }
@@ -412,11 +615,20 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (m *MPTokenIssuance) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(m.ToMap())
+	if err := m.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := m.ToMap()
+	if m.present&mptokenissuanceBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if m.present&mptokenissuanceBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

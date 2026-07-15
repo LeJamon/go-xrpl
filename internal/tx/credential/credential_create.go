@@ -229,6 +229,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TefINTERNAL
 		}
 		cred.SubjectNode = subjectDirResult.Page
+		cred.HasSubjectNode = true
 	}
 
 	// Serialize the credential entry

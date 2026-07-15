@@ -10,11 +10,10 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"time"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // AccountTxMethod handles account_tx: it pages through the transactions that
@@ -105,10 +104,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, types.RPCErrorNotEnabled("")
 		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account transactions: %v", err))
 	}
 
 	// Cache for ledger lookups by sequence, to avoid repeated lookups
@@ -125,6 +121,16 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			return entry
 		}
 		entry := &ledgerCacheEntry{}
+		if source, ok := ctx.Services.Ledger.(types.LedgerContextReader); ok {
+			ledgerContext, lookupErr := source.GetLedgerContext(ctx.Context, seq)
+			if lookupErr == nil && ledgerContext != nil {
+				entry.hash = ledgerContext.Hash
+				entry.closeTimeSec = ledgerContext.CloseTime
+				entry.found = true
+				ledgerCache[seq] = entry
+				return entry
+			}
+		}
 		ledger, lookupErr := ctx.Services.Ledger.GetLedgerBySequence(seq)
 		if lookupErr == nil && ledger != nil {
 			entry.hash = ledger.Hash()
@@ -141,8 +147,8 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	isV2 := ctx.ApiVersion > 1
 
 	// Build transactions array
-	transactions := make([]map[string]any, len(result.Transactions))
-	for i, txn := range result.Transactions {
+	transactions := make([]map[string]any, 0, len(result.Transactions))
+	for _, txn := range result.Transactions {
 		txEntry := map[string]any{
 			"validated": true,
 		}
@@ -172,11 +178,9 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			}
 
 			// Decode tx_blob into JSON
-			txBlobHex := hex.EncodeToString(txn.TxBlob)
-			txJSON, decErr := binarycodec.Decode(txBlobHex)
+			txJSON, decErr := decodeBinaryObject(txn.TxBlob)
 			if decErr != nil {
-				// Fallback to hex if decode fails
-				txEntry["tx_blob"] = strings.ToUpper(txBlobHex)
+				continue
 			} else {
 				sourceTxJSON = maps.Clone(txJSON)
 				ctidNetworkID := networkID
@@ -208,10 +212,9 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			}
 
 			// Decode metadata
-			metaHex := hex.EncodeToString(txn.Meta)
-			metaJSON, metaErr := binarycodec.Decode(metaHex)
+			metaJSON, metaErr := decodeBinaryObject(txn.Meta)
 			if metaErr != nil {
-				txEntry["meta"] = strings.ToUpper(metaHex)
+				txEntry["meta"] = strings.ToUpper(hex.EncodeToString(txn.Meta))
 			} else {
 				if sourceTxJSON != nil {
 					InjectSyntheticFields(sourceTxJSON, metaJSON, SyntheticMetadataContext{
@@ -229,14 +232,13 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 				if ledgerInfo.found {
 					txEntry["ledger_hash"] = strings.ToUpper(hex.EncodeToString(ledgerInfo.hash[:]))
 					if ledgerInfo.closeTimeSec > 0 {
-						closeTime := rippleEpochTime.Add(time.Duration(ledgerInfo.closeTimeSec) * time.Second)
-						txEntry["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
+						txEntry["close_time_iso"] = protocol.FormatCloseTimeISO(protocol.FromRippleTime(uint32(ledgerInfo.closeTimeSec)))
 					}
 				}
 			}
 		}
 
-		transactions[i] = txEntry
+		transactions = append(transactions, txEntry)
 	}
 
 	response := map[string]any{
@@ -305,7 +307,7 @@ type accountTxLedgerSelection struct {
 	hasRange bool
 	min      uint32
 	max      uint32
-	spec     *types.LedgerSpecifier
+	spec     json.RawMessage
 }
 
 func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json.RawMessage) (accountTxLedgerSelection, *types.RPCError) {
@@ -336,7 +338,6 @@ func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json
 		return accountTxLedgerSelection{hasRange: true, min: min, max: max}, nil
 	}
 
-	var spec types.LedgerSpecifier
 	if hashRaw, ok := fields["ledger_hash"]; ok {
 		value, err := decodeAccountTxValue(hashRaw)
 		hash, isString := value.(string)
@@ -347,17 +348,18 @@ func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json
 		if err != nil || len(decoded) != 32 {
 			return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("ledgerHashMalformed")
 		}
-		spec.LedgerHash = hash
+		spec, _ := json.Marshal(map[string]json.RawMessage{"ledger_hash": hashRaw})
+		return accountTxLedgerSelection{spec: spec}, nil
 	} else if indexRaw, ok := fields["ledger_index"]; ok {
 		index, err := accountTxLedgerIndex(indexRaw)
 		if err != nil {
 			return accountTxLedgerSelection{}, err
 		}
-		spec.LedgerIndex = index
+		spec, _ := json.Marshal(map[string]any{"ledger_index": index})
+		return accountTxLedgerSelection{spec: spec}, nil
 	} else {
 		return accountTxLedgerSelection{}, nil
 	}
-	return accountTxLedgerSelection{spec: &spec}, nil
 }
 
 func resolveAccountTxLedgerSelection(ctx *types.RPCContext, selection accountTxLedgerSelection) (int64, int64, *types.RPCError) {
@@ -394,7 +396,7 @@ func resolveAccountTxLedgerSelection(ctx *types.RPCContext, selection accountTxL
 	if selection.spec == nil {
 		return int64(validatedMin), int64(validatedMax), nil
 	}
-	ledger, validated, err := LookupLedger(ctx, *selection.spec)
+	ledger, validated, err := LookupLedger(ctx, selection.spec)
 	if err != nil {
 		return 0, 0, err
 	}

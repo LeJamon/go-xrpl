@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -307,10 +308,10 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}
 	// Emit the marker only when the limit was reached AND the page produced
 	// at least one offer. limit=0 hits errStopBookWalk before any offer is
-	// recorded; emitting formatHashHex(lastOfferKey) there would be 64 zeros,
+	// recorded; emitting protocol.Hash256Hex(lastOfferKey) there would be 64 zeros,
 	// which round-trips as a bad marker on the next call.
 	if hitLimit && len(offers) > 0 {
-		result.Marker = formatHashHex(lastOfferKey)
+		result.Marker = protocol.Hash256Hex(lastOfferKey)
 	}
 	return result, nil
 }
@@ -336,20 +337,20 @@ func (s *Service) buildBookOffer(
 ) (BookOffer, error) {
 	bookOffer := BookOffer{
 		Account:           offer.Account,
-		BookDirectory:     formatHashHex(offer.BookDirectory),
+		BookDirectory:     protocol.Hash256Hex(offer.BookDirectory),
 		BookNode:          fmt.Sprintf("%x", offer.BookNode),
 		Expiration:        offer.Expiration,
 		Flags:             offer.Flags,
 		LedgerEntryType:   "Offer",
 		OwnerNode:         fmt.Sprintf("%x", offer.OwnerNode),
-		PreviousTxnID:     formatHashHex(offer.PreviousTxnID),
+		PreviousTxnID:     protocol.Hash256Hex(offer.PreviousTxnID),
 		PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
 		Sequence:          offer.Sequence,
-		Index:             formatHashHex(key),
+		Index:             protocol.Hash256Hex(key),
 		Quality:           qualityFromDirKey(dirQuality),
 	}
 	if offer.DomainID != ([32]byte{}) {
-		bookOffer.DomainID = formatHashHex(offer.DomainID)
+		bookOffer.DomainID = protocol.Hash256Hex(offer.DomainID)
 	}
 	// Hybrid permissioned offers carry an AdditionalBooks array pointing at
 	// the open book entry the offer is also placed in. Rippled emits this
@@ -360,7 +361,7 @@ func (s *Service) buildBookOffer(
 		bookOffer.AdditionalBooks = []map[string]any{
 			{
 				"Book": map[string]any{
-					"BookDirectory": formatHashHex(offer.AdditionalBookDirectory),
+					"BookDirectory": protocol.Hash256Hex(offer.AdditionalBookDirectory),
 					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
 				},
 			},
@@ -543,7 +544,7 @@ func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte,
 	}
 	var parentCloseTime uint32
 	if !closeTime.IsZero() {
-		switch seconds := toRippleTime(closeTime); {
+		switch seconds := protocol.RippleSeconds(closeTime); {
 		case seconds > math.MaxUint32:
 			parentCloseTime = math.MaxUint32
 		case seconds > 0:
@@ -557,14 +558,11 @@ func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte,
 }
 
 func decodeHex32Into(s string, out *[32]byte) error {
-	if len(s) != 64 {
-		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
-	}
-	b, err := hex.DecodeString(s)
+	hash, err := protocol.Hash256FromHex(s)
 	if err != nil {
 		return err
 	}
-	copy(out[:], b)
+	*out = hash
 	return nil
 }
 
@@ -652,7 +650,7 @@ func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 func extractOfferProof(ctx context.Context, snap *shamap.SHAMap, key [32]byte) ([]string, error) {
 	proof, err := snap.GetProofPathContext(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("offer proof %s: %w", formatHashHex(key), err)
+		return nil, fmt.Errorf("offer proof %s: %w", protocol.Hash256Hex(key), err)
 	}
 	if proof == nil || !proof.Found {
 		return nil, nil

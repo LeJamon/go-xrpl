@@ -5,12 +5,13 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func TestDefaultFees(t *testing.T) {
-	f := defaultFees()
+	f := drops.DefaultFees()
 	if f.Base != 10 || f.Reserve != 10_000_000 || f.Increment != 2_000_000 {
 		t.Errorf("defaultFees = %+v", f)
 	}
@@ -31,7 +32,7 @@ func TestExtractFeesFromSHAMap_Default(t *testing.T) {
 	sm := shamap.New(shamap.TypeState)
 	// No FeeSettings entry → defaults.
 	f := extractFeesFromSHAMap(sm)
-	if f != defaultFees() {
+	if f != drops.DefaultFees() {
 		t.Errorf("extractFeesFromSHAMap (empty) = %+v want defaults", f)
 	}
 }

@@ -3,6 +3,7 @@ package invariants
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -278,8 +279,10 @@ func TestNoZeroEscrow_IOUBadCurrency(t *testing.T) {
 			"issuer":   issuer,
 			"value":    "1",
 		},
-		"OwnerNode": "0",
-		"Flags":     uint32(0),
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {

@@ -389,7 +389,7 @@ var coverageFixtures = map[string]map[string]any{
 		"AssetsTotal":       "1000",
 		"AssetsAvailable":   "500",
 		"AssetsMaximum":     "10000",
-		"LossUnrealized":    "0",
+		"LossUnrealized":    "1",
 		"ShareMPTID":        fxHash192,
 		"WithdrawalPolicy":  uint32(1),
 		"Scale":             uint32(6),

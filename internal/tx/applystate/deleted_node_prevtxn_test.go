@@ -86,10 +86,8 @@ func TestBuildDeletedNode_OfferPrevTxnFromOriginal(t *testing.T) {
 }
 
 // nftokenPageBytes encodes an NFTokenPage blob. withPrevTxn controls whether
-// the stored threading pointer is present: the on-ledger page carries it, but
-// serializeNFTokenPage rebuilds a page WITHOUT it (the page is re-serialized
-// during a merge before being erased), so the deleted entry's Current is
-// threadless.
+// the required threading fields carry the stored pointer or their fresh-entry
+// zero defaults.
 func nftokenPageBytes(t *testing.T, tokens []string, prevTxn [32]byte, prevSeq uint32, withPrevTxn bool) []byte {
 	t.Helper()
 	nfTokens := make([]map[string]any, len(tokens))
@@ -99,9 +97,11 @@ func nftokenPageBytes(t *testing.T, tokens []string, prevTxn [32]byte, prevSeq u
 		}
 	}
 	obj := map[string]any{
-		"LedgerEntryType": "NFTokenPage",
-		"Flags":           uint32(0),
-		"NFTokens":        nfTokens,
+		"LedgerEntryType":   "NFTokenPage",
+		"Flags":             uint32(0),
+		"NFTokens":          nfTokens,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	if withPrevTxn {
 		obj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(prevTxn[:]))
@@ -120,10 +120,10 @@ func nftokenPageBytes(t *testing.T, tokens []string, prevTxn [32]byte, prevSeq u
 
 // TestBuildDeletedNode_NFTokenPagePrevTxnFromOriginal reproduces the divergence
 // at mainnet ledger 99226885 tx 6 (issue #1047): an NFToken leaves a page, the
-// page is re-serialized (serializeNFTokenPage drops PreviousTxnID) and then
+// page is re-serialized (serializeNFTokenPage resets PreviousTxnID) and then
 // merged into a sibling and erased within the same tx. The erased entry's
-// Current is therefore threadless — it carries no PreviousTxnID at all — while
-// its on-ledger Original still holds the page's last-modified pointer.
+// Current therefore carries a zero PreviousTxnID while its on-ledger Original
+// still holds the page's last-modified pointer.
 //
 // rippled builds the DeletedNode's FinalFields from its in-memory SLE, which
 // retains sfPreviousTxnID (sMD_DeleteFinal), so mainnet reports the stored
@@ -143,7 +143,7 @@ func TestBuildDeletedNode_NFTokenPagePrevTxnFromOriginal(t *testing.T) {
 
 	// Original: the live page, with its stored threading pointer.
 	origBytes := nftokenPageBytes(t, tokens, priorTxn, priorSeq, true)
-	// Current: the rebuilt, threadless page (serializeNFTokenPage output).
+	// Current: the rebuilt page with default-zero threading fields.
 	curBytes := nftokenPageBytes(t, tokens, priorTxn, priorSeq, false)
 
 	var key [32]byte

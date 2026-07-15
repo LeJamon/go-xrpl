@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
@@ -48,7 +49,7 @@ type pathAlternativeJSON struct {
 
 // RipplePathFindMethod handles the ripple_path_find RPC method.
 // Reference: rippled RipplePathFind.cpp + PathRequest::parseJson/isValid.
-type RipplePathFindMethod struct{}
+type RipplePathFindMethod struct{ BaseHandler }
 
 func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	release, rpcErr := AcquirePathfind(ctx)
@@ -252,14 +253,6 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	return flat, nil
 }
 
-func (m *RipplePathFindMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *RipplePathFindMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
 func (m *RipplePathFindMethod) RequiredCondition() types.Condition {
 	return types.NeedsCurrentLedger
 }
@@ -409,6 +402,15 @@ type pathFindLedgerMeta struct {
 	validated bool
 }
 
+type selectedPathFindLedger struct {
+	view   types.LedgerStateView
+	reader types.LedgerReader
+}
+
+func (l selectedPathFindLedger) Sequence() uint32  { return l.reader.Sequence() }
+func (l selectedPathFindLedger) Hash() [32]byte    { return l.reader.Hash() }
+func (l selectedPathFindLedger) IsValidated() bool { return l.reader.IsValidated() }
+
 // resolvePathFindLedger selects the ledger to run pathfinding on. With no
 // selector the closed ledger is used and no metadata is reported.
 func resolvePathFindLedger(
@@ -423,56 +425,57 @@ func resolvePathFindLedger(
 		}
 		return view, nil, nil
 	}
-
-	selector, selectorErr := resolveLedgerSelector(spec)
-	if selectorErr != nil {
-		return nil, nil, selectorErr
-	}
-	if len(selector) == 64 {
-		rawBytes, _ := hex.DecodeString(selector)
-		var h [32]byte
-		copy(h[:], rawBytes)
-		src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
-		if !ok {
-			return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		view, reader, lerr := src.GetLedgerViewByHash(h)
-		if lerr != nil || view == nil {
-			return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		return view, &pathFindLedgerMeta{
-			current:   !reader.IsClosed(),
-			seq:       reader.Sequence(),
-			hash:      reader.Hash(),
-			validated: reader.IsValidated(),
-		}, nil
+	selection, rpcErr := parseLedgerSelectorInput(spec, ledgerselector.Current())
+	if rpcErr != nil {
+		return nil, nil, rpcErr
 	}
 
-	seq := uint32(0)
-	switch selector {
-	case "current":
-		seq = ctx.Services.Ledger.GetCurrentLedgerIndex()
-	case "closed":
-		seq = ctx.Services.Ledger.GetClosedLedgerIndex()
-	case "validated":
-		seq = ctx.Services.Ledger.GetValidatedLedgerIndex()
-	default:
-		parsed, _ := parseLedgerIndex(selector)
-		seq = uint32(parsed)
-	}
-	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
+	source, ok := ctx.Services.Ledger.(types.LedgerViewSource)
 	if !ok {
 		return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 	}
-	view, reader, lerr := src.GetLedgerViewBySeq(seq)
-	if lerr != nil || view == nil || reader == nil {
+	bySequence := func(sequence uint32) (selectedPathFindLedger, bool, error) {
+		view, reader, err := source.GetLedgerViewBySeq(sequence)
+		selected := selectedPathFindLedger{view: view, reader: reader}
+		return selected, view != nil && reader != nil, err
+	}
+	byHash := func(hash [32]byte) (selectedPathFindLedger, bool, error) {
+		view, reader, err := source.GetLedgerViewByHash(hash)
+		selected := selectedPathFindLedger{view: view, reader: reader}
+		return selected, view != nil && reader != nil, err
+	}
+	validated := func() (selectedPathFindLedger, bool, error) {
+		sequence := ctx.Services.Ledger.GetValidatedLedgerIndex()
+		if sequence == 0 {
+			return selectedPathFindLedger{}, false, nil
+		}
+		return bySequence(sequence)
+	}
+	resolved, err := ledgerselector.Resolve(selection, ledgerselector.Callbacks[selectedPathFindLedger]{
+		Current: func() (selectedPathFindLedger, bool, error) {
+			return bySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+		},
+		Closed: func() (selectedPathFindLedger, bool, error) {
+			return bySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+		},
+		Validated:  validated,
+		BySequence: bySequence,
+		ByHash:     byHash,
+	})
+	if err != nil {
 		return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 	}
-	return view, &pathFindLedgerMeta{
-		current:   !reader.IsClosed(),
-		seq:       reader.Sequence(),
-		hash:      reader.Hash(),
-		validated: reader.IsValidated(),
+	validatedResult := resolved.Validated
+	if selection.Kind() == ledgerselector.KindCurrent {
+		validatedResult = false
+	} else if selection.Kind() == ledgerselector.KindValidated {
+		validatedResult = true
+	}
+	return resolved.Value.view, &pathFindLedgerMeta{
+		current:   !resolved.Value.reader.IsClosed(),
+		seq:       resolved.Sequence,
+		hash:      resolved.Hash,
+		validated: validatedResult,
 	}, nil
 }
 

@@ -57,6 +57,9 @@ func (a *Adaptor) VerifyValidation(validation *consensus.Validation) error {
 }
 
 func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	_, ok := a.trustedSet[node]
@@ -93,23 +96,40 @@ func (a *Adaptor) DropUntrustedValidations() bool {
 	return a.relayValidations == RelayValidationsDropUntrusted
 }
 
-// OnTrustChanged implements consensus.TrustChangeNotifier: fn runs after
-// every SetTrustedValidators swap, outside a.mu.
-func (a *Adaptor) OnTrustChanged(fn func()) {
+func (a *Adaptor) OnTrustChanged(fn func([]consensus.NodeID, int)) {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.onTrustChanged = fn
+	a.mu.Unlock()
+
+	if fn != nil {
+		trusted, quorum := a.trustedValidatorsAndQuorum()
+		fn(trusted, quorum)
+	}
 }
 
 func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	result := make([]consensus.NodeID, len(a.trustedValidators))
-	copy(result, a.trustedValidators)
-	return result
+	return append([]consensus.NodeID(nil), a.trustedValidators...)
+}
+
+// GetTrustedValidatorsAndQuorum returns an internally consistent snapshot.
+func (a *Adaptor) GetTrustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+	return a.trustedValidatorsAndQuorum()
 }
 
 func (a *Adaptor) GetTrustedMasterKeys() [][33]byte {
+	a.trustUpdateMu.Lock()
+	defer a.trustUpdateMu.Unlock()
+
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	result := make([][33]byte, len(a.trustedMasterKeys))
@@ -146,6 +166,19 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 		copy(mkCopy, masterKeys)
 	}
 
+	a.trustUpdateMu.Lock()
+	a.trustTransitioning.Store(true)
+	defer func() {
+		a.trustTransitioning.Store(false)
+		a.trustUpdateMu.Unlock()
+	}()
+
+	negUNL := a.GetNegativeUNL()
+	quorum := quorumForTrustedSet(newSet, len(vCopy), negUNL)
+	if a.publisherQuorumUnavailable() {
+		quorum = math.MaxInt
+	}
+
 	a.mu.Lock()
 	a.trustedValidators = vCopy
 	a.trustedSet = newSet
@@ -162,10 +195,8 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 	if a.IsUNLBlocked() && a.GetOperatingMode() > consensus.OpModeConnected {
 		a.SetOperatingMode(consensus.OpModeConnected)
 	}
-	// Outside a.mu: the engine's trust refresh reads back through
-	// GetTrustedValidators / GetQuorum, which re-lock it.
 	if onTrustChanged != nil {
-		onTrustChanged()
+		onTrustChanged(vCopy, quorum)
 	}
 }
 
@@ -173,22 +204,48 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 // every call to account for negative-UNL changes:
 // max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
-	// GetNegativeUNL takes its own lock, so resolve it before locking a.mu.
+	_, quorum := a.GetTrustedValidatorsAndQuorum()
+	return quorum
+}
+
+// SetQuorumUnavailableFunc wires the publisher-availability quorum gate.
+func (a *Adaptor) SetQuorumUnavailableFunc(fn func() bool) {
+	a.quorumUnavailable = fn
+}
+
+func (a *Adaptor) publisherQuorumUnavailable() bool {
+	return a.quorumUnavailable != nil && a.quorumUnavailable()
+}
+
+// IsQuorumUnavailable implements consensus.TrustOracle. The transition bit
+// keeps finality closed until the tracker has installed the matching pair.
+func (a *Adaptor) IsQuorumUnavailable() bool {
+	return a.trustTransitioning.Load() || a.publisherQuorumUnavailable()
+}
+
+func (a *Adaptor) trustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
 	negUNL := a.GetNegativeUNL()
+	unavailable := a.publisherQuorumUnavailable()
 
 	a.mu.Lock()
-	trusted := len(a.trustedValidators)
-	// Count only negUNL entries that are actually in our trusted UNL: a
-	// disabled validator we don't trust must not lower our quorum (rippled
-	// ValidatorList::updateTrusted intersects the negUNL with the trusted
-	// keys, ValidatorList.cpp:2064-2070).
+	trusted := append([]consensus.NodeID(nil), a.trustedValidators...)
+	trustedSet := a.trustedSet
+	quorum := quorumForTrustedSet(trustedSet, len(trusted), negUNL)
+	a.mu.Unlock()
+
+	if unavailable {
+		quorum = math.MaxInt
+	}
+	return trusted, quorum
+}
+
+func quorumForTrustedSet(trustedSet map[consensus.NodeID]struct{}, trusted int, negUNL []consensus.NodeID) int {
 	disabled := 0
 	for _, id := range negUNL {
-		if _, ok := a.trustedSet[id]; ok {
+		if _, ok := trustedSet[id]; ok {
 			disabled++
 		}
 	}
-	a.mu.Unlock()
 	return computeQuorum(trusted, disabled)
 }
 
@@ -468,14 +525,6 @@ func (a *Adaptor) SetUNLRefreshFunc(fn func()) {
 // view (promote rotations, latch/clear the lock-down flag) so the consensus
 // bow-out reacts to an expiring list within a round or two instead of only on
 // the standalone refresh tick. No-op without publisher lists.
-//
-// Runs on a background goroutine, deliberately NOT inline: the refresh takes
-// the aggregator lock and its OnChange fan-out reaches onTrustChanged ->
-// Engine.refreshTrustedSet, which locks e.mu. The caller holds e.mu at round
-// start, so an inline call would self-deadlock (e.mu is not reentrant) and, on
-// the ticker goroutine, ABBA against it. The bow-out reads the sticky flag
-// lock-free via IsUNLBlocked; the single-flight guard drops overlapping
-// refreshes so a slow tick can't pile up goroutines.
 func (a *Adaptor) RefreshUNLState() {
 	if a.refreshUNL == nil {
 		return

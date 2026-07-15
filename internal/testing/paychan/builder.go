@@ -11,7 +11,7 @@ import (
 )
 
 func ToRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(t)
 }
 
 type ChannelCreateBuilder struct {

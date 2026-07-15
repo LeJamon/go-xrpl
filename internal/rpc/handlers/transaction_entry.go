@@ -9,13 +9,10 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TransactionEntryMethod handles the transaction_entry RPC method.
-// Retrieves a transaction from a specific ledger version.
-// Unlike the 'tx' method which searches across the ledger range,
-// this method requires a specific ledger to search in.
-// Reference: rippled TransactionEntry.cpp
 type TransactionEntryMethod struct{ BaseHandler }
 
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
@@ -103,7 +100,6 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 		return nil, types.RPCErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
 	}
 
-	// Parse the stored transaction data (VL-encoded binary or JSON)
 	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
 		return nil, types.RPCErrorInternal("Failed to parse transaction data")
@@ -114,7 +110,6 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	response := maps.Clone(lookupExtra)
 	response["tx_json"] = projectTransactionJSON(storedTx.TxJSON, strings.ToUpper(txHashString), ctx.ApiVersion)
 
-	// Metadata key: "meta" for v2+, "metadata" for v1
 	if ctx.ApiVersion > 1 {
 		response["meta"] = storedTx.Meta
 	} else {
@@ -122,7 +117,6 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	}
 
 	if ctx.ApiVersion > 1 {
-		// v2: hash at root, conditional ledger_hash/ledger_index/close_time_iso
 		response["hash"] = strings.ToUpper(txHashString)
 		response["validated"] = validated
 
@@ -133,12 +127,10 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 			response["ledger_index"] = txInfo.LedgerIndex
 			closeTimeSec := targetLedger.CloseTime()
 			if closeTimeSec > 0 {
-				closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-				response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
+				response["close_time_iso"] = protocol.FormatCloseTimeISO(protocol.FromRippleTime(uint32(closeTimeSec)))
 			}
 		}
 	} else {
-		// v1: always include ledger_index, ledger_hash, and validated
 		response["ledger_index"] = txInfo.LedgerIndex
 		response["ledger_hash"] = ledgerHash
 		response["validated"] = txInfo.Validated

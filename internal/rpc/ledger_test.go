@@ -79,7 +79,7 @@ type ledgerMock struct {
 	*mockLedgerService
 	getLedgerBySequenceFn func(seq uint32) (types.LedgerReader, error)
 	getLedgerByHashFn     func(hash [32]byte) (types.LedgerReader, error)
-	getLedgerDataFn       func(ledgerIndex string, marker string) (*types.LedgerDataResult, error)
+	getLedgerDataFn       func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error)
 }
 
 func (m *ledgerMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
@@ -91,7 +91,7 @@ func (m *ledgerMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error)
 
 func (m *ledgerMock) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	if m.getLedgerDataFn != nil {
-		return m.getLedgerDataFn(ledgerIndex, marker)
+		return m.getLedgerDataFn(ledgerIndex, limit, marker)
 	}
 	return m.mockLedgerService.GetLedgerData(ctx, ledgerIndex, limit, marker)
 }
@@ -169,11 +169,20 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
+		assert.NotContains(t, resp, "ledger")
+		closed := resp["closed"].(map[string]any)["ledger"].(map[string]any)
+		open := resp["open"].(map[string]any)["ledger"].(map[string]any)
+		assert.Equal(t, true, closed["closed"])
+		assert.Equal(t, false, open["closed"])
+	})
+
+	t.Run("Options without selector are ignored", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true,"accounts":true,"queue":true}`))
+		require.Nil(t, rpcErr)
+		resp := resultToMap(t, result)
 		assert.Contains(t, resp, "closed")
 		assert.Contains(t, resp, "open")
-		assert.NotContains(t, resp, "ledger")
-		assert.Equal(t, true, resp["closed"].(map[string]any)["closed"])
-		assert.Equal(t, false, resp["open"].(map[string]any)["closed"])
+		assert.NotContains(t, resp, "queue_data")
 	})
 
 	t.Run("No selector ignores full permission gate and warns on type", func(t *testing.T) {
@@ -319,6 +328,9 @@ func TestLedgerCurrentRequest(t *testing.T) {
 	assert.Equal(t, "3", ledger["ledger_index"])
 	// Current ledger should not be validated
 	assert.Equal(t, false, resp["validated"])
+	assert.Equal(t, float64(3), resp["ledger_current_index"])
+	assert.NotContains(t, resp, "ledger_hash")
+	assert.NotContains(t, resp, "ledger_index")
 }
 
 // TestLedgerFullOption tests the full option with transactions and expand
@@ -488,8 +500,10 @@ func TestLedgerAccountsOption(t *testing.T) {
 		"1100612200000000240000000125000000016240000000000F424081140000000000000000000000000000000000000001")
 	require.NoError(t, decErr)
 	var dataSelector string
-	mock.getLedgerDataFn = func(ledgerIndex string, marker string) (*types.LedgerDataResult, error) {
+	var dumpLimit uint32
+	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 		dataSelector = ledgerIndex
+		dumpLimit = limit
 		return &types.LedgerDataResult{
 			LedgerIndex: 2,
 			State: []types.LedgerDataItem{
@@ -546,6 +560,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 	assert.Equal(t, "AccountRoot", entry["LedgerEntryType"])
 	wantSelector := hex.EncodeToString(reader.hash[:])
 	assert.Equal(t, wantSelector, dataSelector)
+	assert.Equal(t, uint32(256), dumpLimit, "full state walks must use a positive page size")
 
 	openBase := newDefaultLedgerReader(3, false)
 	openBase.closed = false
@@ -582,6 +597,39 @@ func TestLedgerAccountsOption(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+}
+
+func TestLedgerQueueRequiresOpenSelector(t *testing.T) {
+	mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+	closed := newDefaultLedgerReader(2, true)
+	open := newDefaultLedgerReader(3, false)
+	mock.getLedgerBySequenceFn = func(sequence uint32) (types.LedgerReader, error) {
+		switch sequence {
+		case 2:
+			return closed, nil
+		case 3:
+			return open, nil
+		default:
+			return nil, errors.New("not found")
+		}
+	}
+	ctx := &types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: mock},
+	}
+	method := &handlers.LedgerMethod{}
+
+	result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","queue":true}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "Invalid parameters.", rpcErr.Message)
+
+	result, rpcErr = method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","queue":true}`))
+	require.Nil(t, rpcErr)
+	require.NotNil(t, result)
 }
 
 // TestLedgerLookupByHash tests ledger lookup by hash

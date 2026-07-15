@@ -13,7 +13,7 @@ import (
 
 // SubmitMultisignedMethod handles the submit_multisigned RPC method
 // This submits a multi-signed transaction to the network
-type SubmitMultisignedMethod struct{}
+type SubmitMultisignedMethod struct{ BaseHandler }
 
 func (m *SubmitMultisignedMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
@@ -201,19 +201,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RPCContext, params json.RawM
 	// Route fail_hard submissions through the optional surface so they
 	// are not held or relayed on non-apply. Mirrors rippled
 	// NetworkOPs.cpp:1685-1689 (`!enforceFailHard`).
-	var (
-		result    *types.SubmitResult
-		submitErr error
-	)
-	if request.FailHard {
-		if fh, ok := ctx.Services.Ledger.(types.FailHardSubmitter); ok {
-			result, submitErr = fh.SubmitTransactionFailHard(txJSON, txBlob)
-		} else {
-			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
-		}
-	} else {
-		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
-	}
+	result, submitErr := submitWithFailHard(ctx.Services.Ledger, txJSON, txBlob, request.FailHard)
 	if submitErr != nil {
 		return nil, types.RPCErrorInternal("Transaction submission failed: " + submitErr.Error())
 	}
@@ -237,10 +225,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RPCContext, params json.RawM
 
 func (m *SubmitMultisignedMethod) RequiredRole() types.Role {
 	return types.RoleUser
-}
-
-func (m *SubmitMultisignedMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *SubmitMultisignedMethod) RequiredCondition() types.Condition {

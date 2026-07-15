@@ -88,15 +88,15 @@ func TestUpdateOnMap_PreservesFirstLedgerSequence(t *testing.T) {
 	// mainnet-seeded state map would carry it. Keep Hashes/LastLedgerSequence
 	// untouched so the next chain-advance assertion still holds.
 	const firstSeq = uint32(2)
-	fields, h, lastSeq, err := ReadLedgerHashesSLE(sm, rollingKey.Key)
+	entry, h, lastSeq, err := ReadLedgerHashesSLE(sm, rollingKey.Key)
 	if err != nil {
 		t.Fatalf("ReadLedgerHashesSLE: %v", err)
 	}
-	if fields == nil {
+	if entry == nil {
 		t.Fatalf("rolling LedgerHashes SLE absent after seeding to seq 5")
 	}
-	fields["FirstLedgerSequence"] = firstSeq
-	if err := Write(sm, rollingKey.Key, fields, h, lastSeq); err != nil {
+	entry.SetFirstLedgerSequence(firstSeq)
+	if err := Write(sm, rollingKey.Key, entry, h, lastSeq); err != nil {
 		t.Fatalf("Write (seeding FirstLedgerSequence): %v", err)
 	}
 
@@ -106,17 +106,14 @@ func TestUpdateOnMap_PreservesFirstLedgerSequence(t *testing.T) {
 	}
 
 	// FirstLedgerSequence must survive, and the list must have advanced.
-	gotFields, gotHashes, gotLast, err := ReadLedgerHashesSLE(sm, rollingKey.Key)
+	gotEntry, gotHashes, gotLast, err := ReadLedgerHashesSLE(sm, rollingKey.Key)
 	if err != nil {
 		t.Fatalf("ReadLedgerHashesSLE after advance: %v", err)
 	}
-	if _, ok := gotFields["FirstLedgerSequence"]; !ok {
+	if _, ok := gotEntry.ToMap()["FirstLedgerSequence"]; !ok {
 		t.Fatalf("FirstLedgerSequence dropped on rewrite (issue #1008)")
 	}
-	gotFirst, err := decodeUint32Field(gotFields, "FirstLedgerSequence")
-	if err != nil {
-		t.Fatalf("decode FirstLedgerSequence: %v", err)
-	}
+	gotFirst := gotEntry.FirstLedgerSequence
 	if gotFirst != firstSeq {
 		t.Errorf("FirstLedgerSequence = %d, want %d", gotFirst, firstSeq)
 	}
@@ -137,14 +134,14 @@ func TestUpdateOnMap_PreservesFirstLedgerSequence(t *testing.T) {
 // synthesize a FirstLedgerSequence the reference never writes.
 func TestUpdateOnMap_CreatedSkipListHasNoFirstLedgerSequence(t *testing.T) {
 	sm, _ := seedToSeq(t, 5)
-	fields, _, _, err := ReadLedgerHashesSLE(sm, keylet.LedgerHashes().Key)
+	entry, _, _, err := ReadLedgerHashesSLE(sm, keylet.LedgerHashes().Key)
 	if err != nil {
 		t.Fatalf("ReadLedgerHashesSLE: %v", err)
 	}
-	if fields == nil {
+	if entry == nil {
 		t.Fatalf("rolling LedgerHashes SLE absent after seeding to seq 5")
 	}
-	if _, ok := fields["FirstLedgerSequence"]; ok {
+	if _, ok := entry.ToMap()["FirstLedgerSequence"]; ok {
 		t.Errorf("freshly created skip list has FirstLedgerSequence; rippled does not set it on creation")
 	}
 }

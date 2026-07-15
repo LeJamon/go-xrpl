@@ -1,9 +1,6 @@
 package replaytool
 
-import (
-	"encoding/hex"
-	"strings"
-)
+import "github.com/LeJamon/go-xrpl/protocol"
 
 // fixPreviousTxnIDEnabled reflects that this tool reconstructs recent mainnet
 // ledgers, where fixPreviousTxnID has long been active. It gates whether the
@@ -274,6 +271,6 @@ func threadPreviousTxn(obj map[string]any, entryType string, txHash [32]byte, le
 	if !isThreadedType(entryType) {
 		return
 	}
-	obj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(txHash[:]))
+	obj["PreviousTxnID"] = protocol.Hash256Hex(txHash)
 	obj["PreviousTxnLgrSeq"] = ledgerSeq
 }

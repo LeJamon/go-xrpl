@@ -420,10 +420,10 @@ func getPeerCount(ctx *types.RPCContext) int {
 // consensus subsystem hasn't been wired (standalone or pre-startup).
 // Rippled exposes the runtime quorum here; previously goxrpl hardcoded
 // 1, which made network-mode soaks misleading (#451).
-func resolveValidationQuorum(services *types.ServiceContainer) int {
+func resolveValidationQuorum(services *types.ServiceContainer) uint32 {
 	if services != nil && services.ValidationQuorum != nil {
 		if q := services.ValidationQuorum(); q > 0 {
-			return q
+			return validationQuorumForRPC(q)
 		}
 	}
 	return 1

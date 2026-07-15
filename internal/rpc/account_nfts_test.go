@@ -861,6 +861,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 		assert.Contains(t, resp, "ledger_current_index")
 		assert.NotContains(t, resp, "ledger_hash")
 		assert.NotContains(t, resp, "ledger_index")
+		assert.Empty(t, mock.accountNFTsMarker)
 	})
 
 	t.Run("Marker continues pagination", func(t *testing.T) {
@@ -909,10 +910,33 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 		nftsResp := resp["account_nfts"].([]any)
 		assert.Len(t, nftsResp, 2, "Should have 2 NFTs from marker")
-		assert.Equal(t, bobAccount, resp["account"])
-		assert.NotContains(t, resp, "limit")
+		assert.Equal(t, params["marker"], mock.accountNFTsMarker)
 		assert.NotContains(t, resp, "marker")
-		assert.Equal(t, "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B9000000000000000003", mock.accountNFTsMarker)
+		assert.NotContains(t, resp, "limit")
+		assert.Equal(t, bobAccount, resp["account"])
+	})
+
+	t.Run("Malformed and null markers are rejected", func(t *testing.T) {
+		for _, marker := range []any{"ABCD", strings.Repeat("G", 64), nil} {
+			paramsJSON, err := json.Marshal(map[string]any{"account": bobAccount, "marker": marker})
+			require.NoError(t, err)
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		}
+	})
+
+	t.Run("Stale marker maps to invalid field", func(t *testing.T) {
+		mock.accountNFTsResult = nil
+		mock.accountNFTsErr = svcerr.ErrInvalidMarker
+		marker := strings.Repeat("A", 64)
+		paramsJSON, err := json.Marshal(map[string]any{"account": bobAccount, "marker": marker})
+		require.NoError(t, err)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
 	})
 }
 

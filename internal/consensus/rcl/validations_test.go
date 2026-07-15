@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -52,6 +53,60 @@ func TestValidationTracker_Add(t *testing.T) {
 	}
 }
 
+func TestValidationTrackerUnreachableQuorumDoesNotFinalize(t *testing.T) {
+	nodes := []consensus.NodeID{{1}, {2}}
+	vt := NewValidationTracker(math.MaxInt, 5*time.Minute)
+	vt.SetTrusted(nodes)
+
+	fired := false
+	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired = true })
+	for _, node := range nodes {
+		vt.Add(&consensus.Validation{
+			LedgerID:  consensus.LedgerID{1},
+			LedgerSeq: 1,
+			NodeID:    node,
+			SignTime:  time.Now(),
+			Full:      true,
+		})
+	}
+
+	if fired {
+		t.Fatal("unreachable quorum finalized a ledger")
+	}
+}
+
+func TestValidationTrackerLiveQuorumUnavailableGate(t *testing.T) {
+	nodes := []consensus.NodeID{{1}, {2}, {3}}
+	vt := NewValidationTracker(2, 5*time.Minute)
+	vt.SetTrusted(nodes)
+
+	unavailable := true
+	vt.SetQuorumUnavailableFunc(func() bool { return unavailable })
+	fired := 0
+	vt.SetFullyValidatedCallback(func(consensus.LedgerID, uint32) { fired++ })
+
+	ledger := consensus.LedgerID{1}
+	now := time.Now()
+	for _, node := range nodes[:2] {
+		vt.Add(&consensus.Validation{
+			LedgerID: ledger, LedgerSeq: 1, NodeID: node,
+			SignTime: now, Full: true,
+		})
+	}
+	if fired != 0 {
+		t.Fatal("unavailable quorum finalized a ledger using the cached finite quorum")
+	}
+
+	unavailable = false
+	vt.Add(&consensus.Validation{
+		LedgerID: ledger, LedgerSeq: 1, NodeID: nodes[2],
+		SignTime: now, Full: true,
+	})
+	if fired != 1 {
+		t.Fatalf("available quorum did not finalize after the live gate reopened: fired=%d", fired)
+	}
+}
+
 func TestValidationTracker_TrustedValidations(t *testing.T) {
 	vt := NewValidationTracker(2, 5*time.Minute)
 
@@ -76,6 +131,64 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 	// Trusted should be 2
 	if vt.TrustedValidationCount(ledger1) != 2 {
 		t.Errorf("Expected 2 trusted validations, got %d", vt.TrustedValidationCount(ledger1))
+	}
+}
+
+func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	vt.SetNow(func() time.Time { return now })
+
+	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}, {6}}
+	vt.SetTrusted([]consensus.NodeID{nodes[0], nodes[1], nodes[2], nodes[4], nodes[5]})
+	vt.SetNegativeUNL([]consensus.NodeID{nodes[2]})
+
+	ledgerID := consensus.LedgerID{0xAA}
+	const seq uint32 = 7
+	fires := 0
+	vt.SetFullyValidatedCallback(func(gotID consensus.LedgerID, gotSeq uint32) {
+		if gotID != ledgerID || gotSeq != seq {
+			t.Errorf("callback got (%x, %d), want (%x, %d)", gotID, gotSeq, ledgerID, seq)
+		}
+		fires++
+	})
+
+	add := func(node consensus.NodeID, full bool) {
+		t.Helper()
+		if !vt.Add(&consensus.Validation{
+			LedgerID:  ledgerID,
+			LedgerSeq: seq,
+			NodeID:    node,
+			SignTime:  now,
+			Full:      full,
+		}) {
+			t.Fatalf("validation from node %x was rejected", node)
+		}
+	}
+
+	add(nodes[0], true)
+	add(nodes[1], true)
+	add(nodes[2], true)  // negative UNL
+	add(nodes[3], true)  // untrusted
+	add(nodes[4], false) // partial
+	if fires != 1 {
+		t.Fatalf("initial quorum fired %d times, want 1", fires)
+	}
+
+	validations, quorum, accepted := vt.RecheckFullyValidated(ledgerID, seq)
+	if !accepted || quorum != 2 || len(validations) != 2 {
+		t.Fatalf("recheck got accepted=%v quorum=%d validations=%d, want true/2/2", accepted, quorum, len(validations))
+	}
+
+	vt.SetQuorum(3)
+	validations, quorum, accepted = vt.RecheckFullyValidated(ledgerID, seq)
+	if accepted || quorum != 3 || len(validations) != 2 {
+		t.Fatalf("recheck after quorum change got accepted=%v quorum=%d validations=%d, want false/3/2", accepted, quorum, len(validations))
+	}
+
+	add(nodes[5], true)
+	if fires != 2 {
+		t.Fatalf("validation after rejected recheck fired %d times, want 2", fires)
 	}
 }
 

@@ -54,7 +54,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 // ledgerData and peer-selection averages are reported as 0 until those
 // subsystems exist (see peermanagement.txMetrics). Zeros throughout when no
 // overlay is wired (standalone / RPC-only).
-type TxReduceRelayMethod struct{}
+type TxReduceRelayMethod struct{ BaseHandler }
 
 func (m *TxReduceRelayMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var metrics types.TxReduceRelayMetrics
@@ -66,14 +66,6 @@ func (m *TxReduceRelayMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 
 func (m *TxReduceRelayMethod) RequiredRole() types.Role {
 	return types.RoleUser // rippled: Role::USER (Handler.cpp line 179)
-}
-
-func (m *TxReduceRelayMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *TxReduceRelayMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }
 
 // ConnectMethod handles the connect RPC method. When the overlay is wired it

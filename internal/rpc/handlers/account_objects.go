@@ -102,50 +102,23 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
-	rawFields := make(map[string]json.RawMessage)
-	if params != nil {
-		if err := json.Unmarshal(params, &rawFields); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
-		}
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-	accountRaw, ok := rawFields["account"]
-	if !ok {
-		return nil, types.RPCErrorMissingField("account")
+	if err := RequireLedgerService(ctx.Services); err != nil {
+		return nil, err
 	}
-	account, ok := rawJSONString(accountRaw)
-	if !ok {
-		return nil, types.RPCErrorInvalidField("account")
-	}
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
 	if selErr != nil {
 		return nil, selErr
 	}
-	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
-	if lookupErr != nil {
-		return nil, lookupErr
-	}
 	deletionBlockersOnly := false
-	if raw, ok := rawFields["deletion_blockers_only"]; ok {
+	if raw, ok := fields["deletion_blockers_only"]; ok {
 		deletionBlockersOnly = jsonCppBoolRaw(raw)
 	}
 
-	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(targetLedger, lookupValidated))
-	}
-	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
-		return nil, accountErr
-	}
-
-	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
-	if limitErr != nil {
-		return nil, limitErr
-	}
-
-	typeRaw, typePresent := rawFields["type"]
+	typeRaw, typePresent := fields["type"]
 	effectiveType := ""
 	forceEmptyResults := false
 	deletionBlockerType := ""
@@ -166,12 +139,15 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, typeErr
 		}
 	}
-
-	var marker any
-	if markerRaw, ok := rawFields["marker"]; ok {
-		marker, _ = decodeRawJSONValue(markerRaw)
+	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
 	}
-	markerStr, mErr := markerString(marker)
+	markerStr := ""
+	var mErr *types.RPCError
+	if markerRaw, ok := fields["marker"]; ok {
+		markerStr, mErr = markerString(markerRaw)
+	}
 	if mErr != nil {
 		return nil, mErr
 	}
@@ -184,8 +160,6 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
-		// rippled AccountObjects.cpp returns invalid_field_error("marker") for a
-		// malformed marker or one whose dirIndex/entryIndex no longer resolves.
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RPCErrorInvalidField("marker")
 		}
@@ -230,9 +204,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		"account":         result.Account,
 		"account_objects": objects,
 	}
-	for key, value := range ledgerEntryResponseFields(targetLedger, lookupValidated) {
-		response[key] = value
-	}
+	mergeLedgerFields(response, ledgerFields)
 
 	if result.Marker != "" {
 		response["limit"] = limit

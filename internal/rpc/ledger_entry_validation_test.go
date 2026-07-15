@@ -108,7 +108,52 @@ func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 	}
 }
 
-func TestLedgerEntryNFTOfferSelector(t *testing.T) {
+func TestLedgerEntryLegacyAndConflictingSelectors(t *testing.T) {
+	const (
+		entryIndex = "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+		ledgerHash = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
+	)
+	mock := newMockLedgerEntryService()
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RPCContext{
+		Context:  context.Background(),
+		Services: newLedgerEntryTestServices(mock),
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"legacy sequence", 2, "2"},
+		{"legacy hash", ledgerHash, ledgerHash},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{"index": entryIndex, "ledger": test.value})
+			require.NoError(t, err)
+			_, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, test.want, mock.lastLedgerIndex)
+		})
+	}
+
+	t.Run("conflicting fields", func(t *testing.T) {
+		params, err := json.Marshal(map[string]any{
+			"index":        entryIndex,
+			"ledger_hash":  ledgerHash,
+			"ledger_index": 2,
+		})
+		require.NoError(t, err)
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Exactly one of 'ledger_hash' or 'ledger_index' can be specified.", rpcErr.Message)
+	})
+}
+
+// TestLedgerEntryNFTOfferAlias verifies the canonical rippled `nft_offer`
+// selector and the go-xrpl `nftoken_offer` alias both resolve to a lookup and
+// pass the type check for an NFTokenOffer entry.
+func TestLedgerEntryNFTOfferAlias(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
 

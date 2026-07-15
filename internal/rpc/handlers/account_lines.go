@@ -15,41 +15,19 @@ import (
 type AccountLinesMethod struct{ BaseHandler }
 
 func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	fields, fieldsErr := rawJSONFields(params)
-	if fieldsErr != nil {
-		return nil, fieldsErr
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-	accountRaw, ok := fields["account"]
-	if !ok {
-		return nil, types.RPCErrorMissingField("account")
-	}
-	account, ok := rawJSONString(accountRaw)
-	if !ok {
-		return nil, types.RPCErrorInvalidField("account")
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
 	if selErr != nil {
 		return nil, selErr
 	}
-	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
-	if lookupErr != nil {
-		return nil, lookupErr
-	}
-	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
-	}
-	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
-		return nil, accountErr
-	}
-	peer := ""
+
+	var peer string
 	if peerRaw, ok := fields["peer"]; ok {
 		var valid bool
 		peer, valid = jsonCppStringRaw(peerRaw)
@@ -58,7 +36,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		}
 	}
 	if peer != "" && !types.IsValidClassicAddress(peer) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
@@ -69,13 +47,11 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	if ignoreRaw, ok := fields["ignore_default"]; ok {
 		ignoreDefault = jsonCppBoolRaw(ignoreRaw)
 	}
-	marker := ""
-	if markerRaw, ok := fields["marker"]; ok {
-		var valid bool
-		marker, valid = rawJSONString(markerRaw)
-		if !valid {
-			return nil, types.RPCErrorExpectedField("marker", "string")
-		}
+	marker, mErr := markerString(fields["marker"])
+	if mErr != nil {
+		return nil, mErr
+	}
+	if _, present := fields["marker"]; present {
 		if marker == "" {
 			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
@@ -147,9 +123,11 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	}
 
 	// Build response
-	response := ledgerEntryResponseFields(ledger, validated)
-	response["account"] = result.Account
-	response["lines"] = jsonLines
+	response := map[string]any{
+		"account": result.Account,
+		"lines":   jsonLines,
+	}
+	mergeLedgerFields(response, ledgerFields)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

@@ -120,6 +120,7 @@ func (s *Service) drainPendingValidationLocked(hash [32]byte) *LedgerAcceptedEve
 // rather than promoting a fork.
 type pendingValidationEntry struct {
 	expectedHash [32]byte
+	signTime     time.Time
 	at           time.Time
 }
 
@@ -130,12 +131,13 @@ const pendingValidationTTL = 10 * time.Minute
 // stashPendingLedgerValidationLocked stores a (seq, expectedHash, at) entry
 // drained when ledgerHistory[seq] lands, LRU-evicting at the cap.
 // Caller must hold s.mu.
-func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [32]byte) {
+func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [32]byte, signTime time.Time) {
 	if _, exists := s.pendingLedgerValidations[seq]; !exists {
 		s.pendingLedgerValidationsOrder = append(s.pendingLedgerValidationsOrder, seq)
 	}
 	s.pendingLedgerValidations[seq] = pendingValidationEntry{
 		expectedHash: expectedHash,
+		signTime:     signTime,
 		at:           time.Now(),
 	}
 
@@ -155,9 +157,10 @@ func (s *Service) stashPendingLedgerValidationLocked(seq uint32, expectedHash [3
 }
 
 // drainPendingLedgerValidationLocked removes any stashed validation at seq and,
-// on hash match within pendingValidationTTL, promotes adopted to validated and
-// returns true. Expired/mismatched entries are deleted (else a later adopt at the
-// same seq could match a stale notification). Caller must hold s.mu.
+// on hash match within pendingValidationTTL and a successful current-quorum
+// recheck, promotes adopted to validated and returns true. Rejected entries are
+// deleted so a later adopt cannot match a stale notification. Caller must hold
+// s.mu.
 func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger.Ledger) bool {
 	entry, ok := s.pendingLedgerValidations[seq]
 	if !ok {
@@ -181,14 +184,29 @@ func (s *Service) drainPendingLedgerValidationLocked(seq uint32, adopted *ledger
 		return false
 	}
 
-	_ = adopted.SetValidated()
+	signTime := entry.signTime
+	if s.pendingValidationResolver != nil && !s.config.Standalone {
+		var accepted bool
+		signTime, accepted = s.pendingValidationResolver(seq, entry.expectedHash)
+		if !accepted {
+			return false
+		}
+	}
+
 	// The validated tip is monotonic (rippled LedgerMaster::setFullLedger,
 	// LedgerMaster.cpp:948): a below-tip match marks the ledger validated but
 	// must not rewind the pointer.
 	if s.validatedLedger != nil && seq <= s.validatedLedger.Sequence() {
+		_ = adopted.SetValidated()
 		return false
 	}
+
+	if signTime.IsZero() {
+		signTime = adopted.CloseTime()
+	}
+	_ = adopted.SetValidated()
 	s.validatedLedger = adopted
+	s.validatedSignTime = signTime
 	s.evictOldHistoryLocked(seq)
 	return true
 }

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // DelegateData holds parsed fields from a Delegate ledger entry.
@@ -34,74 +34,87 @@ type DelegateData struct {
 // Extracts Account, Authorize, OwnerNode, and the Permissions array.
 // Reference: rippled DelegateUtils.cpp — sfPermissions array with sfPermissionValue fields
 func ParseDelegate(data []byte) (*DelegateData, error) {
-	entry := &DelegateData{}
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			if f.FieldCode == 5 { // PreviousTxnLgrSeq
-				entry.PreviousTxnLgrSeq = f.UInt32()
-			}
-		case stUInt64:
-			switch f.FieldCode {
-			case 4: // OwnerNode
-				entry.OwnerNode = f.UInt64()
-			case 9: // DestinationNode
-				entry.DestinationNode = f.UInt64()
-				entry.HasDestinationNode = true
-			}
-		case stHash256:
-			if f.FieldCode == 5 { // PreviousTxnID
-				entry.PreviousTxnID = f.Hash256()
-			}
-		case stAccountID:
-			switch f.FieldCode {
-			case 1: // Account
-				if id, ok := f.AccountID(); ok {
-					entry.Account = id
-				}
-			case 5: // Authorize
-				if id, ok := f.AccountID(); ok {
-					entry.Authorize = id
-				}
-			}
-		case stArray:
-			if f.FieldCode == 29 { // Permissions
-				perms, err := parseDelegatePermissions(f.Value)
-				if err != nil {
-					return err
-				}
-				entry.Permissions = perms
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	var decoded ledgerfields.Delegate
+	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Delegate: %w", err)
+	}
+	fields := decoded.ToMap()
+	entry := &DelegateData{
+		HasDestinationNode: fields["DestinationNode"] != nil,
+		PreviousTxnLgrSeq:  decoded.PreviousTxnLgrSeq,
+	}
+
+	var err error
+	if _, ok := fields["Account"]; ok {
+		entry.Account, err = decodeLedgerAccount("Delegate.Account", decoded.Account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["Authorize"]; ok {
+		entry.Authorize, err = decodeLedgerAccount("Delegate.Authorize", decoded.Authorize)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["OwnerNode"]; ok {
+		entry.OwnerNode, err = parseLedgerUint64("Delegate.OwnerNode", decoded.OwnerNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if entry.HasDestinationNode {
+		entry.DestinationNode, err = parseLedgerUint64("Delegate.DestinationNode", decoded.DestinationNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["PreviousTxnID"]; ok {
+		if err := decodeLedgerHex("Delegate.PreviousTxnID", decoded.PreviousTxnID, entry.PreviousTxnID[:]); err != nil {
+			return nil, err
+		}
+	}
+	entry.Permissions, err = decodeDelegatePermissions(decoded.Permissions)
+	if err != nil {
+		return nil, err
 	}
 
 	return entry, nil
 }
 
-// parseDelegatePermissions decodes the Permissions STArray content; each element
-// is a Permission STObject carrying a UInt32 PermissionValue. Zero values are
-// skipped.
-func parseDelegatePermissions(content []byte) ([]uint32, error) {
+func decodeDelegatePermissions(values []any) ([]uint32, error) {
 	var perms []uint32
-	err := WalkFields(content, func(elem Field) error {
-		if elem.TypeCode != stObject || elem.FieldCode != 15 { // Permission
-			return nil
+	for i, value := range values {
+		wrapper, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("Delegate.Permissions[%d]: expected object, got %T", i, value)
 		}
-		return WalkFields(elem.Value, func(inner Field) error {
-			if inner.TypeCode == stUInt32 && inner.FieldCode == 52 { // PermissionValue
-				if v := inner.UInt32(); v > 0 {
-					perms = append(perms, v)
-				}
-			}
-			return nil
-		})
-	})
-	return perms, err
+		value, ok = wrapper["Permission"]
+		if !ok {
+			continue
+		}
+		permission, ok := value.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("Delegate.Permissions[%d].Permission: expected object, got %T", i, value)
+		}
+		value, ok = permission["PermissionValue"]
+		if !ok {
+			continue
+		}
+		var permissionValue uint32
+		switch value := value.(type) {
+		case string:
+			permissionValue = LookupPermissionValue(value)
+		case uint32:
+			permissionValue = value
+		default:
+			return nil, fmt.Errorf("Delegate.Permissions[%d].Permission.PermissionValue: expected string, got %T", i, value)
+		}
+		if permissionValue > 0 {
+			perms = append(perms, permissionValue)
+		}
+	}
+	return perms, nil
 }
 
 // SerializeDelegate serializes a Delegate ledger entry. prevTxnID/prevTxnLgrSeq
@@ -121,7 +134,7 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 	}
 
 	// Build Permissions array
-	permsArray := make([]map[string]any, len(permissions))
+	permsArray := make([]any, len(permissions))
 	for i, pv := range permissions {
 		permsArray[i] = map[string]any{
 			"Permission": map[string]any{
@@ -130,32 +143,29 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 		}
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Delegate",
-		"Account":         accountAddr,
-		"Authorize":       authorizeAddr,
-		"Permissions":     permsArray,
-		"OwnerNode":       fmt.Sprintf("%X", ownerNode),
-		"Flags":           uint32(0),
-	}
+	entry := &ledgerfields.Delegate{}
+	entry.SetAccount(accountAddr)
+	entry.SetAuthorize(authorizeAddr)
+	entry.SetPermissions(permsArray)
+	entry.SetOwnerNode(fmt.Sprintf("%X", ownerNode))
+	entry.SetFlags(0)
 
 	if destinationNode != nil {
-		jsonObj["DestinationNode"] = fmt.Sprintf("%X", *destinationNode)
+		entry.SetDestinationNode(fmt.Sprintf("%X", *destinationNode))
 	}
 
 	// Emit only once threaded; a fresh entry's pointers are stamped by the apply layer.
 	var emptyHash [32]byte
 	if prevTxnID != emptyHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(prevTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = prevTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(prevTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(prevTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Delegate: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // HasTxPermission checks if the Delegate SLE grants permission for the given

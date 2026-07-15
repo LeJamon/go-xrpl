@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -62,12 +62,15 @@ type AccountRoot struct {
 	AccountTxnID         [32]byte // Hash of the last transaction this account submitted (when enabled)
 	HasAccountTxnID      bool     // Whether sfAccountTxnID is present (zero is a valid value after asfAccountTxnID is enabled)
 	WalletLocator        string   // Arbitrary hex data (deprecated)
+	WalletSize           uint32   // Arbitrary data (deprecated)
+	HasWalletSize        bool     // Whether sfWalletSize is present (zero is a valid value)
 	TicketCount          uint32   // Number of outstanding tickets owned by this account
 	AMMID                [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
 	VaultID              [32]byte // Links Vault pseudo-account to its Vault ledger entry (sfVaultID, fieldCode 35)
 	LoanBrokerID         [32]byte // Links LoanBroker pseudo-account to its LoanBroker ledger entry (sfLoanBrokerID, fieldCode 37)
 	PreviousTxnID        [32]byte
 	PreviousTxnLgrSeq    uint32
+	decodedOptionals     map[string]any
 }
 
 // HasAMMID reports whether the sfAMMID field is present, the faithful equivalent
@@ -137,33 +140,6 @@ const (
 	arrayEndMarker  = 0xF1
 )
 
-// Field codes for AccountRoot (unexported, only used locally)
-const (
-	fieldCodeLedgerEntryType      = 1  // UInt16
-	fieldCodeFlags                = 2  // UInt32
-	fieldCodeSequence             = 4  // UInt32
-	fieldCodeOwnerCount           = 13 // UInt32 (per rippled sfields.macro)
-	fieldCodeTransferRate         = 11 // UInt32
-	fieldCodeMintedNFTokens       = 43 // UInt32 - number of NFTokens minted
-	fieldCodeBurnedNFTokens       = 44 // UInt32 - number of NFTokens burned
-	fieldCodeFirstNFTokenSequence = 50 // UInt32 - first NFToken sequence (fixNFTokenRemint)
-	fieldCodeRegularKey           = 8  // Account
-	fieldCodeAccount              = 1  // Account (different context)
-	fieldCodeNFTokenMinter        = 9  // Account - authorized NFT minter
-	fieldCodeEmailHash            = 1  // Hash128
-	fieldCodeDomain               = 7  // Blob
-	fieldCodeTickSize             = 16 // UInt8 (type code 16)
-	fieldCodeTicketCount          = 40 // UInt32 - number of outstanding tickets
-	fieldCodeAccountTxnID         = 9  // Hash256 - last transaction ID
-	fieldCodeWalletLocator        = 7  // Hash256 - wallet locator (deprecated)
-	fieldCodeAMMID                = 14 // Hash256 - links AMM pseudo-account to AMM entry (sfAMMID)
-	fieldCodeVaultID              = 35 // Hash256 - links Vault pseudo-account to Vault entry (sfVaultID)
-	fieldCodeLoanBrokerID         = 37 // Hash256 - links LoanBroker pseudo-account to LoanBroker entry (sfLoanBrokerID)
-)
-
-// Ledger entry type code for AccountRoot (unexported)
-const ledgerEntryTypeAccountRoot = uint16(entry.TypeAccountRoot)
-
 // AccountRoot ledger entry flags.
 const (
 	LsfPasswordSpent                = entry.LsfPasswordSpent
@@ -190,221 +166,181 @@ func encodeAccountID(accountID [20]byte) (string, error) {
 
 // ParseAccountRoot parses account data from binary format
 func ParseAccountRoot(data []byte) (*AccountRoot, error) {
-	if len(data) < 20 {
-		return nil, errors.New("account data too short")
+	var decoded ledgerfields.AccountRoot
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode AccountRoot: %w", err)
 	}
-
-	account := &AccountRoot{}
-	verified := false
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt16:
-			if f.FieldCode == fieldCodeLedgerEntryType && !verified {
-				if f.UInt16() != ledgerEntryTypeAccountRoot {
-					return errors.New("not an AccountRoot entry")
-				}
-				verified = true
-			}
-
-		case stUInt32:
-			switch f.FieldCode {
-			case fieldCodeFlags:
-				account.Flags = f.UInt32()
-			case fieldCodeSequence:
-				account.Sequence = f.UInt32()
-			case 5: // PreviousTxnLgrSeq
-				account.PreviousTxnLgrSeq = f.UInt32()
-			case fieldCodeOwnerCount:
-				account.OwnerCount = f.UInt32()
-			case fieldCodeTransferRate:
-				account.TransferRate = f.UInt32()
-			case fieldCodeMintedNFTokens:
-				account.MintedNFTokens = f.UInt32()
-			case fieldCodeBurnedNFTokens:
-				account.BurnedNFTokens = f.UInt32()
-			case fieldCodeFirstNFTokenSequence:
-				account.FirstNFTokenSequence = f.UInt32()
-				account.HasFirstNFTSeq = true
-			case fieldCodeTicketCount:
-				account.TicketCount = f.UInt32()
-			}
-
-		case stAmount:
-			// AccountRoot's only Amount is the native XRP Balance (8 bytes); a
-			// foreign IOU/MPT value is ignored.
-			if len(f.Value) == 8 {
-				account.Balance = xrpDrops(f.Value)
-			}
-
-		case stAccountID:
-			if id, ok := f.AccountID(); ok {
-				if addr, err := encodeAccountID(id); err == nil {
-					switch f.FieldCode {
-					case fieldCodeAccount:
-						account.Account = addr
-					case fieldCodeRegularKey:
-						account.RegularKey = addr
-					case fieldCodeNFTokenMinter:
-						account.NFTokenMinter = addr
-					}
-				}
-			}
-
-		case stBlob:
-			switch f.FieldCode {
-			case 2: // MessageKey
-				account.MessageKey = hex.EncodeToString(f.VLBytes())
-			case fieldCodeDomain:
-				account.Domain = string(f.VLBytes())
-			}
-
-		case stHash128:
-			if f.FieldCode == fieldCodeEmailHash {
-				account.EmailHash = hex.EncodeToString(f.Value)
-			}
-
-		case stHash256:
-			switch f.FieldCode {
-			case 5: // PreviousTxnID
-				account.PreviousTxnID = f.Hash256()
-			case fieldCodeAccountTxnID:
-				account.AccountTxnID = f.Hash256()
-				account.HasAccountTxnID = true
-			case fieldCodeWalletLocator:
-				account.WalletLocator = hex.EncodeToString(f.Value)
-			case fieldCodeAMMID:
-				account.AMMID = f.Hash256()
-			case fieldCodeVaultID:
-				account.VaultID = f.Hash256()
-			case fieldCodeLoanBrokerID:
-				account.LoanBrokerID = f.Hash256()
-			}
-
-		case stUInt8:
-			if f.FieldCode == fieldCodeTickSize {
-				account.TickSize = f.UInt8()
-			}
-		}
-		return nil
-	})
+	fields := decoded.ToMap()
+	balance, err := decodeNativeLedgerBalance("AccountRoot.Balance", decoded.Balance)
 	if err != nil {
 		return nil, err
 	}
+	domain, err := hex.DecodeString(decoded.Domain)
+	if err != nil {
+		return nil, fmt.Errorf("AccountRoot.Domain: invalid hex: %w", err)
+	}
+	if decoded.TickSize < 0 || decoded.TickSize > 255 {
+		return nil, fmt.Errorf("AccountRoot.TickSize: decoded value %d is out of range", decoded.TickSize)
+	}
 
+	account := &AccountRoot{
+		Account:              decoded.Account,
+		Balance:              balance,
+		Sequence:             decoded.Sequence,
+		OwnerCount:           decoded.OwnerCount,
+		Flags:                decoded.Flags,
+		RegularKey:           decoded.RegularKey,
+		Domain:               string(domain),
+		EmailHash:            strings.ToLower(decoded.EmailHash),
+		MessageKey:           strings.ToLower(decoded.MessageKey),
+		TransferRate:         decoded.TransferRate,
+		TickSize:             uint8(decoded.TickSize),
+		NFTokenMinter:        decoded.NFTokenMinter,
+		MintedNFTokens:       decoded.MintedNFTokens,
+		BurnedNFTokens:       decoded.BurnedNFTokens,
+		FirstNFTokenSequence: decoded.FirstNFTokenSequence,
+		HasFirstNFTSeq:       fields["FirstNFTokenSequence"] != nil,
+		HasAccountTxnID:      fields["AccountTxnID"] != nil,
+		WalletLocator:        strings.ToLower(decoded.WalletLocator),
+		WalletSize:           decoded.WalletSize,
+		HasWalletSize:        fields["WalletSize"] != nil,
+		TicketCount:          decoded.TicketCount,
+		PreviousTxnLgrSeq:    decoded.PreviousTxnLgrSeq,
+		decodedOptionals: map[string]any{
+			"Domain":       string(domain),
+			"MessageKey":   strings.ToLower(decoded.MessageKey),
+			"TransferRate": decoded.TransferRate,
+			"TickSize":     uint8(decoded.TickSize),
+			"TicketCount":  decoded.TicketCount,
+			"AMMID":        [32]byte{},
+			"VaultID":      [32]byte{},
+			"LoanBrokerID": [32]byte{},
+		},
+	}
+	for _, field := range []string{"Domain", "MessageKey", "TransferRate", "TickSize", "TicketCount", "AMMID", "VaultID", "LoanBrokerID"} {
+		if _, ok := fields[field]; !ok {
+			delete(account.decodedOptionals, field)
+		}
+	}
+	for _, hash := range []struct {
+		field string
+		value string
+		dst   []byte
+	}{
+		{"AccountTxnID", decoded.AccountTxnID, account.AccountTxnID[:]},
+		{"AMMID", decoded.AMMID, account.AMMID[:]},
+		{"VaultID", decoded.VaultID, account.VaultID[:]},
+		{"LoanBrokerID", decoded.LoanBrokerID, account.LoanBrokerID[:]},
+		{"PreviousTxnID", decoded.PreviousTxnID, account.PreviousTxnID[:]},
+	} {
+		if _, ok := fields[hash.field]; !ok {
+			continue
+		}
+		if err := decodeLedgerHex("AccountRoot."+hash.field, hash.value, hash.dst); err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["AMMID"]; ok {
+		account.decodedOptionals["AMMID"] = account.AMMID
+	}
+	if _, ok := fields["VaultID"]; ok {
+		account.decodedOptionals["VaultID"] = account.VaultID
+	}
+	if _, ok := fields["LoanBrokerID"]; ok {
+		account.decodedOptionals["LoanBrokerID"] = account.LoanBrokerID
+	}
 	return account, nil
 }
 
 // SerializeAccountRoot serializes an AccountRoot to binary format
 func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
-	// Build the JSON representation for the binary codec
-	jsonObj := map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Balance":         fmt.Sprintf("%d", account.Balance), // XRP balance as drops string
-		"Sequence":        account.Sequence,
-		"OwnerCount":      account.OwnerCount,
-		"Flags":           account.Flags,
+	if account == nil {
+		return nil, errors.New("failed to encode AccountRoot: nil entry")
 	}
 
-	// Add Account if set
+	var sle ledgerfields.AccountRoot
+	sle.SetBalance(fmt.Sprintf("%d", account.Balance))
+	sle.SetSequence(account.Sequence)
+	sle.SetOwnerCount(account.OwnerCount)
+	sle.SetFlags(account.Flags)
+
 	if account.Account != "" {
-		jsonObj["Account"] = account.Account
+		sle.SetAccount(account.Account)
 	}
 
-	// Add TransferRate if set
-	if account.TransferRate > 0 {
-		jsonObj["TransferRate"] = account.TransferRate
+	if account.TransferRate > 0 || decodedFieldUnchanged(account.decodedOptionals, "TransferRate", account.TransferRate) {
+		sle.SetTransferRate(account.TransferRate)
 	}
 
-	// Add RegularKey if set
 	if account.RegularKey != "" {
-		jsonObj["RegularKey"] = account.RegularKey
+		sle.SetRegularKey(account.RegularKey)
 	}
 
-	// Add Domain if set (as hex string)
-	if account.Domain != "" {
-		jsonObj["Domain"] = strings.ToUpper(hex.EncodeToString([]byte(account.Domain)))
+	if account.Domain != "" || decodedFieldUnchanged(account.decodedOptionals, "Domain", account.Domain) {
+		sle.SetDomain(strings.ToUpper(hex.EncodeToString([]byte(account.Domain))))
 	}
 
-	// Add EmailHash if set
 	if account.EmailHash != "" {
-		jsonObj["EmailHash"] = strings.ToUpper(account.EmailHash)
+		sle.SetEmailHash(strings.ToUpper(account.EmailHash))
 	}
 
-	// Add MessageKey if set
-	if account.MessageKey != "" {
-		jsonObj["MessageKey"] = strings.ToUpper(account.MessageKey)
+	if account.MessageKey != "" || decodedFieldUnchanged(account.decodedOptionals, "MessageKey", account.MessageKey) {
+		sle.SetMessageKey(strings.ToUpper(account.MessageKey))
 	}
 
-	// Add NFTokenMinter if set
 	if account.NFTokenMinter != "" {
-		jsonObj["NFTokenMinter"] = account.NFTokenMinter
+		sle.SetNFTokenMinter(account.NFTokenMinter)
 	}
 
-	// Add MintedNFTokens if set (for NFToken issuer tracking)
 	if account.MintedNFTokens > 0 {
-		jsonObj["MintedNFTokens"] = account.MintedNFTokens
+		sle.SetMintedNFTokens(account.MintedNFTokens)
 	}
 
-	// Add BurnedNFTokens if set (for NFToken issuer tracking)
 	if account.BurnedNFTokens > 0 {
-		jsonObj["BurnedNFTokens"] = account.BurnedNFTokens
+		sle.SetBurnedNFTokens(account.BurnedNFTokens)
 	}
 
-	// Add FirstNFTokenSequence if set (fixNFTokenRemint amendment)
 	if account.HasFirstNFTSeq {
-		jsonObj["FirstNFTokenSequence"] = account.FirstNFTokenSequence
+		sle.SetFirstNFTokenSequence(account.FirstNFTokenSequence)
 	}
 
-	// Add TicketCount if set (number of outstanding tickets)
-	if account.TicketCount > 0 {
-		jsonObj["TicketCount"] = account.TicketCount
+	if account.TicketCount > 0 || decodedFieldUnchanged(account.decodedOptionals, "TicketCount", account.TicketCount) {
+		sle.SetTicketCount(account.TicketCount)
 	}
 
-	// Add AccountTxnID if present. Once asfAccountTxnID is enabled the field is
-	// present even while still zero (before the account's next transaction),
-	// mirroring rippled's makeFieldPresent(sfAccountTxnID). Keyed on presence,
-	// not non-zero, so a present-zero value round-trips.
 	var zeroHash [32]byte
 	if account.HasAccountTxnID {
-		jsonObj["AccountTxnID"] = strings.ToUpper(hex.EncodeToString(account.AccountTxnID[:]))
+		sle.SetAccountTxnID(strings.ToUpper(hex.EncodeToString(account.AccountTxnID[:])))
 	}
 
-	// Add WalletLocator if set
 	if account.WalletLocator != "" {
-		jsonObj["WalletLocator"] = strings.ToUpper(account.WalletLocator)
+		sle.SetWalletLocator(strings.ToUpper(account.WalletLocator))
+	}
+	if account.HasWalletSize {
+		sle.SetWalletSize(account.WalletSize)
 	}
 
-	// Add AMMID if set (non-zero) — links AMM pseudo-account to AMM entry
-	if account.AMMID != zeroHash {
-		jsonObj["AMMID"] = strings.ToUpper(hex.EncodeToString(account.AMMID[:]))
+	if account.AMMID != zeroHash || decodedFieldUnchanged(account.decodedOptionals, "AMMID", account.AMMID) {
+		sle.SetAMMID(strings.ToUpper(hex.EncodeToString(account.AMMID[:])))
 	}
 
-	// Add VaultID / LoanBrokerID if set (non-zero) — pseudo-account designators
-	if account.VaultID != zeroHash {
-		jsonObj["VaultID"] = strings.ToUpper(hex.EncodeToString(account.VaultID[:]))
+	if account.VaultID != zeroHash || decodedFieldUnchanged(account.decodedOptionals, "VaultID", account.VaultID) {
+		sle.SetVaultID(strings.ToUpper(hex.EncodeToString(account.VaultID[:])))
 	}
-	if account.LoanBrokerID != zeroHash {
-		jsonObj["LoanBrokerID"] = strings.ToUpper(hex.EncodeToString(account.LoanBrokerID[:]))
-	}
-
-	// PreviousTxnID and PreviousTxnLgrSeq are soeREQUIRED on AccountRoot, so
-	// emit them unconditionally (a zero value round-trips), matching the genesis
-	// serializer and rippled's auto-initialised fields.
-	jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(account.PreviousTxnID[:]))
-	jsonObj["PreviousTxnLgrSeq"] = account.PreviousTxnLgrSeq
-
-	// Add TickSize if set (non-zero)
-	if account.TickSize > 0 {
-		jsonObj["TickSize"] = account.TickSize
+	if account.LoanBrokerID != zeroHash || decodedFieldUnchanged(account.decodedOptionals, "LoanBrokerID", account.LoanBrokerID) {
+		sle.SetLoanBrokerID(strings.ToUpper(hex.EncodeToString(account.LoanBrokerID[:])))
 	}
 
-	// Encode using the binary codec
-	hexStr, err := binarycodec.Encode(jsonObj)
+	sle.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(account.PreviousTxnID[:])))
+	sle.SetPreviousTxnLgrSeq(account.PreviousTxnLgrSeq)
+
+	if account.TickSize > 0 || decodedFieldUnchanged(account.decodedOptionals, "TickSize", account.TickSize) {
+		sle.SetTickSize(account.TickSize)
+	}
+
+	data, err := sle.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode AccountRoot: %w", err)
 	}
-
-	// Convert hex string to bytes
-	return hex.DecodeString(hexStr)
+	return data, nil
 }

@@ -15,7 +15,7 @@ import (
 const maxCredentialsArraySize = 8
 
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
-type DepositAuthorizedMethod struct{}
+type DepositAuthorizedMethod struct{ BaseHandler }
 
 func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	rawFields, fieldsErr := rawJSONFields(params)
@@ -169,14 +169,6 @@ func parseCredentialsFormat(raw json.RawMessage) ([]string, *types.RPCError) {
 	}
 
 	return credentials, nil
-}
-
-func (m *DepositAuthorizedMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *DepositAuthorizedMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *DepositAuthorizedMethod) RequiredCondition() types.Condition {

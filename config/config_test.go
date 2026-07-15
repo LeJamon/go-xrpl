@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -143,6 +144,42 @@ owner_reserve = 0
 	assert.True(t, cfg.Voting.OwnerReserveSet)
 }
 
+func TestLoadConfig_ServerAccessDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_test"]
+admin = ["127.0.0.1"]
+admin_user = "common-user"
+admin_password = "common-password"
+secure_gateway = ["10.0.0.0/8"]
+
+[port_test]
+port = 8080
+ip = "127.0.0.1"
+protocol = "http"
+admin = ["::1"]
+admin_password = "port-password"
+secure_gateway = ["192.168.0.0/16"]
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`)
+
+	cfg, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.NoError(t, err)
+	port := cfg.Ports["port_test"]
+	assert.Equal(t, []string{"127.0.0.1", "::1"}, port.Admin)
+	assert.Equal(t, "common-user", port.AdminUser)
+	assert.Equal(t, "port-password", port.AdminPassword)
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, port.SecureGateway)
+}
+
 // TestLoadConfig_MinimalConfig verifies that the optional tuning sections
 // ([overlay], [transaction_queue], [sqlite], ledger_history, fetch_depth,
 // node_size, relay_*, max_transactions) may be omitted entirely.
@@ -225,14 +262,179 @@ type = "pebble"
 path = "/tmp/test/db"
 `
 	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
-	writeConfig(t, tempDir, "explicit_validators.toml",
-		`validator_list_sites = ["https://from-explicit.example.com"]`)
-	otherPath := writeConfig(t, tempDir, "other_validators.toml",
-		`validator_list_sites = ["https://from-paths.example.com"]`)
+	writeConfig(t, tempDir, "explicit_validators.toml", `
+validator_list_sites = ["https://from-explicit.example.com"]
+validator_list_keys = ["ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"]
+`)
+	otherPath := writeConfig(t, tempDir, "other_validators.toml", `
+validator_list_sites = ["https://from-paths.example.com"]
+validator_list_keys = ["ED2677ABFFD1B33AC6FBC3062B71F1E8397C1505E1C42C64D11AD1B28FF73F4734"]
+`)
 
 	config, err := LoadConfig(Paths{Main: mainConfigPath, Validators: otherPath})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"https://from-explicit.example.com"}, config.Validators.ValidatorListSites)
+}
+
+func TestLoadValidatorsConfig_ExplicitPathIsAuthoritative(t *testing.T) {
+	tempDir := t.TempDir()
+	writeConfig(t, tempDir, "selected.txt", `[validators]
+n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5
+`)
+
+	missingPath := filepath.Join(tempDir, "selected.toml")
+	tests := []struct {
+		name           string
+		paths          Paths
+		validatorsFile string
+	}{
+		{
+			name:           "validators_file",
+			paths:          Paths{Main: filepath.Join(tempDir, "xrpld.toml")},
+			validatorsFile: "selected.toml",
+		},
+		{
+			name:  "paths validators",
+			paths: Paths{Validators: missingPath},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := loadValidatorsConfig(test.paths, test.validatorsFile)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), missingPath)
+		})
+	}
+}
+
+func TestLoadValidatorsConfig_ExplicitLegacyExtension(t *testing.T) {
+	tempDir := t.TempDir()
+	path := writeConfig(t, tempDir, "validators.cfg", `[validator_keys]
+n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt legacy
+`)
+
+	validators, err := loadValidatorsConfig(Paths{Validators: path}, "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt"}, validators.Validators)
+}
+
+func TestLoadConfig_ImplicitAdjacentValidatorsTxt(t *testing.T) {
+	tempDir := t.TempDir()
+	configContent := `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_test"]
+
+[port_test]
+port = 8080
+ip = "127.0.0.1"
+protocol = "http"
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	writeConfig(t, tempDir, "validators.txt", `[validator_list_sites]
+https://implicit.example.com
+
+[validator_list_keys]
+ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860
+`)
+
+	config, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"https://implicit.example.com"}, config.Validators.ValidatorListSites)
+	assert.Equal(t, []string{"ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"}, config.Validators.ValidatorListKeys)
+}
+
+func TestLoadConfig_SkipValidators(t *testing.T) {
+	tempDir := t.TempDir()
+	configContent := `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+validators_file = "missing.toml"
+
+[server]
+ports = ["port_test"]
+
+[port_test]
+port = 8080
+ip = "127.0.0.1"
+protocol = "http"
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+
+	config, err := LoadConfig(Paths{Main: mainConfigPath, SkipValidators: true})
+	require.NoError(t, err)
+	assert.Empty(t, config.Validators.Validators)
+	assert.Empty(t, config.Validators.ValidatorListKeys)
+}
+
+func TestLoadConfig_IgnoresImplicitValidatorsDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+	configContent := `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_test"]
+
+[port_test]
+port = 8080
+ip = "127.0.0.1"
+protocol = "http"
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	require.NoError(t, os.Mkdir(filepath.Join(tempDir, "validators.txt"), 0o700))
+
+	config, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.NoError(t, err)
+	assert.Empty(t, config.Validators.Validators)
+	assert.Empty(t, config.Validators.ValidatorListKeys)
+}
+
+func TestLoadConfig_RejectsImplicitSitesWithoutKeys(t *testing.T) {
+	tempDir := t.TempDir()
+	configContent := `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_test"]
+
+[port_test]
+port = 8080
+ip = "127.0.0.1"
+protocol = "http"
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", configContent)
+	writeConfig(t, tempDir, "validators.txt", `[validator_list_sites]
+https://invalid.example.com
+`)
+
+	_, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validator_list_sites requires")
 }
 
 func TestLoadConfig_MissingFile(t *testing.T) {
@@ -294,6 +496,33 @@ func TestConfigValidation_MissingRequiredFields(t *testing.T) {
 		"overlay.", "transaction_queue.", "sqlite.",
 	} {
 		assert.NotContains(t, errMsg, "missing required field: "+gone)
+	}
+}
+
+func TestConfigLocalStateDir(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "filesystem database path",
+			cfg:  Config{DatabasePath: "/var/lib/xrpld/db"},
+			want: "/var/lib/xrpld/db",
+		},
+		{
+			name: "PostgreSQL uses node store parent",
+			cfg: Config{
+				DatabasePath: "postgres://user:secret@db.example/xrpl",
+				NodeDB:       NodeDBConfig{Path: "/var/lib/xrpld/db/pebble"},
+			},
+			want: "/var/lib/xrpld/db",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assert.Equal(t, test.want, test.cfg.LocalStateDir())
+		})
 	}
 }
 
@@ -519,6 +748,21 @@ func TestValidatorsConfigMethods(t *testing.T) {
 	assert.Equal(t, 2, threshold) // floor(3/2) + 1 = 2
 }
 
+func TestValidatorsConfigMethods_DeduplicatePublisherKeys(t *testing.T) {
+	key := "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"
+	validators := ValidatorsConfig{
+		ValidatorListKeys: []string{key, strings.ToLower(key), key},
+	}
+
+	assert.NoError(t, validators.Validate())
+	assert.Equal(t, 1, validators.EffectiveListThreshold())
+
+	validators.ValidatorListThreshold = 2
+	err := validators.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unique validator_list_keys (1)")
+}
+
 func TestParseValidatorsTxt(t *testing.T) {
 	content := `
 # This is a comment
@@ -540,6 +784,32 @@ ED2677ABFFD1B33AC6FBC3062B71F1E8397C1505E1C42C64D11AD1B28FF73F4734
 	assert.Contains(t, config.Validators, "n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5")
 	assert.Contains(t, config.ValidatorListSites, "https://vl.ripple.com")
 	assert.Contains(t, config.ValidatorListKeys, "ED2677ABFFD1B33AC6FBC3062B71F1E8397C1505E1C42C64D11AD1B28FF73F4734")
+}
+
+func TestLoadValidatorsTxtFile_LegacyValidatorKeys(t *testing.T) {
+	tempDir := t.TempDir()
+	path := writeConfig(t, tempDir, "validators.txt", `[validator_keys]
+n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt legacy
+`)
+
+	config, err := loadValidatorsTxtFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt"}, config.Validators)
+	assert.NoError(t, config.Validate())
+}
+
+func TestParseValidatorsTxt_MergesLegacyValidatorKeys(t *testing.T) {
+	config, err := ParseValidatorsTxt(`[validator_keys]
+n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt legacy
+
+[validators]
+n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5 current
+`)
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5",
+		"n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt",
+	}, config.Validators)
 }
 
 // TestParseValidatorsTxt_Nicknames covers rippled's documented format
@@ -571,6 +841,57 @@ func TestParseValidatorsTxt_BadThreshold(t *testing.T) {
 	config, err := ParseValidatorsTxt("[validator_list_threshold]\n2\n")
 	require.NoError(t, err)
 	assert.Equal(t, 2, config.ValidatorListThreshold)
+}
+
+func TestParseValidatorsTxt_ThresholdRequiresSingleWholeValue(t *testing.T) {
+	for _, content := range []string{
+		"[validator_list_threshold]\n1\n2\n",
+		"[validator_list_threshold]\n1 2\n",
+	} {
+		_, err := ParseValidatorsTxt(content)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "validator_list_threshold")
+	}
+
+	config, err := ParseValidatorsTxt("[validator_list_threshold]\n2 # operator comment\n")
+	require.NoError(t, err)
+	assert.Equal(t, 2, config.ValidatorListThreshold)
+}
+
+func TestParseValidatorsTxt_EmptyThresholdUsesDefault(t *testing.T) {
+	for _, content := range []string{
+		"[validator_list_threshold]\n",
+		"[validator_list_threshold]\n# operator comment\n",
+	} {
+		config, err := ParseValidatorsTxt(content)
+		require.NoError(t, err)
+		assert.Equal(t, 0, config.ValidatorListThreshold)
+	}
+}
+
+func TestParseValidatorsTxt_ExactSectionBrackets(t *testing.T) {
+	config, err := ParseValidatorsTxt(`[[validators]]
+n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5
+`)
+	require.NoError(t, err)
+	assert.Empty(t, config.Validators)
+}
+
+func TestParseValidatorsTxt_LineEndings(t *testing.T) {
+	lines := []string{
+		"[validators]",
+		"n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5",
+		"[validator_keys]",
+		"n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt",
+	}
+	for _, separator := range []string{"\r\n", "\r"} {
+		config, err := ParseValidatorsTxt(strings.Join(lines, separator))
+		require.NoError(t, err)
+		assert.Equal(t, []string{
+			"n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5",
+			"n9MqiExBcoG19UXwoLjBJnhsxEhAZMuWwJDRdkyDz1EkEkwzQTNt",
+		}, config.Validators)
+	}
 }
 
 // TestExampleConfigLoads keeps config/examples/xrpld.toml loadable by

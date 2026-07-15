@@ -87,6 +87,7 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	want := first.GetValidatedLedger()
 	require.NotNil(t, want)
 	wantHash := want.Hash()
+	wantCloseTime := want.CloseTime()
 	first.Stop()
 
 	second, err := New(Config{
@@ -104,6 +105,10 @@ func TestService_FastLoadRestoresPersistedValidatedLedger(t *testing.T) {
 	require.False(t, second.NeedsInitialSync())
 	require.Equal(t, seq, second.GetValidatedLedgerIndex())
 	require.Equal(t, wantHash, second.GetValidatedLedger().Hash())
+	second.SetValidatedLedgerAgeClock(func() time.Time {
+		return wantCloseTime.Add(37 * time.Second)
+	})
+	require.Equal(t, 37*time.Second, second.GetValidatedLedgerAge())
 	require.Equal(t, seq+1, second.GetCurrentLedgerIndex())
 	gotTx, ok, err := second.GetValidatedLedger().GetTransaction(txHash)
 	require.NoError(t, err)

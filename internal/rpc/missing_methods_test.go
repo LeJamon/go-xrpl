@@ -1362,7 +1362,7 @@ func TestLogRotateMethod(t *testing.T) {
 
 func TestAMMInfoMethod(t *testing.T) {
 	mock := newMockLedgerServiceMissingMethods()
-	services := servicesForMissingMethods(mock)
+	services := &types.ServiceContainer{Ledger: &ammInfoTestLedgerService{mock}}
 
 	method := &handlers.AMMInfoMethod{}
 
@@ -1467,6 +1467,14 @@ func TestAMMInfoMethod(t *testing.T) {
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
 		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})
+}
+
+type ammInfoTestLedgerService struct {
+	*mockLedgerServiceMissingMethods
+}
+
+func (m *ammInfoTestLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	return newDefaultLedgerReader(seq, seq == m.validatedLedgerIndex), nil
 }
 
 // VaultInfoMethod Tests

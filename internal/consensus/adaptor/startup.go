@@ -49,15 +49,17 @@ type Components struct {
 	// Nil iff ValidatorList is nil or no sites are configured.
 	ValidatorListPoller *validatorlist.SitePoller
 
-	// staticMu guards staticValidators / staticMasterKeys. Both slices
-	// hold the operator's most recent [validators] stanza — initially
-	// from boot, refreshed on every SIGHUP via ReloadStaticValidators.
-	// The publisher-trust OnChange callback reads under staticMu so a
-	// SIGHUP removal can never be silently undone by the next publisher
-	// event re-merging a boot-time snapshot.
-	staticMu         sync.RWMutex
-	staticValidators []consensus.NodeID
-	staticMasterKeys [][33]byte
+	// trustMergeMu serializes source snapshots through their adaptor update.
+	// Publisher callbacks already hold the aggregator mutex, so reload must
+	// merge from the cached publisher snapshot rather than call back into it.
+	trustMergeMu                 sync.Mutex
+	staticValidators             []consensus.NodeID
+	staticMasterKeys             [][33]byte
+	publisherValidators          []consensus.NodeID
+	publisherMasterKeys          [][33]byte
+	configuredPublisherKeys      [][33]byte
+	configuredPublisherSites     []string
+	configuredPublisherThreshold int
 
 	// Archive is the on-disk validation archive, when enabled.
 	// Nil if disabled in config or if no relational DB is configured.
@@ -421,6 +423,7 @@ func NewFromConfig(
 		}
 		router.SetValidatorListAggregator(vlAgg)
 		adaptor.SetUNLBlockedFunc(vlAgg.IsUNLBlocked)
+		adaptor.SetQuorumUnavailableFunc(vlAgg.IsQuorumUnavailable)
 		adaptor.SetUNLRefreshFunc(vlAgg.Tick)
 		// Listed-but-untrusted signers (published below the trust
 		// threshold) get their validations stored by the engine so a later
@@ -431,8 +434,8 @@ func NewFromConfig(
 		// every successful apply, and hydrated on cold start so the
 		// trusted UNL is non-empty before the first poll cycle. Failed
 		// cache I/O is logged but never blocks startup.
-		if appCfg.DatabasePath != "" {
-			cacheDir := filepath.Join(appCfg.DatabasePath, "validator-list")
+		if dataDir := appCfg.LocalStateDir(); dataDir != "" {
+			cacheDir := filepath.Join(dataDir, "validator-list")
 			if err := vlAgg.SetCacheDir(cacheDir); err != nil {
 				slog.Default().Warn("validator-list cache disabled",
 					"dir", cacheDir, "error", err)
@@ -484,32 +487,39 @@ func NewFromConfig(
 	})
 
 	c := &Components{
-		Overlay:             overlay,
-		Engine:              engine,
-		Adaptor:             adaptor,
-		Router:              router,
-		ModeManager:         modeManager,
-		Manifests:           manifestCache,
-		ValidatorList:       vlAgg,
-		ValidatorListPoller: vlPoller,
-		staticValidators:    append([]consensus.NodeID(nil), staticValidators...),
-		staticMasterKeys:    append([][33]byte(nil), staticMasterKeys...),
-		Archive:             validationArchive,
+		Overlay:                      overlay,
+		Engine:                       engine,
+		Adaptor:                      adaptor,
+		Router:                       router,
+		ModeManager:                  modeManager,
+		Manifests:                    manifestCache,
+		ValidatorList:                vlAgg,
+		ValidatorListPoller:          vlPoller,
+		staticValidators:             append([]consensus.NodeID(nil), staticValidators...),
+		staticMasterKeys:             append([][33]byte(nil), staticMasterKeys...),
+		configuredPublisherKeys:      append([][33]byte(nil), publisherKeys...),
+		configuredPublisherSites:     append([]string(nil), appCfg.Validators.ValidatorListSites...),
+		configuredPublisherThreshold: appCfg.Validators.EffectiveListThreshold(),
+		Archive:                      validationArchive,
 	}
 
-	// Wire the publisher OnChange to merge against the live static set
-	// (held under c.staticMu, refreshed by SIGHUP). Capturing the boot
-	// values directly here would let a SIGHUP removal be silently undone
-	// by the next publisher event.
-	if vlAgg != nil {
-		vlAgg.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
-			staticV, staticM := c.snapshotEffectiveStatic()
-			merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
-			adaptor.SetTrustedValidators(merged, mergedMasters)
-		})
-	}
+	// Capturing the boot values directly here would let a SIGHUP removal
+	// be silently undone by the next publisher event.
+	wireValidatorListTrust(c)
 
 	return c, nil
+}
+
+func wireValidatorListTrust(c *Components) {
+	if c.ValidatorList == nil {
+		return
+	}
+	c.ValidatorList.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
+		c.updatePublisherTrust(publisherNodes, publisherMasters)
+	})
+	c.ValidatorList.Tick()
+	publisherNodes, publisherMasters := c.ValidatorList.TrustedValidators()
+	c.updatePublisherTrust(publisherNodes, publisherMasters)
 }
 
 // consensusServerState maps the operating mode and consensus role to the
@@ -529,11 +539,9 @@ func consensusServerState(opMode consensus.OperatingMode, mode consensus.Mode, v
 	return opMode.String()
 }
 
-// snapshotStatic returns deep copies of the current static validator
-// set under staticMu. Both slices are safe for the caller to retain.
 func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
-	c.staticMu.RLock()
-	defer c.staticMu.RUnlock()
+	c.trustMergeMu.Lock()
+	defer c.trustMergeMu.Unlock()
 	v := append([]consensus.NodeID(nil), c.staticValidators...)
 	m := append([][33]byte(nil), c.staticMasterKeys...)
 	return v, m
@@ -560,9 +568,8 @@ func (c *Components) StaticTrustedMasterKeys() [][33]byte {
 // adaptor.
 //
 // When a publisher-trust aggregator is wired, the push is the union of
-// the new static set and the aggregator's current trusted set. When no
-// aggregator is wired the static set is pushed verbatim (single source
-// of truth).
+// the new static set and the latest publisher callback snapshot. When no
+// aggregator is wired the static set is pushed verbatim.
 //
 // SIGHUP-driven config reload calls this; publisher events do NOT —
 // they go through the aggregator's OnChange callback wired in
@@ -573,25 +580,91 @@ func (c *Components) ReloadStaticValidators(validators []consensus.NodeID, maste
 		identity = c.Adaptor.identity
 	}
 	validators, masterKeys = excludeLocalValidator(validators, masterKeys, identity)
-	c.staticMu.Lock()
+	_, effectiveMasterKeys := includeLocalValidator(validators, masterKeys, identity)
+	c.trustMergeMu.Lock()
 	c.staticValidators = append([]consensus.NodeID(nil), validators...)
 	c.staticMasterKeys = append([][33]byte(nil), masterKeys...)
-	c.staticMu.Unlock()
+	c.applyMergedTrustLocked()
+	c.trustMergeMu.Unlock()
 
-	effectiveValidators, effectiveMasterKeys := c.snapshotEffectiveStatic()
 	if c.ValidatorList != nil {
 		c.ValidatorList.SetStaticValidatorCount(len(effectiveMasterKeys))
 	}
+}
+
+func (c *Components) updatePublisherTrust(validators []consensus.NodeID, masterKeys [][33]byte) {
+	c.trustMergeMu.Lock()
+	defer c.trustMergeMu.Unlock()
+
+	c.publisherValidators = append([]consensus.NodeID(nil), validators...)
+	c.publisherMasterKeys = append([][33]byte(nil), masterKeys...)
+	c.applyMergedTrustLocked()
+}
+
+func (c *Components) applyMergedTrustLocked() {
 	if c.Adaptor == nil {
 		return
 	}
-	if c.ValidatorList == nil {
-		c.Adaptor.SetTrustedValidators(effectiveValidators, effectiveMasterKeys)
-		return
-	}
-	pubNodes, pubMasters := c.ValidatorList.TrustedValidators()
-	merged, mergedMasters := mergeValidators(effectiveValidators, effectiveMasterKeys, pubNodes, pubMasters)
+	effectiveValidators, effectiveMasterKeys := includeLocalValidator(
+		c.staticValidators,
+		c.staticMasterKeys,
+		c.Adaptor.identity,
+	)
+	merged, mergedMasters := mergeValidators(
+		effectiveValidators,
+		effectiveMasterKeys,
+		c.publisherValidators,
+		c.publisherMasterKeys,
+	)
 	c.Adaptor.SetTrustedValidators(merged, mergedMasters)
+}
+
+func (c *Components) ValidateValidatorReload(publisherKeys [][33]byte, publisherSites []string, publisherThreshold, staticValidatorCount int) error {
+	if !publisherKeyMultisetsEqual(c.configuredPublisherKeys, publisherKeys) {
+		return fmt.Errorf("validator_list_keys changes require a node restart")
+	}
+	if len(publisherKeys) > 0 &&
+		(!stringMultisetsEqual(c.configuredPublisherSites, publisherSites) || c.configuredPublisherThreshold != publisherThreshold) {
+		return fmt.Errorf("validator list site or threshold changes require a node restart")
+	}
+	if staticValidatorCount == 0 && len(c.configuredPublisherKeys) == 0 {
+		return fmt.Errorf("trusted validator configuration cannot be empty outside standalone mode")
+	}
+	return nil
+}
+
+func stringMultisetsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, value := range a {
+		counts[value]++
+	}
+	for _, value := range b {
+		if counts[value] == 0 {
+			return false
+		}
+		counts[value]--
+	}
+	return true
+}
+
+func publisherKeyMultisetsEqual(a, b [][33]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[[33]byte]int, len(a))
+	for _, key := range a {
+		counts[key]++
+	}
+	for _, key := range b {
+		if counts[key] == 0 {
+			return false
+		}
+		counts[key]--
+	}
+	return true
 }
 
 func includeLocalValidator(validators []consensus.NodeID, masterKeys [][33]byte, identity *ValidatorIdentity) ([]consensus.NodeID, [][33]byte) {
@@ -678,8 +751,11 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 
 	// Listen address from peer port config
-	if _, peerPort, hasPeer := appCfg.PeerPort(); hasPeer {
+	_, peerPort, hasPeerPort := appCfg.PeerPort()
+	if hasPeerPort {
 		opts = append(opts, peermanagement.WithListenAddr(peerPort.BindAddress()))
+	} else {
+		opts = append(opts, peermanagement.WithListenAddr(""))
 	}
 
 	// Bootstrap peers (convert "host port" → "host:port")
@@ -693,13 +769,20 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 
 	// Max peers
-	if appCfg.PeersMax > 0 {
-		opts = append(opts, peermanagement.WithMaxPeers(appCfg.PeersMax))
-	}
+	maxPeers, maxInbound, maxOutbound := peerLimits(appCfg.PeersMax, hasPeerPort && appCfg.PeerPrivate == 0)
+	opts = append(opts,
+		peermanagement.WithMaxPeers(maxPeers),
+		peermanagement.WithMaxInbound(maxInbound),
+		peermanagement.WithMaxOutbound(maxOutbound),
+		peermanagement.WithIPLimit(appCfg.Overlay.IPLimit),
+	)
 
 	// Private mode
 	if appCfg.PeerPrivate > 0 {
 		opts = append(opts, peermanagement.WithPrivateMode(true))
+	}
+	if dataDir := appCfg.LocalStateDir(); dataDir != "" {
+		opts = append(opts, peermanagement.WithDataDir(filepath.Join(dataDir, "peers")))
 	}
 
 	// Compression
@@ -746,6 +829,25 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	}
 
 	return opts
+}
+
+const (
+	defaultMaxPeers     = 21
+	minOutboundPeers    = 10
+	outboundPeerPercent = 15
+)
+
+func peerLimits(maxPeers int, wantIncoming bool) (int, int, int) {
+	if maxPeers == 0 {
+		maxPeers = defaultMaxPeers
+	}
+	maxPeers = max(maxPeers, minOutboundPeers)
+	if !wantIncoming {
+		return maxPeers, 0, maxPeers
+	}
+
+	maxOutbound := max((maxPeers*outboundPeerPercent+50)/100, minOutboundPeers)
+	return maxPeers, maxPeers - maxOutbound, maxOutbound
 }
 
 // feeVoteFromConfig maps the operator's [voting] stanza onto the

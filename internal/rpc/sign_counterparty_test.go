@@ -42,6 +42,7 @@ func TestSign_SignatureTarget_HappyPath(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`))
 	primaryTx := primary["tx_json"].(map[string]any)
@@ -56,6 +57,7 @@ func TestSign_SignatureTarget_HappyPath(t *testing.T) {
 	req, err := json.Marshal(map[string]any{
 		"tx_json":          primaryTx,
 		"passphrase":       "counterparty phrase",
+		"key_type":         "secp256k1",
 		"offline":          true,
 		"signature_target": "CounterpartySignature",
 	})
@@ -104,6 +106,7 @@ func TestSign_SignatureTarget_Invalid(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true,
 		"signature_target": "NotAValidField"
 	}`)
@@ -128,6 +131,7 @@ func TestSign_SignatureTarget_SkipsOwnershipCheck(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "counterparty phrase",
+		"key_type": "secp256k1",
 		"offline": true,
 		"signature_target": "CounterpartySignature"
 	}`))
@@ -157,6 +161,7 @@ func TestSignFor_SignatureTarget(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"signature_target": "CounterpartySignature"
 	}`)
 	result, rpcErr := handler.Handle(ctx, params)
@@ -193,6 +198,7 @@ func TestSignFor_SignatureTarget_Invalid(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"signature_target": "Memo"
 	}`)
 	_, err := handler.Handle(ctx, params)

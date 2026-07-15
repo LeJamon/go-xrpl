@@ -39,7 +39,7 @@ not-found semantics.
 - [x] Propagate request contexts through lazy state and transaction SHAMap reads.
 - [x] Add historical-chain, cancellation, current-snapshot, fee, and error coverage.
 - [x] Pass `just build`, `just vet`, `just lint`, and `git diff --check`.
-- [ ] Reconcile the advanced `v3.0.0` base and reverify the combined behavior tree.
+- [x] Reconcile the advanced `v3.0.0` base and reverify the combined behavior tree.
 - [ ] Commit and push the behavior remediation; require exact-head green CI.
 - [ ] Run the separate AI-comment cleanup phase and verify the final CI head.
 
@@ -284,6 +284,141 @@ Verification:
 - The staged merge has no unmerged paths, conflict markers, or whitespace
   errors.
 
+# Issue #1304 — DRY D1+D2 consolidation
+
+Target: `v3.0.0`. Protocol oracle: local rippled tag `3.2.0`
+(`3c43f4614f87965298773279ff5b85d4c56c637b`). The user approved one large PR.
+
+## Plan
+
+- [x] Inventory every D1/D2 duplication named in the issue and record existing
+      behavioral differences before selecting shared abstractions.
+- [x] Consolidate RPC error construction, handler metadata, account-query error
+      mapping, websocket envelopes, and book-offers pagination without changing
+      response JSON.
+- [x] Add canonical protocol time and Hash256 helpers; remove duplicated
+      consensus parameters, frame encoding, ledger-sync tracking, fee defaults,
+      dead relational retry settings, and state-diff computation.
+- [x] Golden-test ledger-header bytes, then route every serializer through
+      `header.AddRaw`.
+- [x] Consolidate ledger selection across RPC and gRPC while preserving each
+      endpoint's validated/current/error semantics and pagination behavior.
+- [x] Consolidate transaction rendering/decoding/sign-submit seams while
+      preserving `close_time_iso`, CTID, and response-field compatibility.
+- [x] Run formatting and focused tests after each subsystem; compare all
+      protocol-bearing behavior with rippled `3.2.0`.
+- [x] Run `just build-all`, `just build-nocgo`, `just vet`, `just lint`, full
+      tests, and conformance; review the complete diff for correctness and scope.
+- [x] Commit only intentional files, push `feat/issue-1304-dry-sweep`, and open
+      one PR with base `v3.0.0`.
+
+## Review
+
+- Implemented the complete D1+D2 sweep and integrated the current
+  `origin/v3.0.0` at `26d0211ed971c98fe919cb28ed5fed90dd962b67`.
+- Verified protocol behavior against the clean local rippled `3.2.0` checkout
+  at `3c43f4614f87965298773279ff5b85d4c56c637b`, including ledger lookup and
+  freshness, RPC error precedence and response shape, transaction ranges and
+  CTIDs, account pagination, ledger-header serialization, message framing,
+  consensus parameters, and validation-quorum rechecks.
+- `just fmt`, `git diff --check`, `just build-all`, `just build-nocgo`, and
+  `just vet` pass. Both the advisory `just lint` recipe and the required CI
+  command (`golangci-lint` v2.11.3 with the default strict configuration) report
+  0 issues. Go and linter caches were redirected to `/private/tmp` because the
+  sandbox cannot write the user cache directories.
+- Focused tests pass for all touched core and RPC packages. The race detector
+  passes for RPC, ledger service/selector, consensus validation/adaptor, gRPC,
+  and node integration.
+- `just test` passes every package except `internal/testing/conformance`, whose
+  known out-of-scope Batch/Vault/XChain failures make the aggregate command
+  return non-zero. `just conformance --failing` reports 941 pass / 117 fail
+  overall, with all 879 in-scope tests passing and all 117 failures confined to
+  the existing out-of-scope list.
+- Integrated `origin/v3.0.0` at
+  `26d0211ed971c98fe919cb28ed5fed90dd962b67`, retaining both the base branch's
+  durable initial-sync behavior and this PR's validation freshness behavior.
+  No conflict markers, whitespace errors, or unrelated worktree changes are
+  present.
+
+## PR #1321 finalization
+
+- [x] Pin the PR head, current `v3.0.0` base, feature worktree, and clean local
+      rippled `3.2.0` oracle.
+- [x] Resolve and push the base-branch conflicts without discarding either
+      branch's intended behavior.
+- [x] Review the complete merged diff for Go correctness and rippled `3.2.0`
+      behavioral parity.
+- [x] Correct confirmed transaction lookup, RPC/gRPC response, selector,
+      credential, channel, CTID, and compatibility regressions.
+- [x] Eliminate the pending-validation lock inversion exposed by sibling-ledger
+      recovery and pin ancestry resolution outside the validation tracker lock.
+- [ ] Commit and push the conformance corrections; require green CI at the exact
+      reviewed remote head.
+- [ ] Run the separate AI-comment cleanup phase and require green CI at the exact
+      final remote head.
+- [ ] Record the final reviewed heads, verification, and audit result below.
+
+# Issue #1301 — testnet readiness R1
+
+## Plan
+
+- [x] Record the exact `origin/v3.0.0` base and clean local rippled v3.2.0
+      oracle, then map each of the seven reported defects to existing Go and
+      rippled behavior.
+- [x] Make peer limits derived from `peers_max` in shipped/generated configs and
+      cover small/default limits plus actionable validation errors.
+- [x] Emit testnet validator-list defaults, reject an empty trusted validator
+      set outside standalone mode, and correct version-appropriate examples.
+- [x] Wire the configured data directory through production node startup and
+      verify identity, peerfinder cache, and reservation persistence.
+- [x] Remove implicit localhost RPC administration while preserving explicit
+      admin configuration and covering reverse-proxy requests.
+- [x] Correct inbound handshake feature negotiation and compression state,
+      including the HTTP 101 response feature header.
+- [x] Preserve fixed/bootstrap discovery sources and add bounded failed-dial
+      backoff without starving healthy candidates.
+- [x] Represent unavailable/expired validator-list quorum as unreachable and
+      ensure full-validation gating cannot fire.
+- [x] Format and run focused tests, race-sensitive tests where applicable,
+      full changed-area suites, vet, lint, build, and relevant conformance.
+- [x] Review every changed file and reachable caller for correctness, failure
+      paths, lifecycle/concurrency, wiring, and rippled v3.2.0 parity; record the
+      coverage matrix and unresolved scope honestly.
+- [x] Commit only intentional files, push the issue branch, and open a PR against
+      `v3.0.0` with the verified test plan.
+
+## Review
+
+- Base: `origin/v3.0.0` at `48bc716f7f9f9d92a07a494500b7294547f505ac`
+  (refetched immediately before commit; worktree merge-base is identical).
+- Oracle: clean detached rippled tag `3.2.0` at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Coverage matrix:
+  - Peer limits: generated/shipped `peers_max = 21`; default, small, private,
+    listenerless, and 100-peer splits cover rippled's 15%/minimum-10 rule.
+  - Validator trust: exact mainnet/testnet publisher anchors are emitted beside
+    generated configs; non-standalone startup rejects an empty trust source.
+  - Persistence: `database_path/peers` now owns node identity, boot-cache, and
+    reservation files; identity save failures are fatal and file mode is tested.
+  - RPC roles: loopback is guest unless its socket peer matches an explicit
+    `admin` network; HTTP, WebSocket, and proxy-header cases are covered.
+  - Handshake: outbound offers and inbound 101 responses use request/response
+    feature intersection; inbound peers retain the local compression policy.
+  - Discovery: configured bootstrap/fixed endpoints survive pruning and cache
+    pressure; in-flight reservations and bounded fixed-peer retry delays prevent
+    duplicate or hot-looping dials while healthy candidates remain selectable.
+  - Validator lists: unavailable-publisher thresholds follow rippled's
+    `min(threshold, publishers-threshold+1)` cutoff; unreachable quorum is
+    propagated atomically with trust so full validation cannot be declared.
+- Verification: `just fmt`, `just vet`, `just build-all`, `just build-nocgo`,
+  `just test-core`, `just test`, and `just lint` all pass. Race-enabled tests pass
+  for CLI, node, RPC, peer management, validator-list, adaptor, and RCL packages.
+  Conformance is 879/879 in scope; the 117 failures are all in the documented
+  out-of-scope Batch, Vault, XChain, and XChainSim suites.
+- No unresolved in-scope conformance gaps were found. The fail-fast empty-trust
+  check is an intentional startup safety requirement from issue #1301.
+- Delivery: PR #1317 is open and mergeable from
+  `fix/issue-1301-testnet-readiness-r1` into `v3.0.0`.
 # Issue #1306 — shared synthetic transaction metadata
 
 ## Plan

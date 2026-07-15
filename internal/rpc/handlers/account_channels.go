@@ -15,44 +15,22 @@ import (
 type AccountChannelsMethod struct{ BaseHandler }
 
 func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	fields, fieldsErr := rawJSONFields(params)
-	if fieldsErr != nil {
-		return nil, fieldsErr
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-	accountRaw, ok := fields["account"]
-	if !ok {
-		return nil, types.RPCErrorMissingField("account")
-	}
-	account, ok := rawJSONString(accountRaw)
-	if !ok {
-		return nil, types.RPCErrorInvalidField("account")
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
 	if selErr != nil {
 		return nil, selErr
 	}
-	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
-	if lookupErr != nil {
-		return nil, lookupErr
-	}
-	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.")
-	}
-	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
-		return nil, accountErr
-	}
+
 	destinationAccount := ""
-	if destinationRaw, ok := fields["destination_account"]; ok {
+	if rawDestination, ok := fields["destination_account"]; ok {
 		var valid bool
-		destinationAccount, valid = rawJSONString(destinationRaw)
+		destinationAccount, valid = rawJSONString(rawDestination)
 		if !valid {
 			return nil, types.RPCErrorInvalidField("destination_account")
 		}
@@ -65,18 +43,15 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	marker := ""
-	if markerRaw, ok := fields["marker"]; ok {
-		var valid bool
-		marker, valid = rawJSONString(markerRaw)
-		if !valid {
-			return nil, types.RPCErrorExpectedField("marker", "string")
-		}
+	marker, mErr := markerString(fields["marker"])
+	if mErr != nil {
+		return nil, mErr
+	}
+	if _, present := fields["marker"]; present {
 		if marker == "" {
 			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 	}
-
 	result, err := ctx.Services.Ledger.GetAccountChannels(
 		ctx.Context,
 		account,
@@ -134,9 +109,11 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 	}
 
 	// Build response
-	response := ledgerEntryResponseFields(ledger, validated)
-	response["account"] = result.Account
-	response["channels"] = channels
+	response := map[string]any{
+		"account":  result.Account,
+		"channels": channels,
+	}
+	mergeLedgerFields(response, ledgerFields)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

@@ -424,8 +424,7 @@ type TransactionParam struct {
 
 // Pagination parameters
 type PaginationParams struct {
-	Limit  uint32 `json:"limit,omitempty"`
-	Marker any    `json:"marker,omitempty"`
+	Marker json.RawMessage `json:"marker,omitempty"`
 }
 
 // Currency specification

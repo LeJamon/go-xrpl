@@ -5,23 +5,19 @@
 // fully mirrors one ledger-entry type's on-wire field set as defined in
 // rippled's ledger_entries.macro / LedgerFormats.cpp.
 //
-// Two responsibilities:
+// The package has two responsibilities:
 //
 //   - Metadata hot path: decode a ledger-entry blob into a fixed-size struct
 //     and emit only the fields that should appear in PreviousFields /
 //     FinalFields / NewFields. No intermediate map allocation per affected
-//     entry. Used by internal/tx/apply_state_table.
+//     entry. All supported ledger-entry types must be registered because
+//     transaction metadata construction depends on this typed path.
 //
 //   - Typed serialization: every struct also exposes ToMap, Encode, and Hash.
 //     Encode round-trips Decode byte-for-byte through binarycodec; Hash
 //     returns the canonical SHAMap account-state leaf hash
 //     (sha512Half(HashPrefixLeafNode || data || index)). These methods are
-//     a typed alternative to the hand-built map[string]any pattern across
-//     internal/ledger/state/*.go; migrating those callsites is a follow-up.
-//
-// Entry types not yet covered by a typed implementation fall through to the
-// generic map-based path; coverage can be extended type-by-type without
-// touching the apply_state_table wiring.
+//     a typed alternative to hand-built map[string]any serializers.
 package ledgerfields
 
 // Entry is the runtime abstraction over a typed ledger-entry decoder.
@@ -34,6 +30,7 @@ type Entry interface {
 	// Decode parses binary ledger-entry data into the typed struct. It must
 	// reset prior state before decoding.
 	Decode(data []byte) error
+	decodeLegacy(data []byte) error
 
 	// EmitNewFields writes the fields that should appear in
 	// AffectedNode.NewFields for a CreatedNode (sMD_Create | sMD_Always,
@@ -47,7 +44,7 @@ type Entry interface {
 	// EmitPreviousFields writes the fields that should appear in
 	// AffectedNode.PreviousFields for a ModifiedNode (sMD_ChangeOrig and
 	// changed-vs-current). prev must be the same concrete type as the
-	// receiver; mismatched types are treated as "all fields changed".
+	// receiver; mismatched or nil values emit no fields.
 	EmitPreviousFields(prev Entry, out map[string]any)
 
 	// EmitChangeOrigFields writes the names of every present field carrying
@@ -72,6 +69,14 @@ type Entry interface {
 	PreviousTxn() (id string, seq uint32)
 }
 
+// DecodeLegacy decodes a historical go-xrpl ledger entry using the explicit
+// compatibility rules declared by the generated schema. Consensus and live
+// ledger paths must use Entry.Decode, which enforces rippled's current ledger
+// template.
+func DecodeLegacy(entry Entry, data []byte) error {
+	return entry.decodeLegacy(data)
+}
+
 type constructor func() Entry
 
 var registry = map[string]constructor{}
@@ -82,29 +87,13 @@ func Register(entryType string, c constructor) {
 	registry[entryType] = c
 }
 
-// New returns a fresh Entry for the given ledger-entry-type name, or nil if
-// no typed implementation is registered. apply_state_table falls back to the
-// generic map-based path on nil.
+// New returns a fresh Entry for the given ledger-entry-type name, or nil if no
+// implementation is registered.
 func New(entryType string) Entry {
-	if disabled {
-		return nil
-	}
 	if c, ok := registry[entryType]; ok {
 		return c()
 	}
 	return nil
-}
-
-// disabled is a debug toggle used by benchmarks to compare typed vs generic
-// paths. Never set in production code.
-var disabled = false
-
-// SetDisabledForBenchmarks toggles the typed path off for A/B benchmarking.
-// Returns the previous value so the caller can restore it.
-func SetDisabledForBenchmarks(d bool) bool {
-	prev := disabled
-	disabled = d
-	return prev
 }
 
 // HasTyped reports whether a typed implementation exists for entryType.

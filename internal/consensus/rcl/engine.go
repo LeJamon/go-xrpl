@@ -443,23 +443,6 @@ func (e *Engine) SetStallPing(ping func()) {
 	e.stallPing.Store(&ping)
 }
 
-// refreshTrustedSet re-syncs the validation tracker's trusted set and quorum
-// after a runtime UNL change (rippled trustChanged): the trie rebuild inside
-// SetTrusted promotes stored validations from newly-trusted validators into
-// branch support immediately, and quorum reads pick up the new set on the
-// next check. Runs on the trust-change caller's goroutine; takes e.mu only
-// briefly to snapshot the tracker, so it must not be called while holding it.
-func (e *Engine) refreshTrustedSet() {
-	e.mu.RLock()
-	vt := e.validationTracker
-	e.mu.RUnlock()
-	if vt == nil {
-		return
-	}
-	vt.SetTrusted(e.adaptor.GetTrustedValidators())
-	vt.SetQuorum(e.adaptor.GetQuorum())
-}
-
 func (e *Engine) Start(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -475,8 +458,10 @@ func (e *Engine) Start(ctx context.Context) error {
 
 	// Wire the validation tracker: trusted set + quorum from the adaptor;
 	// its callback flips the ledger service's validated_ledger pointer.
-	e.validationTracker = NewValidationTracker(e.adaptor.GetQuorum(), 5*time.Minute)
-	e.validationTracker.SetTrusted(e.adaptor.GetTrustedValidators())
+	trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
+	e.validationTracker = NewValidationTracker(quorum, 5*time.Minute)
+	e.validationTracker.SetTrustedAndQuorum(trusted, quorum)
+	e.validationTracker.SetQuorumUnavailableFunc(e.adaptor.IsQuorumUnavailable)
 	if wired, ok := e.adaptor.(consensus.WireableAdaptor); ok {
 		wired.SetValidationHistorian(e.validationTracker)
 	}
@@ -485,7 +470,8 @@ func (e *Engine) Start(ctx context.Context) error {
 	// may never accept, and the whole point of a runtime trust grant is to
 	// count what the newly-trusted validator already signed.
 	if notifier, ok := e.adaptor.(consensus.TrustChangeNotifier); ok {
-		notifier.OnTrustChanged(e.refreshTrustedSet)
+		tracker := e.validationTracker
+		notifier.OnTrustChanged(tracker.SetTrustedAndQuorum)
 	}
 	if e.ledgerAncestry != nil {
 		e.validationTracker.SetLedgerAncestryProvider(e.ledgerAncestry)
@@ -610,11 +596,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Kick off a trust-view refresh so the bow-out reacts to an expiring list
 	// within a round or two rather than only on the aggregator's 30s tick
-	// (rippled recomputes via updateTrusted at every ledger close). It runs
-	// async — inline would deadlock, since the refresh's OnChange fan-out
-	// re-enters e.mu via onTrustChanged — so this round reads the flag as of
-	// the previous refresh and the next round sees the fresh value. No-op
-	// without publisher lists.
+	// (rippled recomputes via updateTrusted at every ledger close).
 	e.adaptor.RefreshUNLState()
 
 	// Voluntary bow-out: an expired validator list means our trust view is
@@ -909,7 +891,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 		if e.state != nil && len(e.state.CloseTimes.Peers) > 0 {
 			ctj := make(map[string]any, len(e.state.CloseTimes.Peers))
 			for t, c := range e.state.CloseTimes.Peers {
-				ctj[fmt.Sprintf("%d", t.Unix()-protocol.RippleEpochUnix)] = c
+				ctj[fmt.Sprintf("%d", protocol.RippleSeconds(t))] = c
 			}
 			ret["close_times"] = ctj
 		}
@@ -936,7 +918,7 @@ func proposalJSON(p *consensus.Proposal) map[string]any {
 	j := map[string]any{
 		"previous_ledger": fmt.Sprintf("%X", p.PreviousLedger[:]),
 		// close_time is a string, not a bare integer.
-		"close_time": fmt.Sprintf("%d", p.CloseTime.Unix()-protocol.RippleEpochUnix),
+		"close_time": fmt.Sprintf("%d", protocol.RippleSeconds(p.CloseTime)),
 	}
 	if p.Position != 0xFFFFFFFF { // not a bow-out (seqLeave)
 		j["transaction_hash"] = fmt.Sprintf("%X", p.TxSet[:])
@@ -1237,7 +1219,7 @@ func (e *Engine) closeLedger() {
 	// #422: log when prior proposers + self can't meet quorum (likely stall);
 	// skipped before the first completed round.
 	if e.consensusCount > 0 {
-		quorum := e.adaptor.GetQuorum()
+		trusted, quorum := e.adaptor.GetTrustedValidatorsAndQuorum()
 		if e.prevProposers+1 < quorum {
 			seq := uint32(0)
 			if e.prevLedger != nil {
@@ -1248,7 +1230,7 @@ func (e *Engine) closeLedger() {
 				"event", "close-below-quorum",
 				"peer_proposers", e.prevProposers,
 				"quorum", quorum,
-				"unl_size", len(e.adaptor.GetTrustedValidators()),
+				"unl_size", len(trusted),
 				"seq", seq,
 			)
 		}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -8,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/spf13/cobra"
 )
@@ -37,6 +40,13 @@ func TestGenerateConfigContent(t *testing.T) {
 					t.Errorf("%s: generated config missing section %s", tc.network, section)
 				}
 			}
+			if tc.network == "devnet" {
+				if !strings.Contains(content, "--standalone") {
+					t.Error("devnet config does not document standalone startup")
+				}
+			} else if !strings.Contains(content, `validators_file = "validators.toml"`) {
+				t.Error("public-network config does not reference validators.toml")
+			}
 		})
 	}
 }
@@ -62,6 +72,100 @@ func TestRunGenerateConfig(t *testing.T) {
 	if string(data) != generateConfigContent("testnet") {
 		t.Error("written config does not match generateConfigContent output")
 	}
+	validatorsData, err := os.ReadFile(filepath.Join(filepath.Dir(out), generatedValidatorsFilename))
+	if err != nil {
+		t.Fatalf("validators config not written: %v", err)
+	}
+	wantValidators, ok := generateValidatorsContent("testnet")
+	if !ok {
+		t.Fatal("testnet validators config is unavailable")
+	}
+	if string(validatorsData) != wantValidators {
+		t.Error("written validators config does not match generateValidatorsContent output")
+	}
+	if strings.Contains(string(validatorsData), "vl.ripple.com") ||
+		!strings.Contains(string(validatorsData), "https://vl.altnet.rippletest.net") ||
+		!strings.Contains(string(validatorsData), "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860") {
+		t.Error("testnet validators config does not contain only the altnet trust anchor")
+	}
+}
+
+func TestRunGenerateConfig_DoesNotOverwriteExistingOutput(t *testing.T) {
+	prevNet, prevOut := generateNetwork, generateOutput
+	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
+
+	dir := t.TempDir()
+	validatorsPath := filepath.Join(dir, generatedValidatorsFilename)
+	if err := os.WriteFile(validatorsPath, []byte("operator-owned\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generateNetwork = "testnet"
+	generateOutput = filepath.Join(dir, "xrpld.toml")
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, nil); err == nil {
+		t.Fatal("expected existing validators output to be rejected")
+	}
+	data, err := os.ReadFile(validatorsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "operator-owned\n" {
+		t.Fatal("existing validators file was modified")
+	}
+	if _, err := os.Stat(generateOutput); !os.IsNotExist(err) {
+		t.Fatalf("config output exists after rejected generation: %v", err)
+	}
+}
+
+func TestRunGenerateConfig_RecoversIdenticalValidatorsOutput(t *testing.T) {
+	prevNet, prevOut := generateNetwork, generateOutput
+	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
+
+	dir := t.TempDir()
+	validatorsContent, ok := generateValidatorsContent("testnet")
+	if !ok {
+		t.Fatal("testnet validators config is unavailable")
+	}
+	if err := os.WriteFile(filepath.Join(dir, generatedValidatorsFilename), []byte(validatorsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	generateNetwork = "testnet"
+	generateOutput = filepath.Join(dir, "xrpld.toml")
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, nil); err != nil {
+		t.Fatalf("runGenerateConfig: %v", err)
+	}
+	if _, err := os.Stat(generateOutput); err != nil {
+		t.Fatalf("config output was not recovered: %v", err)
+	}
+}
+
+func TestPublishGeneratedFiles_RollsBackPartialPublish(t *testing.T) {
+	dir := t.TempDir()
+	files := []generatedFile{
+		{path: filepath.Join(dir, "validators.toml"), data: []byte("validators")},
+		{path: filepath.Join(dir, "xrpld.toml"), data: []byte("config")},
+	}
+	links := 0
+	err := publishGeneratedFiles(files, func(oldPath, newPath string) error {
+		links++
+		if links == 2 {
+			return errors.New("injected publish failure")
+		}
+		return os.Link(oldPath, newPath)
+	})
+	if err == nil {
+		t.Fatal("expected publish failure")
+	}
+	for _, file := range files {
+		if _, err := os.Stat(file.path); !os.IsNotExist(err) {
+			t.Fatalf("published output %s was not rolled back: %v", file.path, err)
+		}
+	}
 }
 
 // TestGenerateConfigContent_LoadsCleanly round-trips every generated
@@ -70,7 +174,13 @@ func TestRunGenerateConfig(t *testing.T) {
 func TestGenerateConfigContent_LoadsCleanly(t *testing.T) {
 	for _, network := range []string{"main", "testnet", "devnet"} {
 		t.Run(network, func(t *testing.T) {
-			p := filepath.Join(t.TempDir(), "xrpld.toml")
+			dir := t.TempDir()
+			p := filepath.Join(dir, "xrpld.toml")
+			if validatorsContent, ok := generateValidatorsContent(network); ok {
+				if err := os.WriteFile(filepath.Join(dir, generatedValidatorsFilename), []byte(validatorsContent), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := os.WriteFile(p, []byte(generateConfigContent(network)), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -86,6 +196,39 @@ func TestGenerateConfigContent_LoadsCleanly(t *testing.T) {
 			}
 			if txqCfg != txq.DefaultConfig() {
 				t.Errorf("generated [transaction_queue] diverges from txq defaults:\n got %+v\nwant %+v", txqCfg, txq.DefaultConfig())
+			}
+
+			pcfg := peermanagement.DefaultConfig()
+			for _, opt := range adaptor.OverlayOptionsFromConfig(cfg) {
+				opt(&pcfg)
+			}
+			if err := pcfg.Validate(); err != nil {
+				t.Fatalf("generated %s peer config failed validation: %v", network, err)
+			}
+
+			switch network {
+			case "main":
+				wantSites := "https://vl.ripple.com,https://unl.xrplf.org"
+				wantKeys := "ED2677ABFFD1B33AC6FBC3062B71F1E8397C1505E1C42C64D11AD1B28FF73F4734,ED42AEC58B701EEBB77356FFFEC26F83C1F0407263530F068C7C73D392C7E06FD1"
+				if got := strings.Join(cfg.Validators.ValidatorListSites, ","); got != wantSites {
+					t.Fatalf("generated main validator sites = %q, want %q", got, wantSites)
+				}
+				if got := strings.Join(cfg.Validators.ValidatorListKeys, ","); got != wantKeys {
+					t.Fatalf("generated main validator keys = %q, want %q", got, wantKeys)
+				}
+			case "testnet":
+				wantSite := "https://vl.altnet.rippletest.net"
+				wantKey := "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"
+				if got := strings.Join(cfg.Validators.ValidatorListSites, ","); got != wantSite {
+					t.Fatalf("generated testnet validator sites = %q, want %q", got, wantSite)
+				}
+				if got := strings.Join(cfg.Validators.ValidatorListKeys, ","); got != wantKey {
+					t.Fatalf("generated testnet validator keys = %q, want %q", got, wantKey)
+				}
+			case "devnet":
+				if len(cfg.Validators.Validators) != 0 || len(cfg.Validators.ValidatorListKeys) != 0 {
+					t.Fatal("devnet config unexpectedly contains public trust anchors")
+				}
 			}
 		})
 	}

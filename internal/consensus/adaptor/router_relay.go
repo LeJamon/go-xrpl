@@ -53,7 +53,7 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 
 	relayed := *req
 	relayed.RequestCookie = uint64(from)
-	frame, err := encodeFrame(message.TypeGetLedger, &relayed)
+	frame, err := message.EncodeFrame(&relayed)
 	if err != nil {
 		r.logger.Warn("failed to encode relayed get_ledger", "error", err)
 		return false
@@ -77,7 +77,7 @@ func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagem
 	target := uint64(ld.RequestCookie)
 	out := *ld
 	out.RequestCookie = 0
-	frame, err := encodeFrame(message.TypeLedgerData, &out)
+	frame, err := message.EncodeFrame(&out)
 	if err != nil {
 		r.logger.Warn("failed to encode relayed ledger_data", "error", err)
 		return

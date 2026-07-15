@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // lsfCredentialAccepted mirrors credential.LsfCredentialAccepted; duplicated
@@ -56,8 +57,11 @@ func insertNFTokenPageEntry(t *testing.T, svc *Service, ownerAddr string, tokens
 		})
 	}
 	jsonObj := map[string]any{
-		"LedgerEntryType": "NFTokenPage",
-		"NFTokens":        nftArray,
+		"LedgerEntryType":   "NFTokenPage",
+		"NFTokens":          nftArray,
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	data, err := binarycodec.EncodeBytes(jsonObj)
 	if err != nil {
@@ -247,12 +251,15 @@ func insertCredentialEntry(t *testing.T, svc *Service, subjectID, issuerID [20]b
 		t.Fatalf("encode issuer: %v", err)
 	}
 	jsonObj := map[string]any{
-		"LedgerEntryType": "Credential",
-		"Subject":         subjectAddr,
-		"Issuer":          issuerAddr,
-		"CredentialType":  hex.EncodeToString(credType),
-		"IssuerNode":      "0",
-		"SubjectNode":     "0",
+		"LedgerEntryType":   "Credential",
+		"Subject":           subjectAddr,
+		"Issuer":            issuerAddr,
+		"CredentialType":    hex.EncodeToString(credType),
+		"IssuerNode":        "0",
+		"SubjectNode":       "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	if accepted {
 		jsonObj["Flags"] = lsfCredentialAccepted
@@ -437,7 +444,7 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		// Expiration one hour ahead in Ripple-epoch seconds. Guards against
 		// comparing a Ripple-epoch expiration with Unix-epoch close time,
 		// which would falsely expire every credential.
-		exp := uint32(toRippleTime(time.Now().Add(time.Hour)))
+		exp := protocol.ToRippleTime(time.Now().Add(time.Hour))
 		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("FUTURE"), true, &exp)
 		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
 			[]string{formatHashHex(key)})

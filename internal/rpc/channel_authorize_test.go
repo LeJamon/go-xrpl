@@ -68,6 +68,38 @@ func TestChannelAuthorize_MissingSecret(t *testing.T) {
 	assert.Contains(t, err.Message, "secret")
 }
 
+func TestChannelAuthorize_PresentEmptyRequiredFields(t *testing.T) {
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion2}
+	const channelID = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+	const secret = "snoPBrXtMeMyMHUVTgbuqAfg1SUTb"
+
+	tests := []struct {
+		name   string
+		params string
+		code   int
+	}{
+		{
+			name:   "empty channel id is malformed",
+			params: `{"secret":"` + secret + `","channel_id":"","amount":"1"}`,
+			code:   types.RpcCHANNEL_MALFORMED,
+		},
+		{
+			name:   "empty amount is malformed",
+			params: `{"secret":"` + secret + `","channel_id":"` + channelID + `","amount":""}`,
+			code:   types.RpcCHANNEL_AMT_MALFORMED,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := handler.Handle(ctx, json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+		})
+	}
+}
+
 func TestChannelAuthorize_MultipleSecrets(t *testing.T) {
 	handler := &handlers.ChannelAuthorizeMethod{}
 	ctx := &types.RPCContext{
@@ -234,6 +266,38 @@ func TestChannelAuthorize_ValidWithSecret(t *testing.T) {
 	assert.NotEmpty(t, signature)
 	// DER signature for secp256k1 is typically 70-72 bytes, hex encoded = 140-144 chars
 	assert.GreaterOrEqual(t, len(signature), 128)
+}
+
+func TestChannelAuthorize_LegacyRFC1751Secret(t *testing.T) {
+	handler := &handlers.ChannelAuthorizeMethod{}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion1}
+	base := map[string]any{
+		"channel_id": strings.Repeat("A", 64),
+		"amount":     "1",
+	}
+
+	withPhrase := map[string]any{}
+	for key, value := range base {
+		withPhrase[key] = value
+	}
+	withPhrase["secret"] = "SCAT BERN ISLE FOR ROIL BUS SOAK AQUA FREE FOR DRAM BRIG"
+	phraseJSON, err := json.Marshal(withPhrase)
+	require.NoError(t, err)
+	phraseResult, rpcErr := handler.Handle(ctx, phraseJSON)
+	require.Nil(t, rpcErr)
+
+	withHex := map[string]any{}
+	for key, value := range base {
+		withHex[key] = value
+	}
+	withHex["seed_hex"] = "BE6A670A19B209E112146D0A7ED2AAD7"
+	withHex["key_type"] = "secp256k1"
+	hexJSON, err := json.Marshal(withHex)
+	require.NoError(t, err)
+	hexResult, rpcErr := handler.Handle(ctx, hexJSON)
+	require.Nil(t, rpcErr)
+
+	assert.Equal(t, hexResult.(map[string]any)["signature"], phraseResult.(map[string]any)["signature"])
 }
 
 func TestChannelAuthorize_ValidWithSeed(t *testing.T) {

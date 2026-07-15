@@ -3,6 +3,8 @@ package state
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // Serialized type codes for the XRPL binary format. These are the high nibble
@@ -278,10 +280,7 @@ func EntryTypeCode(data []byte) uint16 {
 // EntryTypeName returns the name of the ledger entry type for the given type
 // code, or "Unknown(0x....)" if the code is not a known ledger entry type.
 func EntryTypeName(code uint16) string {
-	if name, ok := ledgerEntryTypeNames[code]; ok {
-		return name
-	}
-	return fmt.Sprintf("Unknown(0x%04x)", code)
+	return entry.Type(code).String()
 }
 
 // EntryType extracts the ledger entry type name from a serialized SLE. Returns
@@ -293,42 +292,4 @@ func EntryType(data []byte) string {
 		return ""
 	}
 	return EntryTypeName(code)
-}
-
-// ledgerEntryTypeNames maps ledger entry type codes to their canonical names.
-// Reference: rippled ledger_entries.macro.
-var ledgerEntryTypeNames = map[uint16]string{
-	0x0037: "NFTokenOffer",
-	0x0043: "Check",
-	0x0049: "DID",
-	0x004e: "NegativeUNL",
-	0x0050: "NFTokenPage",
-	0x0053: "SignerList",
-	0x0054: "Ticket",
-	0x0061: "AccountRoot",
-	0x0063: "Contract", // deprecated
-	0x0064: "DirectoryNode",
-	0x0066: "Amendments",
-	0x0067: "GeneratorMap", // deprecated
-	0x0068: "LedgerHashes",
-	0x0069: "Bridge",
-	0x006e: "Nickname", // deprecated
-	0x006f: "Offer",
-	0x0070: "DepositPreauth",
-	0x0071: "XChainOwnedClaimID",
-	0x0072: "RippleState",
-	0x0073: "FeeSettings",
-	0x0074: "XChainOwnedCreateAccountClaimID",
-	0x0075: "Escrow",
-	0x0078: "PayChannel",
-	0x0079: "AMM",
-	0x007e: "MPTokenIssuance",
-	0x007f: "MPToken",
-	0x0080: "Oracle",
-	0x0081: "Credential",
-	0x0082: "PermissionedDomain",
-	0x0083: "Delegate",
-	0x0084: "Vault",
-	0x0088: "LoanBroker",
-	0x0089: "Loan",
 }

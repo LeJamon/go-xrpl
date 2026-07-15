@@ -1,10 +1,13 @@
 package invariants
 
 import (
+	"encoding/hex"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // cleanup313Rules returns a Rules with only fixCleanup3_1_3 enabled, for
@@ -49,40 +52,48 @@ func makeHybridOfferBlob(t *testing.T, withDomain, withAdditionalBooks bool) []b
 }
 
 // makeRawHybridOfferBlob hand-builds a hybrid Offer SLE so that the degenerate
-// shapes rippled's serializer never emits — a present all-zero DomainID and a
-// present empty AdditionalBooks array — can be exercised. The standard
-// serializer omits both when zero/absent, so they must be assembled directly.
-func makeRawHybridOfferBlob(domainID *[32]byte, additionalBooks *[]([32]byte)) []byte {
-	var blob []byte
+// shapes the state adapter omits — a present all-zero DomainID and a present
+// empty AdditionalBooks array — can be exercised while retaining every field
+// required by the Offer ledger-entry template.
+func makeRawHybridOfferBlob(t *testing.T, domainID *[32]byte, additionalBooks *[]([32]byte)) []byte {
+	t.Helper()
 
-	// LedgerEntryType UInt16 (nth=1) = Offer (0x006f).
-	blob = append(blob, 0x11, 0x00, 0x6f)
-	// Flags UInt32 (nth=2) = lsfHybrid.
-	flags := lsfHybridInvariant
-	blob = append(blob, 0x22)
-	blob = append(blob, byte(flags>>24), byte(flags>>16), byte(flags>>8), byte(flags))
-	// Sequence UInt32 (nth=4) — keeps the blob comfortably past the 20-byte floor.
-	blob = append(blob, 0x24, 0x00, 0x00, 0x00, 0x07)
-
+	zeroHash := strings.Repeat("0", 64)
+	offer := &ledgerfields.Offer{}
+	offer.SetAccount("rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+	offer.SetSequence(7)
+	offer.SetTakerPays(map[string]any{
+		"value":    "0",
+		"currency": "USD",
+		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+	})
+	offer.SetTakerGets("0")
+	offer.SetBookDirectory(zeroHash)
+	offer.SetBookNode("0")
+	offer.SetOwnerNode("0")
+	offer.SetPreviousTxnID(zeroHash)
+	offer.SetPreviousTxnLgrSeq(0)
+	offer.SetFlags(lsfHybridInvariant)
 	if domainID != nil {
-		// DomainID Hash256 (nth=34, extended field code) — present, value as given.
-		blob = append(blob, 0x50, 0x22)
-		blob = append(blob, domainID[:]...)
+		offer.SetDomainID(strings.ToUpper(hex.EncodeToString(domainID[:])))
 	}
-
 	if additionalBooks != nil {
-		// AdditionalBooks STArray (nth=13). Each entry is a Book inner object
-		// (nth=36) carrying a BookDirectory Hash256 (nth=16).
-		blob = append(blob, 0xFD) // type 15, nth 13
+		books := make([]any, 0, len(*additionalBooks))
 		for _, dir := range *additionalBooks {
-			blob = append(blob, 0xE0, 0x24) // Book object (nth=36)
-			blob = append(blob, 0x50, 0x10) // BookDirectory Hash256 (nth=16)
-			blob = append(blob, dir[:]...)
-			blob = append(blob, 0xE1) // object end
+			books = append(books, map[string]any{
+				"Book": map[string]any{
+					"BookDirectory": strings.ToUpper(hex.EncodeToString(dir[:])),
+					"BookNode":      "0",
+				},
+			})
 		}
-		blob = append(blob, 0xF1) // array end
+		offer.SetAdditionalBooks(books)
 	}
 
+	blob, err := offer.Encode()
+	if err != nil {
+		t.Fatalf("encode raw hybrid Offer: %v", err)
+	}
 	return blob
 }
 
@@ -124,7 +135,7 @@ func TestValidPermissionedDEX_HybridDegenerateShapes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			blob := makeRawHybridOfferBlob(tc.domainID, tc.books)
+			blob := makeRawHybridOfferBlob(t, tc.domainID, tc.books)
 			entries := []InvariantEntry{{EntryType: "Offer", After: blob}}
 
 			if v := checkValidPermissionedDEX(tx, TesSUCCESS, entries, nil, nil); (v != nil) != tc.wantOld {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -221,8 +222,6 @@ func assertHeaderFieldsEqual(t *testing.T, got *LedgerHeader, want LedgerHeader,
 	}
 }
 
-// TestZeroTimeHandling verifies zero-value close times serialize to 4 zero bytes
-// and deserialize back to the zero time.
 func TestZeroTimeHandling(t *testing.T) {
 	h := LedgerHeader{
 		LedgerIndex:         7,
@@ -245,11 +244,26 @@ func TestZeroTimeHandling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeserializeHeader error: %v", err)
 	}
-	if !got.ParentCloseTime.IsZero() {
-		t.Errorf("ParentCloseTime = %v, want zero", got.ParentCloseTime)
+	epoch := protocol.FromRippleTime(0)
+	if !got.ParentCloseTime.Equal(epoch) {
+		t.Errorf("ParentCloseTime = %v, want %v", got.ParentCloseTime, epoch)
 	}
-	if !got.CloseTime.IsZero() {
-		t.Errorf("CloseTime = %v, want zero", got.CloseTime)
+	if !got.CloseTime.Equal(epoch) {
+		t.Errorf("CloseTime = %v, want %v", got.CloseTime, epoch)
+	}
+}
+
+func TestCalculateHashUsesAddRawBody(t *testing.T) {
+	h := LedgerHeader{
+		LedgerIndex:         7,
+		Drops:               99,
+		ParentCloseTime:     xrplTime(100),
+		CloseTime:           xrplTime(110),
+		CloseTimeResolution: 10,
+	}
+	want := sha512half.Sum(protocol.HashPrefixLedgerMaster().Bytes(), AddRaw(h, false))
+	if got := CalculateHash(h); got != want {
+		t.Fatalf("CalculateHash = %x, want %x", got, want)
 	}
 }
 

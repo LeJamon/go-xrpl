@@ -1651,14 +1651,118 @@ func TestTxMethodApiVersions(t *testing.T) {
 			assert.Equal(t, "C000006400000000", resp["ctid"])
 
 			if version > 1 {
-				txJSON := resp["tx_json"].(map[string]any)
-				assert.NotContains(t, txJSON, "ctid")
+				shaped := resp["tx_json"].(map[string]any)
+				assert.Equal(t, "1000000", shaped["DeliverMax"])
+				assert.NotContains(t, shaped, "Amount")
+				assert.Equal(t, "C000006400000000", shaped["ctid"])
+				assert.Contains(t, resp, "ledger_hash")
 			} else {
+				assert.Equal(t, "1000000", resp["Amount"])
+				assert.Equal(t, "1000000", resp["DeliverMax"])
 				assert.NotContains(t, resp, "ledger_hash")
 				assert.NotContains(t, resp, "close_time_iso")
 			}
 		})
 	}
+}
+
+func TestTxCTIDResponsePlacement(t *testing.T) {
+	const (
+		hash             = "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+		ledgerIndex      = uint32(3)
+		transactionIndex = uint32(3)
+		serverNetworkID  = uint32(7)
+		transactionNetID = uint32(9)
+		rootCTID         = "C000000300030007"
+		embeddedCTID     = "C000000300030009"
+	)
+
+	txJSON := map[string]any{
+		"TransactionType": "Payment",
+		"Sequence":        uint32(1),
+		"NetworkID":       transactionNetID,
+	}
+	storedData, err := json.Marshal(handlers.StoredTransaction{
+		TxJSON: txJSON,
+		Meta: map[string]any{
+			"TransactionIndex": transactionIndex,
+		},
+	})
+	require.NoError(t, err)
+
+	mock := newMockLedgerServiceTx()
+	mock.serverInfo.NetworkID = serverNetworkID
+	mock.transactions[hash] = &types.TransactionInfo{
+		TxData:      storedData,
+		LedgerIndex: ledgerIndex,
+		LedgerHash:  strings.Repeat("A", 64),
+		Validated:   true,
+		TxIndex:     transactionIndex,
+	}
+
+	request := func(t *testing.T, apiVersion int, binary bool) map[string]any {
+		t.Helper()
+		params, err := json.Marshal(map[string]any{"transaction": hash, "binary": binary})
+		require.NoError(t, err)
+		result, rpcErr := (&handlers.TxMethod{}).Handle(&types.RPCContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: apiVersion,
+			Services:   servicesForTx(mock),
+		}, params)
+		require.Nil(t, rpcErr)
+		response, ok := result.(map[string]any)
+		require.True(t, ok)
+		return response
+	}
+
+	t.Run("API v1 JSON keeps strict CTID at root", func(t *testing.T) {
+		response := request(t, types.ApiVersion1, false)
+		assert.Equal(t, rootCTID, response["ctid"])
+		assert.NotContains(t, response, "tx_json")
+	})
+
+	t.Run("API v2 JSON has strict root and inclusive embedded CTIDs", func(t *testing.T) {
+		response := request(t, types.ApiVersion2, false)
+		assert.Equal(t, rootCTID, response["ctid"])
+		tx, ok := response["tx_json"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, embeddedCTID, tx["ctid"])
+	})
+
+	t.Run("API v1 binary uses tx and retains root CTID", func(t *testing.T) {
+		response := request(t, types.ApiVersion1, true)
+		assert.Equal(t, rootCTID, response["ctid"])
+		assert.Contains(t, response, "tx")
+		assert.NotContains(t, response, "tx_blob")
+	})
+
+	t.Run("API v2 binary uses tx_blob and retains root CTID", func(t *testing.T) {
+		response := request(t, types.ApiVersion2, true)
+		assert.Equal(t, rootCTID, response["ctid"])
+		assert.Contains(t, response, "tx_blob")
+		assert.NotContains(t, response, "tx_json")
+	})
+
+	mock.serverInfo.NetworkID = 0xFFFF
+
+	t.Run("API v1 retains inclusive embedded CTID at strict boundary", func(t *testing.T) {
+		for _, binary := range []bool{false, true} {
+			response := request(t, types.ApiVersion1, binary)
+			assert.Equal(t, embeddedCTID, response["ctid"])
+		}
+	})
+
+	t.Run("API v2 boundary retains only nonbinary embedded CTID", func(t *testing.T) {
+		response := request(t, types.ApiVersion2, false)
+		assert.NotContains(t, response, "ctid")
+		tx, ok := response["tx_json"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, embeddedCTID, tx["ctid"])
+
+		binaryResponse := request(t, types.ApiVersion2, true)
+		assert.NotContains(t, binaryResponse, "ctid")
+	})
 }
 
 func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
@@ -1671,6 +1775,7 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 		serverNetworkID      uint32
 		transactionNetworkID *uint32
 		rootCTID             string
+		embeddedCTID         string
 	}{
 		{
 			name:                 "transaction NetworkID does not override response CTID",
@@ -1679,18 +1784,21 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			serverNetworkID:      11111,
 			transactionNetworkID: &overrideNetworkID,
 			rootCTID:             "C000006400022B67",
+			embeddedCTID:         "C000006400025359",
 		},
 		{
 			name:             "maximum network ID excludes root CTID",
 			ledgerIndex:      100,
 			transactionIndex: 2,
 			serverNetworkID:  0xFFFF,
+			embeddedCTID:     "C00000640002FFFF",
 		},
 		{
 			name:             "maximum ledger index excludes root CTID",
 			ledgerIndex:      0x0FFFFFFF,
 			transactionIndex: 2,
 			serverNetworkID:  11111,
+			embeddedCTID:     "CFFFFFFF00022B67",
 		},
 		{
 			name:             "maximum transaction index remains valid at root",
@@ -1698,6 +1806,7 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			transactionIndex: 0xFFFF,
 			serverNetworkID:  11111,
 			rootCTID:         "C0000064FFFF2B67",
+			embeddedCTID:     "C0000064FFFF2B67",
 		},
 	}
 
@@ -1743,11 +1852,11 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 				assert.Equal(t, tc.rootCTID, response["ctid"])
 			}
 			responseTx := response["tx_json"].(map[string]any)
-			assert.NotContains(t, responseTx, "ctid")
+			assert.Equal(t, tc.embeddedCTID, responseTx["ctid"])
 		})
 	}
 
-	t.Run("API v1 omits CTID when the network ID is at the excluded maximum", func(t *testing.T) {
+	t.Run("API v1 retains the inclusive transaction CTID at the root", func(t *testing.T) {
 		stored, err := json.Marshal(handlers.StoredTransaction{
 			TxJSON: map[string]any{
 				"TransactionType": "Payment",
@@ -1780,14 +1889,14 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			json.RawMessage(`{"transaction":"`+txHash+`"}`),
 		)
 		require.Nil(t, rpcErr)
-		assert.NotContains(t, result.(map[string]any), "ctid")
+		assert.Equal(t, "C000006400025359", result.(map[string]any)["ctid"])
 
 		result, rpcErr = (&handlers.TxMethod{}).Handle(
 			ctx,
 			json.RawMessage(`{"transaction":"`+txHash+`","binary":true}`),
 		)
 		require.Nil(t, rpcErr)
-		assert.NotContains(t, result.(map[string]any), "ctid")
+		assert.Equal(t, "C000006400025359", result.(map[string]any)["ctid"])
 	})
 }
 

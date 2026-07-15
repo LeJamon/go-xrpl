@@ -66,10 +66,7 @@ type RowScanner interface {
 // ToXRPLEpochSeconds converts a Go time to seconds since the XRPL epoch
 // (2000-01-01). The zero time maps to 0.
 func ToXRPLEpochSeconds(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(t)
 }
 
 // FromXRPLEpochSeconds converts seconds since the XRPL epoch (2000-01-01)

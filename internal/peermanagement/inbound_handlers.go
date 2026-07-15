@@ -306,7 +306,7 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		LedgerHash: append([]byte(nil), req.LedgerHash...),
 		Objects:    objects,
 	}
-	encodeAndSend(peer, message.TypeGetObjects, reply, "fetch-pack reply")
+	encodeAndSend(peer, reply, "fetch-pack reply")
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -373,7 +373,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	if !exists {
 		return
 	}
-	encodeAndSend(peer, message.TypeGetObjects, req, "TMGetObjectByHash request")
+	encodeAndSend(peer, req, "TMGetObjectByHash request")
 }
 
 // endpointsIngestMaxEntries bounds an inbound TMEndpoints frame.
@@ -578,7 +578,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		reply.Transactions = append(reply.Transactions, message.Transaction{
 			RawTransaction:   blob,
 			Status:           message.TxStatusCurrent,
-			ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+			ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
 		})
 	}
 	if len(reply.Transactions) == 0 {
@@ -589,7 +589,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	if !exists {
 		return
 	}
-	encodeAndSend(peer, message.TypeTransactions, reply, "TMTransactions reply")
+	encodeAndSend(peer, reply, "TMTransactions reply")
 }
 
 // hardMaxReplyNodes bounds a single generic by-hash request. Mirrors
@@ -750,7 +750,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	// (computeGetObjectByHashFee, PeerImp.cpp:2656).
 	peer.Charge(getObjectByHashFee(requested, len(reply.Objects)), "processed get object by hash request")
 
-	encodeAndSend(peer, message.TypeGetObjects, reply, "TMGetObjectByHash reply")
+	encodeAndSend(peer, reply, "TMGetObjectByHash reply")
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched

@@ -34,12 +34,7 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RPCContext, params json.RawMe
 
 	seed, ok := validationSeed(request.Secret)
 	if !ok {
-		return nil, &types.RPCError{
-			Code:        types.RpcBAD_SEED,
-			ErrorString: "badSeed",
-			Type:        "badSeed",
-			Message:     "Disallowed seed.",
-		}
+		return nil, types.RPCErrorBadSeed()
 	}
 
 	// Validator keys are always secp256k1, derived directly from the root

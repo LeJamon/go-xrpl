@@ -45,12 +45,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 
 	// Validate key type
 	if keyType != "secp256k1" && keyType != "ed25519" {
-		return nil, &types.RPCError{
-			Code:        types.RpcBAD_KEY_TYPE,
-			ErrorString: "badKeyType",
-			Type:        "badKeyType",
-			Message:     "Invalid field 'key_type'.",
-		}
+		return nil, types.RPCErrorBadKeyType("Invalid field 'key_type'.")
 	}
 
 	var entropy []byte
@@ -63,12 +58,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		// Decode the provided seed
 		decodedEntropy, algo, err := addresscodec.DecodeSeed(request.Seed)
 		if err != nil {
-			return nil, &types.RPCError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
+			return nil, types.RPCErrorBadSeed()
 		}
 		entropy = decodedEntropy
 
@@ -76,12 +66,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		// If a seed encodes ed25519 but user requests secp256k1, that's an error
 		if _, isEd25519 := algo.(ed25519.Algorithm); isEd25519 {
 			if keyType != "ed25519" {
-				return nil, &types.RPCError{
-					Code:        types.RpcBAD_SEED,
-					ErrorString: "badSeed",
-					Type:        "badSeed",
-					Message:     "Disallowed seed.",
-				}
+				return nil, types.RPCErrorBadSeed()
 			}
 		}
 	} else if request.SeedHex != "" {
@@ -89,12 +74,7 @@ func (m *WalletProposeMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		var err error
 		entropy, err = hex.DecodeString(request.SeedHex)
 		if err != nil || len(entropy) != 16 {
-			return nil, &types.RPCError{
-				Code:        types.RpcBAD_SEED,
-				ErrorString: "badSeed",
-				Type:        "badSeed",
-				Message:     "Disallowed seed.",
-			}
+			return nil, types.RPCErrorBadSeed()
 		}
 	} else if request.Passphrase != "" {
 		// Derive seed from passphrase using SHA-512 Half (first 16 bytes of SHA-512)

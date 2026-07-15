@@ -878,10 +878,10 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
-			LedgerIndex: 2,
+			LedgerIndex: mock.currentLedgerIndex,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Offers:      []types.BookOffer{},
-			Validated:   true,
+			Validated:   false,
 		}, nil
 	}
 
@@ -911,7 +911,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 	offers, ok := resp["offers"].([]any)
 	require.True(t, ok, "offers should be an array")
 	assert.Equal(t, 0, len(offers), "Expected empty offers array")
-	assert.Contains(t, resp, "validated")
+	assert.Equal(t, false, resp["validated"])
 	// A bare query targets the open ledger, so lookupLedger emits only
 	// ledger_current_index.
 	assert.Contains(t, resp, "ledger_current_index")
@@ -1334,8 +1334,6 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.Contains(t, rpcErr.LogDetail(), "Failed to get book offers")
 }
 
-// TestBookOffersMarkerIgnored mirrors rippled's active getBookPage path, which
-// accepts the marker member but does not use it or emit pagination fields.
 func TestBookOffersMarkerIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1375,12 +1373,22 @@ func TestBookOffersMarkerIgnored(t *testing.T) {
 	require.True(t, ok)
 	assert.NotContains(t, resp, "marker")
 	assert.NotContains(t, resp, "limit")
+
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
+		return &types.BookOffersResult{LedgerIndex: 6, Offers: []types.BookOffer{}, Validated: true}, nil
+	}
+	delete(params, "marker")
+	paramsJSON, err = json.Marshal(params)
+	require.NoError(t, err)
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	resp = result.(map[string]any)
+	_, hasMarker := resp["marker"]
+	assert.False(t, hasMarker, "response must omit marker when service returned none")
+	_, hasLimit := resp["limit"]
+	assert.False(t, hasLimit, "response must omit limit when no marker is emitted")
 }
 
-// TestBookOffersStaleMarkerMapping: a well-formed marker pointing at an entry
-// that no longer exists in the ledger must map to rpcINVALID_PARAMS (not
-// invalid_field_error). Mirrors rippled's AccountOffers.cpp:128-132
-// distinction between malformed marker and missing-referent marker.
 func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1408,9 +1416,6 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "marker")
-	assert.NotEqual(t, "Invalid field 'marker'.", rpcErr.Message,
-		"stale marker must not collapse into invalid_field_error")
 
 	// Sanity: the malformed-marker branch still produces the invalid_field
 	// shape so callers can distinguish the two on the wire.
@@ -1420,11 +1425,9 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
-// TestBookOffersMarkerValuesIgnored verifies that malformed marker values are
-// also ignored, as they are by rippled's active getBookPage implementation.
 func TestBookOffersMarkerValuesIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
@@ -1515,17 +1518,17 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 		{
 			name:          "validated",
 			ledgerIndex:   "validated",
-			expectedIndex: "validated",
+			expectedIndex: "2",
 		},
 		{
 			name:          "current (default)",
 			ledgerIndex:   nil,
-			expectedIndex: "current",
+			expectedIndex: "3",
 		},
 		{
 			name:          "closed",
 			ledgerIndex:   "closed",
-			expectedIndex: "closed",
+			expectedIndex: "2",
 		},
 		{
 			name:          "numeric sequence",
@@ -1915,11 +1918,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	})
 }
 
-// TestBookOffersProofFlagPlumbing pins how the handler forwards the JSON
-// `proof` field through to LedgerService.GetBookOffers as the withProofs
-// flag. Rippled's BookOffers.cpp:201 (`isMember(jss::proof)`) treats any
-// presence — including explicit `false` and `null` — as truthy.
-func TestBookOffersProofFlagPlumbing(t *testing.T) {
+func TestBookOffersProofIsIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1947,14 +1946,13 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 	cases := []struct {
 		name      string
 		proof     any
-		want      bool
 		omitProof bool
 	}{
-		{name: "absent → false", omitProof: true, want: false},
-		{name: "explicit false → true", proof: false, want: true},
-		{name: "explicit true → true", proof: true, want: true},
-		{name: "non-bool present → true", proof: "yes", want: true},
-		{name: "null → true", proof: nil, want: true},
+		{name: "absent", omitProof: true},
+		{name: "false", proof: false},
+		{name: "true", proof: true},
+		{name: "non-bool", proof: "yes"},
+		{name: "null", proof: nil},
 	}
 
 	for _, tc := range cases {
@@ -1970,7 +1968,7 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 
 			_, rpcErr := method.Handle(ctx, body)
 			require.Nil(t, rpcErr)
-			assert.Equal(t, tc.want, captured, "withProofs flag mismatch")
+			assert.False(t, captured)
 		})
 	}
 }

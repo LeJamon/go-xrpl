@@ -8,16 +8,14 @@ import (
 	"maps"
 	"strconv"
 	"strings"
-	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
-
-// rippleEpochTime is 2000-01-01T00:00:00Z
-var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 // LedgerMethod handles the ledger RPC method.
 type LedgerMethod struct{ BaseHandler }
@@ -50,17 +48,9 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		return nil, err
 	}
 	if !hasLedgerSelector {
-		closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
-		if err != nil || closed == nil {
-			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
-		if err != nil || open == nil {
-			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		response := map[string]any{
-			"closed": buildLedgerJSON(closed, false, false, ctx.ApiVersion),
-			"open":   buildLedgerJSON(open, false, false, ctx.ApiVersion),
+		response, rpcErr := ledgerDefaultResponse(ctx)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
 		addLedgerTypeWarning(response, params)
 		return response, nil
@@ -78,21 +68,20 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 			return nil, types.RPCErrorNoPermission("ledger")
 		}
 	}
+	if dumpQueue && targetLedger.IsClosed() {
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
 	if request.Full {
 		request.Transactions = true
 		request.Expand = true
 		request.Accounts = true
 	}
 
-	if dumpQueue && targetLedger.IsClosed() {
-		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
-	}
-
 	ledgerInfo := buildLedgerJSON(targetLedger, request.Binary, request.Full, ctx.ApiVersion)
 	ledgerHash := FormatLedgerHash(targetLedger.Hash())
 
 	closeTimeSec := targetLedger.CloseTime()
-	closeTimeISO := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second).UTC().Format(time.RFC3339)
+	closeTimeISO := protocol.FormatCloseTimeISO(protocol.FromRippleTime(uint32(max(closeTimeSec, 0))))
 	syntheticContext := SyntheticMetadataContext{
 		LedgerSequence: targetLedger.Sequence(),
 		CloseTime:      closeTimeSec,
@@ -167,14 +156,16 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		ledgerInfo["accountState"] = accountState
 	}
 
-	response := map[string]any{"ledger": ledgerInfo}
-	if targetLedger.IsClosed() {
+	response := map[string]any{
+		"ledger":    ledgerInfo,
+		"validated": validated,
+	}
+	if !targetLedger.IsClosed() {
+		response["ledger_current_index"] = targetLedger.Sequence()
+	} else {
 		response["ledger_hash"] = ledgerHash
 		response["ledger_index"] = targetLedger.Sequence()
-	} else {
-		response["ledger_current_index"] = targetLedger.Sequence()
 	}
-	response["validated"] = validated
 
 	if dumpQueue {
 		queueData, queueInternalError := buildLedgerQueueData(
@@ -204,11 +195,20 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 			return map[string]any{"closed": false}
 		}
 		return map[string]any{
-			"closed":      true,
-			"ledger_data": strings.ToUpper(hex.EncodeToString(serializeLedgerHeader(l))),
+			"closed": true,
+			"ledger_data": strings.ToUpper(hex.EncodeToString(ledgerheader.AddRaw(ledgerheader.LedgerHeader{
+				LedgerIndex:         l.Sequence(),
+				ParentCloseTime:     protocol.FromRippleTime(uint32(max(l.ParentCloseTime(), 0))),
+				ParentHash:          l.ParentHash(),
+				TxHash:              l.TxMapHash(),
+				AccountHash:         l.StateMapHash(),
+				Drops:               l.TotalDrops(),
+				CloseFlags:          l.CloseFlags(),
+				CloseTimeResolution: l.CloseTimeResolution(),
+				CloseTime:           protocol.FromRippleTime(uint32(max(l.CloseTime(), 0))),
+			}, false))),
 		}
 	}
-
 	parentHash := l.ParentHash()
 	ledger := map[string]any{
 		"parent_hash": strings.ToUpper(hex.EncodeToString(parentHash[:])),
@@ -239,9 +239,9 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 	ledger["close_time_resolution"] = l.CloseTimeResolution()
 
 	if closeTime := l.CloseTime(); closeTime != 0 {
-		utc := rippleEpochTime.Add(time.Duration(closeTime) * time.Second).UTC()
+		utc := protocol.FromRippleTime(uint32(max(closeTime, 0)))
 		ledger["close_time_human"] = utc.Format("2006-Jan-02 15:04:05.000000000 UTC")
-		ledger["close_time_iso"] = utc.Format(time.RFC3339)
+		ledger["close_time_iso"] = protocol.FormatCloseTimeISO(utc)
 		if l.CloseFlags()&1 != 0 {
 			ledger["close_time_estimated"] = true
 		}
@@ -343,6 +343,41 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RPCError) {
 		return true, nil
 	}
 	return false, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
+}
+
+func ledgerDefaultResponse(ctx *types.RPCContext) (map[string]any, *types.RPCError) {
+	closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+	if err != nil || closed == nil {
+		return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+	}
+	open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+	if err != nil || open == nil {
+		return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+	}
+	return map[string]any{
+		"closed": map[string]any{"ledger": ledgerDataHeader(ledgerHeaderInfo(closed), false, ctx.ApiVersion)},
+		"open":   map[string]any{"ledger": ledgerDataHeader(ledgerHeaderInfo(open), false, ctx.ApiVersion)},
+	}, nil
+}
+
+func ledgerHeaderInfo(l types.LedgerReader) *types.LedgerHeaderInfo {
+	closeTime := l.CloseTime()
+	close := protocol.FromRippleTime(uint32(max(closeTime, 0)))
+	return &types.LedgerHeaderInfo{
+		AccountHash:         l.StateMapHash(),
+		CloseFlags:          l.CloseFlags(),
+		CloseTime:           closeTime,
+		CloseTimeHuman:      close.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
+		CloseTimeISO:        protocol.FormatCloseTimeISO(close),
+		CloseTimeResolution: l.CloseTimeResolution(),
+		Closed:              l.IsClosed(),
+		LedgerHash:          l.Hash(),
+		LedgerIndex:         l.Sequence(),
+		ParentCloseTime:     l.ParentCloseTime(),
+		ParentHash:          l.ParentHash(),
+		TotalCoins:          l.TotalDrops(),
+		TransactionHash:     l.TxMapHash(),
+	}
 }
 
 // ownerFundsLedgerView resolves the state view for the target ledger so
@@ -462,8 +497,12 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 		ledgerIndex = hex.EncodeToString(hash[:])
 	}
 	marker := ""
+	limit := LimitLedgerData.Default
+	if binary {
+		limit = LimitLedgerDataBinary.Default
+	}
 	for {
-		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, LimitLedgerData.Max, marker)
+		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
 		if err != nil {
 			return nil, err
 		}

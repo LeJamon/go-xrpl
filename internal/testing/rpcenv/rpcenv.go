@@ -8,12 +8,10 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Env pairs a live testing.TestEnv with the production RPC handler
@@ -95,8 +93,4 @@ func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) 
 		Services:   e.services,
 	}
 	return handler.Handle(ctx, raw)
-}
-
-func rippleEpochSeconds(t time.Time) int64 {
-	return t.Unix() - protocol.RippleEpochUnix
 }

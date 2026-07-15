@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -107,16 +107,15 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 	return nil
 }
 
-// ReadLedgerHashesSLE returns the decoded field map, Hashes, and LastLedgerSequence
-// for the LedgerHashes SLE at key, or (nil, nil, 0, nil) when absent. The field map
-// lets callers preserve every present field (notably optional FirstLedgerSequence).
-func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
+// ReadLedgerHashesSLE returns the decoded entry, Hashes, and LastLedgerSequence
+// for the LedgerHashes SLE at key, or (nil, nil, 0, nil) when absent.
+func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (*ledgerfields.LedgerHashes, [][32]byte, uint32, error) {
 	return ReadLedgerHashesSLEContext(context.Background(), stateMap, key)
 }
 
 // ReadLedgerHashesSLEContext reads a LedgerHashes SLE while forwarding ctx to
 // lazy storage fetches.
-func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
+func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (*ledgerfields.LedgerHashes, [][32]byte, uint32, error) {
 	item, found, err := stateMap.GetContext(ctx, key)
 	if err != nil {
 		return nil, nil, 0, err
@@ -124,69 +123,33 @@ func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, ke
 	if !found {
 		return nil, nil, 0, nil
 	}
-	jsonObj, err := binarycodec.DecodeBytes(item.Data())
-	if err != nil {
+	entry := &ledgerfields.LedgerHashes{}
+	if err := entry.Decode(item.Data()); err != nil {
 		return nil, nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
 	}
 
-	hashes, err := decodeHashesField(jsonObj)
+	hashes, err := decodeHashesField(entry.Hashes)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	lastSeq, err := decodeUint32Field(jsonObj, "LastLedgerSequence")
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	return jsonObj, hashes, lastSeq, nil
+	return entry, hashes, entry.LastLedgerSequence, nil
 }
 
-func decodeHashesField(jsonObj map[string]any) ([][32]byte, error) {
-	rawHashes, ok := jsonObj["Hashes"]
-	if !ok {
-		return nil, nil
-	}
-	var hashStrings []string
-	switch v := rawHashes.(type) {
-	case []string:
-		hashStrings = v
-	case []any:
-		hashStrings = make([]string, len(v))
-		for i, h := range v {
-			s, ok := h.(string)
-			if !ok {
-				return nil, fmt.Errorf("hash entry is not a string")
-			}
-			hashStrings[i] = s
-		}
-	default:
-		return nil, fmt.Errorf("Hashes field has unexpected type %T", rawHashes)
-	}
-
+func decodeHashesField(hashStrings []string) ([][32]byte, error) {
 	result := make([][32]byte, 0, len(hashStrings))
 	for _, hashStr := range hashStrings {
 		hashBytes, err := hex.DecodeString(hashStr)
 		if err != nil {
 			return nil, fmt.Errorf("decode hash hex: %w", err)
 		}
+		if len(hashBytes) != 32 {
+			return nil, fmt.Errorf("decoded hash length %d, want 32", len(hashBytes))
+		}
 		var hash [32]byte
 		copy(hash[:], hashBytes)
 		result = append(result, hash)
 	}
 	return result, nil
-}
-
-// decodeUint32Field reads a STI_UINT32 field. binarycodec returns uint32, so any
-// other type is a codec-drift signal worth surfacing rather than coercing.
-func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
-	raw, ok := jsonObj[name]
-	if !ok {
-		return 0, nil
-	}
-	v, ok := raw.(uint32)
-	if !ok {
-		return 0, fmt.Errorf("%s field has unexpected type %T (want uint32)", name, raw)
-	}
-	return v, nil
 }
 
 // ReadHashes returns the Hashes array from a LedgerHashes SLE, or nil when absent.
@@ -196,28 +159,22 @@ func ReadHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
 	return hashes, err
 }
 
-// Write serializes a LedgerHashes SLE to the state map. When fields is non-nil (an
-// existing SLE's decoded map) it updates only Hashes and LastLedgerSequence and
-// preserves every other present field — notably optional FirstLedgerSequence;
-// rebuilding from a fixed field set would drop it and diverge account_hash. When
-// fields is nil it creates a fresh entry (FirstLedgerSequence intentionally absent).
-func Write(stateMap *shamap.SHAMap, key [32]byte, fields map[string]any, hashes [][32]byte, lastSeq uint32) error {
+// Write serializes a LedgerHashes SLE to the state map. Existing entries retain
+// every decoded optional field; fresh entries leave FirstLedgerSequence absent.
+func Write(stateMap *shamap.SHAMap, key [32]byte, entry *ledgerfields.LedgerHashes, hashes [][32]byte, lastSeq uint32) error {
 	hashHexes := make([]string, len(hashes))
 	for i, h := range hashes {
 		hashHexes[i] = fmt.Sprintf("%064X", h)
 	}
 
-	jsonObj := fields
-	if jsonObj == nil {
-		jsonObj = map[string]any{
-			"LedgerEntryType": "LedgerHashes",
-			"Flags":           uint32(0),
-		}
+	if entry == nil {
+		entry = &ledgerfields.LedgerHashes{}
+		entry.SetFlags(0)
 	}
-	jsonObj["Hashes"] = hashHexes
-	jsonObj["LastLedgerSequence"] = lastSeq
+	entry.SetHashes(hashHexes)
+	entry.SetLastLedgerSequence(lastSeq)
 
-	data, err := binarycodec.EncodeBytes(jsonObj)
+	data, err := entry.Encode()
 	if err != nil {
 		return fmt.Errorf("encode LedgerHashes: %w", err)
 	}

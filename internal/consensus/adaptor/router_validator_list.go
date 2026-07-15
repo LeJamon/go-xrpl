@@ -371,7 +371,7 @@ func (b *RouterBroadcaster) SendList(peerID uint64, manifestBytes, blob, signatu
 		Signature: signature,
 		Version:   blobVersion,
 	}
-	frame, err := encodeFrame(message.TypeValidatorList, vl)
+	frame, err := message.EncodeFrame(vl)
 	if err != nil {
 		return fmt.Errorf("encode TMValidatorList: %w", err)
 	}
@@ -410,7 +410,7 @@ func (b *RouterBroadcaster) SendCollection(peerID uint64, manifestBytes []byte, 
 			Signature: blob.Signature,
 		})
 	}
-	frame, err := encodeFrame(message.TypeValidatorListCollection, coll)
+	frame, err := message.EncodeFrame(coll)
 	if err != nil {
 		return fmt.Errorf("encode TMValidatorListCollection: %w", err)
 	}

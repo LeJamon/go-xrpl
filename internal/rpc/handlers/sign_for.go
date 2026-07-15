@@ -17,18 +17,12 @@ import (
 
 // SignForMethod handles the sign_for RPC method
 // This adds a signature to a transaction for multi-signing
-type SignForMethod struct{}
+type SignForMethod struct{ BaseHandler }
 
 func (m *SignForMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
-		Account         string          `json:"account"`
-		TxJson          json.RawMessage `json:"tx_json"`
-		Secret          string          `json:"secret,omitempty"`
-		Seed            string          `json:"seed,omitempty"`
-		SeedHex         string          `json:"seed_hex,omitempty"`
-		Passphrase      string          `json:"passphrase,omitempty"`
-		KeyType         string          `json:"key_type,omitempty"`
-		SignatureTarget string          `json:"signature_target,omitempty"`
+		signingRequest
+		Account string `json:"account"`
 	}
 
 	if params != nil {
@@ -59,22 +53,9 @@ func (m *SignForMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	}
 
 	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, rpcErr := parseCredentialsAndDeriveKeypair(
-		request.Secret,
-		request.Seed,
-		request.SeedHex,
-		request.Passphrase,
-		request.KeyType,
-		ctx.ApiVersion,
-	)
+	privateKey, publicKey, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
-	}
-
-	// Determine key type for signing (needed by signPayload)
-	keyType := strings.ToLower(request.KeyType)
-	if keyType == "" {
-		keyType = "secp256k1"
 	}
 
 	// Parse the transaction JSON
@@ -202,22 +183,7 @@ func (m *SignForMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	txHash := CalculateTxHash(txBlob)
 	txMap["hash"] = txHash
 
-	// Inject DeliverMax for Payment transactions, matching rippled's
-	// RPC::insertDeliverMax in transactionFormatResultImpl.
-	injectDeliverMax(txMap, ctx.ApiVersion)
-
-	response := map[string]any{
-		"tx_blob": txBlob,
-		"tx_json": txMap,
-	}
-
-	// API v2+: add hash at root level of response, matching rippled's
-	// transactionFormatResultImpl in TransactionSign.cpp.
-	if ctx.ApiVersion > 1 {
-		response["hash"] = txHash
-	}
-
-	return response, nil
+	return formatSignResult(signResult{TxMap: txMap, TxBlob: txBlob}, ctx.ApiVersion), nil
 }
 
 // signPayload signs a hex-encoded payload with the given private key
@@ -250,12 +216,4 @@ func signPayload(payloadHex string, privateKeyHex string, keyType string) (strin
 
 func (m *SignForMethod) RequiredRole() types.Role {
 	return types.RoleUser
-}
-
-func (m *SignForMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *SignForMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }

@@ -18,7 +18,7 @@ import (
 // cached manifest and returns the stored manifest's details plus the
 // raw serialized manifest as base64. Keys with no recorded manifest
 // return only the `requested` field.
-type ManifestMethod struct{}
+type ManifestMethod struct{ BaseHandler }
 
 // manifestResponse mirrors rippled's DoManifest response shape.
 type manifestResponse struct {
@@ -108,12 +108,4 @@ func (m *ManifestMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (
 
 func (m *ManifestMethod) RequiredRole() types.Role {
 	return types.RoleUser // rippled: Role::USER (Handler.cpp line 136)
-}
-
-func (m *ManifestMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
-}
-
-func (m *ManifestMethod) RequiredCondition() types.Condition {
-	return types.NoCondition
 }
