@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Loan is the typed representation of a Loan ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Loan struct {
 	present                  uint64
+	decoded                  bool
+	dirty                    bool
 	OwnerNode                string // UInt64 (lowercase hex, no leading zeros)
 	LoanBrokerNode           string // UInt64 (lowercase hex, no leading zeros)
 	LoanBrokerID             string // Hash256 (uppercase hex)
@@ -83,16 +88,417 @@ const (
 	loanBitPreviousTxnLgrSeq
 )
 
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (l *Loan) SetOwnerNode(value string) {
+	l.OwnerNode = value
+	l.dirty = true
+	l.present |= loanBitOwnerNode
+}
+
+// SetLoanBrokerNode assigns LoanBrokerNode and updates its serialized presence.
+func (l *Loan) SetLoanBrokerNode(value string) {
+	l.LoanBrokerNode = value
+	l.dirty = true
+	l.present |= loanBitLoanBrokerNode
+}
+
+// SetLoanBrokerID assigns LoanBrokerID and updates its serialized presence.
+func (l *Loan) SetLoanBrokerID(value string) {
+	l.LoanBrokerID = value
+	l.dirty = true
+	l.present |= loanBitLoanBrokerID
+}
+
+// SetLoanSequence assigns LoanSequence and updates its serialized presence.
+func (l *Loan) SetLoanSequence(value uint32) {
+	l.LoanSequence = value
+	l.dirty = true
+	l.present |= loanBitLoanSequence
+}
+
+// SetBorrower assigns Borrower and updates its serialized presence.
+func (l *Loan) SetBorrower(value string) {
+	l.Borrower = value
+	l.dirty = true
+	l.present |= loanBitBorrower
+}
+
+// SetLoanOriginationFee assigns LoanOriginationFee and updates its serialized presence.
+func (l *Loan) SetLoanOriginationFee(value any) {
+	l.LoanOriginationFee = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitLoanOriginationFee
+		return
+	}
+	l.present |= loanBitLoanOriginationFee
+}
+
+// SetLoanServiceFee assigns LoanServiceFee and updates its serialized presence.
+func (l *Loan) SetLoanServiceFee(value any) {
+	l.LoanServiceFee = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitLoanServiceFee
+		return
+	}
+	l.present |= loanBitLoanServiceFee
+}
+
+// SetLatePaymentFee assigns LatePaymentFee and updates its serialized presence.
+func (l *Loan) SetLatePaymentFee(value any) {
+	l.LatePaymentFee = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitLatePaymentFee
+		return
+	}
+	l.present |= loanBitLatePaymentFee
+}
+
+// SetClosePaymentFee assigns ClosePaymentFee and updates its serialized presence.
+func (l *Loan) SetClosePaymentFee(value any) {
+	l.ClosePaymentFee = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitClosePaymentFee
+		return
+	}
+	l.present |= loanBitClosePaymentFee
+}
+
+// SetOverpaymentFee assigns OverpaymentFee and updates its serialized presence.
+func (l *Loan) SetOverpaymentFee(value uint32) {
+	l.OverpaymentFee = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitOverpaymentFee
+		return
+	}
+	l.present |= loanBitOverpaymentFee
+}
+
+// SetInterestRate assigns InterestRate and updates its serialized presence.
+func (l *Loan) SetInterestRate(value uint32) {
+	l.InterestRate = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitInterestRate
+		return
+	}
+	l.present |= loanBitInterestRate
+}
+
+// SetLateInterestRate assigns LateInterestRate and updates its serialized presence.
+func (l *Loan) SetLateInterestRate(value uint32) {
+	l.LateInterestRate = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitLateInterestRate
+		return
+	}
+	l.present |= loanBitLateInterestRate
+}
+
+// SetCloseInterestRate assigns CloseInterestRate and updates its serialized presence.
+func (l *Loan) SetCloseInterestRate(value uint32) {
+	l.CloseInterestRate = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitCloseInterestRate
+		return
+	}
+	l.present |= loanBitCloseInterestRate
+}
+
+// SetOverpaymentInterestRate assigns OverpaymentInterestRate and updates its serialized presence.
+func (l *Loan) SetOverpaymentInterestRate(value uint32) {
+	l.OverpaymentInterestRate = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitOverpaymentInterestRate
+		return
+	}
+	l.present |= loanBitOverpaymentInterestRate
+}
+
+// SetStartDate assigns StartDate and updates its serialized presence.
+func (l *Loan) SetStartDate(value uint32) {
+	l.StartDate = value
+	l.dirty = true
+	l.present |= loanBitStartDate
+}
+
+// SetPaymentInterval assigns PaymentInterval and updates its serialized presence.
+func (l *Loan) SetPaymentInterval(value uint32) {
+	l.PaymentInterval = value
+	l.dirty = true
+	l.present |= loanBitPaymentInterval
+}
+
+// SetGracePeriod assigns GracePeriod and updates its serialized presence.
+func (l *Loan) SetGracePeriod(value uint32) {
+	l.GracePeriod = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitGracePeriod
+		return
+	}
+	l.present |= loanBitGracePeriod
+}
+
+// SetPreviousPaymentDueDate assigns PreviousPaymentDueDate and updates its serialized presence.
+func (l *Loan) SetPreviousPaymentDueDate(value uint32) {
+	l.PreviousPaymentDueDate = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitPreviousPaymentDueDate
+		return
+	}
+	l.present |= loanBitPreviousPaymentDueDate
+}
+
+// SetNextPaymentDueDate assigns NextPaymentDueDate and updates its serialized presence.
+func (l *Loan) SetNextPaymentDueDate(value uint32) {
+	l.NextPaymentDueDate = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitNextPaymentDueDate
+		return
+	}
+	l.present |= loanBitNextPaymentDueDate
+}
+
+// SetPaymentRemaining assigns PaymentRemaining and updates its serialized presence.
+func (l *Loan) SetPaymentRemaining(value uint32) {
+	l.PaymentRemaining = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitPaymentRemaining
+		return
+	}
+	l.present |= loanBitPaymentRemaining
+}
+
+// SetPeriodicPayment assigns PeriodicPayment and updates its serialized presence.
+func (l *Loan) SetPeriodicPayment(value any) {
+	l.PeriodicPayment = value
+	l.dirty = true
+	l.present |= loanBitPeriodicPayment
+}
+
+// SetPrincipalOutstanding assigns PrincipalOutstanding and updates its serialized presence.
+func (l *Loan) SetPrincipalOutstanding(value any) {
+	l.PrincipalOutstanding = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitPrincipalOutstanding
+		return
+	}
+	l.present |= loanBitPrincipalOutstanding
+}
+
+// SetTotalValueOutstanding assigns TotalValueOutstanding and updates its serialized presence.
+func (l *Loan) SetTotalValueOutstanding(value any) {
+	l.TotalValueOutstanding = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitTotalValueOutstanding
+		return
+	}
+	l.present |= loanBitTotalValueOutstanding
+}
+
+// SetManagementFeeOutstanding assigns ManagementFeeOutstanding and updates its serialized presence.
+func (l *Loan) SetManagementFeeOutstanding(value any) {
+	l.ManagementFeeOutstanding = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanBitManagementFeeOutstanding
+		return
+	}
+	l.present |= loanBitManagementFeeOutstanding
+}
+
+// SetLoanScale assigns LoanScale and updates its serialized presence.
+func (l *Loan) SetLoanScale(value int32) {
+	l.LoanScale = int(value)
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanBitLoanScale
+		return
+	}
+	l.present |= loanBitLoanScale
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (l *Loan) SetFlags(value uint32) {
+	l.Flags = value
+	l.dirty = true
+	l.present |= loanBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (l *Loan) SetPreviousTxnID(value string) {
+	l.PreviousTxnID = value
+	l.dirty = true
+	l.present |= loanBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (l *Loan) SetPreviousTxnLgrSeq(value uint32) {
+	l.PreviousTxnLgrSeq = value
+	l.dirty = true
+	l.present |= loanBitPreviousTxnLgrSeq
+}
+
+func (l *Loan) validateRequired() error {
+	if l.decoded && !l.dirty {
+		return nil
+	}
+	if l.present&loanBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Loan: required field OwnerNode is not set")
+	}
+	if l.present&loanBitLoanBrokerNode == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanBrokerNode is not set")
+	}
+	if l.present&loanBitLoanBrokerID == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanBrokerID is not set")
+	}
+	if l.present&loanBitLoanSequence == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanSequence is not set")
+	}
+	if l.present&loanBitBorrower == 0 {
+		return errors.New("ledgerfields: Loan: required field Borrower is not set")
+	}
+	if l.present&loanBitStartDate == 0 {
+		return errors.New("ledgerfields: Loan: required field StartDate is not set")
+	}
+	if l.present&loanBitPaymentInterval == 0 {
+		return errors.New("ledgerfields: Loan: required field PaymentInterval is not set")
+	}
+	if l.present&loanBitPeriodicPayment == 0 {
+		return errors.New("ledgerfields: Loan: required field PeriodicPayment is not set")
+	}
+	if l.present&loanBitFlags == 0 {
+		return errors.New("ledgerfields: Loan: required field Flags is not set")
+	}
+	return nil
+}
+
+func (l *Loan) validateDecoded() error {
+	if l.present&loanBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Loan: required field OwnerNode is missing")
+	}
+	if l.present&loanBitLoanBrokerNode == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanBrokerNode is missing")
+	}
+	if l.present&loanBitLoanBrokerID == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanBrokerID is missing")
+	}
+	if l.present&loanBitLoanSequence == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanSequence is missing")
+	}
+	if l.present&loanBitBorrower == 0 {
+		return errors.New("ledgerfields: Loan: required field Borrower is missing")
+	}
+	if l.present&loanBitLoanOriginationFee != 0 && numberIsDefault(l.LoanOriginationFee) {
+		return errors.New("ledgerfields: Loan: default field LoanOriginationFee is explicitly set")
+	}
+	if l.present&loanBitLoanServiceFee != 0 && numberIsDefault(l.LoanServiceFee) {
+		return errors.New("ledgerfields: Loan: default field LoanServiceFee is explicitly set")
+	}
+	if l.present&loanBitLatePaymentFee != 0 && numberIsDefault(l.LatePaymentFee) {
+		return errors.New("ledgerfields: Loan: default field LatePaymentFee is explicitly set")
+	}
+	if l.present&loanBitClosePaymentFee != 0 && numberIsDefault(l.ClosePaymentFee) {
+		return errors.New("ledgerfields: Loan: default field ClosePaymentFee is explicitly set")
+	}
+	if l.present&loanBitOverpaymentFee != 0 && l.OverpaymentFee == 0 {
+		return errors.New("ledgerfields: Loan: default field OverpaymentFee is explicitly set")
+	}
+	if l.present&loanBitInterestRate != 0 && l.InterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field InterestRate is explicitly set")
+	}
+	if l.present&loanBitLateInterestRate != 0 && l.LateInterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field LateInterestRate is explicitly set")
+	}
+	if l.present&loanBitCloseInterestRate != 0 && l.CloseInterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field CloseInterestRate is explicitly set")
+	}
+	if l.present&loanBitOverpaymentInterestRate != 0 && l.OverpaymentInterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field OverpaymentInterestRate is explicitly set")
+	}
+	if l.present&loanBitStartDate == 0 {
+		return errors.New("ledgerfields: Loan: required field StartDate is missing")
+	}
+	if l.present&loanBitPaymentInterval == 0 {
+		return errors.New("ledgerfields: Loan: required field PaymentInterval is missing")
+	}
+	if l.present&loanBitGracePeriod != 0 && l.GracePeriod == 0 {
+		return errors.New("ledgerfields: Loan: default field GracePeriod is explicitly set")
+	}
+	if l.present&loanBitPreviousPaymentDueDate != 0 && l.PreviousPaymentDueDate == 0 {
+		return errors.New("ledgerfields: Loan: default field PreviousPaymentDueDate is explicitly set")
+	}
+	if l.present&loanBitNextPaymentDueDate != 0 && l.NextPaymentDueDate == 0 {
+		return errors.New("ledgerfields: Loan: default field NextPaymentDueDate is explicitly set")
+	}
+	if l.present&loanBitPaymentRemaining != 0 && l.PaymentRemaining == 0 {
+		return errors.New("ledgerfields: Loan: default field PaymentRemaining is explicitly set")
+	}
+	if l.present&loanBitPeriodicPayment == 0 {
+		return errors.New("ledgerfields: Loan: required field PeriodicPayment is missing")
+	}
+	if l.present&loanBitPrincipalOutstanding != 0 && numberIsDefault(l.PrincipalOutstanding) {
+		return errors.New("ledgerfields: Loan: default field PrincipalOutstanding is explicitly set")
+	}
+	if l.present&loanBitTotalValueOutstanding != 0 && numberIsDefault(l.TotalValueOutstanding) {
+		return errors.New("ledgerfields: Loan: default field TotalValueOutstanding is explicitly set")
+	}
+	if l.present&loanBitManagementFeeOutstanding != 0 && numberIsDefault(l.ManagementFeeOutstanding) {
+		return errors.New("ledgerfields: Loan: default field ManagementFeeOutstanding is explicitly set")
+	}
+	if l.present&loanBitLoanScale != 0 && l.LoanScale == 0 {
+		return errors.New("ledgerfields: Loan: default field LoanScale is explicitly set")
+	}
+	if l.present&loanBitFlags == 0 {
+		return errors.New("ledgerfields: Loan: required field Flags is missing")
+	}
+	if l.present&loanBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Loan: required field PreviousTxnID is missing")
+	}
+	if l.present&loanBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Loan: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (l *Loan) Decode(data []byte) error {
+	return l.decode(data, false)
+}
+
+func (l *Loan) decodeLegacy(data []byte) error {
+	return l.decode(data, true)
+}
+
+func (l *Loan) decode(data []byte, legacy bool) error {
 	*l = Loan{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Loan: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -102,7 +508,10 @@ func (l *Loan) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 137 {
+					return fmt.Errorf("ledgerfields: Loan: LedgerEntryType is %d, want 137", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Loan", typeCode, fieldCode)
 			}
@@ -252,6 +661,13 @@ func (l *Loan) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("Loan", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Loan: missing LedgerEntryType")
+	}
+	l.decoded = true
+	if !legacy {
+		return l.validateDecoded()
 	}
 	return nil
 }
@@ -599,11 +1015,20 @@ func (l *Loan) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (l *Loan) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(l.ToMap())
+	if err := l.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := l.ToMap()
+	if l.present&loanBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if l.present&loanBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

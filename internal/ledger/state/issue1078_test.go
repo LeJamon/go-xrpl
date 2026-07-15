@@ -11,7 +11,13 @@ import (
 // type 19 field 1) carrying payloadLen raw bytes behind the XRPL single-byte
 // length prefix. payloadLen must be <= 192 so the prefix stays one byte.
 func indexesField(payloadLen int) []byte {
-	b := make([]byte, 0, 3+payloadLen)
+	b := make([]byte, 0, 43+payloadLen)
+	b = append(b,
+		0x11, 0x00, 0x64, // LedgerEntryType = DirectoryNode
+		0x22, 0x00, 0x00, 0x00, 0x00, // Flags
+		0x58, // RootIndex
+	)
+	b = append(b, make([]byte, 32)...)
 	b = append(b, 0x01, 0x13, byte(payloadLen)) // field header + 1-byte VL length
 	return append(b, make([]byte, payloadLen)...)
 }
@@ -26,7 +32,7 @@ func TestParseDirectoryNode_RejectsMalformedIndexes(t *testing.T) {
 	// 33 bytes: one whole hash plus a stray trailing byte.
 	_, err := ParseDirectoryNode(indexesField(33))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bad serialization for STVector256")
+	assert.Contains(t, err.Error(), "Vector256 length not a multiple of 32")
 
 	// 32 bytes: a single well-formed hash still parses cleanly.
 	dir, err := ParseDirectoryNode(indexesField(32))

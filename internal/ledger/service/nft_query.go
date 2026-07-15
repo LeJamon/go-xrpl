@@ -124,7 +124,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 		}
 
 		// Parse the offer to verify NFTokenID matches
-		offer, err := state.ParseNFTokenOffer(offerData)
+		offer, err := state.ParseNFTokenOfferLegacy(offerData)
 		if err != nil || offer.NFTokenID != nftID {
 			return nil, svcerr.ErrInvalidMarker
 		}
@@ -168,7 +168,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 			continue
 		}
 
-		offer, err := state.ParseNFTokenOffer(offerData)
+		offer, err := state.ParseNFTokenOfferLegacy(offerData)
 		if err != nil {
 			continue
 		}

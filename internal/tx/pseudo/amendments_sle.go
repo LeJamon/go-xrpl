@@ -2,11 +2,12 @@ package pseudo
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // AmendmentsSLE represents the parsed Amendments ledger entry.
@@ -40,119 +41,89 @@ func ParseAmendmentsSLE(data []byte) (*AmendmentsSLE, error) {
 		return &AmendmentsSLE{}, nil
 	}
 
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
-	if err != nil {
+	var decoded ledgerfields.Amendments
+	if err := decoded.Decode(data); err != nil {
 		return nil, fmt.Errorf("failed to decode Amendments SLE: %w", err)
 	}
 
-	sle := &AmendmentsSLE{}
-
-	// Parse sfAmendments (Vector256 → []string of uppercase hex hashes)
-	if amendments, ok := jsonObj["Amendments"]; ok {
-		switch v := amendments.(type) {
-		case []string:
-			for _, hashHex := range v {
-				var hash [32]byte
-				b, err := hex.DecodeString(hashHex)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decode amendment hash: %w", err)
-				}
-				copy(hash[:], b)
-				sle.Amendments = append(sle.Amendments, hash)
-			}
-		case []any:
-			for _, item := range v {
-				s, ok := item.(string)
-				if !ok {
-					continue
-				}
-				var hash [32]byte
-				b, err := hex.DecodeString(s)
-				if err != nil {
-					return nil, fmt.Errorf("failed to decode amendment hash: %w", err)
-				}
-				copy(hash[:], b)
-				sle.Amendments = append(sle.Amendments, hash)
-			}
-		}
+	sle := &AmendmentsSLE{
+		Amendments: make([][32]byte, 0, len(decoded.Amendments)),
+		Majorities: make([]MajorityEntry, 0, len(decoded.Majorities)),
 	}
 
-	// Parse sfMajorities (STArray → []any of wrapper objects)
-	if majorities, ok := jsonObj["Majorities"]; ok {
-		arr, ok := majorities.([]any)
+	for i, hashHex := range decoded.Amendments {
+		hash, err := decodeAmendmentHash(fmt.Sprintf("Amendments[%d]", i), hashHex)
+		if err != nil {
+			return nil, err
+		}
+		sle.Amendments = append(sle.Amendments, hash)
+	}
+
+	for i, item := range decoded.Majorities {
+		wrapper, ok := item.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("unexpected Majorities type: %T", majorities)
+			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d]: unexpected entry type %T", i, item)
 		}
-		for _, item := range arr {
-			wrapper, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			// Each element is wrapped: {"Majority": {"Amendment": "...", "CloseTime": ...}}
-			inner, ok := wrapper["Majority"]
-			if !ok {
-				continue
-			}
-			innerMap, ok := inner.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			entry := MajorityEntry{}
-
-			if amendHash, ok := innerMap["Amendment"].(string); ok {
-				b, err := hex.DecodeString(amendHash)
-				if err == nil {
-					copy(entry.Amendment[:], b)
-				}
-			}
-
-			if closeTime, ok := innerMap["CloseTime"]; ok {
-				switch v := closeTime.(type) {
-				case float64:
-					entry.CloseTime = uint32(v)
-				case uint32:
-					entry.CloseTime = v
-				case int:
-					entry.CloseTime = uint32(v)
-				case int64:
-					entry.CloseTime = uint32(v)
-				}
-			}
-
-			sle.Majorities = append(sle.Majorities, entry)
+		inner, ok := wrapper["Majority"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d]: missing Majority", i)
 		}
+		amendmentHex, ok := inner["Amendment"].(string)
+		if !ok {
+			return nil, fmt.Errorf("failed to decode Amendments SLE Majorities[%d]: unexpected Amendment type %T", i, inner["Amendment"])
+		}
+		amendment, err := decodeAmendmentHash(fmt.Sprintf("Majorities[%d].Amendment", i), amendmentHex)
+		if err != nil {
+			return nil, err
+		}
+		sle.Majorities = append(sle.Majorities, MajorityEntry{
+			Amendment: amendment,
+			CloseTime: toUint32(inner["CloseTime"]),
+		})
 	}
 
-	// PreviousTxnID/PreviousTxnLgrSeq are threaded as a pair.
-	if ptid, ok := jsonObj["PreviousTxnID"].(string); ok {
-		if b, err := hex.DecodeString(ptid); err == nil && len(b) == 32 {
-			copy(sle.PreviousTxnID[:], b)
-			sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
+	if decoded.PreviousTxnID != "" {
+		previousTxnID, err := decodeAmendmentHash("PreviousTxnID", decoded.PreviousTxnID)
+		if err != nil {
+			return nil, err
 		}
+		sle.PreviousTxnID = previousTxnID
+		sle.PreviousTxnLgrSeq = decoded.PreviousTxnLgrSeq
 	}
 
 	return sle, nil
 }
 
+func decodeAmendmentHash(field, value string) ([32]byte, error) {
+	var hash [32]byte
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		return hash, fmt.Errorf("failed to decode Amendments SLE %s: %w", field, err)
+	}
+	if len(decoded) != len(hash) {
+		return hash, fmt.Errorf("failed to decode Amendments SLE %s: decoded length %d, want %d", field, len(decoded), len(hash))
+	}
+	copy(hash[:], decoded)
+	return hash, nil
+}
+
 // SerializeAmendmentsSLE serializes an AmendmentsSLE to binary data.
 func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Amendments",
-		"Flags":           0,
+	if sle == nil {
+		return nil, errors.New("failed to encode Amendments SLE: nil entry")
 	}
 
-	// Add sfAmendments (Vector256)
+	var entry ledgerfields.Amendments
+	entry.SetFlags(0)
+
 	if len(sle.Amendments) > 0 {
 		hashes := make([]string, len(sle.Amendments))
 		for i, hash := range sle.Amendments {
 			hashes[i] = strings.ToUpper(hex.EncodeToString(hash[:]))
 		}
-		jsonObj["Amendments"] = hashes
+		entry.SetAmendments(hashes)
 	}
 
-	// Add sfMajorities (STArray)
 	if len(sle.Majorities) > 0 {
 		arr := make([]any, len(sle.Majorities))
 		for i, entry := range sle.Majorities {
@@ -163,22 +134,22 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 				},
 			}
 		}
-		jsonObj["Majorities"] = arr
+		entry.SetMajorities(arr)
 	}
 
-	// Carry the pointers through a no-op modify; absent on a brand-new entry.
 	var emptyHash [32]byte
 	if sle.PreviousTxnID != emptyHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = sle.PreviousTxnLgrSeq
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID[:])))
+		entry.SetPreviousTxnLgrSeq(sle.PreviousTxnLgrSeq)
+	} else if sle.PreviousTxnLgrSeq != 0 {
+		return nil, errors.New("failed to encode Amendments SLE: PreviousTxnLgrSeq set without PreviousTxnID")
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Amendments SLE: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // ContainsAmendment checks if the given amendment hash is in the enabled amendments list.

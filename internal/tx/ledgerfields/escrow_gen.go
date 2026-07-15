@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Escrow is the typed representation of a Escrow ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Escrow struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	Sequence          uint32
 	Destination       string // AccountID (base58)
@@ -59,16 +64,190 @@ const (
 	escrowBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (e *Escrow) SetAccount(value string) {
+	e.Account = value
+	e.dirty = true
+	e.present |= escrowBitAccount
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (e *Escrow) SetSequence(value uint32) {
+	e.Sequence = value
+	e.dirty = true
+	e.present |= escrowBitSequence
+}
+
+// SetDestination assigns Destination and updates its serialized presence.
+func (e *Escrow) SetDestination(value string) {
+	e.Destination = value
+	e.dirty = true
+	e.present |= escrowBitDestination
+}
+
+// SetAmount assigns Amount and updates its serialized presence.
+func (e *Escrow) SetAmount(value any) {
+	e.Amount = value
+	e.dirty = true
+	e.present |= escrowBitAmount
+}
+
+// SetCondition assigns Condition and updates its serialized presence.
+func (e *Escrow) SetCondition(value string) {
+	e.Condition = value
+	e.dirty = true
+	e.present |= escrowBitCondition
+}
+
+// SetCancelAfter assigns CancelAfter and updates its serialized presence.
+func (e *Escrow) SetCancelAfter(value uint32) {
+	e.CancelAfter = value
+	e.dirty = true
+	e.present |= escrowBitCancelAfter
+}
+
+// SetFinishAfter assigns FinishAfter and updates its serialized presence.
+func (e *Escrow) SetFinishAfter(value uint32) {
+	e.FinishAfter = value
+	e.dirty = true
+	e.present |= escrowBitFinishAfter
+}
+
+// SetSourceTag assigns SourceTag and updates its serialized presence.
+func (e *Escrow) SetSourceTag(value uint32) {
+	e.SourceTag = value
+	e.dirty = true
+	e.present |= escrowBitSourceTag
+}
+
+// SetDestinationTag assigns DestinationTag and updates its serialized presence.
+func (e *Escrow) SetDestinationTag(value uint32) {
+	e.DestinationTag = value
+	e.dirty = true
+	e.present |= escrowBitDestinationTag
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (e *Escrow) SetOwnerNode(value string) {
+	e.OwnerNode = value
+	e.dirty = true
+	e.present |= escrowBitOwnerNode
+}
+
+// SetDestinationNode assigns DestinationNode and updates its serialized presence.
+func (e *Escrow) SetDestinationNode(value string) {
+	e.DestinationNode = value
+	e.dirty = true
+	e.present |= escrowBitDestinationNode
+}
+
+// SetTransferRate assigns TransferRate and updates its serialized presence.
+func (e *Escrow) SetTransferRate(value uint32) {
+	e.TransferRate = value
+	e.dirty = true
+	e.present |= escrowBitTransferRate
+}
+
+// SetIssuerNode assigns IssuerNode and updates its serialized presence.
+func (e *Escrow) SetIssuerNode(value string) {
+	e.IssuerNode = value
+	e.dirty = true
+	e.present |= escrowBitIssuerNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (e *Escrow) SetFlags(value uint32) {
+	e.Flags = value
+	e.dirty = true
+	e.present |= escrowBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (e *Escrow) SetPreviousTxnID(value string) {
+	e.PreviousTxnID = value
+	e.dirty = true
+	e.present |= escrowBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (e *Escrow) SetPreviousTxnLgrSeq(value uint32) {
+	e.PreviousTxnLgrSeq = value
+	e.dirty = true
+	e.present |= escrowBitPreviousTxnLgrSeq
+}
+
+func (e *Escrow) validateRequired() error {
+	if e.decoded && !e.dirty {
+		return nil
+	}
+	if e.present&escrowBitAccount == 0 {
+		return errors.New("ledgerfields: Escrow: required field Account is not set")
+	}
+	if e.present&escrowBitDestination == 0 {
+		return errors.New("ledgerfields: Escrow: required field Destination is not set")
+	}
+	if e.present&escrowBitAmount == 0 {
+		return errors.New("ledgerfields: Escrow: required field Amount is not set")
+	}
+	if e.present&escrowBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Escrow: required field OwnerNode is not set")
+	}
+	if e.present&escrowBitFlags == 0 {
+		return errors.New("ledgerfields: Escrow: required field Flags is not set")
+	}
+	return nil
+}
+
+func (e *Escrow) validateDecoded() error {
+	if e.present&escrowBitAccount == 0 {
+		return errors.New("ledgerfields: Escrow: required field Account is missing")
+	}
+	if e.present&escrowBitDestination == 0 {
+		return errors.New("ledgerfields: Escrow: required field Destination is missing")
+	}
+	if e.present&escrowBitAmount == 0 {
+		return errors.New("ledgerfields: Escrow: required field Amount is missing")
+	}
+	if e.present&escrowBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Escrow: required field OwnerNode is missing")
+	}
+	if e.present&escrowBitFlags == 0 {
+		return errors.New("ledgerfields: Escrow: required field Flags is missing")
+	}
+	if e.present&escrowBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Escrow: required field PreviousTxnID is missing")
+	}
+	if e.present&escrowBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Escrow: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (e *Escrow) Decode(data []byte) error {
+	return e.decode(data, false)
+}
+
+func (e *Escrow) decodeLegacy(data []byte) error {
+	return e.decode(data, true)
+}
+
+func (e *Escrow) decode(data []byte, legacy bool) error {
 	*e = Escrow{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Escrow: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -78,7 +257,10 @@ func (e *Escrow) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 117 {
+					return fmt.Errorf("ledgerfields: Escrow: LedgerEntryType is %d, want 117", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
@@ -195,6 +377,13 @@ func (e *Escrow) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("Escrow", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Escrow: missing LedgerEntryType")
+	}
+	e.decoded = true
+	if !legacy {
+		return e.validateDecoded()
 	}
 	return nil
 }
@@ -422,11 +611,20 @@ func (e *Escrow) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (e *Escrow) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(e.ToMap())
+	if err := e.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := e.ToMap()
+	if e.present&escrowBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if e.present&escrowBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

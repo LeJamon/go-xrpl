@@ -54,7 +54,7 @@ func roundCoverDeposit(fix320 bool, coverAvailable, amount lmath.N, integral boo
 	coverScale := coverAvailable.AssetExponent(integral, state.RoundToNearest)
 	rounded := amount.RoundToAssetScale(integral, coverScale, state.RoundDownward)
 	if rounded.IsZero() {
-		return lmath.Zero(), ter.TecPRECISION_LOSS
+		return amount.Sub(amount), ter.TecPRECISION_LOSS
 	}
 	return rounded, ter.TesSUCCESS
 }

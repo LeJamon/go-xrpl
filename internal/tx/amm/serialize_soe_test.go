@@ -1,6 +1,7 @@
 package amm
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -129,6 +130,46 @@ func TestSerializeAMM_RoundTrip(t *testing.T) {
 		if voteEntryHasTradingFee(t, fields) != (fee != 0) {
 			t.Errorf("fee=%d: VoteEntry.TradingFee presence wrong after round trip", fee)
 		}
+	}
+}
+
+func TestParseAMMGeneratedDecoderPreservesNestedFields(t *testing.T) {
+	amm := buildTestAMM(t, 500)
+	amm.PreviousTxnID = strings.Repeat("AB", 32)
+	amm.PreviousTxnLgrSeq = 42
+	amm.AuctionSlot = &AuctionSlotData{
+		Account:             [20]byte{0x03},
+		Expiration:          1234,
+		Price:               amm.LPTokenBalance,
+		DiscountedFee:       50,
+		AuthAccounts:        [][20]byte{{0x04}},
+		AuthAccountsPresent: true,
+	}
+
+	want, err := serializeAMMData(amm)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	parsed, err := ParseAMMData(want)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed.AuctionSlot == nil {
+		t.Fatal("AuctionSlot missing after parse")
+	}
+	if !parsed.AuctionSlot.AuthAccountsPresent || len(parsed.AuctionSlot.AuthAccounts) != 1 {
+		t.Fatalf("AuthAccounts = %#v, present=%v", parsed.AuctionSlot.AuthAccounts, parsed.AuctionSlot.AuthAccountsPresent)
+	}
+	if len(parsed.VoteSlots) != 1 || parsed.PreviousTxnLgrSeq != 42 {
+		t.Fatalf("nested/threading fields not preserved: votes=%d previous ledger=%d", len(parsed.VoteSlots), parsed.PreviousTxnLgrSeq)
+	}
+
+	got, err := serializeAMMData(parsed)
+	if err != nil {
+		t.Fatalf("re-serialize: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("parse/serialize changed bytes:\nwant %X\n got %X", want, got)
 	}
 }
 

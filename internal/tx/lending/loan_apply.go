@@ -15,7 +15,7 @@ func hasExpired(now, exp uint32) bool { return exp != 0 && now >= exp }
 
 // updateLoan serializes and updates a loan entry.
 func updateLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l *loanData) ter.Result {
-	data, serr := serializeLoan(l)
+	data, serr := serializeLoanForRules(l, ctx.Rules())
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -25,16 +25,12 @@ func updateLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, l *loanData) ter.Re
 	return ter.TesSUCCESS
 }
 
-// owedToVault is the amount owed to the vault (principal + interest, excluding
-// the broker's management fee): TotalValueOutstanding - ManagementFeeOutstanding.
-func owedToVault(l *loanData) lmath.N {
-	return lendNum(l.TotalValueOutstanding).Sub(lendNum(l.ManagementFeeOutstanding))
+func owedToVaultForRules(l *loanData, rules *amendment.Rules) lmath.N {
+	return lendNumForRules(l.TotalValueOutstanding, rules).Sub(lendNumForRules(l.ManagementFeeOutstanding, rules))
 }
 
-// vaultScaleOf returns getAssetsTotalScale(vault): the exponent of the vault's
-// asset total in its asset (0 for integral assets).
-func vaultScaleOf(v *vault.VaultLending, integral bool) int {
-	return lendNum(v.AssetsTotal).AssetExponent(integral, state.RoundToNearest)
+func vaultScaleOfForRules(v *vault.VaultLending, integral bool, rules *amendment.Rules) int {
+	return lendNumForRules(v.AssetsTotal, rules).AssetExponent(integral, state.RoundToNearest)
 }
 
 // -------------------- LoanDelete --------------------
@@ -104,10 +100,10 @@ func (l *LoanDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	if b.OwnerCount > 0 {
 		b.OwnerCount--
 	}
-	if b.OwnerCount == 0 && lendNum(b.DebtTotal).Signum() != 0 {
+	if b.OwnerCount == 0 && lendNumForRules(b.DebtTotal, ctx.Rules()).Signum() != 0 {
 		b.DebtTotal = ""
 	}
-	associateBrokerAsset(b, integral)
+	associateBrokerAsset(b, integral, ctx.Rules())
 	if res := updateBroker(ctx, brokerKey, b); res != ter.TesSUCCESS {
 		return res
 	}
@@ -224,7 +220,7 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 	if err != nil || loan == nil {
 		return ter.TefBAD_LEDGER
 	}
-	associateLoanAsset(loan, integral)
+	associateLoanAsset(loan, integral, ctx.Rules())
 	if r := updateLoan(ctx, loanKey, loan); r != ter.TesSUCCESS {
 		return r
 	}
@@ -232,7 +228,7 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 	if berr != nil || b == nil {
 		return ter.TefBAD_LEDGER
 	}
-	associateBrokerAsset(b, integral)
+	associateBrokerAsset(b, integral, ctx.Rules())
 	if r := updateBroker(ctx, brokerKey, b); r != ter.TesSUCCESS {
 		return r
 	}
@@ -240,18 +236,18 @@ func (l *LoanManage) associateEntities(ctx *tx.ApplyContext, loanKey, brokerKey,
 	if verr != nil || v == nil {
 		return ter.TefBAD_LEDGER
 	}
-	associateVaultAsset(v, integral)
+	associateVaultAsset(v, integral, ctx.Rules())
 	return vault.UpdateVaultTotals(ctx, vaultKey, v.AssetsTotal, v.AssetsAvailable, v.LossUnrealized)
 }
 
 func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending) ter.Result {
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
-	scale := vaultScaleOf(v, integral)
-	loss := owedToVault(loan)
-	newLoss := lmath.AdjustImprecise(asset, lendNum(v.LossUnrealized), loss, scale)
+	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
+	loss := owedToVaultForRules(loan, ctx.Rules())
+	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss, scale)
 	// Loss cannot exceed the vault's committed-but-unavailable assets.
-	committed := lendNum(v.AssetsTotal).Sub(lendNum(v.AssetsAvailable))
+	committed := lendNumForRules(v.AssetsTotal, ctx.Rules()).Sub(lendNumForRules(v.AssetsAvailable, ctx.Rules()))
 	if newLoss.Cmp(committed) > 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
@@ -268,12 +264,12 @@ func (l *LoanManage) impairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loa
 func (l *LoanManage) unimpairLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, loan *loanData, vaultKey keylet.Keylet, v *vault.VaultLending) ter.Result {
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
-	scale := vaultScaleOf(v, integral)
-	loss := owedToVault(loan)
-	if lendNum(v.LossUnrealized).Cmp(loss) < 0 {
+	scale := vaultScaleOfForRules(v, integral, ctx.Rules())
+	loss := owedToVaultForRules(loan, ctx.Rules())
+	if lendNumForRules(v.LossUnrealized, ctx.Rules()).Cmp(loss) < 0 {
 		return ter.TefBAD_LEDGER
 	}
-	newLoss := lmath.AdjustImprecise(asset, lendNum(v.LossUnrealized), loss.Negate(), scale)
+	newLoss := lmath.AdjustImprecise(asset, lendNumForRules(v.LossUnrealized, ctx.Rules()), loss.Negate(), scale)
 	if res := vault.UpdateVaultTotals(ctx, vaultKey, v.AssetsTotal, v.AssetsAvailable, numStr(newLoss)); res != ter.TesSUCCESS {
 		return res
 	}
@@ -295,9 +291,9 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	asset := mathAsset(v.Asset)
 	integral := asset.Integral
 	loanScale := int(loan.LoanScale)
-	vaultScale := vaultScaleOf(v, integral)
-	debtTotal := lendNum(b.DebtTotal)
-	totalDefault := owedToVault(loan)
+	vaultScale := vaultScaleOfForRules(v, integral, ctx.Rules())
+	debtTotal := lendNumForRules(b.DebtTotal, ctx.Rules())
+	totalDefault := owedToVaultForRules(loan, ctx.Rules())
 
 	// Liquidation cover: min(debtTotal * coverMin * coverLiq, totalDefault),
 	// capped at the broker's available cover.
@@ -307,22 +303,22 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 		liq = totalDefault
 	}
 	covered := lmath.RoundAssetNearest(asset, liq, loanScale)
-	if covered.Cmp(lendNum(b.CoverAvailable)) > 0 {
-		covered = lendNum(b.CoverAvailable)
+	if covered.Cmp(lendNumForRules(b.CoverAvailable, ctx.Rules())) > 0 {
+		covered = lendNumForRules(b.CoverAvailable, ctx.Rules())
 	}
 	vaultDefault := totalDefault.Sub(covered)
 
 	// Vault accounting.
-	if lendNum(v.AssetsTotal).Cmp(vaultDefault) < 0 {
+	if lendNumForRules(v.AssetsTotal, ctx.Rules()).Cmp(vaultDefault) < 0 {
 		return ter.TefBAD_LEDGER
 	}
 	vaultDefaultRounded := lmath.RoundAssetDownward(asset, vaultDefault, vaultScale)
-	newTotal := lendNum(v.AssetsTotal).Sub(vaultDefaultRounded)
-	newAvailable := lendNum(v.AssetsAvailable).Add(covered)
+	newTotal := lendNumForRules(v.AssetsTotal, ctx.Rules()).Sub(vaultDefaultRounded)
+	newAvailable := lendNumForRules(v.AssetsAvailable, ctx.Rules()).Add(covered)
 	if newAvailable.Cmp(newTotal) > 0 {
 		return ter.TecINTERNAL
 	}
-	newLoss := lendNum(v.LossUnrealized)
+	newLoss := lendNumForRules(v.LossUnrealized, ctx.Rules())
 	if loan.Flags&LsfLoanImpaired != 0 {
 		if newLoss.Cmp(totalDefault) < 0 {
 			return ter.TefBAD_LEDGER
@@ -334,11 +330,11 @@ func (l *LoanManage) defaultLoan(ctx *tx.ApplyContext, loanKey keylet.Keylet, lo
 	}
 
 	// Broker accounting.
-	if lendNum(b.CoverAvailable).Cmp(covered) < 0 {
+	if lendNumForRules(b.CoverAvailable, ctx.Rules()).Cmp(covered) < 0 {
 		return ter.TefBAD_LEDGER
 	}
 	b.DebtTotal = numStr(lmath.AdjustImprecise(asset, debtTotal, totalDefault.Negate(), vaultScale))
-	b.CoverAvailable = numStr(lendNum(b.CoverAvailable).Sub(covered))
+	b.CoverAvailable = numStr(lendNumForRules(b.CoverAvailable, ctx.Rules()).Sub(covered))
 	if res := updateBroker(ctx, brokerKey, b); res != ter.TesSUCCESS {
 		return res
 	}

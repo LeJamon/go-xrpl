@@ -3,6 +3,7 @@ package applystate
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -716,6 +717,16 @@ func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
 	return t.items
 }
 
+var errUnregisteredLedgerEntryType = errors.New("applystate: unregistered ledger entry type")
+
+func metadataEntry(entryType string) (ledgerfields.Entry, error) {
+	entry := ledgerfields.New(entryType)
+	if entry == nil {
+		return nil, fmt.Errorf("%w %q", errUnregisteredLedgerEntryType, entryType)
+	}
+	return entry, nil
+}
+
 // buildCreatedNode creates metadata for a newly created entry
 func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.AffectedNode, error) {
 	entryType := state.EntryType(data)
@@ -727,27 +738,14 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.Affect
 		NewFields:       make(map[string]any),
 	}
 
-	if entry := ledgerfields.New(entryType); entry != nil {
-		if err := entry.Decode(data); err != nil {
-			return node, err
-		}
-		entry.EmitNewFields(node.NewFields)
-		return node, nil
-	}
-
-	// Extract fields for NewFields based on entry type
-	fields, err := extractLedgerFields(data, entryType)
+	entry, err := metadataEntry(entryType)
 	if err != nil {
 		return node, err
 	}
-
-	// For CreatedNode, include all non-default fields with sMD_Create | sMD_Always
-	for name, value := range fields {
-		if shouldIncludeInCreate(name) && !state.IsDefaultValue(value) {
-			node.NewFields[name] = value
-		}
+	if err := entry.Decode(data); err != nil {
+		return node, err
 	}
-
+	entry.EmitNewFields(node.NewFields)
 	return node, nil
 }
 
@@ -797,133 +795,81 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 		PreviousFields:  make(map[string]any),
 	}
 
-	if origEntry := ledgerfields.New(entryType); origEntry != nil {
-		currEntry := ledgerfields.New(entryType)
-		if err := origEntry.Decode(original); err != nil {
-			return node, err
-		}
-		if err := currEntry.Decode(current); err != nil {
-			return node, err
-		}
-		// PreviousTxnID/PreviousTxnLgrSeq are only emitted on ModifiedNode
-		// when the entry is a threaded type. Rippled gates this at
-		// STLedgerEntry::isThreadedType (libxrpl/protocol/STLedgerEntry.cpp:
-		// 90-105) — DirectoryNode/Amendments/FeeSettings/NegativeUNL/AMM are
-		// EXCLUDED from threading unless the fixPreviousTxnID amendment is
-		// enabled. Without this gate, goxrpl emits an extra ~36 bytes per
-		// dir-pagination modify (PreviousTxnID 32B + sfPreviousTxnLgrSeq 4B +
-		// the two field markers); the tx-tree leaf bytes for that tx then
-		// diverge from rippled byte-for-byte, transaction_hash diverges,
-		// ledger_hash diverges, account_hash matches — exactly the iter7/8
-		// stall pattern at vseq=7.
-		// Default fixPreviousTxnID to false when rules is nil — this matches
-		// rippled's pre-amendment behaviour (DirectoryNode is NOT threaded,
-		// so its ModifiedNode meta gets no PreviousTxnID/PreviousTxnLgrSeq).
-		// Production callers always set rules at NewApplyStateTable; tests
-		// that build a bare table get the safe rippled-default classification.
-		fixPreviousTxnID := false
-		if t.rules != nil {
-			fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
-		}
-		if isThreadedType(entryType, fixPreviousTxnID) {
-			node.PreviousTxnID, node.PreviousTxnLgrSeq = t.modifiedNodePrevTxn(key, entryType, origEntry)
-		}
-		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
-		currEntry.EmitFinalFields(node.FinalFields)
-		// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case
-		// (ApplyStateTable.cpp:209-220, with the STObject iterator
-		// surfacing template NOTPRESENT placeholders per STObject.cpp:
-		// 156-168). When orig has an absent-in-instance template field
-		// that cur has set, and the field carries sMD_ChangeOrig, rippled
-		// emplaces the NOTPRESENT obj into prevs — making prevs.empty()
-		// false (so the `if (!prevs.empty()) emplace_back(prevs)` gate
-		// fires) while serializing zero inner bytes. The wire effect is
-		// an empty `PreviousFields: {}` (`E6 E1`).
-		//
-		// Goxrpl uses generated EmitChangeOrigFields to enumerate the
-		// MetaDefault (sMD_ChangeOrig-bearing) field set on each side.
-		// MetaAlways fields like RootIndex are excluded — they appear in
-		// FinalFields but lack sMD_ChangeOrig at the rippled level, so a
-		// future MetaAlways field that transitions absent→present on a
-		// Modify must not trip this heuristic. Only fires when no real
-		// PreviousFields diff exists — a non-empty PreviousFields already
-		// produces the wire wrapper.
-		if len(node.PreviousFields) == 0 {
-			origChangeOrig := make(map[string]any)
-			origEntry.EmitChangeOrigFields(origChangeOrig)
-			curChangeOrig := make(map[string]any)
-			currEntry.EmitChangeOrigFields(curChangeOrig)
-			for name := range curChangeOrig {
-				if _, hadInOrig := origChangeOrig[name]; !hadInOrig {
-					node.EmitEmptyPreviousFields = true
-					break
-				}
-			}
-		}
-		if len(node.PreviousFields) == 0 {
-			node.PreviousFields = nil
-		}
-		if len(node.FinalFields) == 0 {
-			node.FinalFields = nil
-		}
-		return node, nil
-	}
-
-	// Extract fields from original and current
-	origFields, err := extractLedgerFields(original, entryType)
+	origEntry, err := metadataEntry(entryType)
 	if err != nil {
 		return node, err
 	}
-
-	currFields, err := extractLedgerFields(current, entryType)
+	currEntry, err := metadataEntry(entryType)
 	if err != nil {
 		return node, err
 	}
-
-	// Extract PreviousTxnID and PreviousTxnLgrSeq from original
-	if prevTxnID, ok := origFields["PreviousTxnID"]; ok {
-		node.PreviousTxnID = fmt.Sprintf("%v", prevTxnID)
+	if err := origEntry.Decode(original); err != nil {
+		return node, err
 	}
-	if prevTxnLgrSeq, ok := origFields["PreviousTxnLgrSeq"]; ok {
-		if seq, ok := prevTxnLgrSeq.(uint32); ok {
-			node.PreviousTxnLgrSeq = seq
-		}
+	if err := currEntry.Decode(current); err != nil {
+		return node, err
 	}
-
-	// PreviousFields: fields that changed (sMD_ChangeOrig)
-	for name, origValue := range origFields {
-		if shouldIncludeInPreviousFields(name) {
-			if currValue, exists := currFields[name]; exists {
-				if !fieldsEqual(origValue, currValue) {
-					node.PreviousFields[name] = origValue
-				}
-			} else {
-				// Field was removed
-				node.PreviousFields[name] = origValue
+	// PreviousTxnID/PreviousTxnLgrSeq are only emitted on ModifiedNode
+	// when the entry is a threaded type. Rippled gates this at
+	// STLedgerEntry::isThreadedType (libxrpl/protocol/STLedgerEntry.cpp:
+	// 90-105) — DirectoryNode/Amendments/FeeSettings/NegativeUNL/AMM are
+	// EXCLUDED from threading unless the fixPreviousTxnID amendment is
+	// enabled. Without this gate, goxrpl emits an extra ~36 bytes per
+	// dir-pagination modify (PreviousTxnID 32B + sfPreviousTxnLgrSeq 4B +
+	// the two field markers); the tx-tree leaf bytes for that tx then
+	// diverge from rippled byte-for-byte, transaction_hash diverges,
+	// ledger_hash diverges, account_hash matches — exactly the iter7/8
+	// stall pattern at vseq=7.
+	// Default fixPreviousTxnID to false when rules is nil — this matches
+	// rippled's pre-amendment behaviour (DirectoryNode is NOT threaded,
+	// so its ModifiedNode meta gets no PreviousTxnID/PreviousTxnLgrSeq).
+	// Production callers always set rules at NewApplyStateTable; tests
+	// that build a bare table get the safe rippled-default classification.
+	fixPreviousTxnID := false
+	if t.rules != nil {
+		fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
+	}
+	if isThreadedType(entryType, fixPreviousTxnID) {
+		node.PreviousTxnID, node.PreviousTxnLgrSeq = t.modifiedNodePrevTxn(key, entryType, origEntry)
+	}
+	currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
+	currEntry.EmitFinalFields(node.FinalFields)
+	// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case
+	// (ApplyStateTable.cpp:209-220, with the STObject iterator
+	// surfacing template NOTPRESENT placeholders per STObject.cpp:
+	// 156-168). When orig has an absent-in-instance template field
+	// that cur has set, and the field carries sMD_ChangeOrig, rippled
+	// emplaces the NOTPRESENT obj into prevs — making prevs.empty()
+	// false (so the `if (!prevs.empty()) emplace_back(prevs)` gate
+	// fires) while serializing zero inner bytes. The wire effect is
+	// an empty `PreviousFields: {}` (`E6 E1`).
+	//
+	// Goxrpl uses generated EmitChangeOrigFields to enumerate the
+	// MetaDefault (sMD_ChangeOrig-bearing) field set on each side.
+	// MetaAlways fields like RootIndex are excluded — they appear in
+	// FinalFields but lack sMD_ChangeOrig at the rippled level, so a
+	// future MetaAlways field that transitions absent→present on a
+	// Modify must not trip this heuristic. Only fires when no real
+	// PreviousFields diff exists — a non-empty PreviousFields already
+	// produces the wire wrapper.
+	if len(node.PreviousFields) == 0 {
+		origChangeOrig := make(map[string]any)
+		origEntry.EmitChangeOrigFields(origChangeOrig)
+		curChangeOrig := make(map[string]any)
+		currEntry.EmitChangeOrigFields(curChangeOrig)
+		for name := range curChangeOrig {
+			if _, hadInOrig := origChangeOrig[name]; !hadInOrig {
+				node.EmitEmptyPreviousFields = true
+				break
 			}
 		}
 	}
-
-	// FinalFields: emit ALL sMD_Always|sMD_ChangeNew fields independently
-	// of whether PreviousFields is empty. Rippled ApplyStateTable.cpp:222-229
-	// builds prevs (lines 209-220) and finals separately — no
-	// `if (!prevs.empty())` gate around finals. Thread-touched owners
-	// (e.g. AccountRoot owning a modified RippleState) leave prevs empty
-	// but still need the full FinalFields block.
-	for name, currValue := range currFields {
-		if shouldIncludeInFinalFields(name) {
-			node.FinalFields[name] = currValue
-		}
-	}
-
-	// Clean up empty maps
 	if len(node.PreviousFields) == 0 {
 		node.PreviousFields = nil
 	}
 	if len(node.FinalFields) == 0 {
 		node.FinalFields = nil
 	}
-
 	return node, nil
 }
 
@@ -941,83 +887,30 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 		PreviousFields:  make(map[string]any),
 	}
 
-	if origEntry := ledgerfields.New(entryType); origEntry != nil {
-		currEntry := ledgerfields.New(entryType)
-		if err := origEntry.Decode(original); err != nil {
-			return node, err
-		}
-		if err := currEntry.Decode(current); err != nil {
-			return node, err
-		}
-		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
-		currEntry.EmitDeletePreviousFields(origEntry, node.PreviousFields)
-		currEntry.EmitDeleteFinalFields(node.FinalFields)
-		restoreDeletedNodePrevTxn(node.FinalFields, node.PreviousTxnID, node.PreviousTxnLgrSeq)
-		if len(node.PreviousFields) == 0 {
-			node.PreviousFields = nil
-		}
-		if len(node.FinalFields) == 0 {
-			node.FinalFields = nil
-		}
-		return node, nil
-	}
-
-	// Extract fields from both original and current
-	origFields, err := extractLedgerFields(original, entryType)
+	origEntry, err := metadataEntry(entryType)
 	if err != nil {
 		return node, err
 	}
-
-	currFields, err := extractLedgerFields(current, entryType)
+	currEntry, err := metadataEntry(entryType)
 	if err != nil {
 		return node, err
 	}
-
-	// Extract PreviousTxnID and PreviousTxnLgrSeq from original
-	if prevTxnID, ok := origFields["PreviousTxnID"]; ok {
-		node.PreviousTxnID = fmt.Sprintf("%v", prevTxnID)
+	if err := origEntry.Decode(original); err != nil {
+		return node, err
 	}
-	if prevTxnLgrSeq, ok := origFields["PreviousTxnLgrSeq"]; ok {
-		if seq, ok := prevTxnLgrSeq.(uint32); ok {
-			node.PreviousTxnLgrSeq = seq
-		} else if seq, ok := prevTxnLgrSeq.(float64); ok {
-			node.PreviousTxnLgrSeq = uint32(seq)
-		} else if seq, ok := prevTxnLgrSeq.(int); ok {
-			node.PreviousTxnLgrSeq = uint32(seq)
-		}
+	if err := currEntry.Decode(current); err != nil {
+		return node, err
 	}
-
-	// PreviousFields: fields that changed between original and current (sMD_ChangeOrig)
-	// This captures any modifications made before deletion
-	for name, origValue := range origFields {
-		if shouldIncludeInPreviousFields(name) {
-			if currValue, exists := currFields[name]; exists {
-				if !fieldsEqual(origValue, currValue) {
-					node.PreviousFields[name] = origValue
-				}
-			} else {
-				// Field was removed before deletion
-				node.PreviousFields[name] = origValue
-			}
-		}
-	}
-
-	// FinalFields: fields from current state with sMD_Always | sMD_DeleteFinal
-	for name, value := range currFields {
-		if shouldIncludeInDeleteFinal(name) {
-			node.FinalFields[name] = value
-		}
-	}
+	node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+	currEntry.EmitDeletePreviousFields(origEntry, node.PreviousFields)
+	currEntry.EmitDeleteFinalFields(node.FinalFields)
 	restoreDeletedNodePrevTxn(node.FinalFields, node.PreviousTxnID, node.PreviousTxnLgrSeq)
-
-	// Clean up empty maps
 	if len(node.PreviousFields) == 0 {
 		node.PreviousFields = nil
 	}
 	if len(node.FinalFields) == 0 {
 		node.FinalFields = nil
 	}
-
 	return node, nil
 }
 
@@ -1035,9 +928,9 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 //     same tx (e.g. a resting offer partially then fully consumed during
 //     crossing) holds the current tx as PreviousTxnID in Current — the correct
 //     FinalFields value is the prior pointer.
-//   - An entry whose serializer drops PreviousTxnID (e.g. NFTokenPage rebuilt
-//     during a page merge before deletion) holds no pointer in Current at all,
-//     so the field must be inserted, not just overwritten.
+//   - An entry whose serializer resets PreviousTxnID (e.g. NFTokenPage rebuilt
+//     during a page merge before deletion) holds the required zero default in
+//     Current, so the stored pointer must replace it.
 //
 // In both cases prevID/prevSeq come from the pre-tx Original, which equals the
 // stored pointer rippled's curNode reports (an erased node is never re-threaded,
@@ -1049,27 +942,6 @@ func restoreDeletedNodePrevTxn(finalFields map[string]any, prevID string, prevSe
 	}
 	finalFields["PreviousTxnID"] = prevID
 	finalFields["PreviousTxnLgrSeq"] = prevSeq
-}
-
-// fieldsEqual compares two field values
-func fieldsEqual(a, b any) bool {
-	// For maps (like Amount), compare recursively
-	aMap, aIsMap := a.(map[string]any)
-	bMap, bIsMap := b.(map[string]any)
-	if aIsMap && bIsMap {
-		if len(aMap) != len(bMap) {
-			return false
-		}
-		for k, v := range aMap {
-			if bv, ok := bMap[k]; !ok || !fieldsEqual(v, bv) {
-				return false
-			}
-		}
-		return true
-	}
-
-	// Direct comparison
-	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
 // Note: isDefaultValue is defined in state.go

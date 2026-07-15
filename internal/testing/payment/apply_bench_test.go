@@ -4,25 +4,13 @@ import (
 	"testing"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // BenchmarkApply_PaymentXRP measures allocs/op for an XRP-to-XRP payment
 // flowing through the engine and its metadata builder. Two AccountRoots are
-// modified per call; the typed fast path skips the per-side
-// `binarycodec.Decode -> map[string]any` step the generic path uses to
-// compute PreviousFields / FinalFields.
+// modified per call, exercising typed PreviousFields / FinalFields emission.
 func BenchmarkApply_PaymentXRP(b *testing.B) {
-	b.Run("typed", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(false)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		benchPaymentXRP(b)
-	})
-	b.Run("generic", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(true)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		benchPaymentXRP(b)
-	})
+	benchPaymentXRP(b)
 }
 
 func benchPaymentXRP(b *testing.B) {

@@ -19,7 +19,7 @@ import (
 
 var (
 	orcTen  = big.NewInt(10)
-	orc1e16 = new(big.Int).Add(maxMantissa, big.NewInt(1)) // 10^16
+	orc1e19 = new(big.Int).Add(maxMantissa, big.NewInt(1))
 )
 
 func orcPow10(n int) *big.Int {
@@ -46,14 +46,14 @@ func orcExp(e int32, lo, hi int) int32 {
 	return ((e%span)+span)%span + int32(lo)
 }
 
-// orcExp16 returns the exponent e such that 1e15 <= (num/den)/10^e < 1e16,
-// chosen from the exact value (num, den > 0) so it is correct at boundaries.
-func orcExp16(num, den *big.Int) int {
-	exp := len(num.String()) - len(den.String()) - 15
+// orcNormalizedExponent returns the exponent e such that the exact value's
+// coefficient lies in the large Number range [1e18, 1e19).
+func orcNormalizedExponent(num, den *big.Int) int {
+	exp := len(num.String()) - len(den.String()) - numberRangeLog
 	for orcValueCmp(num, den, minMantissa, exp) < 0 {
 		exp--
 	}
-	for orcValueCmp(num, den, orc1e16, exp) >= 0 {
+	for orcValueCmp(num, den, orc1e19, exp) >= 0 {
 		exp++
 	}
 	return exp
@@ -72,8 +72,8 @@ func orcValueCmp(num, den, coef *big.Int, exp int) int {
 }
 
 // orcNormalize is the independent oracle for normalize(): it canonicalizes the
-// exact value mantissa*10^exponent to a 16-digit half-even mantissa, then
-// applies rippled's overflow (error) and underflow (canonical zero) rules.
+// exact value mantissa*10^exponent to a large-range half-even mantissa, then
+// applies rippled's signed-wire, overflow, and underflow rules.
 func orcNormalize(mantissa *big.Int, exponent int32) (mant *big.Int, exp int32, overflow bool) {
 	if mantissa.Sign() == 0 {
 		return big.NewInt(0), defaultZeroExp, false
@@ -90,16 +90,24 @@ func orcNormalize(mantissa *big.Int, exponent int32) (mant *big.Int, exp int32, 
 		den = orcPow10(int(-exponent))
 	}
 
-	e := orcExp16(num, den)
-	var m *big.Int
-	if e >= 0 {
-		m = orcDivHalfEven(num, new(big.Int).Mul(den, orcPow10(e)))
-	} else {
-		m = orcDivHalfEven(new(big.Int).Mul(num, orcPow10(-e)), den)
+	e := orcNormalizedExponent(num, den)
+	roundAt := func(exponent int) *big.Int {
+		if exponent >= 0 {
+			return orcDivHalfEven(num, new(big.Int).Mul(den, orcPow10(exponent)))
+		}
+		return orcDivHalfEven(new(big.Int).Mul(num, orcPow10(-exponent)), den)
 	}
+	m := roundAt(e)
 	if m.Cmp(maxMantissa) > 0 { // rounding carried into the next decade
 		m.Div(m, orcTen)
 		e++
+	}
+	if m.Cmp(maxWireMantissa) > 0 {
+		if int64(e) >= int64(maxExponent) {
+			return nil, 0, true
+		}
+		m = roundAt(e + 1)
+		m.Mul(m, orcTen)
 	}
 
 	switch {
@@ -121,17 +129,17 @@ func FuzzNumberNormalize(f *testing.F) {
 		mant string
 		e    int32
 	}{
-		{"12345678901234575", 0},   // tie, odd -> round up
-		{"12345678901234565", 0},   // tie, even -> stays
-		{"12345678901234566", 0},   // above half
-		{"12345678901234564", 0},   // below half
-		{"99999999999999995", 0},   // round-up carries the exponent
-		{"1234567890123456501", 0}, // multi-digit, above half
-		{"1234567890123456500", 0}, // multi-digit, exactly half, even
-		{"1234567890123457500", 0}, // multi-digit, exactly half, odd
-		{"-12345678901234575", 0},  // sign preserved through rounding
-		{"9999999999999999", 0},    // already canonical
-		{"1000000000000000", 0},
+		{"12345678901234567895", 0},   // tie, odd -> round up
+		{"12345678901234567885", 0},   // tie, even -> stays
+		{"12345678901234567896", 0},   // above half
+		{"12345678901234567894", 0},   // below half
+		{"99999999999999999995", 0},   // round-up carries the exponent
+		{"1234567890123456789501", 0}, // multi-digit, above half
+		{"1234567890123456788500", 0}, // multi-digit, exactly half, even
+		{"1234567890123456789500", 0}, // multi-digit, exactly half, odd
+		{"-12345678901234567895", 0},  // sign preserved through rounding
+		{"9999999999999999999", 0},    // already canonical
+		{"1000000000000000000", 0},
 		{"1", -32768},                // underflow at the exponent floor
 		{"5000000000000000", -40000}, // exponent below minimum
 		{"5", 40000},                 // scales up past the exponent ceiling
@@ -173,8 +181,8 @@ func FuzzNumberNormalize(f *testing.F) {
 func FuzzNumberRoundTrip(f *testing.F) {
 	for _, s := range []string{
 		"0", "3.14", "-3.14", "123", "-123",
-		"1000000000000000", "12345678901234575",
-		"1e-20", "1e-10", "-7.5", "0.0000001", "9999999999999999",
+		"1000000000000000000", "12345678901234567895",
+		"1e-20", "1e-10", "-7.5", "0.0000001", "9999999999999999999",
 	} {
 		f.Add(s)
 	}

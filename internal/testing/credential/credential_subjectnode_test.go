@@ -1,10 +1,3 @@
-// Regression test for the directory-node bug class (see issue #729), Credential
-// variant. sfIssuerNode and sfSubjectNode are soeREQUIRED on ltCREDENTIAL, so
-// rippled always serializes them — including SubjectNode:0 for a self-issued
-// credential (subject == issuer), where doApply leaves it at the template
-// default instead of inserting into the subject's directory. goXRPL previously
-// omitted SubjectNode in that case, diverging the Credential SLE → account_hash
-// fork. Reference: rippled Credentials.cpp:175,180-195; ledger_entries.macro.
 package credential_test
 
 import (
@@ -18,14 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCredentialCreate_SelfIssued_EmitsSubjectNode(t *testing.T) {
+func TestCredentialCreate_SelfIssued_OmitsSubjectNode(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	alice := jtx.NewAccount("alice")
 	env.FundAmount(alice, uint64(jtx.XRP(5000)))
 	env.Close()
 
 	credType := "abcde"
-	// Self-issued: issuer == subject == alice.
 	r := env.Submit(credential.CredentialCreate(alice, alice, credType).Build())
 	jtx.RequireTxSuccess(t, r)
 
@@ -35,10 +27,32 @@ func TestCredentialCreate_SelfIssued_EmitsSubjectNode(t *testing.T) {
 	fields, err := binarycodec.Decode(hex.EncodeToString(data))
 	require.NoError(t, err)
 
-	// Both node fields must be present in the serialized state, even at 0.
+	_, hasIssuerNode := fields["IssuerNode"]
+	require.True(t, hasIssuerNode, "IssuerNode must be present")
+	_, hasSubjectNode := fields["SubjectNode"]
+	require.False(t, hasSubjectNode, "self-issued credential must omit SubjectNode")
+}
+
+func TestCredentialCreate_CrossAccount_EmitsZeroSubjectNode(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	issuer := jtx.NewAccount("issuer")
+	subject := jtx.NewAccount("subject")
+	env.Fund(issuer, subject)
+	env.Close()
+
+	credType := "abcde"
+	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
+	jtx.RequireTxSuccess(t, r)
+
+	key := keylet.Credential(subject.ID, issuer.ID, []byte(credType))
+	data, err := env.LedgerEntry(key)
+	require.NoError(t, err)
+	fields, err := binarycodec.Decode(hex.EncodeToString(data))
+	require.NoError(t, err)
+
 	_, hasIssuerNode := fields["IssuerNode"]
 	require.True(t, hasIssuerNode, "IssuerNode must be present")
 	subjectNode, hasSubjectNode := fields["SubjectNode"]
-	require.True(t, hasSubjectNode, "self-issued credential must still serialize SubjectNode (rippled emits 0)")
-	require.Equal(t, "0", subjectNode, "self-issued SubjectNode is page 0")
+	require.True(t, hasSubjectNode, "cross-account credential must include SubjectNode")
+	require.Equal(t, "0", subjectNode, "the first subject directory page is zero")
 }
