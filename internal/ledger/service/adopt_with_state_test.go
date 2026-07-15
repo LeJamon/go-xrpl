@@ -112,6 +112,8 @@ func TestAdoptLedgerWithState_PreservesTxMap(t *testing.T) {
 	adopted, err := svc.GetLedgerByHash(adoptedHash)
 	require.NoError(t, err)
 	require.NotNil(t, adopted)
+	assert.False(t, adopted.IsValidated(),
+		"peer-adopted ledger must remain closed until validation quorum")
 
 	gotTxRoot, err := adopted.TxMapHash()
 	require.NoError(t, err)

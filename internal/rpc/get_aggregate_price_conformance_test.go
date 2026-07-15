@@ -161,7 +161,7 @@ func TestGetAggregatePriceWalksExactlyThreePriorOracleVersions(t *testing.T) {
 			}
 			encoded, err := json.Marshal(params)
 			require.NoError(t, err)
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
@@ -186,7 +186,7 @@ func callAggregatePrice(t *testing.T, service types.LedgerService, request map[s
 	t.Helper()
 	encoded, err := json.Marshal(request)
 	require.NoError(t, err)
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -266,7 +266,13 @@ func aggregateOracleMetadata(t *testing.T, fields map[string]any, previousHash s
 		inner["PreviousTxnLgrSeq"] = previousSequence
 	}
 	blob, err := json.Marshal(map[string]any{
-		"tx_json": map[string]any{},
+		"tx_json": map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+		},
 		"meta": map[string]any{
 			"AffectedNodes": []any{map[string]any{"ModifiedNode": inner}},
 		},

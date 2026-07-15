@@ -83,7 +83,7 @@ type PeerSource interface {
 }
 
 // RPC Context contains request-specific information
-type RPCContext struct {
+type RpcContext struct {
 	Context    context.Context
 	Role       Role
 	ApiVersion int
@@ -98,10 +98,14 @@ type RPCContext struct {
 	// Services is the per-request service container handlers read to
 	// reach the ledger service, dispatcher, manifest cache, etc. The
 	// HTTP/WebSocket dispatchers populate this from the server's wired
-	// container; tests construct RPCContext directly with whatever
+	// container; tests construct RpcContext directly with whatever
 	// fixtures they need. Replaces the former package-level
 	// types.Services global.
 	Services *ServiceContainer
+	// LoadCost is the resource charge selected while handling the request.
+	// Dispatch initializes it to the reference cost; handlers raise it only
+	// after reaching the equivalent rippled work boundary.
+	LoadCost uint32
 	// LoadWarning is set by the post-dispatch load charge when the caller
 	// crosses the resource warn threshold. Transport writers surface it as
 	// the top-level warning:"load" field, mirroring rippled's
@@ -111,7 +115,7 @@ type RPCContext struct {
 
 // Method handler interface - all RPC methods implement this
 type MethodHandler interface {
-	Handle(ctx *RPCContext, params json.RawMessage) (any, *RPCError)
+	Handle(ctx *RpcContext, params json.RawMessage) (any, *RpcError)
 	RequiredRole() Role
 	SupportedApiVersions() []int
 	RequiredCondition() Condition
@@ -151,6 +155,10 @@ type LedgerIndex string
 
 // UnmarshalJSON implements custom unmarshaling for LedgerIndex
 func (li *LedgerIndex) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*li = ""
+		return nil
+	}
 	if string(data) == "-0" {
 		*li = "0"
 		return nil
@@ -216,7 +224,7 @@ type WebSocketCommand struct {
 	Request map[string]any
 }
 
-// WebSocketResponse represents an XRPL WebSocket API response
+// WebSocketResponse represents an XRPL WebSocket API response.
 type WebSocketResponse struct {
 	Status       string          `json:"status"`
 	Type         string          `json:"type"`
@@ -229,10 +237,7 @@ type WebSocketResponse struct {
 	Error        string          `json:"error,omitempty"`
 	ErrorCode    int             `json:"error_code,omitempty"`
 	ErrorMessage string          `json:"error_message,omitempty"`
-	// Request echoes the original command back on an error reply. rippled's
-	// WS missingCommand path returns the unparsed request alongside the
-	// error token (ServerHandler.cpp:457).
-	Request any `json:"request,omitempty"`
+	Request      any             `json:"request,omitempty"`
 }
 
 // Subscription types for WebSocket streams. Rippled's per-book stream
@@ -325,6 +330,17 @@ func (r *SubscriptionRequest) WireArrays() WireSubscriptionArrays {
 	}
 }
 
+// WithoutBooks returns a copy that preserves every wire field except books.
+func (r SubscriptionRequest) WithoutBooks() SubscriptionRequest {
+	r.Books = nil
+	if r.wire != nil {
+		wire := *r.wire
+		wire.books = nil
+		r.wire = &wire
+	}
+	return r
+}
+
 // UnmarshalJSON captures the raw JSON of the array-valued fields before
 // decoding the typed fields, so the subscription manager can apply rippled's
 // per-field, per-shape error codes — a typed slice cannot tell an absent field
@@ -396,7 +412,9 @@ type BookRequest struct {
 	TakerPays json.RawMessage `json:"taker_pays"`
 	TakerGets json.RawMessage `json:"taker_gets"`
 	Snapshot  bool            `json:"snapshot,omitempty"`
+	StateNow  bool            `json:"state_now,omitempty"`
 	Both      bool            `json:"both,omitempty"`
+	BothSides bool            `json:"both_sides,omitempty"`
 	// Taker is the perspective account used when computing snapshot
 	// quality (sfTaker on rippled Subscribe.cpp:282-299). Optional; an
 	// empty value means "anonymous" — the same default rippled uses

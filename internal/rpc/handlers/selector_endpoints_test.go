@@ -123,7 +123,7 @@ func newSelectorEndpointService(t *testing.T) (*selectorEndpointService, string)
 func TestResolvePathFindLedgerSelectors(t *testing.T) {
 	t.Run("omitted uses closed view without metadata", func(t *testing.T) {
 		service, _ := newSelectorEndpointService(t)
-		ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
+		ctx := &types.RpcContext{Services: &types.ServiceContainer{Ledger: service}}
 		view, meta, rpcErr := resolvePathFindLedger(ctx, types.LedgerSpecifier{}, false)
 		if rpcErr != nil || view != service.closedView || meta != nil {
 			t.Fatalf("view=%#v meta=%#v error=%#v", view, meta, rpcErr)
@@ -152,7 +152,7 @@ func TestResolvePathFindLedgerSelectors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			service, hash := newSelectorEndpointService(t)
-			ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
+			ctx := &types.RpcContext{Services: &types.ServiceContainer{Ledger: service}}
 			spec, hasSelector, parseErr := parseLedgerSpecifier(json.RawMessage(test.probe(hash)))
 			if parseErr != nil {
 				t.Fatal(parseErr)
@@ -186,7 +186,7 @@ func TestAMMInfoResolvesSelectorBeforeParameters(t *testing.T) {
 	t.Run("missing ledger outranks invalid AMM parameters", func(t *testing.T) {
 		service, _ := newSelectorEndpointService(t)
 		delete(service.readersBySeq, service.current)
-		ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
+		ctx := &types.RpcContext{Services: &types.ServiceContainer{Ledger: service}}
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 		if rpcErr == nil || rpcErr.ErrorString != "noNetwork" {
 			t.Fatalf("error = %#v", rpcErr)
@@ -198,7 +198,7 @@ func TestAMMInfoResolvesSelectorBeforeParameters(t *testing.T) {
 
 	t.Run("valid selector is resolved once before parameter error", func(t *testing.T) {
 		service, _ := newSelectorEndpointService(t)
-		ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
+		ctx := &types.RpcContext{Services: &types.ServiceContainer{Ledger: service}}
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 		if rpcErr == nil || rpcErr.ErrorString != "invalidParams" {
 			t.Fatalf("error = %#v", rpcErr)

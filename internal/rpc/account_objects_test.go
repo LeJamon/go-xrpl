@@ -49,7 +49,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -193,7 +193,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -322,7 +322,7 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -381,7 +381,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -483,7 +483,7 @@ func TestAccountObjectsTypeSelectionConformance(t *testing.T) {
 					Validated:   true,
 				}, nil
 			}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
@@ -520,7 +520,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -655,7 +655,7 @@ func TestAccountObjectsDeletionBlockerTypeIntersection(t *testing.T) {
 					Marker:      "next",
 				}, nil
 			}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
@@ -696,7 +696,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -840,7 +840,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -942,7 +942,7 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -954,11 +954,11 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Ledger is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -970,7 +970,7 @@ func TestAccountObjectsServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -1000,7 +1000,7 @@ func TestAccountObjectsInvalidAccountTypes(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1051,7 +1051,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1113,7 +1113,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1157,7 +1157,8 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Failed to get account objects")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
+		assert.NotContains(t, rpcErr.Message, "database connection failed")
 	})
 }
 
@@ -1169,7 +1170,7 @@ func TestAccountObjectsAccountEcho(t *testing.T) {
 	services := newAccountObjectsTestServices(mock)
 
 	method := &handlers.AccountObjectsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1229,7 +1230,7 @@ func TestAccountObjectsApiVersions(t *testing.T) {
 
 	for _, version := range versions {
 		t.Run("api_version_"+string(rune('0'+version)), func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,

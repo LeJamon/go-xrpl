@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -13,7 +12,7 @@ import (
 // GatewayBalancesMethod handles the gateway_balances RPC method
 type GatewayBalancesMethod struct{ BaseHandler }
 
-func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -40,16 +39,16 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		var valid bool
 		account, valid = jsonCppStringRaw(accountRaw)
 		if !valid {
-			return nil, types.RPCErrorActMalformed("Account malformed.")
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 	} else if identRaw, ok := rawFields["ident"]; ok {
 		var valid bool
 		account, valid = jsonCppStringRaw(identRaw)
 		if !valid {
-			return nil, types.RPCErrorActMalformed("Account malformed.")
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 	} else {
-		return nil, types.RPCErrorMissingField("account")
+		return nil, types.RpcErrorMissingField("account")
 	}
 
 	var request struct {
@@ -60,7 +59,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		return nil, err
 	}
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.")
+		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 	lookupExtra := ledgerEntryResponseFields(ledger, validated)
 	lookupExtra["account"] = account
@@ -69,12 +68,13 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 			return nil, accountErr.WithExtra(lookupExtra)
 		}
 	}
-	invalidHotWallet := func() *types.RPCError {
+	invalidHotWallet := func() *types.RpcError {
 		if ctx.ApiVersion < 2 {
-			return types.RPCErrorInvalidHotWallet().WithExtra(lookupExtra)
+			return types.RpcErrorInvalidHotWallet().WithExtra(lookupExtra)
 		}
-		return types.RPCErrorInvalidParams("Invalid parameters.").WithExtra(lookupExtra)
+		return types.RpcErrorInvalidParams("Invalid parameters.").WithExtra(lookupExtra)
 	}
+	setLoadHeavy(ctx)
 
 	// Parse hotwallet parameter - can be a string or array of strings
 	var hotWallets []string
@@ -110,18 +110,19 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 	)
 	if err != nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			setLoadReference(ctx)
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.").WithExtra(lookupExtra)
+			return nil, types.RpcErrorActNotFound("Account not found.").WithExtra(lookupExtra)
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RPCErrorActMalformed("Account malformed.")
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidHotWallet) {
 			return nil, invalidHotWallet()
 		}
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get gateway balances: %v", err))
+		return nil, rpcInternalError("gateway_balances: ledger query failed", err)
 	}
 
 	// Build response matching rippled's GatewayBalances.cpp format: rippled only

@@ -7,7 +7,55 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
+
+func TestHeaderConstructorsPreserveValidationState(t *testing.T) {
+	closed, err := NewClosedFromHeader(
+		header.LedgerHeader{},
+		shamap.New(shamap.TypeState),
+		shamap.New(shamap.TypeTransaction),
+		drops.Fees{},
+	)
+	if err != nil {
+		t.Fatalf("NewClosedFromHeader: %v", err)
+	}
+	if closed.State() != StateClosed || closed.IsValidated() {
+		t.Fatalf("unvalidated header created state %s", closed.State())
+	}
+	if err = closed.SetValidated(); err != nil {
+		t.Fatalf("promote closed ledger: %v", err)
+	}
+	if !closed.IsValidated() || !closed.Header().Validated {
+		t.Fatal("SetValidated did not promote the ledger and header together")
+	}
+
+	unvalidated, err := NewFromHeader(
+		header.LedgerHeader{},
+		shamap.New(shamap.TypeState),
+		shamap.New(shamap.TypeTransaction),
+		drops.Fees{},
+	)
+	if err != nil {
+		t.Fatalf("NewFromHeader: %v", err)
+	}
+	if unvalidated.State() != StateClosed || unvalidated.IsValidated() || unvalidated.Header().Validated {
+		t.Fatalf("unvalidated header created state %s", unvalidated.State())
+	}
+
+	validated, err := NewFromHeader(
+		header.LedgerHeader{Validated: true},
+		shamap.New(shamap.TypeState),
+		shamap.New(shamap.TypeTransaction),
+		drops.Fees{},
+	)
+	if err != nil {
+		t.Fatalf("NewFromHeader validated: %v", err)
+	}
+	if validated.State() != StateValidated || !validated.IsValidated() {
+		t.Fatalf("validated header created state %s", validated.State())
+	}
+}
 
 // newParentAt builds a closed parent ledger with the requested
 // (seq, resolution, closeAgree) — synthesized from genesis and a

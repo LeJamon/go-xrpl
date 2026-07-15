@@ -15,7 +15,7 @@ import (
 // call." branch), url from a non-admin → rpcNO_PERMISSION.
 type UnsubscribeMethod struct{ BaseHandler }
 
-func (m *UnsubscribeMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	request, svc, rpcErr := urlSubscriptionRequest(ctx, params, "unsubscribe")
 	if rpcErr != nil {
 		return nil, rpcErr

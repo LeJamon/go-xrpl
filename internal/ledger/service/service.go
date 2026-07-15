@@ -46,6 +46,9 @@ var (
 // Config holds configuration for the LedgerService
 type Config struct {
 	Standalone bool
+	// FetchDepth limits historical ledger serving relative to the closed ledger.
+	// Zero leaves serving unrestricted.
+	FetchDepth uint32
 
 	// NetworkID is the network identifier for this node.
 	// Legacy networks (ID <= 1024) reject transactions that include NetworkID.
@@ -180,6 +183,9 @@ type Service struct {
 	// a ledger that arrived later.
 	pendingValidationResolver PendingValidationResolver
 
+	// Invoked after the validated tip advances and after mu is released.
+	onValidatedLedger func(seq uint32, hash, parentHash [32]byte)
+
 	// heldAdoptions stashes out-of-order replay-delta adoptions (child seq
 	// before parent), keyed by the awaited parent seq so an adopt at N pops the
 	// child at N+1 and cascade-adopts it. Multi-level chains cascade via bounded
@@ -233,7 +239,7 @@ type Service struct {
 
 	// feeTrack is the local LoadFeeTrack mirror, always non-nil. Drivers:
 	//   - Raise/LowerLocalFee: per ledger close via tickLoadFeeLocked.
-	//   - SetRemoteFee: from OnLedgerFullyValidated, median of trusted LoadFees.
+	//   - SetRemoteFee: after validated-ledger promotion, median of trusted LoadFees.
 	//   - SetClusterFee: from the Overlay's TMCluster ingress.
 	feeTrack *feetrack.LoadFeeTrack
 
@@ -1195,31 +1201,76 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 	return s.ledgerHistoryRangeLocked()
 }
 
-// advertisableLedgerRangeLocked returns the held [first, last] span clamped up
-// to the online-delete retention floor, so we never advertise ledgers we won't
-// serve. ok is false when nothing durable remains. Caller holds s.mu.
-func (s *Service) advertisableLedgerRangeLocked() (first, last uint32, ok bool) {
-	minSeq, maxSeq, have := s.ledgerHistoryRangeLocked()
-	if !have {
+func (s *Service) contiguousValidatedRangeLocked() (first, last uint32, ok bool) {
+	if s.validatedLedger == nil {
 		return 0, 0, false
 	}
-	if s.minimumOnlineFunc != nil {
-		if floor := s.minimumOnlineFunc(); floor > minSeq {
-			minSeq = floor
+
+	last = s.validatedLedger.Sequence()
+	tip, found := s.ledgerHistory[last]
+	if !found || tip.Hash() != s.validatedLedger.Hash() {
+		return 0, 0, false
+	}
+
+	first = last
+	current := tip
+	for first > 0 {
+		previous, found := s.ledgerHistory[first-1]
+		if !found || current.ParentHash() != previous.Hash() {
+			break
 		}
+		first--
+		current = previous
 	}
-	if minSeq > maxSeq {
-		return 0, 0, false
-	}
-	return minSeq, maxSeq, true
+	return first, last, true
 }
 
-// AdvertisableLedgerRange is the locking wrapper over
-// advertisableLedgerRangeLocked, read by the peer status-change broadcast.
-func (s *Service) AdvertisableLedgerRange() (first, last uint32, ok bool) {
+func earliestFetch(closed, depth uint32) uint32 {
+	if depth == 0 || closed <= depth {
+		return 0
+	}
+	return closed - depth
+}
+
+// EarliestFetch returns the configured lower sequence bound for peer serving.
+func (s *Service) EarliestFetch() uint32 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.advertisableLedgerRangeLocked()
+	if s.closedLedger == nil {
+		return 0
+	}
+	return earliestFetch(s.closedLedger.Sequence(), s.config.FetchDepth)
+}
+
+// AdvertisableLedgerRange returns the parent-consistent retained range ending
+// at the validated ledger, clamped to the configured and online-delete floors.
+func (s *Service) AdvertisableLedgerRange() (first, last uint32, ok bool) {
+	s.mu.RLock()
+	first, last, ok = s.contiguousValidatedRangeLocked()
+	var closed uint32
+	if s.closedLedger != nil {
+		closed = s.closedLedger.Sequence()
+	}
+	depth := s.config.FetchDepth
+	minimumOnlineFunc := s.minimumOnlineFunc
+	s.mu.RUnlock()
+	if !ok {
+		return 0, 0, false
+	}
+
+	floor := earliestFetch(closed, depth)
+	if minimumOnlineFunc != nil {
+		if minimumOnline := minimumOnlineFunc(); minimumOnline > floor {
+			floor = minimumOnline
+		}
+	}
+	if floor > first {
+		first = floor
+	}
+	if first > last {
+		return 0, 0, false
+	}
+	return first, last, true
 }
 
 // GetValidatedLedgerIndex returns the highest validated ledger index
@@ -1311,16 +1362,9 @@ func (s *Service) QueueAllTxs() []*txq.CandidateDetails {
 // GetServerInfo returns basic server information
 func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	serverState := "full"
-	if s.serverStateFunc != nil {
-		serverState = s.serverStateFunc()
-	}
-
 	info := ServerInfo{
 		Standalone:      s.config.Standalone,
-		ServerState:     serverState,
+		ServerState:     "full",
 		CompleteLedgers: "",
 		NetworkID:       s.config.NetworkID,
 	}
@@ -1342,7 +1386,23 @@ func (s *Service) GetServerInfo() ServerInfo {
 		info.ValidatedLedgerCloseTime = protocol.RippleSeconds(s.validatedLedger.CloseTime())
 	}
 
-	if minSeq, maxSeq, ok := s.advertisableLedgerRangeLocked(); ok {
+	minSeq, maxSeq, haveRange := s.ledgerHistoryRangeLocked()
+	serverStateFunc := s.serverStateFunc
+	minimumOnlineFunc := s.minimumOnlineFunc
+	s.mu.RUnlock()
+
+	if serverStateFunc != nil {
+		info.ServerState = serverStateFunc()
+	}
+	if minimumOnlineFunc != nil {
+		if floor := minimumOnlineFunc(); floor > minSeq {
+			minSeq = floor
+		}
+	}
+	if minSeq > maxSeq {
+		haveRange = false
+	}
+	if haveRange {
 		if minSeq == maxSeq {
 			info.CompleteLedgers = strconv.FormatUint(uint64(minSeq), 10)
 		} else {

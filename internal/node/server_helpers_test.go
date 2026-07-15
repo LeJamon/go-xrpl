@@ -339,6 +339,48 @@ func TestBuildValidationEvent_ServerVersionDecimal(t *testing.T) {
 	}
 }
 
+func TestBuildValidationEvent_LoadFeePresence(t *testing.T) {
+	explicitZero := &consensus.Validation{}
+	explicitZero.SetLoadFee(0)
+	tests := []struct {
+		name       string
+		validation *consensus.Validation
+		wantJSON   string
+	}{
+		{name: "absent", validation: &consensus.Validation{}},
+		{name: "explicit zero", validation: explicitZero, wantJSON: "0"},
+		{name: "legacy non-zero literal", validation: &consensus.Validation{LoadFee: 320}, wantJSON: "320"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			event := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: test.validation}, nil, 0)
+			encoded, err := json.Marshal(event)
+			if err != nil {
+				t.Fatalf("marshal validation event: %v", err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatalf("decode validation event: %v", err)
+			}
+
+			loadFee, present := fields["load_fee"]
+			if test.wantJSON == "" {
+				if event.LoadFee != nil || present {
+					t.Fatalf("load_fee must be omitted: event=%v json=%s", event.LoadFee, encoded)
+				}
+				return
+			}
+			if event.LoadFee == nil || !present {
+				t.Fatalf("load_fee missing: event=%v json=%s", event.LoadFee, encoded)
+			}
+			if got := string(loadFee); got != test.wantJSON {
+				t.Fatalf("load_fee JSON = %s; want %s", got, test.wantJSON)
+			}
+		})
+	}
+}
+
 func TestAcceptedLedgerView_Nil(t *testing.T) {
 	v := newAcceptedLedgerView(nil)
 	if v.Sequence() != 0 || v.Hash() != ([32]byte{}) || v.CloseTime() != 0 || v.IsValidated() {

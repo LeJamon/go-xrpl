@@ -80,7 +80,7 @@ func TestTxSyntheticMetadata(t *testing.T) {
 				LedgerIndex: 2,
 				Validated:   true,
 			}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: apiVersion,
@@ -98,9 +98,11 @@ func TestTxSyntheticMetadata(t *testing.T) {
 
 func TestTxProjectsDeliverMax(t *testing.T) {
 	const txHash = "D2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	txJSON := validStoredPaymentTransaction()
+	txJSON["Amount"] = "100"
 	stored, err := json.Marshal(handlers.StoredTransaction{
-		TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
-		Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+		TxJSON: txJSON,
+		Meta:   validStoredMetadata(),
 	})
 	require.NoError(t, err)
 
@@ -115,7 +117,7 @@ func TestTxProjectsDeliverMax(t *testing.T) {
 				LedgerIndex: 4_594_095,
 				Validated:   true,
 			}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: apiVersion,
@@ -157,7 +159,7 @@ func TestAccountTxSyntheticMetadata(t *testing.T) {
 					Validated: true,
 				}, nil
 			}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: apiVersion,
@@ -203,7 +205,7 @@ func TestAccountTxDeliveredAmountUsesSourceTransaction(t *testing.T) {
 			Validated: true,
 		}, nil
 	}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -227,6 +229,15 @@ func TestTransactionEntryDoesNotInjectSyntheticMetadata(t *testing.T) {
 	ledger := newMockLedgerReaderTE(2)
 	mock.addLedger(ledger)
 
+	paymentTx := validStoredPaymentTransaction()
+	paymentTx["Amount"] = "100"
+	mptTx := map[string]any{
+		"TransactionType": "MPTokenIssuanceCreate",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"Sequence":        1,
+		"SigningPubKey":   "",
+	}
 	tests := []struct {
 		name   string
 		hash   string
@@ -235,21 +246,16 @@ func TestTransactionEntryDoesNotInjectSyntheticMetadata(t *testing.T) {
 		field  string
 	}{
 		{
-			name: "delivered amount",
-			hash: strings.Repeat("A", 64),
-			txJSON: map[string]any{
-				"Amount":          "100",
-				"TransactionType": "Payment",
-			},
-			meta:  map[string]any{"TransactionResult": "tesSUCCESS"},
-			field: "delivered_amount",
+			name:   "delivered amount",
+			hash:   strings.Repeat("A", 64),
+			txJSON: paymentTx,
+			meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+			field:  "delivered_amount",
 		},
 		{
-			name: "MPT issuance ID",
-			hash: strings.Repeat("B", 64),
-			txJSON: map[string]any{
-				"TransactionType": "MPTokenIssuanceCreate",
-			},
+			name:   "MPT issuance ID",
+			hash:   strings.Repeat("B", 64),
+			txJSON: mptTx,
 			meta: map[string]any{
 				"TransactionResult": "tesSUCCESS",
 				"AffectedNodes": []any{
@@ -277,7 +283,7 @@ func TestTransactionEntryDoesNotInjectSyntheticMetadata(t *testing.T) {
 
 		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
 			t.Run(tc.name+"/api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
-				ctx := &types.RPCContext{
+				ctx := &types.RpcContext{
 					Context:    context.Background(),
 					Role:       types.RoleGuest,
 					ApiVersion: apiVersion,
@@ -302,8 +308,10 @@ func TestTransactionEntryDoesNotInjectSyntheticMetadata(t *testing.T) {
 
 func TestTransactionEntryProjectsDeliverMax(t *testing.T) {
 	const txHash = "C2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	txJSON := validStoredPaymentTransaction()
+	txJSON["Amount"] = "100"
 	stored, err := json.Marshal(handlers.StoredTransaction{
-		TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
+		TxJSON: txJSON,
 		Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
 	})
 	require.NoError(t, err)
@@ -319,7 +327,7 @@ func TestTransactionEntryProjectsDeliverMax(t *testing.T) {
 
 	for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
 		t.Run("api_v"+strconv.Itoa(apiVersion), func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: apiVersion,

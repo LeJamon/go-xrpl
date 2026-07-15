@@ -236,7 +236,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -352,7 +352,7 @@ func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -403,7 +403,7 @@ func TestDepositAuthorizedLedgerShape(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -470,7 +470,7 @@ func TestDepositAuthorizedSelfDeposit(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -511,7 +511,7 @@ func TestDepositAuthorizedNotAuthorized(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -552,7 +552,7 @@ func TestDepositAuthorizedWithPreauth(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -593,7 +593,7 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -633,7 +633,7 @@ func TestDepositAuthorizedReciprocal(t *testing.T) {
 // TestDepositAuthorizedServiceUnavailable tests response when ledger service is unavailable
 func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -649,7 +649,7 @@ func TestDepositAuthorizedServiceUnavailable(t *testing.T) {
 	resp, err := method.Handle(ctx, paramsJSON)
 
 	require.NotNil(t, err)
-	assert.Contains(t, err.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", err.Message)
 	assert.Nil(t, resp)
 }
 
@@ -681,7 +681,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -777,7 +777,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 	services := newDepositAuthorizedTestServices(mock)
 
 	method := &handlers.DepositAuthorizedMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

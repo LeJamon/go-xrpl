@@ -28,7 +28,7 @@ func TestValidatorsResponseStructure(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidatorsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -65,7 +65,7 @@ func TestValidatorsEmptyList(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidatorsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -101,7 +101,7 @@ func TestValidatorsDisabledQuorumUsesRippledWireValue(t *testing.T) {
 		ValidationQuorum: func() int { return math.MaxInt },
 	}
 	method := &handlers.ValidatorsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context: context.Background(), Role: types.RoleAdmin,
 		ApiVersion: types.ApiVersion1, Services: services,
 	}
@@ -127,7 +127,7 @@ func TestValidatorsUsesEffectiveTrustedKeys(t *testing.T) {
 		},
 	}
 
-	result, rpcErr := (&handlers.ValidatorsMethod{}).Handle(&types.RPCContext{
+	result, rpcErr := (&handlers.ValidatorsMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -174,7 +174,7 @@ func TestValidatorsWithParams(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidatorsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -203,7 +203,7 @@ func TestValidationCreateReturnsKeyPair(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidationCreateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -245,7 +245,7 @@ func TestValidationCreateWithSecret(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ValidationCreateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -282,7 +282,7 @@ func TestValidationCreateWithSecret(t *testing.T) {
 
 // callValidationCreate invokes validation_create with the given secret and
 // returns the successful result map, failing the test otherwise.
-func callValidationCreate(t *testing.T, method *handlers.ValidationCreateMethod, ctx *types.RPCContext, secret string) map[string]any {
+func callValidationCreate(t *testing.T, method *handlers.ValidationCreateMethod, ctx *types.RpcContext, secret string) map[string]any {
 	t.Helper()
 	params, err := json.Marshal(map[string]any{"secret": secret})
 	require.NoError(t, err)
@@ -299,7 +299,7 @@ func callValidationCreate(t *testing.T, method *handlers.ValidationCreateMethod,
 // family seed.
 func TestValidationCreateHexSeed(t *testing.T) {
 	method := &handlers.ValidationCreateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -325,7 +325,7 @@ func TestValidationCreateHexSeed(t *testing.T) {
 // Seed.cpp:102-109) instead of being silently hashed as a passphrase.
 func TestValidationCreateRejectsKeyTokens(t *testing.T) {
 	method := &handlers.ValidationCreateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -348,7 +348,7 @@ func TestValidationCreateRejectsKeyTokens(t *testing.T) {
 // present empty one (Seed.cpp:99-100).
 func TestValidationCreateEmptySecret(t *testing.T) {
 	method := &handlers.ValidationCreateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -399,7 +399,7 @@ func TestConsensusInfoResponseStructure(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ConsensusInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -458,7 +458,7 @@ func TestConsensusInfoWithParams(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.ConsensusInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -491,7 +491,7 @@ func TestStopReturnsStoppingMessage(t *testing.T) {
 	}
 
 	method := &handlers.StopMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -545,7 +545,7 @@ func TestStopMethodMetadata(t *testing.T) {
 // When the service container is not initialized, stop should return an internal error.
 func TestStopServiceUnavailable(t *testing.T) {
 	method := &handlers.StopMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -558,10 +558,8 @@ func TestStopServiceUnavailable(t *testing.T) {
 	require.NotNil(t, rpcErr, "Expected RPC error when service unavailable")
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
-	assert.Equal(t, types.InternalErrorMessage, rpcErr.Message,
-		"Wire message must be the fixed rippled string")
-	assert.Contains(t, rpcErr.LogDetail(), "Shutdown function not available",
-		"Detail is retained server-side for logging")
+	assert.Equal(t, "Internal error.", rpcErr.Message,
+		"internal error text must remain canonical")
 }
 
 // TestStopShutdownFuncNil tests behavior when ShutdownFunc is nil.
@@ -574,7 +572,7 @@ func TestStopShutdownFuncNil(t *testing.T) {
 	services.ShutdownFunc = nil
 
 	method := &handlers.StopMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -587,10 +585,8 @@ func TestStopShutdownFuncNil(t *testing.T) {
 	require.NotNil(t, rpcErr, "Expected RPC error when shutdown func nil")
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code,
 		"Should return internal error code")
-	assert.Equal(t, types.InternalErrorMessage, rpcErr.Message,
-		"Wire message must be the fixed rippled string")
-	assert.Contains(t, rpcErr.LogDetail(), "Shutdown function not available",
-		"Detail is retained server-side for logging")
+	assert.Equal(t, "Internal error.", rpcErr.Message,
+		"internal error text must remain canonical")
 }
 
 // TestStopWithParams tests that providing params does not affect stop behavior.
@@ -604,7 +600,7 @@ func TestStopWithParams(t *testing.T) {
 	}
 
 	method := &handlers.StopMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

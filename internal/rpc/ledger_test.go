@@ -2,10 +2,13 @@ package rpc
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -136,6 +139,22 @@ func newDefaultLedgerReader(seq uint32, validated bool) *mockLedgerReader {
 	}
 }
 
+func expectedLedgerHeaderHex(l *mockLedgerReader) string {
+	data := make([]byte, 0, 118)
+	data = binary.BigEndian.AppendUint32(data, l.Sequence())
+	data = binary.BigEndian.AppendUint64(data, l.TotalDrops())
+	parentHash := l.ParentHash()
+	txHash := l.TxMapHash()
+	stateHash := l.StateMapHash()
+	data = append(data, parentHash[:]...)
+	data = append(data, txHash[:]...)
+	data = append(data, stateHash[:]...)
+	data = binary.BigEndian.AppendUint32(data, uint32(l.ParentCloseTime()))
+	data = binary.BigEndian.AppendUint32(data, uint32(l.CloseTime()))
+	data = append(data, byte(l.CloseTimeResolution()), l.CloseFlags())
+	return strings.ToUpper(hex.EncodeToString(data))
+}
+
 // TestLedgerBasicRequest tests basic ledger request with default params
 // Based on rippled LedgerRPC_test.cpp testLedgerRequest()
 func TestLedgerBasicRequest(t *testing.T) {
@@ -153,45 +172,173 @@ func TestLedgerBasicRequest(t *testing.T) {
 		}
 		return nil, svcerr.ErrLedgerNotFound
 	}
+	mock.getLedgerDataFn = func(string, uint32, string) (*types.LedgerDataResult, error) {
+		return &types.LedgerDataResult{}, nil
+	}
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
 
-	t.Run("Default params return closed and open ledgers", func(t *testing.T) {
+	t.Run("Default params returns closed and open summaries", func(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr, "Expected no error, got: %v", rpcErr)
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		assert.NotContains(t, resp, "ledger")
-		closed := resp["closed"].(map[string]any)["ledger"].(map[string]any)
-		open := resp["open"].(map[string]any)["ledger"].(map[string]any)
+		closed := resp["closed"].(map[string]any)
+		open := resp["open"].(map[string]any)
 		assert.Equal(t, true, closed["closed"])
-		assert.Equal(t, false, open["closed"])
+		assert.Equal(t, "2", closed["ledger_index"])
+		assert.Contains(t, closed, "ledger_hash")
+		assert.Equal(t, map[string]any{
+			"parent_hash":  handlers.FormatLedgerHash(currentReader.ParentHash()),
+			"ledger_index": "3",
+			"closed":       false,
+		}, open)
 	})
 
-	t.Run("Options without selector are ignored", func(t *testing.T) {
-		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true,"accounts":true,"queue":true}`))
+	t.Run("Default params ignore dump flags", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true,"accounts":true,"transactions":true}`))
 		require.Nil(t, rpcErr)
 		resp := resultToMap(t, result)
 		assert.Contains(t, resp, "closed")
 		assert.Contains(t, resp, "open")
-		assert.NotContains(t, resp, "queue_data")
+		assert.NotContains(t, resp, "ledger")
 	})
 
-	t.Run("No selector ignores full permission gate and warns on type", func(t *testing.T) {
-		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true,"type":"account"}`))
+	for _, params := range []string{
+		`{"ledger_index":""}`,
+		`{"ledger":""}`,
+	} {
+		t.Run("Empty index selects current "+params, func(t *testing.T) {
+			result, rpcErr := method.Handle(ctx, json.RawMessage(params))
+			require.Nil(t, rpcErr)
+			resp := resultToMap(t, result)
+			assert.NotContains(t, resp, "closed")
+			assert.NotContains(t, resp, "open")
+			assert.Equal(t, float64(3), resp["ledger_current_index"])
+		})
+	}
+
+	for _, params := range []string{
+		`{"ledger_index":null}`,
+		`{"ledger_hash":""}`,
+		`{"ledger_hash":null}`,
+		`{"ledger":null}`,
+	} {
+		t.Run("Invalid present selector "+params, func(t *testing.T) {
+			result, rpcErr := method.Handle(ctx, json.RawMessage(params))
+			require.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		})
+	}
+
+	t.Run("Empty index does not bypass dump permission", func(t *testing.T) {
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"","full":true}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcNO_PERMISSION, rpcErr.Code)
+	})
+
+	t.Run("Malformed selector precedes dump permission", func(t *testing.T) {
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_hash":"DEADBEEF","full":true}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Queue requires open ledger", func(t *testing.T) {
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","queue":true}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+
+		_, rpcErr = method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","queue":true}`))
 		require.Nil(t, rpcErr)
-		resp := resultToMap(t, result)
-		assert.Contains(t, resp, "closed")
-		warnings, ok := resp["warnings"].([]any)
-		require.True(t, ok)
+	})
+
+	t.Run("Selected current response shape", func(t *testing.T) {
+		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+			ctx.ApiVersion = apiVersion
+			result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current"}`))
+			require.Nil(t, rpcErr)
+			ledgerIndex := any("3")
+			if apiVersion > 1 {
+				ledgerIndex = float64(3)
+			}
+			assert.Equal(t, map[string]any{
+				"ledger": map[string]any{
+					"parent_hash":  handlers.FormatLedgerHash(currentReader.ParentHash()),
+					"ledger_index": ledgerIndex,
+					"closed":       false,
+				},
+				"ledger_current_index": float64(3),
+				"validated":            false,
+			}, resultToMap(t, result))
+		}
+		ctx.ApiVersion = types.ApiVersion1
+	})
+
+	t.Run("Selected binary response shape", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","binary":true}`))
+		require.Nil(t, rpcErr)
+		assert.Equal(t, map[string]any{
+			"ledger":               map[string]any{"closed": false},
+			"ledger_current_index": float64(3),
+			"validated":            false,
+		}, resultToMap(t, result))
+
+		result, rpcErr = method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated","binary":true}`))
+		require.Nil(t, rpcErr)
+		assert.Equal(t, map[string]any{
+			"ledger": map[string]any{
+				"closed":      true,
+				"ledger_data": expectedLedgerHeaderHex(reader),
+			},
+			"ledger_hash":  handlers.FormatLedgerHash(reader.Hash()),
+			"ledger_index": float64(2),
+			"validated":    true,
+		}, resultToMap(t, result))
+	})
+
+	t.Run("Open full response omits closed", func(t *testing.T) {
+		ctx.Role = types.RoleAdmin
+		ctx.Unlimited = true
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","full":true}`))
+		require.Nil(t, rpcErr)
+		closeTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(currentReader.CloseTime()) * time.Second)
+		assert.Equal(t, map[string]any{
+			"ledger": map[string]any{
+				"accountState":          []any{},
+				"account_hash":          handlers.FormatLedgerHash(currentReader.StateMapHash()),
+				"close_flags":           float64(currentReader.CloseFlags()),
+				"close_time":            float64(currentReader.CloseTime()),
+				"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
+				"close_time_iso":        closeTime.Format(time.RFC3339),
+				"close_time_resolution": float64(currentReader.CloseTimeResolution()),
+				"ledger_hash":           handlers.FormatLedgerHash(currentReader.Hash()),
+				"ledger_index":          "3",
+				"parent_close_time":     float64(currentReader.ParentCloseTime()),
+				"parent_hash":           handlers.FormatLedgerHash(currentReader.ParentHash()),
+				"total_coins":           "99999999999999980",
+				"transaction_hash":      handlers.FormatLedgerHash(currentReader.TxMapHash()),
+				"transactions":          []any{},
+			},
+			"ledger_current_index": float64(3),
+			"validated":            false,
+		}, resultToMap(t, result))
+		ctx.Role = types.RoleGuest
+		ctx.Unlimited = false
+	})
+
+	t.Run("Deprecated type field emits warning", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"type":"ledger"}`))
+		require.Nil(t, rpcErr)
+		warnings := resultToMap(t, result)["warnings"].([]any)
 		require.Len(t, warnings, 1)
 		warning, ok := warnings[0].(map[string]any)
 		require.True(t, ok)
@@ -249,7 +396,7 @@ func TestLedgerBadInput(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -305,7 +452,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -361,7 +508,7 @@ func TestLedgerFullOption(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -443,8 +590,16 @@ func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+apiName, func(t *testing.T) {
 				txData, err := json.Marshal(handlers.StoredTransaction{
-					TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
-					Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+					TxJSON: map[string]any{
+						"TransactionType": "Payment",
+						"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+						"Destination":     "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
+						"Amount":          "100",
+						"Fee":             "10",
+						"Sequence":        1,
+						"SigningPubKey":   "",
+					},
+					Meta: map[string]any{"TransactionResult": "tesSUCCESS"},
 				})
 				require.NoError(t, err)
 
@@ -461,7 +616,7 @@ func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
 					require.Equal(t, uint32(4_594_094), seq)
 					return reader, nil
 				}
-				ctx := &types.RPCContext{
+				ctx := &types.RpcContext{
 					Context:    context.Background(),
 					Role:       types.RoleGuest,
 					ApiVersion: apiVersion,
@@ -526,7 +681,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 
 	// A non-unlimited (guest) role is denied: rippled gates accounts/full
 	// behind isUnlimited else rpcNO_PERMISSION (LedgerHandler.cpp:66-72).
-	guestCtx := &types.RPCContext{
+	guestCtx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -538,7 +693,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 
 	// An unlimited (admin) role is permitted and dumps the state into the
 	// ledger object's accountState array.
-	adminCtx := &types.RPCContext{
+	adminCtx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -614,7 +769,7 @@ func TestLedgerQueueRequiresOpenSelector(t *testing.T) {
 			return nil, errors.New("not found")
 		}
 	}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -654,7 +809,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -746,7 +901,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -763,48 +918,27 @@ func TestLedgerResponseStructure(t *testing.T) {
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
 
-	resp := resultToMap(t, result)
-
-	// Top-level fields
-	assert.Contains(t, resp, "ledger")
-	assert.Contains(t, resp, "ledger_hash")
-	assert.Contains(t, resp, "ledger_index")
-	assert.Contains(t, resp, "validated")
-
-	// Ledger object fields
-	ledger := resp["ledger"].(map[string]any)
-	assert.Contains(t, ledger, "account_hash")
-	assert.Contains(t, ledger, "close_flags")
-	assert.Contains(t, ledger, "close_time")
-	assert.Contains(t, ledger, "close_time_human")
-	assert.Contains(t, ledger, "close_time_iso")
-	assert.Contains(t, ledger, "close_time_resolution")
-	assert.Contains(t, ledger, "closed")
-	// rippled emits only "ledger_hash" on the inner ledger object
-	// (LedgerToJson.cpp:78). No top-level "hash" alias.
-	assert.NotContains(t, ledger, "hash")
-	assert.Contains(t, ledger, "ledger_hash")
-	assert.Contains(t, ledger, "ledger_index")
-	assert.Contains(t, ledger, "parent_close_time")
-	assert.Contains(t, ledger, "parent_hash")
-	assert.Contains(t, ledger, "total_coins")
-	assert.Contains(t, ledger, "transaction_hash")
-
-	// ledger_hash should be 64-char uppercase hex
-	ledgerHash, ok := resp["ledger_hash"].(string)
-	assert.True(t, ok, "ledger_hash should be a string")
-	assert.Equal(t, 64, len(ledgerHash), "ledger_hash should be 64 characters")
-
-	// validated should be true for validated ledger
-	assert.Equal(t, true, resp["validated"])
-
-	// closed should be true for validated ledger
-	assert.Equal(t, true, ledger["closed"])
-
-	// ledger_index inside ledger should be string representation
-	ledgerIndex, ok := ledger["ledger_index"].(string)
-	assert.True(t, ok, "ledger.ledger_index should be a string")
-	assert.Equal(t, "2", ledgerIndex)
+	closeTime := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(reader.CloseTime()) * time.Second)
+	assert.Equal(t, map[string]any{
+		"ledger": map[string]any{
+			"account_hash":          handlers.FormatLedgerHash(reader.StateMapHash()),
+			"close_flags":           float64(reader.CloseFlags()),
+			"close_time":            float64(reader.CloseTime()),
+			"close_time_human":      closeTime.Format("2006-Jan-02 15:04:05.000000000 UTC"),
+			"close_time_iso":        closeTime.Format(time.RFC3339),
+			"close_time_resolution": float64(reader.CloseTimeResolution()),
+			"closed":                true,
+			"ledger_hash":           handlers.FormatLedgerHash(reader.Hash()),
+			"ledger_index":          "2",
+			"parent_close_time":     float64(reader.ParentCloseTime()),
+			"parent_hash":           handlers.FormatLedgerHash(reader.ParentHash()),
+			"total_coins":           "99999999999999980",
+			"transaction_hash":      handlers.FormatLedgerHash(reader.TxMapHash()),
+		},
+		"ledger_hash":  handlers.FormatLedgerHash(reader.Hash()),
+		"ledger_index": float64(2),
+		"validated":    true,
+	}, resultToMap(t, result))
 }
 
 // TestLedgerServiceUnavailable tests behavior when ledger service is not available
@@ -812,7 +946,7 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerMethod{}
 
 	t.Run("Nil services", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -823,11 +957,11 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -838,7 +972,7 @@ func TestLedgerServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -853,7 +987,7 @@ func TestLedgerNilLedgerReturned(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -905,7 +1039,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

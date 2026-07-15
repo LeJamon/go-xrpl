@@ -132,7 +132,7 @@ func TestSubscribeConformanceCurrencyParsedTo160Bit(t *testing.T) {
 	const usdHex = "0000000000000000000000005553440000000000" // to_currency("USD")
 	const xrpHex = "0000000000000000000000000000000000000000"
 
-	subscribe := func(t *testing.T, params string) *types.RPCError {
+	subscribe := func(t *testing.T, params string) *types.RpcError {
 		t.Helper()
 		sm := newTestSubscriptionManager()
 		conn := newTestConnection("cur-conn")

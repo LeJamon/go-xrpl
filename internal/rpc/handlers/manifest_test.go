@@ -97,7 +97,7 @@ func servicesForCache(cache types.ManifestLookup) *types.ServiceContainer {
 	return &types.ServiceContainer{Manifests: cache}
 }
 
-func callManifestRPC(t *testing.T, services *types.ServiceContainer, publicKey string) (map[string]any, *types.RPCError) {
+func callManifestRPC(t *testing.T, services *types.ServiceContainer, publicKey string) (map[string]any, *types.RpcError) {
 	t.Helper()
 	var params json.RawMessage
 	if publicKey != "" {
@@ -107,7 +107,7 @@ func callManifestRPC(t *testing.T, services *types.ServiceContainer, publicKey s
 		params = json.RawMessage(`{}`)
 	}
 	method := &handlers.ManifestMethod{}
-	result, rpcErr := method.Handle(&types.RPCContext{Services: services}, params)
+	result, rpcErr := method.Handle(&types.RpcContext{Services: services}, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}

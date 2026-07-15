@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -73,32 +72,32 @@ var accountObjectLedgerTypes = []accountObjectLedgerType{
 	{"Loan", "loan", true},
 }
 
-func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RPCError) {
+func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RpcError) {
 	if !present {
 		return "", nil
 	}
 
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return "", types.RPCErrorExpectedField("type", "string")
+		return "", types.RpcErrorExpectedField("type", "string")
 	}
 	filter, ok := value.(string)
 	if !ok {
-		return "", types.RPCErrorExpectedField("type", "string")
+		return "", types.RpcErrorExpectedField("type", "string")
 	}
 
 	for _, ledgerType := range accountObjectLedgerTypes {
 		if strings.EqualFold(ledgerType.canonical, filter) || ledgerType.rpcName == filter {
 			if !ledgerType.valid {
-				return "", types.RPCErrorInvalidField("type")
+				return "", types.RpcErrorInvalidField("type")
 			}
 			return ledgerType.rpcName, nil
 		}
 	}
-	return "", types.RPCErrorInvalidField("type")
+	return "", types.RpcErrorInvalidField("type")
 }
 
-func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -133,7 +132,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			}
 		}
 	} else {
-		var typeErr *types.RPCError
+		var typeErr *types.RpcError
 		effectiveType, typeErr = chooseAccountObjectType(typeRaw, typePresent)
 		if typeErr != nil {
 			return nil, typeErr
@@ -144,7 +143,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		return nil, limitErr
 	}
 	markerStr := ""
-	var mErr *types.RPCError
+	var mErr *types.RpcError
 	if markerRaw, ok := fields["marker"]; ok {
 		markerStr, mErr = markerString(markerRaw)
 	}
@@ -158,12 +157,12 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
+			return nil, types.RpcErrorInvalidField("marker")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
+		return nil, rpcInternalError("account_objects: ledger query failed", err)
 	}
 
 	// Build account_objects array with deserialized fields. When
@@ -211,6 +210,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }
 

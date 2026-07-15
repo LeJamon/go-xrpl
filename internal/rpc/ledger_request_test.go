@@ -45,7 +45,7 @@ func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 		mockLedgerService: newMockLedgerService(),
 		byHash:            map[[32]byte]types.LedgerReader{hash: lr},
 	}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -74,7 +74,7 @@ func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
 		mockLedgerService: newMockLedgerService(), // validated ledger is seq 2
 		bySeq:             map[uint32]types.LedgerReader{1: lr},
 	}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -107,7 +107,7 @@ func TestLedgerRequest_AcquiringTargetReturnsBareSnapshot(t *testing.T) {
 	}
 	var gotHash [32]byte
 	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -147,7 +147,7 @@ func TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound(t *testing.T) {
 		"timeouts":    0,
 	}
 	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -175,7 +175,7 @@ func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
 	var hash [32]byte
 	hash[0] = 0x77
 	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

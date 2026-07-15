@@ -29,6 +29,7 @@ import (
 type ledgerLookup interface {
 	GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error)
 	GetLedgerBySequence(seq uint32) (*ledger.Ledger, error)
+	EarliestFetch() uint32
 }
 
 // MinimumOnlineFloor reports the lowest ledger sequence the node still retains
@@ -185,14 +186,16 @@ const fetchPackMaxObjects = 12288
 // haveLedgerHash: the requester supplies a ledger hash it HAS, and we serve
 // its predecessor ("want"). The reply carries want's header object (hash ==
 // want's ledger hash) followed by its account-state and, when non-empty, its
-// transaction SHAMap tree nodes, each tagged with want's sequence. Returns
-// (nil, nil) — drop, no charge — when have is unknown, not yet immutable, or
-// its parent is unavailable, matching the silent-drop stance of the other
-// serve paths.
+// transaction SHAMap tree nodes, each tagged with want's sequence. It returns
+// ErrFetchPackTooEarly below the configured serving range, or (nil, nil) when
+// have is unknown, not yet immutable, or its parent is unavailable.
 func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
 	have, err := p.svc.GetLedgerByHash(haveLedgerHash)
 	if err != nil || have == nil || !have.IsImmutable() {
 		return nil, nil
+	}
+	if have.Sequence() < p.svc.EarliestFetch() {
+		return nil, peermanagement.ErrFetchPackTooEarly
 	}
 	want, err := p.svc.GetLedgerByHash(have.Header().ParentHash)
 	if err != nil || want == nil || p.belowFloor(want.Sequence()) {

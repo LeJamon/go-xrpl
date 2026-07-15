@@ -20,7 +20,7 @@ import (
 // LedgerMethod handles the ledger RPC method.
 type LedgerMethod struct{ BaseHandler }
 
-func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
 		return nil, boolErr
 	}
@@ -30,13 +30,14 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	}
 	var request struct {
 		types.LedgerSpecifier
-		Accounts     bool `json:"accounts,omitempty"`
-		Full         bool `json:"full,omitempty"`
-		Transactions bool `json:"transactions,omitempty"`
-		Expand       bool `json:"expand,omitempty"`
-		OwnerFunds   bool `json:"owner_funds,omitempty"`
-		Binary       bool `json:"binary,omitempty"`
-		Queue        bool `json:"queue,omitempty"`
+		Accounts     bool            `json:"accounts,omitempty"`
+		Full         bool            `json:"full,omitempty"`
+		Transactions bool            `json:"transactions,omitempty"`
+		Expand       bool            `json:"expand,omitempty"`
+		OwnerFunds   bool            `json:"owner_funds,omitempty"`
+		Binary       bool            `json:"binary,omitempty"`
+		Queue        bool            `json:"queue,omitempty"`
+		Type         json.RawMessage `json:"type,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -65,11 +66,16 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 
 	if request.Full || request.Accounts {
 		if !ctx.Unlimited {
-			return nil, types.RPCErrorNoPermission("ledger")
+			return nil, types.RpcErrorNoPermission("ledger")
+		}
+		if request.Binary {
+			setLoadMedium(ctx)
+		} else {
+			setLoadHeavy(ctx)
 		}
 	}
 	if dumpQueue && targetLedger.IsClosed() {
-		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if request.Full {
 		request.Transactions = true
@@ -138,7 +144,7 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 			iterErr = targetLedger.ForEachTransaction(visit)
 		}
 		if iterErr != nil {
-			return nil, types.RPCErrorInternal(fmt.Sprintf("iterate ledger transactions: %v", iterErr))
+			return nil, rpcInternalError("ledger: transaction iteration failed", iterErr)
 		}
 		if txList == nil {
 			txList = []any{}
@@ -151,7 +157,7 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	if request.Accounts {
 		accountState, err := dumpAccountState(ctx, targetLedger, request.Binary, request.Expand)
 		if err != nil {
-			return nil, types.RPCErrorInternal(fmt.Sprintf("dump ledger state: %v", err))
+			return nil, rpcInternalError("ledger: state dump failed", err)
 		}
 		ledgerInfo["accountState"] = accountState
 	}
@@ -160,11 +166,11 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		"ledger":    ledgerInfo,
 		"validated": validated,
 	}
-	if !targetLedger.IsClosed() {
-		response["ledger_current_index"] = targetLedger.Sequence()
-	} else {
+	if targetLedger.IsClosed() {
 		response["ledger_hash"] = ledgerHash
 		response["ledger_index"] = targetLedger.Sequence()
+	} else {
+		response["ledger_current_index"] = targetLedger.Sequence()
 	}
 
 	if dumpQueue {
@@ -181,7 +187,7 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 			response["queue_data"] = queueData
 		}
 		if queueInternalError {
-			return nil, types.RPCErrorInternal("ledger queue owner_funds failed for MPT OfferCreate").WithExtra(response)
+			return nil, rpcInternalInvariantError("ledger: queue owner_funds failed for MPT OfferCreate").WithExtra(response)
 		}
 	}
 	addLedgerTypeWarning(response, params)
@@ -209,44 +215,41 @@ func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int
 			}, false))),
 		}
 	}
+
 	parentHash := l.ParentHash()
-	ledger := map[string]any{
+	result := map[string]any{
 		"parent_hash": strings.ToUpper(hex.EncodeToString(parentHash[:])),
 	}
 	if apiVersion > 1 {
-		ledger["ledger_index"] = l.Sequence()
+		result["ledger_index"] = l.Sequence()
 	} else {
-		ledger["ledger_index"] = strconv.FormatUint(uint64(l.Sequence()), 10)
+		result["ledger_index"] = strconv.FormatUint(uint64(l.Sequence()), 10)
 	}
 
 	if l.IsClosed() {
-		ledger["closed"] = true
+		result["closed"] = true
 	} else if !full {
-		ledger["closed"] = false
-		return ledger
+		result["closed"] = false
+		return result
 	}
 
-	hash := l.Hash()
-	txHash := l.TxMapHash()
-	stateHash := l.StateMapHash()
-	ledger["ledger_hash"] = strings.ToUpper(hex.EncodeToString(hash[:]))
-	ledger["transaction_hash"] = strings.ToUpper(hex.EncodeToString(txHash[:]))
-	ledger["account_hash"] = strings.ToUpper(hex.EncodeToString(stateHash[:]))
-	ledger["total_coins"] = strconv.FormatUint(l.TotalDrops(), 10)
-	ledger["close_flags"] = l.CloseFlags()
-	ledger["parent_close_time"] = l.ParentCloseTime()
-	ledger["close_time"] = l.CloseTime()
-	ledger["close_time_resolution"] = l.CloseTimeResolution()
-
-	if closeTime := l.CloseTime(); closeTime != 0 {
-		utc := protocol.FromRippleTime(uint32(max(closeTime, 0)))
-		ledger["close_time_human"] = utc.Format("2006-Jan-02 15:04:05.000000000 UTC")
-		ledger["close_time_iso"] = protocol.FormatCloseTimeISO(utc)
-		if l.CloseFlags()&1 != 0 {
-			ledger["close_time_estimated"] = true
+	result["ledger_hash"] = FormatLedgerHash(l.Hash())
+	result["transaction_hash"] = FormatLedgerHash(l.TxMapHash())
+	result["account_hash"] = FormatLedgerHash(l.StateMapHash())
+	result["total_coins"] = strconv.FormatUint(l.TotalDrops(), 10)
+	result["close_flags"] = l.CloseFlags()
+	result["parent_close_time"] = l.ParentCloseTime()
+	result["close_time"] = l.CloseTime()
+	result["close_time_resolution"] = l.CloseTimeResolution()
+	if l.CloseTime() != 0 {
+		closeTime := protocol.FromRippleTime(uint32(max(l.CloseTime(), 0)))
+		result["close_time_human"] = closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
+		result["close_time_iso"] = protocol.FormatCloseTimeISO(closeTime)
+		if l.CloseFlags()&ledgerheader.LCFNoConsensusTime != 0 {
+			result["close_time_estimated"] = true
 		}
 	}
-	return ledger
+	return result
 }
 
 func addLedgerTypeWarning(response map[string]any, params json.RawMessage) {
@@ -265,7 +268,7 @@ func addLedgerTypeWarning(response map[string]any, params json.RawMessage) {
 	}}
 }
 
-func validateLedgerBooleanOptions(params json.RawMessage) *types.RPCError {
+func validateLedgerBooleanOptions(params json.RawMessage) *types.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -280,35 +283,40 @@ func validateLedgerBooleanOptions(params json.RawMessage) *types.RPCError {
 		}
 		var value any
 		if err := json.Unmarshal(raw, &value); err != nil {
-			return types.RPCErrorInvalidParams("Invalid parameters.")
+			return types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		if _, ok := value.(bool); !ok {
-			return types.RPCErrorInvalidParams("Invalid parameters.")
+			return types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	return nil
 }
 
-func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RPCError) {
+func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RpcError) {
 	if params == nil {
 		return false, nil
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(params, &fields); err != nil {
-		return false, types.RPCErrorInvalidParams("Invalid parameters.")
+		return false, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
-	selectorNames := []string{"ledger", "ledger_hash", "ledger_index"}
 	present := make([]string, 0, 1)
-	for _, name := range selectorNames {
-		if _, ok := fields[name]; ok {
-			present = append(present, name)
+	for _, name := range []string{"ledger", "ledger_hash", "ledger_index"} {
+		raw, ok := fields[name]
+		if !ok {
+			continue
+		}
+		present = append(present, name)
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return false, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	if len(present) > 1 {
 		if _, hasLegacy := fields["ledger"]; hasLegacy {
-			return false, types.RPCErrorInvalidParams("Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.")
+			return false, types.RpcErrorInvalidParams("Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.")
 		}
-		return false, types.RPCErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
+		return false, types.RpcErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
 	}
 	if len(present) == 0 {
 		return false, nil
@@ -317,46 +325,43 @@ func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RPCError) {
 	name := present[0]
 	var value any
 	if err := json.Unmarshal(fields[name], &value); err != nil {
-		return false, types.RPCErrorInvalidParams("Invalid parameters.")
+		return false, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if name == "ledger_hash" {
 		hash, ok := value.(string)
 		if !ok || len(hash) != 64 {
-			return false, types.RPCErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
+			return false, types.RpcErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
 		}
 		if _, err := hex.DecodeString(hash); err != nil {
-			return false, types.RPCErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
+			return false, types.RpcErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
 		}
 		return true, nil
 	}
-	if _, stringValue := value.(string); stringValue {
+	if _, ok := value.(string); ok {
 		return true, nil
 	}
-	if _, numberValue := value.(float64); numberValue {
+	if _, ok := value.(float64); ok {
 		rawNumber := strings.TrimSpace(string(fields[name]))
 		if strings.ContainsAny(rawNumber, ".eE") {
-			return false, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
-		}
-		if strings.HasPrefix(rawNumber, "-") {
-			return true, nil
+			return false, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
 		}
 		return true, nil
 	}
-	return false, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
+	return false, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
 }
 
-func ledgerDefaultResponse(ctx *types.RPCContext) (map[string]any, *types.RPCError) {
+func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcError) {
 	closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
 	if err != nil || closed == nil {
-		return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
 	if err != nil || open == nil {
-		return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+		return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	return map[string]any{
-		"closed": map[string]any{"ledger": ledgerDataHeader(ledgerHeaderInfo(closed), false, ctx.ApiVersion)},
-		"open":   map[string]any{"ledger": ledgerDataHeader(ledgerHeaderInfo(open), false, ctx.ApiVersion)},
+		"closed": buildLedgerSummaryJSON(closed, true, ctx.ApiVersion),
+		"open":   buildLedgerSummaryJSON(open, false, ctx.ApiVersion),
 	}, nil
 }
 
@@ -385,7 +390,7 @@ func ledgerHeaderInfo(l types.LedgerReader) *types.LedgerHeaderInfo {
 // call against fill.ledger (LedgerToJson.cpp:216-221). Returns nil when the
 // service can't supply a view for that ledger (mocks, unsupported selectors),
 // in which case the annotation is simply omitted.
-func ownerFundsLedgerView(ctx *types.RPCContext, l types.LedgerReader) types.LedgerStateView {
+func ownerFundsLedgerView(ctx *types.RpcContext, l types.LedgerReader) types.LedgerStateView {
 	src, ok := ctx.Services.Ledger.(types.LedgerViewSource)
 	if !ok {
 		return nil
@@ -453,7 +458,7 @@ func ledgerOwnerFundsUnsupportedMPT(txJSON map[string]any) bool {
 // array rippled emits for accounts:true (LedgerToJson.cpp fillJsonState):
 // expanded SLE JSON in JSON mode, {hash, tx_blob} in binary mode, or bare
 // keys otherwise.
-func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expanded bool) ([]any, error) {
+func dumpAccountState(ctx *types.RpcContext, l types.LedgerReader, binary, expanded bool) ([]any, error) {
 	state := make([]any, 0)
 	appendItem := func(index string, data []byte) error {
 		upperIndex := strings.ToUpper(index)
@@ -507,7 +512,7 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 			return nil, err
 		}
 		if result == nil {
-			return nil, fmt.Errorf("ledger data returned no result")
+			break
 		}
 		for _, item := range result.State {
 			if err := appendItem(item.Index, item.Data); err != nil {
@@ -529,7 +534,7 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 // body (tx for API v1, merged tx_json for v2+). Returns nil when the queue is
 // empty or unwired.
 func buildLedgerQueueData(
-	ctx *types.RPCContext,
+	ctx *types.RpcContext,
 	binary, expanded, ownerFunds bool,
 	ownerFundsView types.LedgerStateView,
 	reserveBase, reserveInc uint64,

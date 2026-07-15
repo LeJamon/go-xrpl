@@ -102,6 +102,64 @@ func TestLedger_MutateHappyAndErrorPaths(t *testing.T) {
 	}
 }
 
+func TestLedger_ApplyAtomically(t *testing.T) {
+	l := newOpenChild(t)
+	existing := mutAcct(0x03)
+	original := mutData(0x11)
+	if err := l.Insert(existing, original); err != nil {
+		t.Fatalf("seed existing entry: %v", err)
+	}
+	l.AdjustDropsDestroyed(drops.XRPAmount(10))
+
+	inserted := mutAcct(0x04)
+	injected := errors.New("injected apply failure")
+	err := l.ApplyAtomically(func(view Writer) error {
+		if err := view.Update(existing, mutData(0x22)); err != nil {
+			return err
+		}
+		if err := view.Insert(inserted, mutData(0x33)); err != nil {
+			return err
+		}
+		view.AdjustDropsDestroyed(drops.XRPAmount(5))
+		return injected
+	})
+	if !errors.Is(err, injected) {
+		t.Fatalf("ApplyAtomically error = %v, want %v", err, injected)
+	}
+	if got, _ := l.Read(existing); !bytes.Equal(got, original) {
+		t.Fatalf("failed apply changed existing entry: got %x want %x", got, original)
+	}
+	if exists, _ := l.Exists(inserted); exists {
+		t.Fatal("failed apply committed inserted entry")
+	}
+	if l.dropsDestroyed != drops.XRPAmount(10) {
+		t.Fatalf("failed apply destroyed %d drops, want 10", l.dropsDestroyed)
+	}
+
+	err = l.ApplyAtomically(func(view Writer) error {
+		if err := view.Update(existing, mutData(0x22)); err != nil {
+			return err
+		}
+		if err := view.Insert(inserted, mutData(0x33)); err != nil {
+			return err
+		}
+		view.AdjustDropsDestroyed(drops.XRPAmount(5))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ApplyAtomically success: %v", err)
+	}
+	if got, _ := l.Read(existing); !bytes.Equal(got, mutData(0x22)) {
+		t.Fatalf("successful apply existing entry = %x, want %x", got, mutData(0x22))
+	}
+	if got, _ := l.Read(inserted); !bytes.Equal(got, mutData(0x33)) {
+		t.Fatalf("successful apply inserted entry = %x, want %x", got, mutData(0x33))
+	}
+	if l.dropsDestroyed != drops.XRPAmount(15) {
+		t.Fatalf("successful apply destroyed %d drops, want 15", l.dropsDestroyed)
+	}
+}
+
 // TestLedger_MutatorsRejectedWhenImmutable verifies that once a ledger is
 // closed (state != StateOpen), all three mutators are rejected with
 // ErrLedgerImmutable. The targeted entry is seeded while the ledger is

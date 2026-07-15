@@ -29,7 +29,7 @@ import (
 // adaptor.
 type ValidatorsMethod struct{ AdminHandler }
 
-func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
+func (m *ValidatorsMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 	var services *types.ServiceContainer
 	if ctx != nil {
 		services = ctx.Services
@@ -220,7 +220,7 @@ func resolveValidatorListSnapshot(services *types.ServiceContainer, now time.Tim
 // rippled/src/xrpld/app/misc/detail/ValidatorSite.cpp:672-705.
 type ValidatorListSitesMethod struct{ AdminHandler }
 
-func (m *ValidatorListSitesMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
+func (m *ValidatorListSitesMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 	sites := []map[string]any{}
 
 	if ctx != nil && ctx.Services != nil && ctx.Services.ValidatorList != nil {

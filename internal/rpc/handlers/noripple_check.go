@@ -13,26 +13,26 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/NoRippleCheck.cpp
 type NoRippleCheckMethod struct{ BaseHandler }
 
-func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
 	if fieldsErr != nil {
 		return nil, fieldsErr
 	}
 	accountRaw, hasAccount := rawFields["account"]
 	if !hasAccount {
-		return nil, types.RPCErrorMissingField("account")
+		return nil, types.RpcErrorMissingField("account")
 	}
 	roleRaw, hasRole := rawFields["role"]
 	if !hasRole {
-		return nil, types.RPCErrorMissingField("role")
+		return nil, types.RpcErrorMissingField("role")
 	}
 	account, validAccount := rawJSONString(accountRaw)
 	if !validAccount {
-		return nil, types.RPCErrorInvalidField("account")
+		return nil, types.RpcErrorInvalidField("account")
 	}
 	role, validRole := jsonCppStringRaw(roleRaw)
 	if !validRole || (role != "gateway" && role != "user") {
-		return nil, types.RPCErrorInvalidField("role")
+		return nil, types.RpcErrorInvalidField("role")
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitNoRippleCheck, ctx.Unlimited)
@@ -46,7 +46,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 			var valid bool
 			transactions, valid = rawJSONBool(transactionsRaw)
 			if !valid {
-				return nil, types.RPCErrorInvalidField("transactions")
+				return nil, types.RpcErrorInvalidField("transactions")
 			}
 		} else {
 			transactions = jsonCppBoolRaw(transactionsRaw)
@@ -73,7 +73,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		response["transactions"] = []map[string]any{}
 	}
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(response)
+		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(response)
 	}
 
 	result, err := ctx.Services.Ledger.GetNoRippleCheck(
@@ -86,12 +86,12 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RPCErrorActMalformed("Account malformed.")
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, mapAccountQueryErr(err, err.Error())
+		return nil, mapAccountQueryErr(err, "noripple_check: ledger query failed")
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format

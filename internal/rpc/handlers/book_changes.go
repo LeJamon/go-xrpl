@@ -112,7 +112,7 @@ func ComputeBookChangesContext(ctx context.Context, l LedgerWithTransactions) (m
 	}, nil
 }
 
-func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 	}
 
@@ -131,7 +131,7 @@ func (m *BookChangesMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 
 	result, err := ComputeBookChangesContext(ctx.Context, targetLedger)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("iterate ledger transactions: %v", err))
+		return nil, rpcInternalError("book_changes: transaction iteration failed", err)
 	}
 	return result, nil
 }

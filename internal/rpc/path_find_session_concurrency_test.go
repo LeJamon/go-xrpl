@@ -21,15 +21,15 @@ func TestPathFindCreateInvalidReplacementClearsOldSession(t *testing.T) {
 	before := conn.pathFindGeneration
 
 	ws := NewWebSocketServer(0, nil)
-	ws.handlePathFindCreate(conn, &types.RPCContext{Context: ctx}, types.WebSocketCommand{
+	_, rpcErr := ws.executePathFindCreate(conn, &types.RpcContext{Context: ctx}, types.WebSocketCommand{
 		ID:     1,
 		Params: json.RawMessage(`{"subcommand":"create"}`),
 	})
+	require.NotNil(t, rpcErr)
 
 	_, active := conn.snapshotPathFindUpdate()
 	require.False(t, active)
 	require.Equal(t, before+1, conn.pathFindGeneration)
-	require.NotEmpty(t, conn.sendChannel)
 }
 
 func TestPathFindInFlightUpdateDiscardedAfterSessionChange(t *testing.T) {

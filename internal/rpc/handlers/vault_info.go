@@ -12,7 +12,7 @@ import (
 // VaultInfoMethod handles the vault_info RPC method
 type VaultInfoMethod struct{ BaseHandler }
 
-func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -41,18 +41,18 @@ func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr.WithExtra(response)
 		}
-		return nil, types.RPCErrorEntryNotFoundBare("").WithExtra(response)
+		return nil, types.RpcErrorEntryNotFoundBare("").WithExtra(response)
 	}
 
 	vaultDecoded, decodeErr := decodeLedgerEntryNode(vaultEntry.Node)
 	if decodeErr != nil {
-		return nil, types.RPCErrorInternal("Failed to decode Vault: " + decodeErr.Error()).WithExtra(response)
+		return nil, rpcInternalError("vault_info: vault decoding failed", decodeErr)
 	}
 
 	shareMPTIDHex, ok := vaultDecoded["ShareMPTID"].(string)
 	shareMPTIDBytes, shareErr := hex.DecodeString(shareMPTIDHex)
 	if !ok || shareErr != nil || len(shareMPTIDBytes) != 24 {
-		return nil, types.RPCErrorInternal("Vault has invalid ShareMPTID").WithExtra(response)
+		return nil, rpcInternalInvariantError("vault_info: vault has invalid ShareMPTID").WithExtra(response)
 	}
 	var shareMPTID [24]byte
 	copy(shareMPTID[:], shareMPTIDBytes)
@@ -63,11 +63,11 @@ func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 		if rerr := mapLedgerLookupErr(mptErr); rerr != nil {
 			return nil, rerr.WithExtra(response)
 		}
-		return nil, types.RPCErrorEntryNotFoundBare("").WithExtra(response)
+		return nil, types.RpcErrorEntryNotFoundBare("").WithExtra(response)
 	}
 	mptIssuanceDecoded, mptDecodeErr := decodeLedgerEntryNode(mptIssuanceEntry.Node)
 	if mptDecodeErr != nil {
-		return nil, types.RPCErrorInternal("Failed to decode MPTokenIssuance: " + mptDecodeErr.Error()).WithExtra(response)
+		return nil, rpcInternalError("vault_info: MPTokenIssuance decoding failed", mptDecodeErr).WithExtra(response)
 	}
 
 	addLedgerEntryJSONFields(vaultDecoded, strings.ToUpper(hex.EncodeToString(vaultKey[:])))
@@ -77,7 +77,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	return response, nil
 }
 
-func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RPCError) {
+func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RpcError) {
 	vaultIDRaw, hasVaultID := params["vault_id"]
 	ownerRaw, hasOwner := params["owner"]
 	seqRaw, hasSeq := params["seq"]
@@ -92,7 +92,7 @@ func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RPCE
 		var vaultKey [32]byte
 		copy(vaultKey[:], vaultIDBytes)
 		if vaultKey == ([32]byte{}) {
-			return [32]byte{}, types.RPCErrorMalformedRequestBare()
+			return [32]byte{}, types.RpcErrorMalformedRequestBare()
 		}
 		return vaultKey, nil
 	}
@@ -114,8 +114,8 @@ func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RPCE
 	return [32]byte{}, vaultInfoMalformedInvalidParams()
 }
 
-func vaultInfoMalformedInvalidParams() *types.RPCError {
-	return types.NewRPCError(
+func vaultInfoMalformedInvalidParams() *types.RpcError {
+	return types.NewRpcError(
 		types.RpcINVALID_PARAMS,
 		"malformedRequest",
 		"invalidParams",
@@ -123,8 +123,8 @@ func vaultInfoMalformedInvalidParams() *types.RPCError {
 	)
 }
 
-func vaultInfoMalformedActMalformed() *types.RPCError {
-	return types.NewRPCError(
+func vaultInfoMalformedActMalformed() *types.RpcError {
+	return types.NewRpcError(
 		types.RpcACT_MALFORMED,
 		"malformedRequest",
 		"actMalformed",

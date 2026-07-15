@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -14,7 +13,7 @@ import (
 // destination_account.
 type AccountChannelsMethod struct{ BaseHandler }
 
-func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
@@ -32,11 +31,11 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		var valid bool
 		destinationAccount, valid = rawJSONString(rawDestination)
 		if !valid {
-			return nil, types.RPCErrorInvalidField("destination_account")
+			return nil, types.RpcErrorInvalidField("destination_account")
 		}
 	}
 	if destinationAccount != "" && !types.IsValidClassicAddress(destinationAccount) {
-		return nil, types.RPCErrorActMalformed("Account malformed.")
+		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountChannels, ctx.Unlimited)
@@ -49,7 +48,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 	}
 	if _, present := fields["marker"]; present {
 		if marker == "" {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	result, err := ctx.Services.Ledger.GetAccountChannels(
@@ -65,12 +64,12 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
+		return nil, rpcInternalError("account_channels: ledger query failed", err)
 	}
 
 	// Build channels array with proper field handling
@@ -121,5 +120,6 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }

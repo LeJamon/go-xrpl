@@ -12,12 +12,12 @@ import (
 )
 
 // MethodDispatcher allows forwarding RPC calls to the method registry.
-// Used by the 'json' RPC method to proxy calls. The caller's RPCContext is
+// Used by the 'json' RPC method to proxy calls. The caller's RpcContext is
 // threaded through so the forwarded method keeps the request's timeout,
 // role, client IP and api version — without it a guest could wrap a heavy
 // method in `json` to escape per-IP load charging.
 type MethodDispatcher interface {
-	ExecuteMethod(ctx *RPCContext, method string, params []byte) (any, *RPCError)
+	ExecuteMethod(ctx *RpcContext, method string, params []byte) (any, *RpcError)
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the
@@ -444,11 +444,11 @@ type URLSubscriptionService interface {
 	// Subscribe registers (or extends) the url subscription and returns the
 	// same ack payload a WebSocket subscriber gets (current ledger info for
 	// the ledger stream, book snapshots).
-	Subscribe(ctx *RPCContext, request SubscriptionRequest) (map[string]any, *RPCError)
+	Subscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
 	// Unsubscribe removes the listed streams/accounts/books from the url
 	// subscription and drops the registry entry once no stream
 	// subscriptions remain. An unknown url is silent success.
-	Unsubscribe(ctx *RPCContext, request SubscriptionRequest) (map[string]any, *RPCError)
+	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
 }
 
 // QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by

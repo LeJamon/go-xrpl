@@ -392,7 +392,8 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 // ahead of the TxQ.
 func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledger, txBlobs, disputedBlobs [][]byte, closeTime time.Time, closeTimeCorrect bool) (uint32, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	if s.closedLedger == nil {
 		return 0, ErrNoClosedLedger
@@ -593,6 +594,7 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 // signing-time median. A zero signing time falls back to the ledger close time.
 func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTime time.Time) {
 	s.mu.Lock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
 	l, ok := s.ledgerHistory[seq]
 	// rippled checkAccept is hash-keyed; our seq-keyed map splits into "no entry"
 	// or "different-hash" (same-height fork) — both stash and arm acquisition.
@@ -642,6 +644,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	pool := s.localTxs
 	event := s.drainPendingValidationLocked(expectedHash)
 	s.enqueuePersist(l)
+	notification := s.validatedLedgerNotificationLocked(previousValidatedSeq)
 	s.mu.Unlock()
 
 	// Fold into the amendment table outside the lock (it has its own mutex).
@@ -660,6 +663,7 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 		}
 		s.dispatchLedgerEvent(event)
 	}
+	notification.notify()
 }
 
 // SubmitHeldAdoptionResult describes the disposition of a candidate ledger. When
@@ -698,7 +702,8 @@ func (s *Service) SubmitHeldAdoption(ctx context.Context, h *header.LedgerHeader
 	}
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 
 	// Evict stale entries on every submission.
 	s.evictExpiredHeldAdoptionsLocked()
@@ -797,7 +802,8 @@ func (s *Service) NeedsInitialSync() bool {
 // state-only catchup of a ledger whose transaction root is empty.
 func (s *Service) AdoptLedgerWithState(ctx context.Context, h *header.LedgerHeader, stateMap *shamap.SHAMap, txMap *shamap.SHAMap) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousValidatedSeq := s.validatedLedgerSeqLocked()
+	defer s.unlockAndNotifyValidatedLedger(previousValidatedSeq)
 	return s.adoptLedgerWithStateLocked(ctx, h, stateMap, txMap, 0)
 }
 

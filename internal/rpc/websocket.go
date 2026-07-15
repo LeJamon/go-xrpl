@@ -1,11 +1,12 @@
 package rpc
 
 import (
+	"bytes"
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
-	"maps"
+	"io"
 	"net"
 	"net/http"
 	"runtime/debug"
@@ -95,10 +96,20 @@ type WebSocketConnection struct {
 }
 
 // NewWebSocketServer creates a new WebSocket server. The provided
-// service container is attached to every RPCContext routed through the
+// service container is attached to every RpcContext routed through the
 // server so handlers reach the ledger via ctx.Services. May be nil for
 // test contexts.
 func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer) *WebSocketServer {
+	return NewWebSocketServerWithLoadTracker(timeout, services, nil)
+}
+
+// NewWebSocketServerWithLoadTracker creates a WebSocket server using tracker
+// for transport-level admission and charging. A nil tracker preserves
+// NewWebSocketServer's standalone default.
+func NewWebSocketServerWithLoadTracker(timeout time.Duration, services *types.ServiceContainer, tracker *loadtrack.Tracker) *WebSocketServer {
+	if tracker == nil {
+		tracker = loadtrack.New()
+	}
 	if services != nil && services.ClientLoad == nil {
 		services.ClientLoad = types.NewClientLoadShedder()
 	}
@@ -115,7 +126,7 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 		connections:         make(map[string]*WebSocketConnection),
 		timeout:             timeout,
 		services:            services,
-		loadTracker:         loadtrack.New(),
+		loadTracker:         tracker,
 		pingInterval:        30 * time.Second,
 	}
 	// The url (RPCSub) registry lives on the WebSocket server because url
@@ -214,11 +225,6 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	defer ws.closeConnection(wsConn)
 	defer recoverPanic("handleConnection", wsConn.ID)
 
-	// Match the HTTP body cap. rippled enforces RPC::Tuning::maxRequestSize
-	// (1 MB) on both onWSMessage and processRequest (ServerHandler.cpp:343
-	// and :625), so the WS path uses the same byte ceiling as POST.
-	wsConn.conn.SetReadLimit(int64(MaxRequestBytes))
-
 	wsConn.conn.SetPongHandler(func(string) error {
 		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 		return nil
@@ -233,12 +239,21 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 	for {
 		wsConn.conn.SetReadDeadline(time.Now().Add(90 * time.Second))
 
-		_, message, err := wsConn.conn.ReadMessage()
+		_, reader, err := wsConn.conn.NextReader()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 				wsLog().Debug("WebSocket read error", "err", err)
 			}
 			return
+		}
+		message, err := io.ReadAll(io.LimitReader(reader, MaxRequestBytes+1))
+		if err != nil {
+			wsLog().Debug("WebSocket read error", "err", err)
+			return
+		}
+		if len(message) > MaxRequestBytes {
+			ws.sendJSONInvalid(wsConn, nil, false)
+			continue
 		}
 
 		select {
@@ -308,20 +323,26 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	defer func() {
 		if rec := recover(); rec != nil {
 			wsLog().Error("ws message panic", "conn", wsConn.ID, "err", rec, "stack", string(debug.Stack()))
-			ws.sendError(wsConn, types.NewRPCError(types.RpcINTERNAL, "internal", "internal", "Internal server error"), nil)
+			ws.sendErrorResponse(wsConn, rpcInternalError(), nil, nil, buildWSRequestEcho(message))
 		}
 	}()
 
-	// XRPL WebSocket format: command and id at top level, all other fields are params.
-	var cmdMap map[string]any
-	if err := json.Unmarshal(message, &cmdMap); err != nil {
-		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
+	var requestValue any
+	if err := decodeJSONUseNumber(message, &requestValue); err != nil {
+		ws.sendJSONInvalid(wsConn, nil, false)
+		return
+	}
+	cmdMap, ok := requestValue.(map[string]any)
+	if !ok || cmdMap == nil {
+		ws.sendJSONInvalid(wsConn, requestValue, true)
 		return
 	}
 
+	requestEcho := redactedRequestMap(cmdMap)
 	var id any
-	if idVal, exists := cmdMap["id"]; exists {
+	if idVal, exists := requestEcho["id"]; exists {
 		id = idVal
+		cmdMap["id"] = idVal
 	}
 
 	// Role is always derived from the socket-level peer, never from
@@ -333,20 +354,20 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	peerIP := getWebSocketClientIP(wsConn.conn)
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
 	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
-
-	apiVersion := parseWebSocketAPIVersion(message)
-	dispatchCtx := wsConn.ctx
-	var cancel context.CancelFunc
-	if ws.timeout > 0 {
-		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
-		defer cancel()
+	loadCtx := newRpcContext(wsConn.ctx, role, types.DefaultApiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	if rpcErr := gateLoad(ws.loadTracker, loadCtx, "", wsLog()); rpcErr != nil {
+		wsConn.closeWithPolicyViolation("threshold exceeded")
+		return
 	}
-	rpcCtx := newRPCContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
-	if rpcErr := validateApiVersion(rpcCtx); rpcErr != nil {
-		ws.sendMalformedRequest(wsConn, cmdMap, id, rpcErr.ErrorString)
-		if ws.loadTracker != nil && !role.IsUnlimited() {
-			ws.loadTracker.Charge(clientIP, loadtrack.LoadMalformed)
-		}
+
+	apiVersion := types.DefaultApiVersion
+	if version, present := apiVersionFromObject(message); present {
+		apiVersion = version
+	}
+	versionCtx := newRpcContext(wsConn.ctx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
+	if rpcErr := validateApiVersion(versionCtx); rpcErr != nil {
+		chargeLoad(ws.loadTracker, versionCtx, "", loadtrack.LoadMalformed, wsLog())
+		ws.sendErrorResponse(wsConn, rpcErr, id, nil, requestEcho)
 		return
 	}
 
@@ -356,23 +377,19 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	// feeMalformedRPC (ServerHandler.cpp:446-468).
 	command, ok := resolveWSCommand(cmdMap)
 	if !ok {
+		chargeLoad(ws.loadTracker, versionCtx, "", loadtrack.LoadMalformed, wsLog())
 		ws.sendMissingCommand(wsConn, cmdMap, id)
-		if ws.loadTracker != nil && !role.IsUnlimited() {
-			ws.loadTracker.Charge(clientIP, loadtrack.LoadMalformed)
-		}
 		return
 	}
 
 	cmd := types.WebSocketCommand{
 		Command: command,
 		ID:      id,
-		Request: make(map[string]any, len(cmdMap)),
+		Request: requestEcho,
 	}
-	maps.Copy(cmd.Request, cmdMap)
 
 	delete(cmdMap, "command")
 	delete(cmdMap, "method")
-	delete(cmdMap, "id")
 	delete(cmdMap, "api_version")
 
 	if len(cmdMap) > 0 {
@@ -381,194 +398,324 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
+	dispatchCtx := wsConn.ctx
+	var cancel context.CancelFunc
+	if ws.timeout > 0 {
+		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
+		defer cancel()
+	}
+	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 
-	// Handle subscription commands specially
 	switch cmd.Command {
 	case "subscribe":
-		ws.handleSubscribe(wsConn, rpcCtx, cmd)
+		ws.handleSpecialCommand(wsConn, rpcCtx, cmd, ws.executeSubscribe)
 		return
 	case "unsubscribe":
-		ws.handleUnsubscribe(wsConn, rpcCtx, cmd)
+		ws.handleSpecialCommand(wsConn, rpcCtx, cmd, ws.executeUnsubscribe)
 		return
 	case "path_find":
-		ws.handlePathFind(wsConn, rpcCtx, cmd)
+		ws.handleSpecialCommand(wsConn, rpcCtx, cmd, ws.executePathFind)
 		return
 	}
 
 	ws.handleRPCMethod(wsConn, rpcCtx, cmd)
 }
 
-func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
+type wsSpecialHandler func(*WebSocketConnection, *types.RpcContext, types.WebSocketCommand) (any, *types.RpcError)
+
+func (ws *WebSocketServer) handleSpecialCommand(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand, handler wsSpecialHandler) {
+	ctx.LoadCost = uint32(loadtrack.LoadReference)
+	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
+		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
+		ws.sendCommandError(wsConn, rpcErr, cmd)
+		return
+	}
+
+	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
+	if !resolution.resolved {
+		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
+		ws.sendCommandError(wsConn, types.RpcErrorMethodNotFound(), cmd)
+		return
+	}
+	if rpcErr := conditionMet(resolution.handler.RequiredCondition(), ctx); rpcErr != nil {
+		finalizeLoad(ws.loadTracker, ctx, cmd.Command, loadtrack.LoadReference, wsLog())
+		ws.sendCommandError(wsConn, rpcErr, cmd)
+		return
+	}
+
+	result, rpcErr, recovered := func() (any, *types.RpcError, bool) {
+		if ws.services != nil && ws.services.ClientLoad != nil {
+			ws.services.ClientLoad.Begin()
+			defer ws.services.ClientLoad.End()
+		}
+		return invokeWSSpecial(handler, wsConn, ctx, cmd)
+	}()
+	kind := loadtrack.LoadKind(ctx.LoadCost)
+	if recovered && kind == loadtrack.LoadReference {
+		kind = loadtrack.LoadException
+	}
+	finalizeLoad(ws.loadTracker, ctx, cmd.Command, kind, wsLog())
+	if rpcErr != nil {
+		// Error responses deliberately omit warnings produced by the final charge.
+		ws.sendCommandError(wsConn, rpcErr, cmd)
+		return
+	}
+	ws.sendCommandResponse(wsConn, result, cmd, wsLoadWarningOpts(ctx))
+}
+
+func invokeWSSpecial(handler wsSpecialHandler, wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (result any, rpcErr *types.RpcError, recovered bool) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			wsLog().Error("rpc handler panic", "err", rec, "stack", string(debug.Stack()), "method", cmd.Command, "client", ctx.ClientIP)
+			result = nil
+			rpcErr = rpcInternalError()
+			recovered = true
+		}
+	}()
+	result, rpcErr = handler(wsConn, ctx, cmd)
+	return result, rpcErr, false
+}
+
+func (ws *WebSocketServer) executeSubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
-			ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid subscription parameters: "+err.Error()), cmd.ID)
-			return
+			return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
 		}
 	}
-	request.ApiVersion = ctx.ApiVersion
-
 	// url requests are server-to-server (RPCSub) subscriptions: events go
 	// to the url's subscriber, not to this WebSocket connection.
 	if request.HasURL() {
 		if !ctx.IsAdmin {
-			ws.sendError(wsConn, types.RPCErrorNoPermission("subscribe"), cmd.ID)
-			return
+			return nil, types.RpcErrorNoPermission("subscribe")
 		}
 		result, rpcErr := ws.urlSubs.Subscribe(ctx, request)
 		if rpcErr != nil {
-			ws.sendError(wsConn, rpcErr, cmd.ID)
-			return
+			return nil, rpcErr
 		}
-		ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, nil)
-		return
+		setSubscriptionLoadCost(ctx, request)
+		return result, nil
 	}
 
 	// wsConn.legacy is the same connection the subscription manager already
 	// tracks (created in attachConnection, before any message can arrive); it
 	// shares the subscriptions map and carries the Disconnect callback a
 	// freshly-built copy would lack.
-	if err := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, request, ctx.IsAdmin); err != nil {
-		ws.sendError(wsConn, err, cmd.ID)
-		return
+	prefix, err := subscriptionRequestExcluding(cmd.Params, "books")
+	if err != nil {
+		return nil, types.RpcErrorInvalidParams("Invalid subscription parameters.")
+	}
+	prefix.ApiVersion = ctx.ApiVersion
+	if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, prefix, ctx.IsAdmin); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		bookRequest.ApiVersion = ctx.ApiVersion
+		if rpcErr := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, bookRequest, ctx.IsAdmin); rpcErr != nil {
+			return rpcErr
+		}
+		setSubscriptionLoadCost(ctx, bookRequest)
+		return nil
+	}); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	result := ws.buildSubscribeAck(ctx, request)
-
-	ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, nil)
+	return result, nil
 }
 
-func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
+func subscriptionRequestExcluding(params json.RawMessage, fields ...string) (types.SubscriptionRequest, error) {
+	var request types.SubscriptionRequest
+	if len(params) == 0 {
+		return request, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(params, &raw); err != nil {
+		return request, err
+	}
+	for _, field := range fields {
+		delete(raw, field)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return request, err
+	}
+	err = json.Unmarshal(data, &request)
+	return request, err
+}
+
+func applySubscriptionBooks(raw json.RawMessage, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+	if raw == nil {
+		return nil
+	}
+	if rawJSONNull(raw) {
+		request, err := subscriptionRequestForBooks(raw)
+		if err != nil {
+			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+		}
+		return apply(request)
+	}
+	var books []json.RawMessage
+	if err := json.Unmarshal(raw, &books); err != nil {
+		request, decodeErr := subscriptionRequestForBooks(raw)
+		if decodeErr != nil {
+			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+		}
+		return apply(request)
+	}
+	for _, book := range books {
+		request, err := subscriptionRequestForBooks(json.RawMessage("[" + string(book) + "]"))
+		if err != nil {
+			return types.RpcErrorInvalidParams("Invalid subscription parameters.")
+		}
+		if rpcErr := apply(request); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	return nil
+}
+
+func subscriptionRequestForBooks(books json.RawMessage) (types.SubscriptionRequest, error) {
+	data, err := json.Marshal(map[string]json.RawMessage{"books": books})
+	if err != nil {
+		return types.SubscriptionRequest{}, err
+	}
+	var request types.SubscriptionRequest
+	err = json.Unmarshal(data, &request)
+	return request, err
+}
+
+func (ws *WebSocketServer) finishUnsubscribe(wsConn *WebSocketConnection, request types.SubscriptionRequest, params json.RawMessage, isAdmin bool) *types.RpcError {
+	prefix, err := subscriptionRequestExcluding(params, "books")
+	if err != nil {
+		return types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
+	}
+	if rpcErr := ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, prefix, isAdmin); rpcErr != nil {
+		return rpcErr
+	}
+	return applySubscriptionBooks(request.WireArrays().Books, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		return ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, bookRequest, isAdmin)
+	})
+}
+
+func setSubscriptionLoadCost(ctx *types.RpcContext, request types.SubscriptionRequest) {
+	for _, book := range request.Books {
+		if book.Snapshot || book.StateNow {
+			ctx.LoadCost = uint32(loadtrack.LoadMedium)
+			return
+		}
+	}
+}
+
+func (ws *WebSocketServer) executeUnsubscribe(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	var request types.SubscriptionRequest
 	if len(cmd.Params) > 0 {
 		if err := json.Unmarshal(cmd.Params, &request); err != nil {
-			ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid unsubscription parameters: "+err.Error()), cmd.ID)
-			return
+			return nil, types.RpcErrorInvalidParams("Invalid unsubscription parameters.")
 		}
 	}
-
 	// See handleSubscribe: url requests target the RPCSub registry.
 	if request.HasURL() {
 		if !ctx.IsAdmin {
-			ws.sendError(wsConn, types.RPCErrorNoPermission("unsubscribe"), cmd.ID)
-			return
+			return nil, types.RpcErrorNoPermission("unsubscribe")
 		}
 		result, rpcErr := ws.urlSubs.Unsubscribe(ctx, request)
 		if rpcErr != nil {
-			ws.sendError(wsConn, rpcErr, cmd.ID)
-			return
+			return nil, rpcErr
 		}
-		ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, nil)
-		return
+		return result, nil
 	}
 
-	if err := ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, request, ctx.IsAdmin); err != nil {
-		ws.sendError(wsConn, err, cmd.ID)
-		return
+	if rpcErr := ws.finishUnsubscribe(wsConn, request, cmd.Params, ctx.IsAdmin); rpcErr != nil {
+		return nil, rpcErr
 	}
 
-	ws.sendSuccess(wsConn, cmd.ID, map[string]any{}, ctx.ApiVersion, nil)
+	return map[string]any{}, nil
 }
 
-// handlePathFind processes path_find commands (special WebSocket-only method).
-// Subcommands: "create" (start session), "close" (stop session), "status" (get current paths).
-// Reference: rippled PathFind.cpp
-func (ws *WebSocketServer) handlePathFind(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) executePathFind(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	var params map[string]json.RawMessage
 	if len(cmd.Params) == 0 || json.Unmarshal(cmd.Params, &params) != nil {
-		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
-		return
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	rawSubcommand, exists := params["subcommand"]
 	if !exists {
-		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
-		return
+		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
 	}
 	var subcommand *string
 	if err := json.Unmarshal(rawSubcommand, &subcommand); err != nil || subcommand == nil {
-		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
-		return
+		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
 	}
 	wsConn.legacy.SetAPIVersion(ctx.ApiVersion)
 
 	switch *subcommand {
 	case "create":
-		ws.handlePathFindCreate(wsConn, ctx, cmd)
+		ctx.LoadCost = uint32(loadtrack.LoadHeavy)
+		return ws.executePathFindCreate(wsConn, ctx, cmd)
 	case "close":
-		ws.handlePathFindClose(wsConn, ctx, cmd)
+		return ws.executePathFindClose(wsConn, ctx, cmd)
 	case "status":
-		ws.handlePathFindStatus(wsConn, ctx, cmd)
+		return ws.executePathFindStatus(wsConn, ctx, cmd)
 	default:
-		ws.sendError(wsConn, types.RPCErrorInvalidParams("Invalid field 'subcommand'."), cmd.ID)
+		return nil, types.RpcErrorInvalidParams("Invalid field 'subcommand'.")
 	}
 }
 
-// handlePathFindCreate creates a new persistent pathfinding session.
+// executePathFindCreate creates a new persistent pathfinding session.
 // Any existing session on this connection is replaced (matching rippled).
-func (ws *WebSocketServer) handlePathFindCreate(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
-	// A create replaces the old request before the new request is admitted,
-	// parsed, or evaluated. A failed replacement therefore leaves no active
-	// request.
+func (ws *WebSocketServer) executePathFindCreate(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) (any, *types.RpcError) {
 	wsConn.clearPathFindSession()
 
 	release, rpcErr := handlers.AcquirePathfind(ctx)
 	if rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
+		return nil, rpcErr
 	}
 	defer release()
 
 	session, rpcErr := ParseAndCreateSession(cmd.Params, cmd.ID)
 	if rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
+		return nil, rpcErr
 	}
 
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		ws.sendError(wsConn, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
-			"No closed ledger available"), cmd.ID)
-		return
+		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+			"No closed ledger available")
 	}
 	view, err := ctx.Services.Ledger.GetClosedLedgerView()
 	if err != nil {
-		ws.sendError(wsConn, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
-			"No closed ledger available"), cmd.ID)
-		return
+		return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+			"No closed ledger available")
 	}
 
 	event := session.Execute(view, false)
 
 	wsConn.installPathFindSession(session)
 
-	ws.sendSuccess(wsConn, cmd.ID, event, ctx.ApiVersion, nil)
+	return event, nil
 }
 
-// handlePathFindClose closes the active pathfinding session on this connection.
-func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
+// executePathFindClose closes the active pathfinding session on this connection.
+func (ws *WebSocketServer) executePathFindClose(wsConn *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 	session := wsConn.clearPathFindSession()
 
 	if session == nil {
-		ws.sendError(wsConn, types.RPCErrorNoPathRequest(), cmd.ID)
-		return
+		return nil, types.RpcErrorNoPathRequest()
 	}
 
-	ws.sendSuccess(wsConn, cmd.ID, session.Close(), ctx.ApiVersion, nil)
+	return session.Close(), nil
 }
 
-// handlePathFindStatus returns the current status of the active pathfinding session.
-func (ws *WebSocketServer) handlePathFindStatus(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
+// executePathFindStatus returns the current status of the active pathfinding session.
+func (ws *WebSocketServer) executePathFindStatus(wsConn *WebSocketConnection, _ *types.RpcContext, _ types.WebSocketCommand) (any, *types.RpcError) {
 	wsConn.mutex.RLock()
 	session := wsConn.pathFindSession
 	wsConn.mutex.RUnlock()
 
 	if session == nil {
-		ws.sendError(wsConn, types.RPCErrorNoPathRequest(), cmd.ID)
-		return
+		return nil, types.RpcErrorNoPathRequest()
 	}
 
-	event := session.Status()
-
-	ws.sendSuccess(wsConn, cmd.ID, event, ctx.ApiVersion, nil)
+	return session.Status(), nil
 }
 
 // UpdatePathFindSessions re-runs pathfinding for all active sessions on ledger close.
@@ -668,68 +815,59 @@ func (target pathFindUpdateTarget) trySend(data []byte) bool {
 	return target.connection.legacy.TrySend(data)
 }
 
-func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RPCContext, cmd types.WebSocketCommand) {
+func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
 	// Shared dispatch core (registry → admin gate → conditionMet →
 	// api-version → busy/load gates → handle → finalize), identical to the
 	// HTTP path. The WS-specific admin gate returns rpcFORBIDDEN instead of
 	// rpcNO_PERMISSION (ServerHandler.cpp:482-486): when requestRole returns
 	// Role::FORBID for an admin-required command, rippled writes
 	// rpcError(rpcFORBIDDEN) before doCommand ever runs.
-	result, rpcErr := dispatchMethod(ws.methodRegistry, ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, types.RPCErrorForbidden, wsLog())
-	opts := wsLoadWarningOpts(ctx)
-	if rpcErr != nil {
-		ws.sendErrorWithOptions(wsConn, webSocketErrorWithRequest(rpcErr, cmd.Request), cmd.ID, opts)
+	resolution := resolveMethod(ws.methodRegistry, cmd.Command, ctx.ApiVersion)
+	if rpcErr := admitMethod(ws.loadTracker, ctx, cmd.Command, resolution, types.RpcErrorForbidden, false, wsLog()); rpcErr != nil {
+		warnLoad(ws.loadTracker, ctx, cmd.Command, wsLog())
+		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
 		return
 	}
-	ws.sendSuccess(wsConn, cmd.ID, result, ctx.ApiVersion, opts)
-}
-
-func webSocketErrorWithRequest(rpcErr *types.RPCError, request map[string]any) *types.RPCError {
-	if rpcErr == nil || request == nil {
-		return rpcErr
+	result, rpcErr := dispatchResolvedMethod(ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, resolution, wsLog())
+	if rpcErr != nil {
+		ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
+		return
 	}
-	extra := make(map[string]any, len(rpcErr.Extra)+4)
-	maps.Copy(extra, rpcErr.Extra)
-	echo := make(map[string]any, len(request))
-	maps.Copy(echo, request)
-	redactCredentials(echo)
-	extra["request"] = echo
-	for _, key := range []string{"jsonrpc", "ripplerpc", "api_version"} {
-		if value, ok := request[key]; ok {
-			extra[key] = value
-		}
-	}
-	return rpcErr.WithExtra(extra)
+	ws.sendCommandResponse(wsConn, result, cmd, wsLoadWarningOpts(ctx))
 }
 
 // wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
 // dispatch crossed the resource warn threshold (recorded on ctx by
 // finalizeLoad), and returns nil otherwise.
-func wsLoadWarningOpts(ctx *types.RPCContext) *types.WebSocketResponseOptions {
+func wsLoadWarningOpts(ctx *types.RpcContext) *types.WebSocketResponseOptions {
 	if ctx != nil && ctx.LoadWarning {
 		return &types.WebSocketResponseOptions{Warning: "load"}
 	}
 	return nil
 }
 
-func (ws *WebSocketServer) sendSuccess(wsConn *WebSocketConnection, id, result any, apiVersion int, opts *types.WebSocketResponseOptions) {
-	ws.sendResponseWithOptions(wsConn, types.WebSocketResponse{
-		Type:       "response",
-		ID:         id,
-		Status:     "success",
-		Result:     result,
-		ApiVersion: apiVersion,
-	}, opts)
-}
-
-func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, response types.WebSocketResponse, opts *types.WebSocketResponseOptions) {
+func (ws *WebSocketServer) sendCommandResponse(wsConn *WebSocketConnection, result any, cmd types.WebSocketCommand, opts *types.WebSocketResponseOptions) {
+	payload := map[string]any{
+		"type":   "response",
+		"status": "success",
+	}
+	if result != nil {
+		payload["result"] = result
+	}
+	copyWSMetadata(payload, cmd.Request, cmd.ID)
 	if opts != nil {
-		response.Warning = opts.Warning
-		response.Warnings = opts.Warnings
-		response.Forwarded = opts.Forwarded
+		if opts.Warning != "" {
+			payload["warning"] = opts.Warning
+		}
+		if len(opts.Warnings) > 0 {
+			payload["warnings"] = opts.Warnings
+		}
+		if opts.Forwarded {
+			payload["forwarded"] = true
+		}
 	}
 
-	data, err := json.Marshal(response)
+	data, err := marshalWebSocketJSON(payload)
 	if err != nil {
 		wsLog().Error("Failed to marshal WebSocket response", "err", err)
 		return
@@ -757,40 +895,29 @@ func (ws *WebSocketServer) deliver(wsConn *WebSocketConnection, data []byte) {
 	}
 }
 
-func parseWebSocketAPIVersion(message []byte) int {
-	var request struct {
-		APIVersion json.RawMessage `json:"api_version"`
-	}
-	if err := json.Unmarshal(message, &request); err != nil {
-		return 0
-	}
-	if request.APIVersion == nil {
-		return types.DefaultApiVersion
-	}
-	var version int
-	if err := json.Unmarshal(request.APIVersion, &version); err != nil {
-		return 0
-	}
-	return version
-}
-
 // resolveWSCommand resolves the WS command name from the incoming JSON,
 // accepting `method` as an alias for `command` (ServerHandler.cpp:446-475).
-// ok is false — meaning the caller emits missingCommand — when neither is a
-// non-empty string, or both are present strings that disagree.
+// ok is false when either supplied field is not a string, neither is supplied,
+// or both strings disagree. Empty strings are valid at this layer and resolve
+// to unknownCmd during dispatch.
 func resolveWSCommand(m map[string]any) (string, bool) {
-	cmd, cmdOK := m["command"].(string)
-	method, methodOK := m["method"].(string)
+	cmdValue, cmdPresent := m["command"]
+	methodValue, methodPresent := m["method"]
+	cmd, cmdOK := cmdValue.(string)
+	method, methodOK := methodValue.(string)
+	if (cmdPresent && !cmdOK) || (methodPresent && !methodOK) {
+		return "", false
+	}
 	switch {
-	case cmdOK && methodOK:
+	case cmdPresent && methodPresent:
 		if cmd != method {
 			return "", false
 		}
-		return cmd, cmd != ""
-	case cmdOK:
-		return cmd, cmd != ""
-	case methodOK:
-		return method, method != ""
+		return cmd, true
+	case cmdPresent:
+		return cmd, true
+	case methodPresent:
+		return method, true
 	default:
 		return "", false
 	}
@@ -801,30 +928,15 @@ func resolveWSCommand(m map[string]any) (string, bool) {
 // (ServerHandler.cpp:452-468). Credentials in the echo are redacted — a
 // deliberate goxrpl superset of rippled's raw echo.
 func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, request map[string]any, id any) {
-	ws.sendMalformedRequest(wsConn, request, id, "missingCommand")
-}
-
-func (ws *WebSocketServer) sendMalformedRequest(wsConn *WebSocketConnection, request map[string]any, id any, errorToken string) {
-	echo := make(map[string]any, len(request))
-	maps.Copy(echo, request)
-	redactCredentials(echo)
+	echo := redactedRequestMap(request)
 	resp := map[string]any{
 		"type":    "response",
 		"status":  "error",
-		"error":   errorToken,
+		"error":   "missingCommand",
 		"request": echo,
 	}
-	if id != nil {
-		resp["id"] = id
-	}
-	// rippled also lifts jsonrpc/ripplerpc/api_version to the top level of the
-	// error reply, alongside the request echo (ServerHandler.cpp:460-465).
-	for _, k := range []string{"jsonrpc", "ripplerpc", "api_version"} {
-		if v, ok := request[k]; ok {
-			resp[k] = v
-		}
-	}
-	data, err := json.Marshal(resp)
+	copyWSMetadata(resp, echo, id)
+	data, err := marshalWebSocketJSON(resp)
 	if err != nil {
 		wsLog().Error("Failed to marshal malformed WebSocket response", "err", err)
 		return
@@ -832,29 +944,45 @@ func (ws *WebSocketServer) sendMalformedRequest(wsConn *WebSocketConnection, req
 	ws.deliver(wsConn, data)
 }
 
-func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RPCError, id any) {
-	ws.sendErrorWithOptions(wsConn, rpcErr, id, nil)
-}
-
-// sendErrorWithOptions writes an XRPL-format error: error fields are at top
-// level (not nested in result) per the WebSocket spec.
-func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RPCError, id any, opts *types.WebSocketResponseOptions) {
-	response := buildWebSocketErrorResponse(rpcErr, id, opts)
-	data, err := json.Marshal(response)
+func (ws *WebSocketServer) sendJSONInvalid(wsConn *WebSocketConnection, value any, parsed bool) {
+	rawValue := "<redacted>"
+	if parsed {
+		if data, err := marshalWebSocketJSON(redactJSONValue(value)); err == nil {
+			rawValue = string(data)
+		}
+	}
+	data, err := marshalWebSocketJSON(map[string]any{
+		"type":  "error",
+		"error": "jsonInvalid",
+		"value": rawValue,
+	})
 	if err != nil {
-		wsLog().Error("Failed to marshal WebSocket error response", "err", err)
+		wsLog().Error("Failed to marshal invalid JSON response", "err", err)
 		return
 	}
 	ws.deliver(wsConn, data)
 }
 
-func buildWebSocketErrorResponse(rpcErr *types.RPCError, id any, opts *types.WebSocketResponseOptions) map[string]any {
-	response := rpcErr.ResponseFields()
-	response["type"] = "response"
-	response["status"] = "error"
+func (ws *WebSocketServer) sendCommandError(wsConn *WebSocketConnection, rpcErr *types.RpcError, cmd types.WebSocketCommand) {
+	ws.sendErrorResponse(wsConn, rpcErr, cmd.ID, nil, cmd.Request)
+}
+
+func (ws *WebSocketServer) sendErrorResponse(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions, request map[string]any) {
+	response := map[string]any{
+		"type":   "response",
+		"status": "error",
+		"error":  rpcErr.ErrorString,
+	}
 	if id != nil {
 		response["id"] = id
 	}
+	if rpcErr.ErrorException != "" {
+		response["error_exception"] = rpcErr.ErrorException
+	} else if !rpcErr.IsBareToken() {
+		response["error_code"] = rpcErr.Code
+		response["error_message"] = rpcErr.Message
+	}
+
 	if opts != nil {
 		if opts.Warning != "" {
 			response["warning"] = opts.Warning
@@ -866,7 +994,47 @@ func buildWebSocketErrorResponse(rpcErr *types.RPCError, id any, opts *types.Web
 			response["forwarded"] = true
 		}
 	}
-	return response
+
+	if request != nil {
+		response["request"] = request
+	}
+	copyWSMetadata(response, request, id)
+
+	data, err := marshalWebSocketJSON(response)
+	if err != nil {
+		wsLog().Error("Failed to marshal WebSocket error response", "err", err)
+		return
+	}
+	ws.deliver(wsConn, data)
+}
+
+func buildWSRequestEcho(message []byte) map[string]any {
+	var request map[string]any
+	if err := decodeJSONUseNumber(message, &request); err != nil || request == nil {
+		return nil
+	}
+	return redactedRequestMap(request)
+}
+
+func copyWSMetadata(response map[string]any, request map[string]any, fallbackID any) {
+	if fallbackID != nil {
+		response["id"] = fallbackID
+	}
+	for _, key := range []string{"id", "jsonrpc", "ripplerpc", "api_version"} {
+		if value, ok := request[key]; ok {
+			response[key] = value
+		}
+	}
+}
+
+func marshalWebSocketJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte{'\n'}), nil
 }
 
 // attachConnection is the single point at which a new WS connection
@@ -912,6 +1080,16 @@ func (c *WebSocketConnection) closeSocket() {
 	c.conn.Close()
 }
 
+func (wsConn *WebSocketConnection) closeWithPolicyViolation(reason string) {
+	wsConn.cancel()
+	_ = wsConn.conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
+		time.Now().Add(time.Second),
+	)
+	wsConn.conn.Close()
+}
+
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsConn.cancel()
 
@@ -942,7 +1120,7 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 // It reuses the ledger service's GetBookOffers — the same code path the
 // book_offers RPC uses — so the snapshot a subscriber gets in the ack is
 // identical to what they would have read with a separate book_offers call.
-func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RPCContext, request types.SubscriptionRequest) map[string]any {
+func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
 	result := make(map[string]any)
 
 	if slices.Contains(request.Streams, types.SubLedger) {
@@ -969,7 +1147,7 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RPCContext, request type
 	}
 
 	for _, book := range request.Books {
-		if !book.Snapshot || ctx.Services == nil || ctx.Services.Ledger == nil {
+		if (!book.Snapshot && !book.StateNow) || ctx.Services == nil || ctx.Services.Ledger == nil {
 			continue
 		}
 		var takerGets, takerPays types.CurrencySpec
@@ -981,9 +1159,9 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RPCContext, request type
 		}
 		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
 		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
-		if book.Both {
-			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
-			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker)
+		if book.Both || book.BothSides {
+			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, book.Domain)
+			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker, book.Domain)
 			if bids != nil {
 				result["bids"] = appendOffers(result["bids"], bids)
 			}
@@ -992,7 +1170,7 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RPCContext, request type
 			}
 			continue
 		}
-		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker, book.Domain)
 		if offers != nil {
 			result["offers"] = appendOffers(result["offers"], offers)
 		}
@@ -1006,11 +1184,11 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RPCContext, request type
 // subscribe ack. Errors are squashed — a snapshot failure mustn't
 // reject the entire subscribe (rippled Subscribe.cpp:339-394 ignores
 // the snapshot block on lookup failure too).
-func (ws *WebSocketServer) snapshotBook(ctx *types.RPCContext, takerGets, takerPays types.Amount, taker string) ([]types.BookOffer, error) {
+func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker, domain string) ([]types.BookOffer, error) {
 	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, nil
 	}
-	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, "", "current", DefaultBookSnapshotLimit, "", false)
+	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, domain, "validated", DefaultBookSnapshotLimit, "", false)
 	if err != nil || res == nil {
 		return nil, err
 	}

@@ -33,9 +33,6 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 		if err != nil {
 			t.Fatalf("snapshot tx: %v", err)
 		}
-		// NewFromHeader yields StateValidated; NewOpenWithHeader yields
-		// StateOpen (IsValidated()==false) — the synthetic shape needed
-		// to exercise the precedence skip.
 		var parentHash, ledgerHash [32]byte
 		parentHash[0] = salt
 		ledgerHash[0] = salt
@@ -44,6 +41,7 @@ func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {
 			LedgerIndex: seq,
 			ParentHash:  parentHash,
 			Hash:        ledgerHash,
+			Validated:   validated,
 		}
 		if validated {
 			l, err := ledger.NewFromHeader(h, stateMap, txMap, drops.Fees{})

@@ -85,6 +85,13 @@ type Writer interface {
 	AdjustDropsDestroyed(drops drops.XRPAmount)
 }
 
+// AtomicWriter can commit a group of ledger and destroyed-drop changes as one
+// unit. The supplied writer is valid only for the duration of apply.
+type AtomicWriter interface {
+	Writer
+	ApplyAtomically(apply func(Writer) error) error
+}
+
 // Ledger represents a single ledger in the chain
 type Ledger struct {
 	mu sync.RWMutex
@@ -105,6 +112,8 @@ type Ledger struct {
 	// with the resulting amendment state when that ledger closes.
 	rules *amendment.Rules
 }
+
+var _ AtomicWriter = (*Ledger)(nil)
 
 // NewOpen creates a new open ledger based on a parent ledger
 func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
@@ -176,19 +185,22 @@ func FromGenesis(
 	}
 }
 
-// NewFromHeader creates a closed/validated ledger from a deserialized header
-// and existing state/tx maps. Used during initial sync to adopt a peer's ledger.
+// NewFromHeader creates a closed ledger from a deserialized header and existing
+// state/tx maps. The header's Validated flag determines whether it is already
+// validated; peer wire headers omit that local state and remain closed until
+// quorum promotion.
 func NewFromHeader(
 	hdr header.LedgerHeader,
 	stateMap *shamap.SHAMap,
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) (*Ledger, error) {
-	return newFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees, StateValidated)
+	return NewFromHeaderContext(context.Background(), hdr, stateMap, txMap, fees)
 }
 
-// NewFromHeaderContext reconstructs a validated ledger while forwarding ctx to
-// amendment-state reads from lazily backed maps.
+// NewFromHeaderContext reconstructs a closed or validated ledger, according to
+// the header's local validation flag, while forwarding ctx to amendment-state
+// reads from lazily backed maps.
 func NewFromHeaderContext(
 	ctx context.Context,
 	hdr header.LedgerHeader,
@@ -196,7 +208,11 @@ func NewFromHeaderContext(
 	txMap *shamap.SHAMap,
 	fees drops.Fees,
 ) (*Ledger, error) {
-	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, StateValidated)
+	state := StateClosed
+	if hdr.Validated {
+		state = StateValidated
+	}
+	return newFromHeaderContext(ctx, hdr, stateMap, txMap, fees, state)
 }
 
 // NewClosedFromHeader reconstructs an immutable ledger without asserting validation.
@@ -531,6 +547,35 @@ func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	defer l.mu.Unlock()
 
 	l.dropsDestroyed = l.dropsDestroyed.Add(drops)
+}
+
+func (l *Ledger) ApplyAtomically(apply func(Writer) error) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state != StateOpen {
+		return ErrLedgerImmutable
+	}
+
+	stateMap, err := l.stateMap.MutableFork()
+	if err != nil {
+		return fmt.Errorf("fork ledger state: %w", err)
+	}
+	staged := &Ledger{
+		stateMap:       stateMap,
+		txMap:          l.txMap,
+		header:         l.header,
+		fees:           l.fees,
+		state:          l.state,
+		dropsDestroyed: l.dropsDestroyed,
+	}
+	if err := apply(staged); err != nil {
+		return err
+	}
+
+	l.stateMap = staged.stateMap
+	l.dropsDestroyed = staged.dropsDestroyed
+	return nil
 }
 
 // AdoptState replaces this ledger's state map, tx map, and destroyed-drops tally

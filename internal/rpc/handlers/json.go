@@ -12,7 +12,7 @@ import (
 // Reference: rippled JSON.cpp
 type JSONMethod struct{ BaseHandler }
 
-func (m *JSONMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *JSONMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Method string          `json:"method"`
 		Params json.RawMessage `json:"params,omitempty"`
@@ -20,16 +20,16 @@ func (m *JSONMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any,
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	if request.Method == "" {
-		return nil, types.RPCErrorInvalidParams("Missing required parameter: method")
+		return nil, types.RpcErrorInvalidParams("Missing required parameter: method")
 	}
 
 	if ctx.Services == nil || ctx.Services.Dispatcher == nil {
-		return nil, types.RPCErrorInternal("Method dispatcher not available")
+		return nil, rpcInternalInvariantError("json: method dispatcher unavailable")
 	}
 
 	// The params field in the json method can be either:

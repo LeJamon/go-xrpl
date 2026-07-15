@@ -1314,7 +1314,7 @@ func TestGetSubscribeResponse(t *testing.T) {
 // call." branch when context.infoSub is null and no `url` param is provided).
 func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 	method := &handlers.SubscribeMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1331,7 +1331,7 @@ func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 // "Must be a JSON-RPC call." gate as Subscribe.cpp).
 func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 	method := &handlers.UnsubscribeMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
 	}
@@ -1359,7 +1359,7 @@ func TestSubscribeURLGating(t *testing.T) {
 
 	for name, method := range methods {
 		t.Run(name+": url from non-admin is noPermission", func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
 			}
@@ -1371,7 +1371,7 @@ func TestSubscribeURLGating(t *testing.T) {
 		})
 
 		t.Run(name+": url from admin is notSupported", func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Role:       types.RoleAdmin,
 				ApiVersion: types.ApiVersion1,
 			}
@@ -1803,9 +1803,10 @@ func TestWebSocketSnapshot_Single(t *testing.T) {
 	ws := &WebSocketServer{services: services}
 
 	offers, err := ws.snapshotBook(
-		&types.RPCContext{Context: context.Background(), Services: services},
+		&types.RpcContext{Context: context.Background(), Services: services},
 		types.Amount{Currency: "XRP"},
 		types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		"",
 		"",
 	)
 	require.NoError(t, err)
@@ -1827,11 +1828,11 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 	}
 	services := types.NewServiceContainer(mock)
 	ws := &WebSocketServer{services: services}
-	ctx := &types.RPCContext{Context: context.Background(), Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), Services: services}
 
-	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "")
+	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "", "")
 	require.NoError(t, err)
-	asks, err := ws.snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "")
+	asks, err := ws.snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "", "")
 	require.NoError(t, err)
 	require.Len(t, mock.calls, 2, "both:true snapshot must issue one GetBookOffers per side")
 	require.Equal(t, "rBid", bids[0].Account)

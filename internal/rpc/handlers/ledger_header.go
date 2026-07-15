@@ -20,7 +20,7 @@ import (
 // and returns both ledger_data (binary hex) and a ledger JSON object.
 type LedgerHeaderMethod struct{ BaseHandler }
 
-func (m *LedgerHeaderMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 	}
 
@@ -81,14 +81,21 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 // fillJson(json, closed, info, bFull=false, apiVersion=1).
 // Reference: rippled/src/xrpld/app/ledger/detail/LedgerToJson.cpp fillJson()
 func buildLedgerHeaderJSON(lr types.LedgerReader, closed bool) map[string]any {
+	return buildLedgerSummaryJSON(lr, closed, types.ApiVersion1)
+}
+
+func buildLedgerSummaryJSON(lr types.LedgerReader, closed bool, apiVersion int) map[string]any {
 	ledgerObj := map[string]any{}
 
 	// parent_hash is always present
 	parentHash := lr.ParentHash()
 	ledgerObj["parent_hash"] = FormatLedgerHash(parentHash)
 
-	// ledger_index as string (API v1 behavior, which is the only version this method supports)
-	ledgerObj["ledger_index"] = strconv.FormatUint(uint64(lr.Sequence()), 10)
+	if apiVersion > types.ApiVersion1 {
+		ledgerObj["ledger_index"] = lr.Sequence()
+	} else {
+		ledgerObj["ledger_index"] = strconv.FormatUint(uint64(lr.Sequence()), 10)
+	}
 
 	if !closed {
 		ledgerObj["closed"] = false

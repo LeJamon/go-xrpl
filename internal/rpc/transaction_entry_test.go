@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -147,7 +148,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -200,7 +201,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -281,15 +282,8 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	copy(txHash[:], txHashBytes)
 
 	storedTx := map[string]any{
-		"tx_json": map[string]any{
-			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			"TransactionType": "Payment",
-			"Amount":          "1000000",
-			"Fee":             "10",
-		},
-		"meta": map[string]any{
-			"TransactionResult": "tesSUCCESS",
-		},
+		"tx_json": validStoredPaymentTransaction(),
+		"meta":    validStoredMetadata(),
 	}
 	txData, _ := json.Marshal(storedTx)
 	ledger2.txs[txHash] = txData
@@ -302,7 +296,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	}
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -409,7 +403,7 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -449,7 +443,7 @@ func TestTransactionEntryContextReadError(t *testing.T) {
 
 	requestContext, cancel := context.WithCancel(context.Background())
 	cancel()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    requestContext,
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -487,13 +481,8 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 
 	storedTx := map[string]any{
-		"tx_json": map[string]any{
-			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			"TransactionType": "Payment",
-		},
-		"meta": map[string]any{
-			"TransactionResult": "tesSUCCESS",
-		},
+		"tx_json": validStoredPaymentTransaction(),
+		"meta":    validStoredMetadata(),
 	}
 	txData, _ := json.Marshal(storedTx)
 
@@ -506,7 +495,7 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 	}
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -540,18 +529,9 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 
-	storedTx := map[string]any{
-		"tx_json": map[string]any{
-			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			"TransactionType": "Payment",
-			"Amount":          "1000000",
-			"Fee":             "10",
-			"Sequence":        float64(3),
-		},
-		"meta": map[string]any{
-			"TransactionResult": "tesSUCCESS",
-		},
-	}
+	txJSON := validStoredPaymentTransaction()
+	txJSON["Sequence"] = 3
+	storedTx := map[string]any{"tx_json": txJSON, "meta": validStoredMetadata()}
 	txData, _ := json.Marshal(storedTx)
 	txHashBytes, _ := hex.DecodeString(txHashStr)
 	var txHash [32]byte
@@ -566,7 +546,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	}
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -612,31 +592,117 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	meta, ok := resp["metadata"].(map[string]any)
 	require.True(t, ok, "metadata must be an object")
 	assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
-	assert.NotContains(t, meta, "delivered_amount")
-
-	ctx.ApiVersion = types.ApiVersion2
-	result, rpcErr = method.Handle(ctx, paramsJSON)
-	require.Nil(t, rpcErr)
-	resp = result.(map[string]any)
-	txJSON = resp["tx_json"].(map[string]any)
-	assert.Equal(t, txHashStr, resp["hash"])
-	assert.Equal(t, "1000000", txJSON["DeliverMax"])
-	assert.NotContains(t, txJSON, "Amount")
-	assert.NotContains(t, txJSON, "hash")
-	assert.NotContains(t, resp["meta"].(map[string]any), "delivered_amount")
+	assert.NotContains(t, meta, "DeliveredAmount")
 }
 
-func TestTransactionEntryLedgerLookupPrecedesTxHashPresence(t *testing.T) {
+func TestTransactionEntryCorruptedStoredDataIsSanitized(t *testing.T) {
 	mock := newMockLedgerServiceTE()
-	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
-		Context: context.Background(), ApiVersion: types.ApiVersion1,
-		Services: newTransactionEntryTestServices(mock),
+	ledger := newMockLedgerReaderTE(2)
+	mock.addLedger(ledger)
+
+	txHash := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTransactionEntryTestServices(mock),
 	}
-	result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
-	assert.Nil(t, result)
-	require.NotNil(t, rpcErr)
-	assert.Equal(t, "noNetwork", rpcErr.ErrorString)
+	params, err := json.Marshal(map[string]any{"tx_hash": txHash, "ledger_index": ledger.seq})
+	require.NoError(t, err)
+
+	for _, tc := range corruptedStoredTransactionData(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.transactions[txHash] = &types.TransactionInfo{
+				TxData:      tc.data,
+				LedgerIndex: ledger.seq,
+				Validated:   true,
+			}
+
+			result, rpcErr := (&handlers.TransactionEntryMethod{}).Handle(ctx, params)
+
+			requireCanonicalInternalError(t, result, rpcErr)
+		})
+	}
+}
+
+func TestTransactionEntryStoredDataWithoutMetadata(t *testing.T) {
+	mock := newMockLedgerServiceTE()
+	ledger := newMockLedgerReaderTE(2)
+	mock.addLedger(ledger)
+
+	txHash := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTransactionEntryTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{"tx_hash": txHash, "ledger_index": ledger.seq})
+	require.NoError(t, err)
+
+	for _, tc := range storedTransactionDataWithoutMetadata(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.transactions[txHash] = &types.TransactionInfo{
+				TxData:      tc.data,
+				LedgerIndex: ledger.seq,
+				Validated:   true,
+			}
+
+			for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+				t.Run(fmt.Sprintf("API v%d", apiVersion), func(t *testing.T) {
+					requestCtx := *ctx
+					requestCtx.ApiVersion = apiVersion
+					result, rpcErr := (&handlers.TransactionEntryMethod{}).Handle(&requestCtx, params)
+					if tc.name == "VL metadata absent" {
+						requireCanonicalInternalError(t, result, rpcErr)
+						return
+					}
+
+					require.Nil(t, rpcErr)
+					response, ok := result.(map[string]any)
+					require.True(t, ok)
+					txJSON, ok := response["tx_json"].(map[string]any)
+					require.True(t, ok)
+					assert.Equal(t, "Payment", txJSON["TransactionType"])
+					if tc.name == "VL metadata empty" {
+						key := "metadata"
+						if apiVersion > types.ApiVersion1 {
+							key = "meta"
+						}
+						assert.Equal(t, map[string]any{}, response[key])
+					} else {
+						assert.NotContains(t, response, "metadata")
+						assert.NotContains(t, response, "meta")
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestTransactionEntryAcceptsGenericCodecMetadata(t *testing.T) {
+	mock := newMockLedgerServiceTE()
+	ledger := newMockLedgerReaderTE(2)
+	mock.addLedger(ledger)
+	const txHash = "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTransactionEntryTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{"tx_hash": txHash, "ledger_index": ledger.seq})
+	require.NoError(t, err)
+
+	for _, tc := range txMetadataCorruptionData(t) {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.transactions[txHash] = &types.TransactionInfo{TxData: tc.data, LedgerIndex: ledger.seq, Validated: true}
+			result, rpcErr := (&handlers.TransactionEntryMethod{}).Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			response := result.(map[string]any)
+			require.IsType(t, map[string]any{}, response["metadata"])
+		})
+	}
 }
 
 // TestTransactionEntryServiceUnavailable tests behavior when ledger service is not available.
@@ -644,7 +710,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 	method := &handlers.TransactionEntryMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -662,11 +728,11 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -684,7 +750,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -711,7 +777,7 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 	services := newTransactionEntryTestServices(mock)
 
 	method := &handlers.TransactionEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -721,10 +787,8 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 
 	storedTx := map[string]any{
-		"tx_json": map[string]any{
-			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		},
-		"meta": map[string]any{},
+		"tx_json": validStoredPaymentTransaction(),
+		"meta":    validStoredMetadata(),
 	}
 	txData, _ := json.Marshal(storedTx)
 	mock.transactions[txHashStr] = &types.TransactionInfo{

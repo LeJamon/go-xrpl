@@ -19,7 +19,7 @@ import (
 func signOffline(t *testing.T, params json.RawMessage) map[string]any {
 	t.Helper()
 	handler := &handlers.SignMethod{}
-	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
 	result, rpcErr := handler.Handle(ctx, params)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
@@ -95,7 +95,7 @@ func TestSign_SignatureTarget_HappyPath(t *testing.T) {
 // the CounterpartySignature field, with rpcINVALID_PARAMS.
 func TestSign_SignatureTarget_Invalid(t *testing.T) {
 	handler := &handlers.SignMethod{}
-	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -147,7 +147,7 @@ func TestSign_SignatureTarget_SkipsOwnershipCheck(t *testing.T) {
 // CounterpartySignature object via sign_for.
 func TestSignFor_SignatureTarget(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
 
 	// account is the signer; the tx Account is a different primary account.
 	params := json.RawMessage(`{
@@ -186,7 +186,7 @@ func TestSignFor_SignatureTarget(t *testing.T) {
 // TestSignFor_SignatureTarget_Invalid rejects an unknown signature_target.
 func TestSignFor_SignatureTarget_Invalid(t *testing.T) {
 	handler := &handlers.SignForMethod{}
-	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1}
 	params := json.RawMessage(`{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"tx_json": {

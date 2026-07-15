@@ -206,16 +206,14 @@ func (q *TxQ) removeByFee(c *Candidate) {
 	}
 }
 
-// erase removes a candidate from both byFee and byAccount.
+// erase removes a candidate while retaining its AccountQueue until the next
+// closed-ledger cleanup.
 // Caller must hold the lock.
 func (q *TxQ) erase(c *Candidate) {
 	q.removeByFee(c)
 
 	if aq, exists := q.byAccount[c.Account]; exists {
 		aq.Remove(c.SeqProxy)
-		if aq.Empty() {
-			delete(q.byAccount, c.Account)
-		}
 	}
 }
 

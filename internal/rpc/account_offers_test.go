@@ -52,7 +52,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -194,7 +194,7 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -285,7 +285,7 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -437,7 +437,7 @@ func TestAccountOffersResponseFields(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -534,7 +534,7 @@ func TestAccountOffersEmptyOffers(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -585,7 +585,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -756,7 +756,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -939,7 +939,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountOffersMethod{}
 
 	t.Run("Services nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -957,11 +957,11 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Ledger nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -979,7 +979,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -1006,7 +1006,7 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1064,8 +1064,8 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 	const hashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := func(mock *accountOffersMock) *types.RPCContext {
-		return &types.RPCContext{
+	ctx := func(mock *accountOffersMock) *types.RpcContext {
+		return &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1136,7 +1136,7 @@ func TestAccountOffersInvalidAccountTypes(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1186,7 +1186,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1251,7 +1251,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 	services := newAccountOffersTestServices(mock)
 
 	method := &handlers.AccountOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1307,6 +1307,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Failed to get account offers")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
+		assert.NotContains(t, rpcErr.Message, "database connection failed")
 	})
 }

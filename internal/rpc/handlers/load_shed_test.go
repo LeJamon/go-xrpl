@@ -6,16 +6,16 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-func unlimitedCtx(s *types.ClientLoadShedder) *types.RPCContext {
-	return &types.RPCContext{
+func unlimitedCtx(s *types.ClientLoadShedder) *types.RpcContext {
+	return &types.RpcContext{
 		Role:      types.RoleAdmin,
 		Unlimited: true,
 		Services:  &types.ServiceContainer{ClientLoad: s},
 	}
 }
 
-func gatedCtx(s *types.ClientLoadShedder) *types.RPCContext {
-	return &types.RPCContext{Services: &types.ServiceContainer{ClientLoad: s}}
+func gatedCtx(s *types.ClientLoadShedder) *types.RpcContext {
+	return &types.RpcContext{Services: &types.ServiceContainer{ClientLoad: s}}
 }
 
 func loadInFlight(s *types.ClientLoadShedder, n int64) {
@@ -25,7 +25,7 @@ func loadInFlight(s *types.ClientLoadShedder, n int64) {
 }
 
 func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
-	for _, ctx := range []*types.RPCContext{
+	for _, ctx := range []*types.RpcContext{
 		nil,
 		{},
 		{Services: &types.ServiceContainer{}},
@@ -47,19 +47,17 @@ func TestGates_NilOrUnwiredIsNoOp(t *testing.T) {
 	}
 }
 
-// Strict-greater semantics for the generic gate mirror
-// rippled RPCHandler.cpp:135 (maxJobQueueClients = 500).
 func TestRequireNotBusyClient_Strictness(t *testing.T) {
 	s := types.NewClientLoadShedder()
-	loadInFlight(s, types.MaxJobQueueClients)
+	loadInFlight(s, types.MaxJobQueueClients-1)
 
 	if rpcErr := RequireNotBusyClient(gatedCtx(s)); rpcErr != nil {
-		t.Fatalf("count==500 should not shed, got %v", rpcErr)
+		t.Fatalf("count==499 should not shed, got %v", rpcErr)
 	}
 	s.Begin()
 	rpcErr := RequireNotBusyClient(gatedCtx(s))
 	if rpcErr == nil {
-		t.Fatal("count==501 should shed")
+		t.Fatal("count==500 should shed")
 	}
 	if rpcErr.Code != types.RpcTOO_BUSY || rpcErr.ErrorString != "tooBusy" {
 		t.Errorf("got code=%d errorString=%q, want %d/%q", rpcErr.Code, rpcErr.ErrorString, types.RpcTOO_BUSY, "tooBusy")

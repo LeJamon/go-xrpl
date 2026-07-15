@@ -1115,7 +1115,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	// another peer's behalf. Route it back to the original requester named
 	// by the cookie and do not consume it locally. Mirrors rippled
 	// onMessage(TMLedgerData).
-	if ld.RequestCookie != 0 {
+	if ld.HasRequestCookie() {
 		r.routeRelayedLedgerData(ld, msg.PeerID)
 		return
 	}

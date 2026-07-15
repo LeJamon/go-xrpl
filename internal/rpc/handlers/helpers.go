@@ -15,14 +15,39 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+func logRpcError(operation string, err error) {
+	xrpllog.Named(xrpllog.PartitionRPC).Error(operation, "err", err)
+}
+
+func rpcInternalError(operation string, err error) *types.RpcError {
+	logRpcError(operation, err)
+	return types.RpcErrorInternal()
+}
+
+func rpcInternalInvariantError(operation string) *types.RpcError {
+	xrpllog.Named(xrpllog.PartitionRPC).Error(operation)
+	return types.RpcErrorInternal()
+}
+
+func rpcTransactionSubmissionError(operation string, err error) *types.RpcError {
+	logRpcError(operation, err)
+	return types.RpcErrorTransactionSubmission()
+}
+
+func rpcDBDeserializationError(operation string, err error) *types.RpcError {
+	logRpcError(operation, err)
+	return types.RpcErrorDBDeserialization()
+}
+
 // RequireLedgerService checks that the ledger service is available
-// on the request's service container. Returns an RPCError if not.
-func RequireLedgerService(services *types.ServiceContainer) *types.RPCError {
+// on the request's service container. Returns an RpcError if not.
+func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	if services == nil || services.Ledger == nil {
-		return types.RPCErrorInternal("Ledger service not available")
+		return rpcInternalInvariantError("rpc: ledger service unavailable")
 	}
 	return nil
 }
@@ -33,12 +58,12 @@ func RequireLedgerService(services *types.ServiceContainer) *types.RPCError {
 // database answers notEnabled even for otherwise-malformed requests.
 // Services that don't implement types.TxTablesProvider are assumed to
 // have history available.
-func RequireTxTables(services *types.ServiceContainer) *types.RPCError {
+func RequireTxTables(services *types.ServiceContainer) *types.RpcError {
 	if err := RequireLedgerService(services); err != nil {
 		return err
 	}
 	if p, ok := services.Ledger.(types.TxTablesProvider); ok && !p.UseTxTables() {
-		return types.RPCErrorNotEnabled("")
+		return types.RpcErrorNotEnabled("")
 	}
 	return nil
 }
@@ -47,24 +72,21 @@ func RequireTxTables(services *types.ServiceContainer) *types.RPCError {
 // Skips when ctx is missing, the shedder isn't wired, or the caller is
 // unlimited (admin/identified) — mirroring rippled's isUnlimited(role)
 // carve-out at RPCHandler.cpp:132 and LegacyPathFind.cpp:32-37.
-func shedCheck(ctx *types.RPCContext) *types.ClientLoadShedder {
+func shedCheck(ctx *types.RpcContext) *types.ClientLoadShedder {
 	if ctx == nil || ctx.Unlimited || ctx.Services == nil {
 		return nil
 	}
 	return ctx.Services.ClientLoad
 }
 
-// RequireNotBusyClient is the generic RPC admission gate fired before
-// every non-admin RPC dispatches. Mirrors rippled's fillHandler check
-// at RPCHandler.cpp:132-141: shed when the jtCLIENT-or-higher job count
-// exceeds Tuning::maxJobQueueClients (500).
-func RequireNotBusyClient(ctx *types.RPCContext) *types.RPCError {
+// RequireNotBusyClient rejects non-admin RPC requests when the client job queue is full.
+func RequireNotBusyClient(ctx *types.RpcContext) *types.RpcError {
 	s := shedCheck(ctx)
 	if s == nil {
 		return nil
 	}
-	if s.InFlight() > types.MaxJobQueueClients {
-		return types.RPCErrorTooBusy()
+	if s.InFlight() >= types.MaxJobQueueClients {
+		return types.RpcErrorTooBusy()
 	}
 	return nil
 }
@@ -72,13 +94,13 @@ func RequireNotBusyClient(ctx *types.RPCContext) *types.RPCError {
 // RequireNotBusyBookOffers is the book_offers-specific gate matching
 // rippled BookOffers.cpp:42-43 (`getJobCountGE(jtCLIENT) > 200`). Fires
 // in addition to the generic dispatcher-level gate.
-func RequireNotBusyBookOffers(ctx *types.RPCContext) *types.RPCError {
+func RequireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
 	s := shedCheck(ctx)
 	if s == nil {
 		return nil
 	}
 	if s.InFlight() > types.MaxBookOffersClients {
-		return types.RPCErrorTooBusy()
+		return types.RpcErrorTooBusy()
 	}
 	return nil
 }
@@ -95,23 +117,23 @@ func RequireNotBusyBookOffers(ctx *types.RPCContext) *types.RPCError {
 // when admitted; release is nil on shed. The isLoadedLocal() check
 // rippled performs in the same ctor will land alongside the LoadFeeTrack
 // subsystem (ServiceContainer.LoadFactorFees is nil today).
-func AcquirePathfind(ctx *types.RPCContext) (release func(), rpcErr *types.RPCError) {
+func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
 	s := shedCheck(ctx)
 	if s == nil {
 		return func() {}, nil
 	}
 	if s.InFlight() > types.MaxPathfindClients {
-		return nil, types.RPCErrorTooBusy()
+		return nil, types.RpcErrorTooBusy()
 	}
 	if !s.AcquirePathfind() {
-		return nil, types.RPCErrorTooBusy()
+		return nil, types.RpcErrorTooBusy()
 	}
 	return s.ReleasePathfind, nil
 }
 
-// ParseParams unmarshals JSON params into dest, returning an RPCError on failure.
+// ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
 // If params is nil, dest is left untouched (zero value).
-func ParseParams(params json.RawMessage, dest any) *types.RPCError {
+func ParseParams(params json.RawMessage, dest any) *types.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -130,12 +152,12 @@ func ParseParams(params json.RawMessage, dest any) *types.RPCError {
 		}
 	}
 	if err := json.Unmarshal(params, dest); err != nil {
-		return types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		return types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return nil
 }
 
-func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, *types.RPCError) {
+func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, *types.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return types.LedgerSpecifier{}, false, rpcErr
 	}
@@ -148,7 +170,7 @@ func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, 
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(params, &fields); err != nil {
-		return types.LedgerSpecifier{}, false, types.RPCErrorInvalidParams("Invalid parameters.")
+		return types.LedgerSpecifier{}, false, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	var spec types.LedgerSpecifier
 	if raw, ok := fields["ledger_hash"]; ok {
@@ -176,7 +198,7 @@ func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, 
 	return spec, true, nil
 }
 
-func validateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
+func validateJsonCppIntegerRange(params json.RawMessage) *types.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -217,36 +239,36 @@ func validateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
 	}
 	walk(value)
 	if invalid {
-		return types.RPCErrorInvalidParams("Invalid parameters.")
+		return types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	return nil
 }
 
-func ValidateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
+func ValidateJsonCppIntegerRange(params json.RawMessage) *types.RpcError {
 	return validateJsonCppIntegerRange(params)
 }
 
 // RequireAccount checks that the account parameter is non-empty.
-func RequireAccount(account string) *types.RPCError {
+func RequireAccount(account string) *types.RpcError {
 	if account == "" {
-		return types.RPCErrorInvalidParams("Missing required parameter: account")
+		return types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 	return nil
 }
 
 // ValidateAccount validates a base58-encoded XRPL account address.
 // Returns rpcACT_MALFORMED (code 35) if malformed, matching rippled behavior.
-func ValidateAccount(account string) *types.RPCError {
+func ValidateAccount(account string) *types.RpcError {
 	if account == "" {
-		return types.RPCErrorActMalformed("Account malformed.")
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 	if !types.IsValidXRPLAddress(account) {
-		return types.RPCErrorActMalformed("Account malformed.")
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 	return nil
 }
 
-func resolveLedgerSelector(input any) (string, *types.RPCError) {
+func resolveLedgerSelector(input any) (string, *types.RpcError) {
 	selection, rpcErr := parseLedgerSelectorInput(input, ledgerselector.Current())
 	if rpcErr != nil {
 		return "", rpcErr
@@ -255,12 +277,12 @@ func resolveLedgerSelector(input any) (string, *types.RPCError) {
 }
 
 func preflightAccountPage(
-	ctx *types.RPCContext,
+	ctx *types.RpcContext,
 	params json.RawMessage,
 	account string,
 	internalDetail string,
 	includeLedgerFieldsOnError bool,
-) (string, map[string]any, *types.RPCError) {
+) (string, map[string]any, *types.RpcError) {
 	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
 	if rpcErr != nil {
 		return "", nil, rpcErr
@@ -292,20 +314,20 @@ func mergeLedgerFields(response, ledgerFields map[string]any) {
 	}
 }
 
-func accountPageParams(params json.RawMessage) (map[string]json.RawMessage, string, *types.RPCError) {
+func accountPageParams(params json.RawMessage) (map[string]json.RawMessage, string, *types.RpcError) {
 	var fields map[string]json.RawMessage
 	if len(params) > 0 && !isJSONNull(params) {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, "", types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, "", types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	rawAccount, ok := fields["account"]
 	if !ok {
-		return fields, "", types.RPCErrorMissingField("account")
+		return fields, "", types.RpcErrorMissingField("account")
 	}
 	var account string
 	if isJSONNull(rawAccount) || json.Unmarshal(rawAccount, &account) != nil {
-		return fields, "", types.RPCErrorInvalidField("account")
+		return fields, "", types.RpcErrorInvalidField("account")
 	}
 	return fields, account, nil
 }
@@ -313,13 +335,13 @@ func accountPageParams(params json.RawMessage) (map[string]json.RawMessage, stri
 func parseLedgerSelectorParams(
 	params json.RawMessage,
 	defaultSelection ledgerselector.Selector,
-) (ledgerselector.Selector, *types.RPCError) {
+) (ledgerselector.Selector, *types.RpcError) {
 	if len(params) == 0 || isJSONNull(params) {
 		return defaultSelection, nil
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(params, &raw); err != nil {
-		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		return ledgerselector.Selector{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return parseRawLedgerSelector(raw, defaultSelection, lookupLedgerSelectorErrors)
 }
@@ -327,7 +349,7 @@ func parseLedgerSelectorParams(
 func parseLedgerSelectorInput(
 	input any,
 	defaultSelection ledgerselector.Selector,
-) (ledgerselector.Selector, *types.RPCError) {
+) (ledgerselector.Selector, *types.RpcError) {
 	switch value := input.(type) {
 	case nil:
 		return defaultSelection, nil
@@ -346,29 +368,29 @@ func parseLedgerSelectorInput(
 		}
 		return parseRawLedgerSelector(raw, defaultSelection, lookupLedgerSelectorErrors)
 	default:
-		return ledgerselector.Selector{}, types.RPCErrorInvalidParams("Invalid parameters.")
+		return ledgerselector.Selector{}, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 }
 
 type rawLedgerSelectorErrors struct {
-	hashType       func() *types.RPCError
-	hashMalformed  func() *types.RPCError
-	indexType      func(field string) *types.RPCError
-	indexMalformed func(field string) *types.RPCError
+	hashType       func() *types.RpcError
+	hashMalformed  func() *types.RpcError
+	indexType      func(field string) *types.RpcError
+	indexMalformed func(field string) *types.RpcError
 }
 
 var lookupLedgerSelectorErrors = rawLedgerSelectorErrors{
-	hashType: func() *types.RPCError {
-		return types.RPCErrorExpectedField("ledger_hash", "hex string")
+	hashType: func() *types.RpcError {
+		return types.RpcErrorExpectedField("ledger_hash", "hex string")
 	},
-	hashMalformed: func() *types.RPCError {
-		return types.RPCErrorExpectedField("ledger_hash", "hex string")
+	hashMalformed: func() *types.RpcError {
+		return types.RpcErrorExpectedField("ledger_hash", "hex string")
 	},
-	indexType: func(field string) *types.RPCError {
-		return types.RPCErrorExpectedField(field, "string or number")
+	indexType: func(field string) *types.RpcError {
+		return types.RpcErrorExpectedField(field, "string or number")
 	},
-	indexMalformed: func(field string) *types.RPCError {
-		return types.RPCErrorExpectedField(field, "string or number")
+	indexMalformed: func(field string) *types.RpcError {
+		return types.RpcErrorExpectedField(field, "string or number")
 	},
 }
 
@@ -376,7 +398,7 @@ func parseRawLedgerSelector(
 	raw map[string]json.RawMessage,
 	defaultSelection ledgerselector.Selector,
 	errorStyle rawLedgerSelectorErrors,
-) (ledgerselector.Selector, *types.RPCError) {
+) (ledgerselector.Selector, *types.RpcError) {
 	rawLedger, hasLedger := raw["ledger"]
 	rawHash, hasHash := raw["ledger_hash"]
 	rawIndex, hasIndex := raw["ledger_index"]
@@ -388,11 +410,11 @@ func parseRawLedgerSelector(
 	}
 	if selectorCount > 1 {
 		if hasLedger {
-			return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
+			return ledgerselector.Selector{}, types.RpcErrorInvalidParams(
 				"Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.",
 			)
 		}
-		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(
+		return ledgerselector.Selector{}, types.RpcErrorInvalidParams(
 			"Exactly one of 'ledger_hash' or 'ledger_index' can be specified.",
 		)
 	}
@@ -434,9 +456,9 @@ func parseRawLedgerSelector(
 }
 
 func resolveLedgerSelection(
-	ctx *types.RPCContext,
+	ctx *types.RpcContext,
 	selection ledgerselector.Selector,
-) (ledgerselector.Result[types.LedgerReader], *types.RPCError) {
+) (ledgerselector.Result[types.LedgerReader], *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return ledgerselector.Result[types.LedgerReader]{}, err
 	}
@@ -475,18 +497,18 @@ func resolveLedgerSelection(
 	if err != nil {
 		if selection.Kind() == ledgerselector.KindHash {
 			if errors.Is(err, svcerr.ErrLedgerNotFound) || errors.Is(err, ledgerselector.ErrLedgerNotFound) {
-				return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorLgrNotFound("ledgerNotFound")
+				return ledgerselector.Result[types.LedgerReader]{}, types.RpcErrorLgrNotFound("ledgerNotFound")
 			}
-			return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorInternal(fmt.Sprintf("ledger hash lookup: %v", err))
+			return ledgerselector.Result[types.LedgerReader]{}, rpcInternalError("ledger lookup: hash query failed", err)
 		}
 		switch selection.Kind() {
 		case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
 			if ctx.ApiVersion <= types.ApiVersion1 {
-				return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorNoNetwork("InsufficientNetworkMode")
+				return ledgerselector.Result[types.LedgerReader]{}, types.RpcErrorNoNetwork("InsufficientNetworkMode")
 			}
-			return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorNotSynced("notSynced")
+			return ledgerselector.Result[types.LedgerReader]{}, types.RpcErrorNotSynced("notSynced")
 		}
-		return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorLgrNotFound("ledgerNotFound")
+		return ledgerselector.Result[types.LedgerReader]{}, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	if selection.Kind() == ledgerselector.KindCurrent || selection.Kind() == ledgerselector.KindAbsent {
 		resolved.Validated = false
@@ -497,7 +519,7 @@ func resolveLedgerSelection(
 }
 
 // LookupLedger resolves a request's ledger selector, defaulting to current.
-func LookupLedger(ctx *types.RPCContext, input any) (types.LedgerReader, bool, *types.RPCError) {
+func LookupLedger(ctx *types.RpcContext, input any) (types.LedgerReader, bool, *types.RpcError) {
 	selection, rpcErr := parseLedgerSelectorInput(input, ledgerselector.Current())
 	if rpcErr != nil {
 		return nil, false, rpcErr
@@ -519,51 +541,51 @@ func getLedgerByHashContext(ctx context.Context, svc types.LedgerService, hash [
 }
 
 // mapLedgerLookupErr maps the ledger-resolution errors a ledger-backed account
-// query can return into rippled RPCErrors (ledgerNotFound,
+// query can return into rippled RpcErrors (ledgerNotFound,
 // ledgerIndexMalformed, ledgerHashMalformed). It returns nil when err is not a
 // ledger-resolution error so callers fall through to their handler-specific
 // mapping (account-not-found, etc.), mirroring how rippled's lookupLedger sits
 // ahead of each handler's own checks.
-func mapLedgerLookupErr(err error) *types.RPCError {
+func mapLedgerLookupErr(err error) *types.RpcError {
 	switch {
 	case errors.Is(err, svcerr.ErrLedgerNotFound):
-		return types.RPCErrorLgrNotFound("ledgerNotFound")
+		return types.RpcErrorLgrNotFound("ledgerNotFound")
 	case errors.Is(err, svcerr.ErrInvalidLedgerIndex):
-		return types.RPCErrorInvalidParams("ledgerIndexMalformed")
+		return types.RpcErrorInvalidParams("ledgerIndexMalformed")
 	case errors.Is(err, svcerr.ErrInvalidLedgerHash):
-		return types.RPCErrorInvalidParams("ledgerHashMalformed")
+		return types.RpcErrorInvalidParams("ledgerHashMalformed")
 	}
 	return nil
 }
 
-func mapAccountQueryErr(err error, internalDetail string) *types.RPCError {
+func mapAccountQueryErr(err error, internalDetail string) *types.RpcError {
 	if rpcErr := mapLedgerLookupErr(err); rpcErr != nil {
 		return rpcErr
 	}
 	switch {
 	case errors.Is(err, svcerr.ErrAccountMalformed):
-		return types.RPCErrorActMalformed("Account malformed.")
+		return types.RpcErrorActMalformed("Account malformed.")
 	case errors.Is(err, svcerr.ErrAccountNotFound):
-		return types.RPCErrorActNotFound("Account not found.")
+		return types.RpcErrorActNotFound("Account not found.")
 	case errors.Is(err, svcerr.ErrInvalidMarker):
-		return types.RPCErrorInvalidField("marker")
+		return types.RpcErrorInvalidField("marker")
 	default:
-		return types.RPCErrorInternal(internalDetail)
+		return rpcInternalError(internalDetail, err)
 	}
 }
 
 // markerString extracts an opaque pagination marker while preserving the
 // distinction between an absent member and a present JSON null.
-func markerString(marker json.RawMessage) (string, *types.RPCError) {
+func markerString(marker json.RawMessage) (string, *types.RpcError) {
 	if marker == nil {
 		return "", nil
 	}
 	if isJSONNull(marker) {
-		return "", types.RPCErrorExpectedField("marker", "string")
+		return "", types.RpcErrorExpectedField("marker", "string")
 	}
 	var s string
 	if err := json.Unmarshal(marker, &s); err != nil {
-		return "", types.RPCErrorExpectedField("marker", "string")
+		return "", types.RpcErrorExpectedField("marker", "string")
 	}
 	return s, nil
 }
@@ -648,17 +670,17 @@ var (
 // range default; a non-integer or negative value is expected_field_error; an
 // explicit 0 is invalid_field_error — rejected for every role, before clamping;
 // otherwise the value is clamped to [Min, Max] for non-unlimited roles.
-func ReadLimitField(params json.RawMessage, r LimitRange, unlimited bool) (uint32, *types.RPCError) {
+func ReadLimitField(params json.RawMessage, r LimitRange, unlimited bool) (uint32, *types.RpcError) {
 	raw, present := rawLimitField(params)
 	if !present || isJSONNull(raw) {
 		return r.Default, nil
 	}
 	var v uint32
 	if err := json.Unmarshal(raw, &v); err != nil {
-		return 0, types.RPCErrorExpectedField("limit", "unsigned integer")
+		return 0, types.RpcErrorExpectedField("limit", "unsigned integer")
 	}
 	if v == 0 {
-		return 0, types.RPCErrorInvalidField("limit")
+		return 0, types.RpcErrorInvalidField("limit")
 	}
 	if !unlimited {
 		if v < r.Min {
@@ -685,12 +707,12 @@ func rawLimitField(params json.RawMessage) (json.RawMessage, bool) {
 	return raw, ok
 }
 
-// arraySizeRPCError maps a binarycodec.Encode failure that is a JSON array-size
+// arraySizeRpcError maps a binarycodec.Encode failure that is a JSON array-size
 // overflow to invalidParams (matching rippled's STParsedJSON cap), returning nil
 // for any other error so the caller keeps its existing mapping.
-func arraySizeRPCError(err error) *types.RPCError {
+func arraySizeRpcError(err error) *types.RpcError {
 	if msg, ok := binarycodec.AsArrayTooLargeError(err); ok {
-		return types.RPCErrorInvalidParams(msg)
+		return types.RpcErrorInvalidParams(msg)
 	}
 	return nil
 }
@@ -727,17 +749,38 @@ func decodeBinaryObject(data []byte) (map[string]any, error) {
 //
 // It tries VL binary decode first, then falls back to JSON unmarshal.
 func decodeTxBlob(data []byte) (StoredTransaction, error) {
+	return decodeTxBlobWithMetadataMode(data, false, true, false)
+}
+
+func decodeTxBlobForTx(data []byte) (StoredTransaction, error) {
+	return decodeTxBlobWithMetadataMode(data, true, false, false)
+}
+
+func decodeTxBlobForTransactionEntry(data []byte) (StoredTransaction, error) {
+	return decodeTxBlobWithMetadataMode(data, false, true, true)
+}
+
+func decodeTxBlobWithMetadataMode(data []byte, requireMetadataFields, preserveEmptyMetadata, requireBinaryMetadata bool) (StoredTransaction, error) {
 	// Try VL-encoded binary format first
 	txBytes, metaBytes, err := tx.SplitTxWithMetaBlob(data)
 	if err == nil {
-		txJSON, decErr := decodeBinaryObject(txBytes)
+		if requireBinaryMetadata && metaBytes == nil {
+			return StoredTransaction{}, errors.New("stored transaction is missing binary metadata")
+		}
+		txJSON, decErr := binarycodec.DecodeBytes(txBytes)
 		if decErr == nil {
 			st := StoredTransaction{TxJSON: txJSON}
 			if len(metaBytes) > 0 {
-				metaJSON, metaErr := decodeBinaryObject(metaBytes)
-				if metaErr == nil {
-					st.Meta = metaJSON
+				metaJSON, metaErr := binarycodec.DecodeBytes(metaBytes)
+				if metaErr != nil {
+					return StoredTransaction{}, fmt.Errorf("decode transaction metadata: %w", metaErr)
 				}
+				st.Meta = metaJSON
+			} else if metaBytes != nil && (preserveEmptyMetadata || requireMetadataFields) {
+				st.Meta = map[string]any{}
+			}
+			if err := validateStoredTransaction(&st, requireMetadataFields); err != nil {
+				return StoredTransaction{}, err
 			}
 			return st, nil
 		}
@@ -748,7 +791,34 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	if jsonErr := json.Unmarshal(data, &st); jsonErr != nil {
 		return StoredTransaction{}, jsonErr
 	}
+	if err := validateStoredTransaction(&st, requireMetadataFields); err != nil {
+		return StoredTransaction{}, err
+	}
 	return st, nil
+}
+
+func validateStoredTransaction(st *StoredTransaction, requireMetadataFields bool) error {
+	if st.TxJSON == nil {
+		return errors.New("stored transaction is missing tx_json")
+	}
+	canonicalTx, err := tx.CanonicalizeSerializedTransaction(st.TxJSON)
+	if err != nil {
+		return fmt.Errorf("validate stored transaction: %w", err)
+	}
+	st.TxJSON = canonicalTx
+	if st.Meta != nil {
+		var canonicalMeta map[string]any
+		if requireMetadataFields {
+			canonicalMeta, err = tx.CanonicalizeSerializedMetadata(st.Meta)
+		} else {
+			canonicalMeta, err = tx.CanonicalizeSerializedObject(st.Meta)
+		}
+		if err != nil {
+			return fmt.Errorf("validate stored transaction metadata: %w", err)
+		}
+		st.Meta = canonicalMeta
+	}
+	return nil
 }
 
 const (

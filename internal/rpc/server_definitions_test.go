@@ -18,7 +18,7 @@ import (
 // Reference: rippled ServerDefinitions.cpp
 func TestServerDefinitionsReturnsTypeDefinitions(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -53,7 +53,7 @@ func TestServerDefinitionsReturnsTypeDefinitions(t *testing.T) {
 // Reference: rippled definitions.json format
 func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -109,7 +109,7 @@ func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 // contain actual data.
 func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -173,7 +173,7 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 // Reference: rippled ServerInfo.cpp:288-317.
 func TestServerDefinitionsHash(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -234,7 +234,7 @@ func TestServerDefinitionsHash(t *testing.T) {
 // present in TRANSACTION_TYPES and LEDGER_ENTRY_TYPES (rippled ServerInfo.cpp:282).
 func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -262,7 +262,7 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 // TRANSACTION_FLAGS, LEDGER_ENTRY_FLAGS and ACCOUNT_SET_FLAGS.
 func TestServerDefinitions_3_2_0_Sections(t *testing.T) {
 	method := &handlers.ServerDefinitionsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

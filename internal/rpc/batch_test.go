@@ -15,7 +15,7 @@ import (
 // tests can assert per-element dispatch and version resolution.
 func echoHandler() *stubHandler {
 	return &stubHandler{
-		handle: func(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+		handle: func(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 			var p map[string]any
 			_ = json.Unmarshal(params, &p)
 			return map[string]any{

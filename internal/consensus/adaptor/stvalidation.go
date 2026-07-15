@@ -157,7 +157,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			v.CloseTime = xrplEpochToTime(epoch)
 
 		case typeCode == typeUINT32 && fieldCode == fieldLoadFee:
-			v.LoadFee = binary.BigEndian.Uint32(fieldData)
+			v.SetLoadFee(binary.BigEndian.Uint32(fieldData))
 
 		case typeCode == typeUINT32 && fieldCode == fieldReserveBase:
 			v.ReserveBase = binary.BigEndian.Uint32(fieldData)
@@ -254,8 +254,8 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 // code, then ascending field code within each type).
 //
 // Outbound validations set both vfFullValidation and vfFullyCanonicalSig on
-// sfFlags. Optional supplementary fields (Cookie, LoadFee, ConsensusHash,
-// ServerVersion) are emitted only when non-zero.
+// sfFlags. Optional supplementary fields are emitted when present; fields
+// without explicit presence tracking use a non-zero value as their proxy.
 //
 // Exported so external packages (the validation archive) can reserialize
 // self-built validations whose Raw field is nil.
@@ -290,7 +290,7 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	buf = binary.BigEndian.AppendUint32(buf, timeToXrplEpoch(v.SignTime))
 
 	// sfLoadFee (field 24) — optional
-	if v.LoadFee != 0 {
+	if v.HasLoadFee() {
 		buf = appendFieldHeader(buf, typeUINT32, fieldLoadFee)
 		buf = binary.BigEndian.AppendUint32(buf, v.LoadFee)
 	}

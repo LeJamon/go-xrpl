@@ -75,13 +75,13 @@ func TestDispatchGateOrder(t *testing.T) {
 			if c.saturated {
 				services.ClientLoad = saturatedShedder()
 			}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				ApiVersion: c.apiVersion,
 				Role:       types.RoleGuest, // non-admin caller
 				Services:   services,
 			}
 
-			result, rpcErr := dispatchMethod(reg, nil, services, ctx, c.method, nil, types.RPCErrorForbidden, rpcLog())
+			result, rpcErr := dispatchMethod(reg, nil, services, ctx, c.method, nil, types.RpcErrorForbidden, rpcLog())
 
 			if !c.wantErr {
 				require.Nil(t, rpcErr)
@@ -97,8 +97,9 @@ func TestDispatchGateOrder(t *testing.T) {
 // TestHTTPForbiddenBeatsBusy pins the observable wire-shape divergence the
 // resequencing fixes: a forbidden admin request concurrent with a saturated
 // job queue returns HTTP 403 "Forbidden" (the role-layer short-circuit), not
-// the rpcTOO_BUSY 503 envelope. An unknown method under the same saturation
-// stays 503, confirming busy still precedes the unknown-command failure.
+// the rpcTOO_BUSY envelope. An unknown method under the same saturation keeps
+// the legacy HTTP 200 status while returning tooBusy, confirming busy still
+// precedes the unknown-command failure.
 func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	srv := NewServer(time.Second, services)
@@ -122,14 +123,14 @@ func TestHTTPForbiddenBeatsBusy(t *testing.T) {
 		assert.NotContains(t, rr.Body.String(), "tooBusy")
 	})
 
-	t.Run("unknown method stays 503 tooBusy", func(t *testing.T) {
+	t.Run("unknown method returns legacy HTTP 200 tooBusy", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"nope","params":[{}]}`))
 		req.RemoteAddr = "192.0.2.1:1234"
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
 
-		require.Equal(t, http.StatusServiceUnavailable, rr.Code,
-			"unknown method under saturation must stay 503; body: %s", rr.Body.String())
+		require.Equal(t, http.StatusOK, rr.Code,
+			"default ripplerpc must retain HTTP 200; body: %s", rr.Body.String())
 		result := decodeEnvelope(t, rr.Body.Bytes())
 		assert.Equal(t, "tooBusy", result["error"])
 	})

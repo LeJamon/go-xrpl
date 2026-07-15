@@ -75,7 +75,7 @@ func TestLedgerDataCurrentResponseFields(t *testing.T) {
 		result.Validated = false
 		return result, nil
 	}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:  context.Background(),
 		Services: &types.ServiceContainer{Ledger: mock},
 	}
@@ -106,7 +106,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -300,7 +300,7 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -384,7 +384,7 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -451,7 +451,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -539,7 +539,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -595,7 +595,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerDataMethod{}
 
 	t.Run("Nil services", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -606,11 +606,11 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Nil ledger in services", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -621,7 +621,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Service returns error", func(t *testing.T) {
@@ -631,7 +631,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 			return nil, errors.New("storage unavailable")
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -709,7 +709,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -793,7 +793,7 @@ func TestLedgerDataEmptyState(t *testing.T) {
 	services := &types.ServiceContainer{Ledger: mock}
 
 	method := &handlers.LedgerDataMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -826,7 +826,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 			return nil, svcerr.ErrInvalidMarker
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -849,7 +849,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			called = true
 			return newDefaultLedgerDataResult(1, false), nil
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -875,7 +875,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			called = true
 			return newDefaultLedgerDataResult(1, false), nil
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -901,7 +901,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			called = true
 			return newDefaultLedgerDataResult(1, false), nil
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -931,7 +931,7 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 			// A present marker → service returns no ledger header.
 			return newDefaultLedgerDataResult(2, false), nil
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,

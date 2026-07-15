@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -99,19 +100,14 @@ func TestStatusChange_OnLedgerSwitchedPayload(t *testing.T) {
 // durably serve — clamped up to the online-delete floor, not genesis..tip.
 func TestStatusChange_OmitsNewStatusAdvertisesServedRange(t *testing.T) {
 	sender := &scRecordingSender{}
-	svc := newTestLedgerService(t)
+	svc := adg_newNonStandaloneService(t)
 	a := New(Config{LedgerService: svc, Sender: sender})
 
-	for range 3 {
-		_, err := svc.AcceptLedger(context.TODO())
-		require.NoError(t, err)
-	}
-	_, maxSeq, ok := svc.AvailableLedgerRange()
-	require.True(t, ok)
-	require.Greater(t, maxSeq, uint32(2))
-	// Only the tip is durably served: the advertised range must start at the
-	// floor, proving it is not the old hard-coded genesis lower bound.
-	svc.SetMinimumOnlineFunc(func() uint32 { return maxSeq })
+	parent := svc.GetClosedLedger()
+	require.NotNil(t, parent)
+	closedSeq, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, nil, time.Now(), true)
+	require.NoError(t, err)
+	require.Greater(t, closedSeq, svc.GetValidatedLedgerIndex())
 
 	a.OnPhaseChange(consensus.PhaseOpen, consensus.PhaseEstablish)
 
@@ -121,9 +117,10 @@ func TestStatusChange_OmitsNewStatusAdvertisesServedRange(t *testing.T) {
 	sc := sender.scs[0]
 	assert.Equal(t, message.NodeEventClosingLedger, sc.NewEvent)
 	assert.Equal(t, message.NodeStatus(0), sc.NewStatus)
+	assert.Equal(t, closedSeq, sc.LedgerSeq)
 	require.NotNil(t, sc.FirstSeq)
 	require.NotNil(t, sc.LastSeq)
-	assert.Equal(t, maxSeq, *sc.FirstSeq)
-	assert.Equal(t, maxSeq, *sc.LastSeq)
+	assert.Equal(t, svc.GetValidatedLedgerIndex(), *sc.LastSeq)
+	assert.Less(t, *sc.LastSeq, sc.LedgerSeq)
 	assert.NotZero(t, sc.NetworkTime)
 }

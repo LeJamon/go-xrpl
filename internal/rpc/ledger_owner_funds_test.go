@@ -106,8 +106,9 @@ func TestLedgerOwnerFunds(t *testing.T) {
 			"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
 			"value":    "100",
 		},
-		"Sequence": 1,
-		"Fee":      "10",
+		"Sequence":      1,
+		"Fee":           "10",
+		"SigningPubKey": "",
 	}
 	stored := map[string]any{"tx_json": offerCreate}
 	storedJSON, err := json.Marshal(stored)
@@ -129,7 +130,7 @@ func TestLedgerOwnerFunds(t *testing.T) {
 	mock := &ownerFundsLedgerMock{ledgerMock: base, view: view, reader: reader}
 	services := &types.ServiceContainer{Ledger: mock}
 
-	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	method := &handlers.LedgerMethod{}
 	for _, tc := range []struct {
 		apiVersion int
@@ -287,8 +288,9 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 			"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
 			"value":    "100",
 		},
-		"Sequence": 1,
-		"Fee":      "10",
+		"Sequence":      1,
+		"Fee":           "10",
+		"SigningPubKey": "",
 	}})
 	require.NoError(t, err)
 
@@ -306,7 +308,7 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 	}
 
 	services := &types.ServiceContainer{Ledger: &ownerFundsLedgerMock{ledgerMock: base, view: view, reader: reader}}
-	ctx := &types.RPCContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
+	ctx := &types.RpcContext{Context: context.Background(), ApiVersion: types.ApiVersion1, Services: services}
 	paramsJSON, err := json.Marshal(map[string]any{
 		"ledger_index": 2,
 		"transactions": true,
@@ -393,6 +395,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 		"TakerPays":       "100",
 		"Sequence":        1,
 		"Fee":             "10",
+		"SigningPubKey":   "",
 	}
 	storedMPT, err := json.Marshal(map[string]any{"tx_json": mptOffer})
 	require.NoError(t, err)
@@ -401,6 +404,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 		"Account":         holder,
 		"Sequence":        2,
 		"Fee":             "10",
+		"SigningPubKey":   "",
 	}})
 	require.NoError(t, err)
 
@@ -430,7 +434,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 		"owner_funds":  true,
 	})
 	require.NoError(t, err)
-	result, rpcErr := (&handlers.LedgerMethod{}).Handle(&types.RPCContext{
+	result, rpcErr := (&handlers.LedgerMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
@@ -455,7 +459,7 @@ func TestTransactionOwnerFundsMPT(t *testing.T) {
 		"owner_funds":  true,
 	})
 	require.NoError(t, err)
-	result, rpcErr = (&handlers.LedgerMethod{}).Handle(&types.RPCContext{
+	result, rpcErr = (&handlers.LedgerMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 		Services:   services,

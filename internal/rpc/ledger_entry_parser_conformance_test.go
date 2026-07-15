@@ -15,8 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func ledgerEntryParserContext(mock *mockLedgerEntryService) (*handlers.LedgerEntryMethod, *types.RPCContext) {
-	return &handlers.LedgerEntryMethod{}, &types.RPCContext{
+func ledgerEntryParserContext(mock *mockLedgerEntryService) (*handlers.LedgerEntryMethod, *types.RpcContext) {
+	return &handlers.LedgerEntryMethod{}, &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

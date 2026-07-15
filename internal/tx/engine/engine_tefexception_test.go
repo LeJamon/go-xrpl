@@ -122,7 +122,7 @@ func TestBlockProcessor_ApplyPanic_BecomesErrorAndContinues(t *testing.T) {
 	// The processor survived: a subsequent well-formed tx still applies. The
 	// poisoned tx mutated nothing (it panicked before any state change), so the
 	// account is untouched and this AccountSet no-op succeeds.
-	res, err := bp.ApplyTransaction(recoveryTx(10, 1), []byte{0x02})
+	res, err := bp.ApplyTransaction(successfulRecoveryTx{recoveryTx(10, 1)}, []byte{0x02})
 	if err != nil {
 		t.Fatalf("good tx after a poisoned one returned err: %v", err)
 	}

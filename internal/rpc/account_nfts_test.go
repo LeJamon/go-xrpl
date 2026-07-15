@@ -198,7 +198,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -302,7 +302,7 @@ func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -351,7 +351,7 @@ func TestAccountNFTsBasic(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -503,7 +503,7 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -647,7 +647,7 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -804,7 +804,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -944,7 +944,7 @@ func TestAccountNFTsMarkerValidation(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	method := &handlers.AccountNftsMethod{}
 	mock := newMockAccountNFTsLedgerService()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -1003,7 +1003,7 @@ func TestAccountNFTsMarkerValidation(t *testing.T) {
 // TestAccountNFTsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountNFTsServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1021,7 +1021,7 @@ func TestAccountNFTsServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestAccountNFTsMethodMetadata tests the method's metadata functions
@@ -1047,7 +1047,7 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 	services := newAccountNFTsTestServices(mock)
 
 	method := &handlers.AccountNftsMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

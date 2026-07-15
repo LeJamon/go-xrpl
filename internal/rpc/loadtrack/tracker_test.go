@@ -16,7 +16,7 @@ func TestCharge_NoKeyAlwaysOK(t *testing.T) {
 
 func TestCharge_ReferenceStaysBelowWarning(t *testing.T) {
 	tr := New()
-	// 200 × ChargeReference = 4000 — below warning (5000).
+	// The raw sample is normalized by the 32-second decay window.
 	for i := range 200 {
 		if got := tr.Charge("1.2.3.4", LoadReference); got != OutcomeOK {
 			t.Fatalf("got %v at iter %d, balance %v", got, i, tr.Balance("1.2.3.4"))
@@ -27,16 +27,15 @@ func TestCharge_ReferenceStaysBelowWarning(t *testing.T) {
 func TestCharge_HeavyCrossesWarnThenDrop(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	tr := newWithClock(func() time.Time { return now })
-	// 1 × Heavy (3000) — below warning still.
-	if got := tr.Charge("1.2.3.4", LoadHeavy); got != OutcomeOK {
-		t.Fatalf("1×heavy: expected OK, got %v", got)
+	for i := range 53 {
+		if got := tr.Charge("1.2.3.4", LoadHeavy); got != OutcomeOK {
+			t.Fatalf("charge %d: expected OK, got %v", i+1, got)
+		}
 	}
-	// 2 × Heavy (6000) — over warning, below drop.
 	if got := tr.Charge("1.2.3.4", LoadHeavy); got != OutcomeWarn {
-		t.Fatalf("2×heavy: expected Warn, got %v (balance %v)", got, tr.Balance("1.2.3.4"))
+		t.Fatalf("charge 54: expected Warn, got %v (balance %v)", got, tr.Balance("1.2.3.4"))
 	}
-	// Subsequent heavies climb to >= 25000 ⇒ Drop.
-	for range 10 {
+	for range 300 {
 		got := tr.Charge("1.2.3.4", LoadHeavy)
 		if got == OutcomeDrop {
 			return
@@ -48,16 +47,17 @@ func TestCharge_HeavyCrossesWarnThenDrop(t *testing.T) {
 func TestCharge_DecayRecovers(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	tr := newWithClock(func() time.Time { return now })
-	for range 3 {
-		tr.Charge("1.2.3.4", LoadHeavy) // 9000
+	tr.Charge("1.2.3.4", LoadKind(3200))
+	if got := tr.Balance("1.2.3.4"); got != 100 {
+		t.Fatalf("initial normalized balance = %v, want 100", got)
 	}
-	if got := tr.Balance("1.2.3.4"); got < 8000 {
-		t.Fatalf("expected balance ~9000, got %v", got)
+	now = now.Add(time.Second)
+	if got := tr.Balance("1.2.3.4"); got != 96 {
+		t.Fatalf("one-second normalized balance = %v, want 96", got)
 	}
-	// Advance two full decay windows — balance should fall by ~75%.
-	now = now.Add(2 * DecayWindow)
-	if got := tr.Balance("1.2.3.4"); got > 9000*0.30 {
-		t.Fatalf("expected decay to <30%% of initial, got %v", got)
+	now = now.Add(4*DecayWindow + time.Second)
+	if got := tr.Balance("1.2.3.4"); got != 0 {
+		t.Fatalf("balance after reset horizon = %v, want 0", got)
 	}
 }
 
@@ -74,7 +74,7 @@ func TestCharge_PerKeyIsolated(t *testing.T) {
 func TestSweep_EvictsIdleEntries(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	tr := newWithClock(func() time.Time { return now })
-	tr.Charge("1.2.3.4", LoadReference)
+	tr.Charge("1.2.3.4", LoadKind(decayWindowSeconds))
 	if tr.Balance("1.2.3.4") == 0 {
 		t.Fatal("expected non-zero balance immediately after charge")
 	}

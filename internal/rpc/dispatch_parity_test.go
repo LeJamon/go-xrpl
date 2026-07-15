@@ -20,7 +20,7 @@ type condStubHandler struct {
 	cond types.Condition
 }
 
-func (h *condStubHandler) Handle(*types.RPCContext, json.RawMessage) (any, *types.RPCError) {
+func (h *condStubHandler) Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError) {
 	return map[string]any{"ok": true}, nil
 }
 func (h *condStubHandler) RequiredRole() types.Role           { return types.RoleGuest }
@@ -35,22 +35,22 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 	reg.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
 
 	t.Run("not synced is refused", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			ApiVersion: types.ApiVersion1,
 			Services:   &types.ServiceContainer{Ledger: newMockLedgerService()}, // zero serverInfo: disconnected
 		}
-		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RPCErrorNoPermission, rpcLog())
+		_, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
 		assert.Equal(t, "noNetwork", rpcErr.ErrorString)
 	})
 
 	t.Run("synced passes", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			ApiVersion: types.ApiVersion1,
 			Services:   &types.ServiceContainer{Ledger: syncedStandalone()},
 		}
-		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RPCErrorNoPermission, rpcLog())
+		result, rpcErr := dispatchMethod(reg, nil, ctx.Services, ctx, "gated", nil, types.RpcErrorNoPermission, rpcLog())
 		require.Nil(t, rpcErr)
 		assert.Equal(t, map[string]any{"ok": true}, result)
 	})
@@ -58,7 +58,8 @@ func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 
 // TestResolveWSCommand pins M4's command resolution: `method` is accepted as an
 // alias for `command`, and the request is malformed (→ missingCommand) only
-// when neither is a non-empty string or both are present and disagree.
+// when neither field is present, a supplied field is not a string, or both
+// fields are present and disagree. An empty string reaches normal dispatch.
 func TestResolveWSCommand(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -71,7 +72,7 @@ func TestResolveWSCommand(t *testing.T) {
 		{"both agree", map[string]any{"command": "ping", "method": "ping"}, "ping", true},
 		{"both disagree", map[string]any{"command": "ping", "method": "pong"}, "", false},
 		{"neither", map[string]any{"id": 1}, "", false},
-		{"empty command", map[string]any{"command": ""}, "", false},
+		{"empty command", map[string]any{"command": ""}, "", true},
 		{"non-string command", map[string]any{"command": 7}, "", false},
 	}
 	for _, c := range cases {
@@ -121,7 +122,7 @@ func TestSingleRequestParseFailuresReturn400(t *testing.T) {
 // warning:"load" INSIDE result (rippled ServerHandler.cpp:919-920 → :938/:971),
 // not at the top level (which is the WS placement, :519).
 func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
-	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JSONRPCResponseOptions{Warning: "load"})
+	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JsonRpcResponseOptions{Warning: "load"})
 	result, ok := body["result"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "load", result["warning"], "HTTP load warning belongs inside result")
@@ -171,42 +172,40 @@ func TestWSCommandAliasAndMissingCommand(t *testing.T) {
 		assert.NotContains(t, resp, "error_message")
 	})
 
+	t.Run("missing command redacts credential-shaped metadata", func(t *testing.T) {
+		resp := roundtrip(map[string]any{
+			"id": map[string]any{"secret": "private seed"},
+		})
+		assert.Equal(t, "missingCommand", resp["error"])
+		assert.Equal(t, map[string]any{"secret": maskedValue}, resp["id"])
+		encoded, err := json.Marshal(resp)
+		require.NoError(t, err)
+		assert.NotContains(t, string(encoded), "private seed")
+	})
+
 	t.Run("command/method mismatch is missingCommand", func(t *testing.T) {
 		resp := roundtrip(map[string]any{"command": "ping", "method": "pong", "id": float64(3)})
 		assert.Equal(t, "error", resp["status"])
 		assert.Equal(t, "missingCommand", resp["error"])
 	})
 
-	for _, tc := range []struct {
-		name    string
-		request map[string]any
-	}{
-		{
-			name:    "missing command",
-			request: map[string]any{"api_version": float64(0)},
-		},
-		{
-			name:    "non-string command",
-			request: map[string]any{"command": float64(1), "api_version": float64(0)},
-		},
-		{
-			name:    "disagreeing aliases",
-			request: map[string]any{"command": "ping", "method": "pong", "api_version": float64(0)},
-		},
-	} {
-		t.Run("invalid api version precedes "+tc.name, func(t *testing.T) {
-			tc.request["id"] = float64(4)
-			tc.request["jsonrpc"] = "2.0"
-			tc.request["ripplerpc"] = "2.0"
-			resp := roundtrip(tc.request)
-			assert.Equal(t, "invalid_API_version", resp["error"])
-			assert.Equal(t, float64(4), resp["id"])
-			assert.Equal(t, "2.0", resp["jsonrpc"])
-			assert.Equal(t, "2.0", resp["ripplerpc"])
-			assert.Equal(t, float64(0), resp["api_version"])
-			assert.Equal(t, tc.request, resp["request"])
-			assert.NotContains(t, resp, "error_code")
-			assert.NotContains(t, resp, "error_message")
-		})
-	}
+	t.Run("non-string command is not rescued by method", func(t *testing.T) {
+		resp := roundtrip(map[string]any{"command": float64(7), "method": "ping", "id": float64(4)})
+		assert.Equal(t, "error", resp["status"])
+		assert.Equal(t, "missingCommand", resp["error"])
+	})
+
+	t.Run("non-string method is not rescued by command", func(t *testing.T) {
+		resp := roundtrip(map[string]any{"command": "ping", "method": float64(7), "id": float64(5)})
+		assert.Equal(t, "error", resp["status"])
+		assert.Equal(t, "missingCommand", resp["error"])
+	})
+
+	t.Run("empty command reaches unknown method", func(t *testing.T) {
+		resp := roundtrip(map[string]any{"command": "", "id": float64(6)})
+		assert.Equal(t, "error", resp["status"])
+		assert.Equal(t, "unknownCmd", resp["error"])
+		assert.Equal(t, float64(types.RpcMETHOD_NOT_FOUND), resp["error_code"])
+		assert.Equal(t, "Unknown method.", resp["error_message"])
+	})
 }

@@ -75,8 +75,14 @@ func (m *mockLedgerReaderBC) ForEachTransaction(fn func([32]byte, []byte) bool) 
 func addBookChangesTransaction(t *testing.T, ledger *mockLedgerReaderBC, affectedNodes []any) {
 	t.Helper()
 	blob, err := json.Marshal(handlers.StoredTransaction{
-		TxJSON: map[string]any{"TransactionType": "Payment"},
-		Meta:   map[string]any{"AffectedNodes": affectedNodes},
+		TxJSON: map[string]any{
+			"TransactionType": "AccountSet",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Fee":             "10",
+			"Sequence":        1,
+			"SigningPubKey":   "",
+		},
+		Meta: map[string]any{"AffectedNodes": affectedNodes},
 	})
 	require.NoError(t, err)
 	var hash [32]byte
@@ -179,7 +185,7 @@ func TestBookChangesValidLedgerIndexVariants(t *testing.T) {
 	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -250,7 +256,7 @@ func TestBookChangesInvalidLedger(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -283,7 +289,7 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -317,7 +323,7 @@ func TestBookChangesContextReadError(t *testing.T) {
 
 	requestContext, cancel := context.WithCancel(context.Background())
 	cancel()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    requestContext,
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -392,7 +398,7 @@ func TestBookChangesResponseStructure(t *testing.T) {
 	mock.addLedger(ledger2)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -465,7 +471,7 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -494,7 +500,7 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 	method := &handlers.BookChangesMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -511,11 +517,11 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -532,7 +538,7 @@ func TestBookChangesServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -566,7 +572,7 @@ func TestBookChangesNilParams(t *testing.T) {
 	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

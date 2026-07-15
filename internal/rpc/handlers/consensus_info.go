@@ -15,7 +15,7 @@ import (
 // node that is not participating in consensus.
 type ConsensusInfoMethod struct{ AdminHandler }
 
-func (m *ConsensusInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *ConsensusInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	info := map[string]any{}
 	if ctx.Services != nil && ctx.Services.ConsensusInfo != nil {
 		if live := ctx.Services.ConsensusInfo(true); live != nil {

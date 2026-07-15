@@ -27,12 +27,12 @@ type channelVerifyRequest struct {
 	Signature string `json:"signature"`
 }
 
-func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request channelVerifyRequest
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 	var fields map[string]json.RawMessage
@@ -41,16 +41,16 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// Validate required fields
 	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
 	if _, ok := fields["public_key"]; !ok {
-		return nil, types.RPCErrorMissingField("public_key")
+		return nil, types.RpcErrorMissingField("public_key")
 	}
 	if _, ok := fields["channel_id"]; !ok {
-		return nil, types.RPCErrorMissingField("channel_id")
+		return nil, types.RpcErrorMissingField("channel_id")
 	}
 	if _, ok := fields["amount"]; !ok {
-		return nil, types.RPCErrorMissingField("amount")
+		return nil, types.RpcErrorMissingField("amount")
 	}
 	if _, ok := fields["signature"]; !ok {
-		return nil, types.RPCErrorMissingField("signature")
+		return nil, types.RpcErrorMissingField("signature")
 	}
 
 	// Parse public key - can be base58 (AccountPublic) or hex
@@ -59,17 +59,17 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// if (!pk) { pkHex = strUnHex(strPk); if (!pkHex) return rpcError(rpcPUBLIC_MALFORMED); ... }
 	pubKeyHex, err := parsePublicKey(request.PublicKey)
 	if err != nil {
-		return nil, types.RPCErrorPublicMalformed()
+		return nil, types.RpcErrorPublicMalformed()
 	}
 
 	// Validate channel_id - must be valid 256-bit hex (64 characters)
 	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
 	channelIDHex := strings.ToUpper(request.ChannelID)
 	if len(channelIDHex) != 64 {
-		return nil, types.RPCErrorChannelMalformed()
+		return nil, types.RpcErrorChannelMalformed()
 	}
 	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, types.RPCErrorChannelMalformed()
+		return nil, types.RpcErrorChannelMalformed()
 	}
 
 	// Validate amount - must be a string that parses to uint64
@@ -77,7 +77,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
 	drops, err := strconv.ParseUint(request.Amount, 10, 64)
 	if err != nil {
-		return nil, types.RPCErrorChannelAmountMalformed()
+		return nil, types.RpcErrorChannelAmountMalformed()
 	}
 
 	// Validate signature - must be valid hex and non-empty
@@ -85,7 +85,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	sigHex := strings.ToUpper(request.Signature)
 	sigBytes, err := hex.DecodeString(sigHex)
 	if err != nil || len(sigBytes) == 0 {
-		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Serialize the payment channel claim message
@@ -96,13 +96,13 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	}
 	messageHex, err := binarycodec.EncodeForSigningClaim(claimJSON)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode claim: %v", err))
+		return nil, rpcInternalError("channel_verify: claim encoding failed", err)
 	}
 
 	// Convert hex message to raw bytes for verification
 	messageBytes, err := hex.DecodeString(messageHex)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to decode message: %v", err))
+		return nil, rpcInternalError("channel_verify: claim decoding failed", err)
 	}
 
 	// Verify the signature

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"testing"
 
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -64,7 +65,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -176,7 +177,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -290,13 +291,36 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 	}
 }
 
+func TestSubmitMethodStoredMetadataIncludesAffectedNodes(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newSubmitTestServices(mock),
+	}
+	params, err := json.Marshal(map[string]any{"tx_json": validStoredPaymentTransaction()})
+	require.NoError(t, err)
+
+	_, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+	require.Nil(t, rpcErr)
+	require.Len(t, mock.storedTxs, 1)
+	for _, storedData := range mock.storedTxs {
+		var stored handlers.StoredTransaction
+		require.NoError(t, json.Unmarshal(storedData, &stored))
+		nodes, ok := stored.Meta["AffectedNodes"].([]any)
+		require.True(t, ok)
+		assert.Empty(t, nodes)
+	}
+}
+
 // TestSubmitMethodResponseFields tests that response contains expected fields
 func TestSubmitMethodResponseFields(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -399,7 +423,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -577,7 +601,7 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -664,7 +688,7 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 // TestSubmitMethodServiceUnavailable tests behavior when ledger service is not available
 func TestSubmitMethodServiceUnavailable(t *testing.T) {
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -687,13 +711,13 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestSubmitMethodServiceNilLedger tests behavior when ledger service is nil
 func TestSubmitMethodServiceNilLedger(t *testing.T) {
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -716,7 +740,7 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestSubmitMethodSubmitError tests handling of ledger service errors
@@ -725,7 +749,7 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -733,24 +757,20 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		submitError   error
-		expectedError string
+		name        string
+		submitError error
 	}{
 		{
-			name:          "Internal error",
-			submitError:   errors.New("internal ledger error"),
-			expectedError: "Failed to submit transaction",
+			name:        "Internal error",
+			submitError: errors.New("internal ledger error"),
 		},
 		{
-			name:          "Network error",
-			submitError:   errors.New("network unavailable"),
-			expectedError: "Failed to submit transaction",
+			name:        "Network error",
+			submitError: errors.New("network unavailable"),
 		},
 		{
-			name:          "Validation error",
-			submitError:   errors.New("transaction validation failed"),
-			expectedError: "Failed to submit transaction",
+			name:        "Validation error",
+			submitError: errors.New("transaction validation failed"),
 		},
 	}
 
@@ -773,9 +793,46 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 
 			assert.Nil(t, result)
 			require.NotNil(t, rpcErr)
-			assert.Contains(t, rpcErr.LogDetail(), tc.expectedError)
+			assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+			assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
+			assert.NotContains(t, rpcErr.Message, tc.submitError.Error())
 		})
 	}
+}
+
+func TestSubmitMethodTxBlobSubmitErrorIsSanitized(t *testing.T) {
+	mock := newMockLedgerServiceSubmit()
+	submitErr := errors.New("private ledger backend failure")
+	mock.submitError = submitErr
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion1,
+		Services:   newSubmitTestServices(mock),
+	}
+	txBlob, err := binarycodec.Encode(map[string]any{
+		"TransactionType": "Payment",
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Amount":          "1000000",
+		"Fee":             "10",
+		"Sequence":        1,
+		"SigningPubKey":   "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
+		"TxnSignature":    "30440220143759437C04F7B61F012563AFE90D8DAFC46E86035E1D965A9CED282C97D4CE02204CFD241E86F17E011298FC1A39B63386C74306A5DE047E213B0F29EFA4571C2C",
+	})
+	require.NoError(t, err)
+	params, err := json.Marshal(map[string]any{"tx_blob": txBlob})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.SubmitMethod{}).Handle(ctx, params)
+
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, "internal", rpcErr.ErrorString)
+	assert.Equal(t, "internal", rpcErr.Type)
+	assert.Equal(t, "Exception occurred during transaction submission.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Message, submitErr.Error())
 }
 
 // TestSubmitMethodMetadata tests the method's metadata functions
@@ -801,7 +858,7 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -916,7 +973,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -1027,7 +1084,7 @@ func TestSubmitMethodEmptyCredentialIsPresent(t *testing.T) {
 		},
 		"secret": ""
 	}`)
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -1058,7 +1115,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 	}
 
 	t.Run("API v1 does not have hash at root", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -1092,7 +1149,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 	})
 
 	t.Run("API v2 has hash at root", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -1127,7 +1184,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 	})
 
 	t.Run("API v3 has hash at root", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion3,
@@ -1167,7 +1224,7 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 	method := &handlers.SubmitMethod{}
 
 	t.Run("API v1 Payment - Amount kept, DeliverMax added", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -1209,7 +1266,7 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 	})
 
 	t.Run("API v2 Payment - Amount removed, DeliverMax added", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -1252,7 +1309,7 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 	})
 
 	t.Run("Non-Payment tx - no DeliverMax regardless of API version", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion2,
@@ -1299,7 +1356,7 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 	services := newSubmitTestServices(mock)
 
 	method := &handlers.SubmitMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,

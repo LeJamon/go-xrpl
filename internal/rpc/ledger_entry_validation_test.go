@@ -16,7 +16,7 @@ func TestLedgerEntryLedgerSelectorValidation(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -115,7 +115,7 @@ func TestLedgerEntryLegacyAndConflictingSelectors(t *testing.T) {
 	)
 	mock := newMockLedgerEntryService()
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:  context.Background(),
 		Services: newLedgerEntryTestServices(mock),
 	}
@@ -158,7 +158,7 @@ func TestLedgerEntryNFTOfferAlias(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

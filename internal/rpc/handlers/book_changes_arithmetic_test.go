@@ -38,7 +38,7 @@ func TestComputeBookChangesCanonicalArithmeticAndRendering(t *testing.T) {
 				return map[string]any{"currency": "USD", "issuer": issuer, "value": value}
 			}
 			blob, err := json.Marshal(StoredTransaction{
-				TxJSON: map[string]any{"TransactionType": "Payment"},
+				TxJSON: validBookChangesTxJSON(),
 				Meta: map[string]any{"AffectedNodes": []any{
 					map[string]any{"ModifiedNode": map[string]any{
 						"LedgerEntryType": "Offer",
@@ -65,5 +65,15 @@ func TestComputeBookChangesCanonicalArithmeticAndRendering(t *testing.T) {
 				require.Equal(t, test.wantRate, change[field], field)
 			}
 		})
+	}
+}
+
+func validBookChangesTxJSON() map[string]any {
+	return map[string]any{
+		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "AccountSet",
 	}
 }

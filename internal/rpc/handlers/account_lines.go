@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -14,7 +13,7 @@ import (
 // default state on the account's side.
 type AccountLinesMethod struct{ BaseHandler }
 
-func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
@@ -32,11 +31,11 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		var valid bool
 		peer, valid = jsonCppStringRaw(peerRaw)
 		if !valid {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	if peer != "" && !types.IsValidClassicAddress(peer) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
+		return nil, types.RpcErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
@@ -53,7 +52,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	}
 	if _, present := fields["marker"]; present {
 		if marker == "" {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, account, ledgerIndex, peer, limit, marker)
@@ -62,12 +61,12 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 			return nil, rerr
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
+		return nil, rpcInternalError("account_lines: ledger query failed", err)
 	}
 
 	lines := result.Lines
@@ -135,5 +134,6 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		response["marker"] = result.Marker
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }

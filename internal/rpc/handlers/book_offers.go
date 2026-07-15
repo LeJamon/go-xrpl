@@ -27,7 +27,7 @@ var (
 
 type BookOffersMethod struct{ BaseHandler }
 
-func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireNotBusyBookOffers(ctx); err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	probe := map[string]json.RawMessage{}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &probe); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid params: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid params: %v", err))
 		}
 	}
 
@@ -59,17 +59,17 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// emitted first.
 	paysRaw, ok := probe["taker_pays"]
 	if !ok {
-		return nil, types.RPCErrorMissingField("taker_pays")
+		return nil, types.RpcErrorMissingField("taker_pays")
 	}
 	getsRaw, ok := probe["taker_gets"]
 	if !ok {
-		return nil, types.RPCErrorMissingField("taker_gets")
+		return nil, types.RpcErrorMissingField("taker_gets")
 	}
 	if !isJSONObjectOrNull(paysRaw) {
-		return nil, types.RPCErrorExpectedField("taker_pays", "object")
+		return nil, types.RpcErrorExpectedField("taker_pays", "object")
 	}
 	if !isJSONObjectOrNull(getsRaw) {
-		return nil, types.RPCErrorExpectedField("taker_gets", "object")
+		return nil, types.RpcErrorExpectedField("taker_gets", "object")
 	}
 	paysInner := unmarshalObjectOrNull(paysRaw)
 	getsInner := unmarshalObjectOrNull(getsRaw)
@@ -111,13 +111,13 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	var takerStr string
 	if rawTaker, ok := probe["taker"]; ok {
 		if !isJSONString(rawTaker) {
-			return nil, types.RPCErrorExpectedField("taker", "string")
+			return nil, types.RpcErrorExpectedField("taker", "string")
 		}
 		if err := json.Unmarshal(rawTaker, &takerStr); err != nil {
-			return nil, types.RPCErrorExpectedField("taker", "string")
+			return nil, types.RpcErrorExpectedField("taker", "string")
 		}
 		if _, _, err := addresscodec.DecodeClassicAddressToAccountID(takerStr); err != nil {
-			return nil, types.RPCErrorInvalidField("taker")
+			return nil, types.RpcErrorInvalidField("taker")
 		}
 	}
 
@@ -126,21 +126,21 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	var domain string
 	if rawDomain, ok := probe["domain"]; ok {
 		if !isJSONString(rawDomain) {
-			return nil, types.RPCErrorDomainMalformed("Unable to parse domain.")
+			return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
 		}
 		var domainStr string
 		if err := json.Unmarshal(rawDomain, &domainStr); err != nil {
-			return nil, types.RPCErrorDomainMalformed("Unable to parse domain.")
+			return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
 		}
 		// rippled base_uint.h:228 accepts the literal "0" as zero uint256.
 		if domainStr == "0" {
 			domain = "0000000000000000000000000000000000000000000000000000000000000000"
 		} else {
 			if len(domainStr) != 64 {
-				return nil, types.RPCErrorDomainMalformed("Unable to parse domain.")
+				return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
 			}
 			if _, err := hex.DecodeString(domainStr); err != nil {
-				return nil, types.RPCErrorDomainMalformed("Unable to parse domain.")
+				return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
 			}
 			domain = domainStr
 		}
@@ -150,7 +150,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// currency normalizes to zero, issuers normalize to their decoded
 	// 20-byte AccountIDs (any valid encoding of the same account collides).
 	if sameBookAsset(takerPays, paysIssuerID, takerGets, getsIssuerID) {
-		return nil, types.RPCErrorBadMarket()
+		return nil, types.RpcErrorBadMarket()
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitBookOffers, ctx.Unlimited)
@@ -161,17 +161,18 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", false)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrStaleMarker) {
-			return nil, types.RPCErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
+			return nil, types.RpcErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
+		return nil, rpcInternalError("book_offers: ledger query failed", err)
 	}
 
+	setLoadMedium(ctx)
 	response := map[string]any{
 		"offers": result.Offers,
 	}
@@ -179,39 +180,39 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	return response, nil
 }
 
-func validateTakerBookJSON(inner map[string]json.RawMessage, name string) *types.RPCError {
+func validateTakerBookJSON(inner map[string]json.RawMessage, name string) *types.RpcError {
 	_, hasCurrency := inner["currency"]
 	_, hasMPT := inner["mpt_issuance_id"]
 	if !hasCurrency && !hasMPT {
-		return types.RPCErrorMissingField(name + ".currency")
+		return types.RpcErrorMissingField(name + ".currency")
 	}
 	if hasMPT {
 		if hasCurrency {
-			return types.RPCErrorInvalidField(name)
+			return types.RpcErrorInvalidField(name)
 		}
 		if _, hasIssuer := inner["issuer"]; hasIssuer {
-			return types.RPCErrorInvalidField(name)
+			return types.RpcErrorInvalidField(name)
 		}
 	}
 	if raw, ok := inner["currency"]; ok && !isJSONString(raw) {
-		return types.RPCErrorExpectedField(name+".currency", "string")
+		return types.RpcErrorExpectedField(name+".currency", "string")
 	}
 	if raw, ok := inner["mpt_issuance_id"]; ok && !isJSONString(raw) {
-		return types.RPCErrorExpectedField(name+".currency", "string")
+		return types.RpcErrorExpectedField(name+".currency", "string")
 	}
 	return nil
 }
 
-func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Amount, [20]byte, *types.RPCError) {
+func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Amount, [20]byte, *types.RpcError) {
 	if raw, ok := inner["currency"]; ok {
 		var currency string
 		_ = json.Unmarshal(raw, &currency)
 		if !keylet.IsValidCurrencyCode(currency) {
 			if isPay {
-				return types.Amount{}, [20]byte{}, types.RPCErrorSrcCurMalformed(
+				return types.Amount{}, [20]byte{}, types.RpcErrorSrcCurMalformed(
 					"Invalid field 'taker_pays.currency', bad currency.")
 			}
-			return types.Amount{}, [20]byte{}, types.RPCErrorDstAmtMalformed(
+			return types.Amount{}, [20]byte{}, types.RpcErrorDstAmtMalformed(
 				"Invalid field 'taker_gets.currency', bad currency.")
 		}
 		return types.Amount{Currency: currency}, [20]byte{}, nil
@@ -222,10 +223,10 @@ func parseTakerBookAsset(inner map[string]json.RawMessage, isPay bool) (types.Am
 	id, ok := parseBookMPTID(value)
 	if !ok {
 		field := "taker_gets.mpt_issuance_id"
-		makeErr := types.RPCErrorDstAmtMalformed
+		makeErr := types.RpcErrorDstAmtMalformed
 		if isPay {
 			field = "taker_pays.mpt_issuance_id"
-			makeErr = types.RPCErrorSrcCurMalformed
+			makeErr = types.RpcErrorSrcCurMalformed
 		}
 		return types.Amount{}, [20]byte{}, makeErr(fmt.Sprintf("Invalid field '%s'", field))
 	}
@@ -258,11 +259,11 @@ func sameBookAsset(a types.Amount, aIssuer [20]byte, b types.Amount, bIssuer [20
 // runs the rippled cross-checks (BookOffers.cpp:98-129 / :131-162). Returns
 // the literal issuer string for downstream callers and the decoded AccountID
 // for canonical-form comparisons (e.g. badMarket).
-func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, isPay bool) (string, [20]byte, *types.RPCError) {
-	makeErr := types.RPCErrorDstIsrMalformed
+func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, isPay bool) (string, [20]byte, *types.RpcError) {
+	makeErr := types.RpcErrorDstIsrMalformed
 	field := "taker_gets.issuer"
 	if isPay {
-		makeErr = types.RPCErrorSrcIsrMalformed
+		makeErr = types.RpcErrorSrcIsrMalformed
 		field = "taker_pays.issuer"
 	}
 
@@ -271,10 +272,10 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 	hasIssuer := false
 	if rawIssuer, ok := inner["issuer"]; ok {
 		if !isJSONString(rawIssuer) {
-			return "", [20]byte{}, types.RPCErrorExpectedField(field, "string")
+			return "", [20]byte{}, types.RpcErrorExpectedField(field, "string")
 		}
 		if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
-			return "", [20]byte{}, types.RPCErrorExpectedField(field, "string")
+			return "", [20]byte{}, types.RpcErrorExpectedField(field, "string")
 		}
 		_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
 		if err != nil {
@@ -361,7 +362,7 @@ func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
 }
 
 // preResolveLedger preserves ledger lookup error precedence over book validation.
-func preResolveLedger(ctx *types.RPCContext, probe map[string]json.RawMessage) (string, *types.RPCError) {
+func preResolveLedger(ctx *types.RpcContext, probe map[string]json.RawMessage) (string, *types.RpcError) {
 	selection, rpcErr := parseRawLedgerSelector(probe, ledgerselector.Current(), lookupLedgerSelectorErrors)
 	if rpcErr != nil {
 		return "", rpcErr

@@ -112,7 +112,7 @@ func TestServerInfoResponseFields(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -312,7 +312,7 @@ func TestServerInfoDisabledQuorumUsesRippledWireValue(t *testing.T) {
 	services := servicesForServerInfo(mock)
 	services.ValidationQuorum = func() int { return math.MaxInt }
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context: context.Background(), Role: types.RoleGuest,
 		ApiVersion: types.ApiVersion1, Services: services,
 	}
@@ -333,7 +333,7 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -460,7 +460,7 @@ func TestServerInfoServerStates(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -503,7 +503,7 @@ func TestServerInfoStandaloneMode(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -563,7 +563,7 @@ func TestServerInfoApiVersions(t *testing.T) {
 
 	for _, apiVersion := range apiVersions {
 		t.Run("API version "+string(rune('0'+apiVersion)), func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: apiVersion,
@@ -603,7 +603,7 @@ func TestServerInfoMethodSupportedApiVersions(t *testing.T) {
 // TestServerInfoServiceUnavailable tests behavior when ledger service is not available
 func TestServerInfoServiceUnavailable(t *testing.T) {
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -615,13 +615,13 @@ func TestServerInfoServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestServerInfoServiceNilLedger tests behavior when ledger service is nil
 func TestServerInfoServiceNilLedger(t *testing.T) {
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -633,7 +633,7 @@ func TestServerInfoServiceNilLedger(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // Method Metadata Tests
@@ -663,7 +663,7 @@ func TestServerInfoCompleteLedgersFormat(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -723,7 +723,7 @@ func TestServerInfoStateAccounting(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -762,7 +762,7 @@ func TestServerInfoTimeField(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -795,7 +795,7 @@ func TestServerInfoFeeCalculations(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -874,7 +874,7 @@ func TestServerStateMethod(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerStateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -943,7 +943,7 @@ func TestServerStateMethodMetadata(t *testing.T) {
 // TestServerStateServiceUnavailable tests behavior when ledger service is not available
 func TestServerStateServiceUnavailable(t *testing.T) {
 	method := &handlers.ServerStateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -955,7 +955,7 @@ func TestServerStateServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // Integration-like Tests
@@ -966,7 +966,7 @@ func TestServerInfoWithDifferentLedgerStates(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1037,7 +1037,7 @@ func TestServerInfoWithParams(t *testing.T) {
 	services := servicesForServerInfo(mock)
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1118,7 +1118,7 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	// IsAdmin=true so load_factor_fee_escalation is emitted even when
 	// loadFactorFeeEscalation == loadFactor; mirrors rippled's
 	// NetworkOPs.cpp:2902-2907 (admin || loadFactorFeeEscalation != loadFactor).
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
@@ -1178,7 +1178,7 @@ func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	}
 
 	method := &handlers.ServerStateMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1213,7 +1213,7 @@ func TestServerInfo_ValidatedLedgerAge_HighAgeThreshold(t *testing.T) {
 
 	services := servicesForServerInfo(mock)
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1251,7 +1251,7 @@ func TestServerInfo_HumanMode_LoadFactorFeeEscalation_NonAdminGate(t *testing.T)
 	}
 
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1288,7 +1288,7 @@ func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
 
 	services := servicesForServerInfo(mock)
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1312,15 +1312,15 @@ func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
 // closed ledger. Suppressed entirely when neither is available.
 func TestServerInfo_SingleLedgerEmit(t *testing.T) {
 	method := &handlers.ServerInfoMethod{}
-	newCtx := func(svc *types.ServiceContainer) *types.RPCContext {
-		return &types.RPCContext{
+	newCtx := func(svc *types.ServiceContainer) *types.RpcContext {
+		return &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
 			Services:   svc,
 		}
 	}
-	dispatch := func(ctx *types.RPCContext) map[string]any {
+	dispatch := func(ctx *types.RpcContext) map[string]any {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
@@ -1374,7 +1374,7 @@ func TestServerInfo_HumanMode_LoadFactorServer(t *testing.T) {
 				OpenLedgerFeeLevel: 1024,
 			}
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1395,7 +1395,7 @@ func TestServerInfo_HumanMode_LoadFactorServer(t *testing.T) {
 		mock := newMockLedgerServiceServerInfo()
 		services := servicesForServerInfo(mock)
 		// No TxQMetrics → escalation falls back to loadBase.
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1427,7 +1427,7 @@ func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) 
 		if withHook {
 			services.LoadFactorFees = feesHook
 		}
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1499,7 +1499,7 @@ func TestServerInfo_CloseTimeOffset_Threshold(t *testing.T) {
 			services := servicesForServerInfo(mock)
 			offset := tc.offset
 			services.CloseTimeOffset = func() time.Duration { return offset }
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion1,
@@ -1567,7 +1567,7 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		services := servicesForServerInfo(mock)
 		services.ValidatorPublicKey = pk
 		services.Manifests = manifests
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1629,7 +1629,7 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		mock := newMockLedgerServiceServerInfo()
 		services := servicesForServerInfo(mock)
 		services.ValidatorPublicKey = signing
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1662,7 +1662,7 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 
 	infoFor := func(t *testing.T, admin bool) map[string]any {
 		t.Helper()
-		result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RPCContext{
+		result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1683,7 +1683,7 @@ func TestServerInfoValidatorListVisibility(t *testing.T) {
 
 	stateFor := func(t *testing.T, admin bool) map[string]any {
 		t.Helper()
-		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(&types.RPCContext{
+		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(&types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1702,7 +1702,7 @@ func TestServerInfoExpiredValidatorListWarningIsPublic(t *testing.T) {
 	mock := newMockLedgerServiceServerInfo()
 	services := servicesForServerInfo(mock)
 	services.ValidatorList = &serverInfoValidatorList{blocked: true}
-	result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RPCContext{
+	result, rpcErr := (&handlers.ServerInfoMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1716,7 +1716,7 @@ func TestServerInfoExpiredValidatorListWarningIsPublic(t *testing.T) {
 	assert.Equal(t, types.WarningExpiredValidatorList, warnings[0].ID)
 	assert.Equal(t, "This server has an expired validator list. validators.txt may be incorrectly configured or some [validator_list_sites] may be unreachable.", warnings[0].Message)
 
-	result, rpcErr = (&handlers.ServerStateMethod{}).Handle(&types.RPCContext{
+	result, rpcErr = (&handlers.ServerStateMethod{}).Handle(&types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

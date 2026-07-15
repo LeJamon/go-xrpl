@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -14,13 +13,13 @@ import (
 // owns, read from its NFTokenPage entries.
 type AccountNftsMethod struct{ BaseHandler }
 
-func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
 	}
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.")
+		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
@@ -41,11 +40,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	}
 	if _, present := fields["marker"]; present {
 		if marker != "0" && len(marker) != 64 {
-			return nil, types.RPCErrorInvalidField("marker")
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		if marker != "0" {
 			if _, err := hex.DecodeString(marker); err != nil {
-				return nil, types.RPCErrorInvalidField("marker")
+				return nil, types.RpcErrorInvalidField("marker")
 			}
 		}
 	}
@@ -60,16 +59,16 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
-		if errors.Is(err, svcerr.ErrAccountMalformed) {
-			return nil, types.RPCErrorActMalformed("Account malformed.")
-		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorInvalidField("marker")
+		if errors.Is(err, svcerr.ErrAccountMalformed) {
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
+		if errors.Is(err, svcerr.ErrInvalidMarker) || errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		return nil, rpcInternalError("account_nfts: ledger query failed", err)
 	}
 
 	// Build NFTs array with proper field handling
@@ -106,5 +105,6 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		response["account"] = result.Account
 	}
 
+	setLoadMedium(ctx)
 	return response, nil
 }

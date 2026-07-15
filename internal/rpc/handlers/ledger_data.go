@@ -20,7 +20,7 @@ import (
 // LedgerDataMethod handles the ledger_data RPC method
 type LedgerDataMethod struct{ BaseHandler }
 
-func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -33,7 +33,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	fields := make(map[string]json.RawMessage)
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	markerStr := ""
@@ -41,11 +41,11 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	if hasMarker {
 		var marker string
 		if err := json.Unmarshal(markerRaw, &marker); err != nil {
-			return nil, types.RPCErrorExpectedField("marker", "valid")
+			return nil, types.RpcErrorExpectedField("marker", "valid")
 		}
 		switch marker {
 		case "":
-			return nil, types.RPCErrorExpectedField("marker", "valid")
+			return nil, types.RpcErrorExpectedField("marker", "valid")
 		case "0":
 			markerStr = strings.Repeat("0", 64)
 		default:
@@ -58,7 +58,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		var valid bool
 		binaryMode, valid = rawJSONBool(raw)
 		if !valid {
-			return nil, types.RPCErrorExpectedField("binary", "boolean")
+			return nil, types.RpcErrorExpectedField("binary", "boolean")
 		}
 	}
 
@@ -80,9 +80,9 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		// rippled's doLedgerData rejects a present-but-unparseable marker with
 		// expected_field_error(jss::marker, "valid").
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
-			return nil, types.RPCErrorExpectedField("marker", "valid")
+			return nil, types.RpcErrorExpectedField("marker", "valid")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
+		return nil, rpcInternalError("ledger_data: ledger query failed", err)
 	}
 
 	// Build state array based on binary flag
@@ -148,7 +148,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	return response, nil
 }
 
-func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *types.RPCError) {
+func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) (uint32, *types.RpcError) {
 	maxLimit := uint64(LimitLedgerData.Default)
 	if binary {
 		maxLimit = uint64(LimitLedgerDataBinary.Default)
@@ -160,20 +160,20 @@ func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) 
 
 	value := string(raw)
 	if strings.ContainsAny(value, ".eE") || value == "" || value == "null" || value == "true" || value == "false" {
-		return 0, types.RPCErrorExpectedField("limit", "integer")
+		return 0, types.RpcErrorExpectedField("limit", "integer")
 	}
 	if strings.HasPrefix(value, "-") {
 		if _, err := strconv.ParseInt(value, 10, 64); err != nil {
-			return 0, types.RPCErrorExpectedField("limit", "integer")
+			return 0, types.RpcErrorExpectedField("limit", "integer")
 		}
 		return uint32(maxLimit), nil
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return 0, types.RPCErrorExpectedField("limit", "integer")
+		return 0, types.RpcErrorExpectedField("limit", "integer")
 	}
 	if parsed > math.MaxInt32 {
-		return 0, types.RPCErrorInvalidParams("Invalid parameters.")
+		return 0, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if !unlimited && parsed > maxLimit {
 		parsed = maxLimit
@@ -220,21 +220,21 @@ var ledgerDataTypes = [...]ledgerDataType{
 	{"Loan", "loan", 0x0089},
 }
 
-func ledgerDataEntryType(params map[string]json.RawMessage) (uint16, *types.RPCError) {
+func ledgerDataEntryType(params map[string]json.RawMessage) (uint16, *types.RpcError) {
 	raw, ok := params["type"]
 	if !ok {
 		return 0, nil
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, types.RPCErrorExpectedField("type", "string")
+		return 0, types.RpcErrorExpectedField("type", "string")
 	}
 	for _, candidate := range ledgerDataTypes {
 		if strings.EqualFold(value, candidate.canonical) || value == candidate.rpc {
 			return candidate.code, nil
 		}
 	}
-	return 0, types.RPCErrorInvalidField("type")
+	return 0, types.RpcErrorInvalidField("type")
 }
 
 func ledgerDataHeader(header *types.LedgerHeaderInfo, binary bool, apiVersion int) map[string]any {

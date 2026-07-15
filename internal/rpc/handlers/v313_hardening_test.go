@@ -61,10 +61,10 @@ func TestIssueFromJSON_RejectsSentinelIssuers(t *testing.T) {
 	})
 }
 
-// TestArraySizeRPCError verifies the JSON-array-size overflow from the codec is
+// TestArraySizeRpcError verifies the JSON-array-size overflow from the codec is
 // mapped to invalidParams (item 2, rippled STParsedJSON cap), and other encode
 // errors fall through (nil). Reference: rippled commit 377b155ddc.
-func TestArraySizeRPCError(t *testing.T) {
+func TestArraySizeRpcError(t *testing.T) {
 	hashes := make([]any, 513)
 	for i := range hashes {
 		hashes[i] = strings.Repeat("A", 64)
@@ -72,14 +72,14 @@ func TestArraySizeRPCError(t *testing.T) {
 	_, encErr := binarycodec.Encode(map[string]any{"Amendments": hashes})
 	require.Error(t, encErr)
 
-	rpcErr := arraySizeRPCError(encErr)
+	rpcErr := arraySizeRpcError(encErr)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	assert.Equal(t, "invalidParams", rpcErr.ErrorString)
 	assert.Contains(t, rpcErr.Message, "exceeds allowed JSON array size of 512 elements per field.")
 
-	assert.Nil(t, arraySizeRPCError(errors.New("some other encode error")))
-	assert.Nil(t, arraySizeRPCError(nil))
+	assert.Nil(t, arraySizeRpcError(errors.New("some other encode error")))
+	assert.Nil(t, arraySizeRpcError(nil))
 }
 
 // TestReadLimitField exercises the readLimitField port directly: absent/null ->
@@ -88,7 +88,7 @@ func TestArraySizeRPCError(t *testing.T) {
 func TestReadLimitField(t *testing.T) {
 	r := LimitRange{Min: 10, Default: 200, Max: 400}
 
-	check := func(t *testing.T, params string, unlimited bool) (uint32, *types.RPCError) {
+	check := func(t *testing.T, params string, unlimited bool) (uint32, *types.RpcError) {
 		t.Helper()
 		return ReadLimitField(json.RawMessage(params), r, unlimited)
 	}

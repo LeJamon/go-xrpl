@@ -137,59 +137,57 @@ func TestGoxrplSpecificCodesDoNotCollide(t *testing.T) {
 // (ErrorCodes.cpp:51-120). This catches a constructor wired to the wrong slot.
 func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 	cases := []struct {
-		err   *RPCError
+		err   *RpcError
 		token string
 		code  int
 	}{
-		{RPCErrorUnknown("x"), "unknown", RpcUNKNOWN},
-		{RPCErrorInvalidParams("x"), "invalidParams", 31},
-		{RPCErrorMethodNotFound("m"), "unknownCmd", 32},
-		{RPCErrorLgrNotFound("x"), "lgrNotFound", 21},
-		{RPCErrorActNotFound("x"), "actNotFound", 19},
-		{RPCErrorActMalformed("x"), "actMalformed", 35},
-		{RPCErrorTxnNotFound("x"), "txnNotFound", 29},
-		{RPCErrorInvalidHotWallet(), "invalidHotWallet", 30},
-		{RPCErrorInternal("x"), "internal", 73},
-		{RPCErrorNoPermission("m"), "noPermission", 6},
-		{RPCErrorForbidden("m"), "forbidden", 3},
-		{RPCErrorTooBusy(), "tooBusy", 9},
-		{RPCErrorSlowDown("x"), "slowDown", 10},
-		{RPCErrorNotEnabled(""), "notEnabled", 12},
-		{RPCErrorNotSupported(""), "notSupported", 75},
-		{RPCErrorNoEvents(""), "noEvents", 7},
-		{RPCErrorAmendmentBlocked(), "amendmentBlocked", 14},
-		{RPCErrorBadFeature("x"), "badFeature", 40},
-		{RPCErrorNoPathRequest(), "noPathRequest", 33},
-		{RPCErrorObjectNotFound("x"), "objectNotFound", 92},
-		{RPCErrorBadCredentials("x"), "badCredentials", 95},
-		{RPCErrorHighFee("x"), "highFee", 11},
-		{RPCErrorSigningMalformed(), "signingMalformed", 63},
-		{RPCErrorPublicMalformed(), "publicMalformed", 62},
-		{RPCErrorBadSeed(), "badSeed", 44},
-		{RPCErrorBadKeyType("x"), "badKeyType", 76},
-		{RPCErrorChannelMalformed(), "channelMalformed", 45},
-		{RPCErrorChannelAmountMalformed(), "channelAmtMalformed", 46},
-		{RPCErrorTxSigned(), "transactionSigned", 96},
-		{RPCErrorSrcActMalformed("x"), "srcActMalformed", 65},
-		{RPCErrorNotImpl(), "notImpl", 74},
-		{RPCErrorOracleMalformed(), "oracleMalformed", 94},
-		{RPCErrorEntryNotFound("x"), "entryNotFound", RpcENTRY_NOT_FOUND},
-		{RPCErrorEntryNotFoundBare("x"), "entryNotFound", RpcUNKNOWN},
-		{RPCErrorUnexpectedLedgerType(), "unexpectedLedgerType", RpcUNEXPECTED_LEDGER_TYPE},
-		{RPCErrorTransactionNotFound("x"), "transactionNotFound", RpcUNKNOWN},
-		{RPCErrorNotStandalone("x"), "notStandAlone", RpcUNKNOWN},
-		{RPCErrorUnknownOption("x"), "unknownOption", RpcUNKNOWN},
-		{RPCErrorSrcActMissing("x"), "srcActMissing", 66},
-		{RPCErrorSrcActNotFound("x"), "srcActNotFound", 67},
-		{RPCErrorSrcCurMalformed("x"), "srcCurMalformed", 69},
-		{RPCErrorDstAmtMalformed("x"), "dstAmtMalformed", 51},
-		{RPCErrorSrcIsrMalformed("x"), "srcIsrMalformed", 70},
-		{RPCErrorDstIsrMalformed("x"), "dstIsrMalformed", 53},
-		{RPCErrorBadMarket(), "badMarket", 42},
-		{RPCErrorDomainMalformed(""), "domainMalformed", 97},
-		{RPCErrorDstActNotFound("x"), "dstActNotFound", 50},
-		{RPCErrorFieldNotFoundTransaction(), "fieldNotFoundTransaction", RpcUNKNOWN},
-		{RPCErrorInvalidApiVersion("3"), "invalid_API_version", RpcINVALID_API_VERSION},
+		{RpcErrorUnknown("x"), "unknown", RpcUNKNOWN},
+		{RpcErrorInvalidParams("x"), "invalidParams", 31},
+		{RpcErrorMethodNotFound(), "unknownCmd", 32},
+		{RpcErrorLgrNotFound("x"), "lgrNotFound", 21},
+		{RpcErrorActNotFound("x"), "actNotFound", 19},
+		{RpcErrorActMalformed("x"), "actMalformed", 35},
+		{RpcErrorTxnNotFound("x"), "txnNotFound", 29},
+		{RpcErrorInvalidHotWallet(), "invalidHotWallet", 30},
+		{RpcErrorInternal(), "internal", 73},
+		{RpcErrorTransactionSubmission(), "internal", 73},
+		{RpcErrorDBDeserialization(), "dbDeserialization", 77},
+		{RpcErrorNoPermission("m"), "noPermission", 6},
+		{RpcErrorForbidden("m"), "forbidden", 3},
+		{RpcErrorTooBusy(), "tooBusy", 9},
+		{RpcErrorSlowDown("x"), "slowDown", 10},
+		{RpcErrorNotEnabled(""), "notEnabled", 12},
+		{RpcErrorNotSupported(""), "notSupported", 75},
+		{RpcErrorNoEvents(""), "noEvents", 7},
+		{RpcErrorAmendmentBlocked(), "amendmentBlocked", 14},
+		{RpcErrorBadFeature("x"), "badFeature", 40},
+		{RpcErrorNoPathRequest(), "noPathRequest", 33},
+		{RpcErrorObjectNotFound("x"), "objectNotFound", 92},
+		{RpcErrorBadCredentials("x"), "badCredentials", 95},
+		{RpcErrorHighFee("x"), "highFee", 11},
+		{RpcErrorSigningMalformed(), "signingMalformed", 63},
+		{RpcErrorPublicMalformed(), "publicMalformed", 62},
+		{RpcErrorTxSigned(), "transactionSigned", 96},
+		{RpcErrorSrcActMalformed("x"), "srcActMalformed", 65},
+		{RpcErrorNotImpl(), "notImpl", 74},
+		{RpcErrorOracleMalformed(), "oracleMalformed", 94},
+		{RpcErrorEntryNotFound("x"), "entryNotFound", RpcENTRY_NOT_FOUND},
+		{RpcErrorEntryNotFoundBare("x"), "entryNotFound", RpcUNKNOWN},
+		{RpcErrorUnexpectedLedgerType(), "unexpectedLedgerType", RpcUNEXPECTED_LEDGER_TYPE},
+		{RpcErrorTransactionNotFound("x"), "transactionNotFound", RpcUNKNOWN},
+		{RpcErrorNotStandalone("x"), "notStandAlone", RpcUNKNOWN},
+		{RpcErrorUnknownOption("x"), "unknownOption", RpcUNKNOWN},
+		{RpcErrorSrcActMissing("x"), "srcActMissing", 66},
+		{RpcErrorSrcActNotFound("x"), "srcActNotFound", 67},
+		{RpcErrorSrcCurMalformed("x"), "srcCurMalformed", 69},
+		{RpcErrorDstAmtMalformed("x"), "dstAmtMalformed", 51},
+		{RpcErrorSrcIsrMalformed("x"), "srcIsrMalformed", 70},
+		{RpcErrorDstIsrMalformed("x"), "dstIsrMalformed", 53},
+		{RpcErrorBadMarket(), "badMarket", 42},
+		{RpcErrorDomainMalformed(""), "domainMalformed", 97},
+		{RpcErrorDstActNotFound("x"), "dstActNotFound", 50},
+		{RpcErrorFieldNotFoundTransaction(), "fieldNotFoundTransaction", RpcUNKNOWN},
+		{RpcErrorInvalidApiVersion("3"), "invalid_API_version", RpcINVALID_API_VERSION},
 	}
 	for _, c := range cases {
 		if c.err.ErrorString != c.token {
@@ -201,57 +199,16 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 	}
 }
 
-func TestRPCErrorResponseFields(t *testing.T) {
-	fields := RPCErrorActNotFound("Account not found.").WithExtra(map[string]any{"index": "ABC"}).ResponseFields()
-	if fields["error"] != "actNotFound" || fields["error_code"] != RpcACT_NOT_FOUND || fields["error_message"] != "Account not found." {
-		t.Fatalf("response fields = %#v", fields)
-	}
-	if fields["index"] != "ABC" {
-		t.Fatalf("extra index = %v, want ABC", fields["index"])
-	}
-
-	bare := RPCErrorEntryNotFoundBare("missing").ResponseFields()
-	if _, ok := bare["error_code"]; ok {
-		t.Fatalf("bare response includes error_code: %#v", bare)
-	}
-	if _, ok := bare["error_message"]; ok {
-		t.Fatalf("bare response includes error_message: %#v", bare)
+func TestRpcErrorMethodNotFoundMessage(t *testing.T) {
+	if got := RpcErrorMethodNotFound().Message; got != "Unknown method." {
+		t.Fatalf("message = %q, want %q", got, "Unknown method.")
 	}
 }
 
-// TestInternalErrorHidesDetail pins the rpcINTERNAL contract: the wire message
-// is always the fixed rippled string, and the caller's detail is retained only
-// on LogDetail for server-side logging — never serialized. This prevents
-// leaking internal storage/codec state to the client and forking the API from
-// rippled's fixed "Internal error." on every internal failure.
-func TestInternalErrorHidesDetail(t *testing.T) {
-	const detail = "pebble: key aabbcc size=4096 not found"
-	e := RPCErrorInternal(detail)
-
-	if e.Message != InternalErrorMessage {
-		t.Errorf("wire message = %q, want the fixed %q", e.Message, InternalErrorMessage)
-	}
-	if e.Message != "Internal error." {
-		t.Errorf("wire message = %q, want rippled's exact %q", e.Message, "Internal error.")
-	}
-	if e.LogDetail() != detail {
-		t.Errorf("LogDetail = %q, want %q", e.LogDetail(), detail)
-	}
-	// The detail must not appear on any serialized field.
-	if e.ErrorString == detail || e.Type == detail {
-		t.Errorf("internal detail leaked onto a serialized field")
-	}
-}
-
-// TestLogDetailEmptyForNonInternal confirms only rpcINTERNAL carries a log
-// detail, so the dispatcher's detail-logging branch never fires for ordinary
-// user errors.
-func TestLogDetailEmptyForNonInternal(t *testing.T) {
-	if got := RPCErrorInvalidParams("bad").LogDetail(); got != "" {
-		t.Errorf("LogDetail = %q, want empty for a non-internal error", got)
-	}
-	if got := (*RPCError)(nil).LogDetail(); got != "" {
-		t.Errorf("nil-receiver LogDetail = %q, want empty", got)
+func TestRpcErrorDBDeserialization(t *testing.T) {
+	err := RpcErrorDBDeserialization()
+	if err.Message != "Database deserialization error." {
+		t.Fatalf("message = %q, want %q", err.Message, "Database deserialization error.")
 	}
 }
 
@@ -260,29 +217,28 @@ func TestLogDetailEmptyForNonInternal(t *testing.T) {
 // wired, never error_code or error_message. Errors built through inject_error
 // keep all three fields.
 func TestBareTokenErrors(t *testing.T) {
-	bare := []*RPCError{
-		RPCErrorEntryNotFoundBare("x"),
-		RPCErrorTransactionNotFound("x"),
-		RPCErrorUnknownOption("x"),
-		RPCErrorFieldNotFoundTransaction(),
-		RPCErrorNotStandalone("x"),
+	bare := []*RpcError{
+		RpcErrorEntryNotFoundBare("x"),
+		RpcErrorTransactionNotFound("x"),
+		RpcErrorUnknownOption("x"),
+		RpcErrorFieldNotFoundTransaction(),
+		RpcErrorNotStandalone("x"),
 		// rippled emits invalid_API_version bare on every transport that still
 		// carries a result envelope (WS, batch-via-result): no code, no message.
-		RPCErrorInvalidApiVersion("3"),
+		RpcErrorInvalidApiVersion("3"),
 	}
 	for _, e := range bare {
 		if !e.IsBareToken() {
 			t.Errorf("%q should be a bare token", e.ErrorString)
 		}
 	}
-	notBare := []*RPCError{
-		RPCErrorTxnNotFound("x"),
-		RPCErrorLgrNotFound("x"),
-		RPCErrorInternal("x"),
-		RPCErrorActNotFound("x"),
-		// rippled 3.0.0 promoted these ledger_entry paths to inject_error.
-		RPCErrorEntryNotFound("x"),
-		RPCErrorUnexpectedLedgerType(),
+	notBare := []*RpcError{
+		RpcErrorTxnNotFound("x"),
+		RpcErrorLgrNotFound("x"),
+		RpcErrorInternal(),
+		RpcErrorActNotFound("x"),
+		RpcErrorEntryNotFound("x"),
+		RpcErrorUnexpectedLedgerType(),
 	}
 	for _, e := range notBare {
 		if e.IsBareToken() {
@@ -291,14 +247,14 @@ func TestBareTokenErrors(t *testing.T) {
 	}
 }
 
-// RPCErrorEntryNotFound defaults an empty message to rippled's canonical
-// "Entry not found." string (ErrorCodes.cpp:121); RPCErrorEntryNotFoundBare
+// RpcErrorEntryNotFound defaults an empty message to rippled's canonical
+// "Entry not found." string (ErrorCodes.cpp:121); RpcErrorEntryNotFoundBare
 // carries whatever the handler passes.
 func TestEntryNotFoundDefaultMessage(t *testing.T) {
-	if got := RPCErrorEntryNotFound("").Message; got != "Entry not found." {
+	if got := RpcErrorEntryNotFound("").Message; got != "Entry not found." {
 		t.Errorf("default message = %q, want %q", got, "Entry not found.")
 	}
-	if got := RPCErrorEntryNotFound("custom").Message; got != "custom" {
+	if got := RpcErrorEntryNotFound("custom").Message; got != "custom" {
 		t.Errorf("explicit message = %q, want %q", got, "custom")
 	}
 }
@@ -308,7 +264,7 @@ func TestEntryNotFoundDefaultMessage(t *testing.T) {
 // jss::invalid_API_version token with no numeric code or message
 // (ServerHandler.cpp:454-455, 689, 694-695).
 func TestInvalidApiVersionError(t *testing.T) {
-	e := RPCErrorInvalidApiVersion("3")
+	e := RpcErrorInvalidApiVersion("3")
 	if e.ErrorString != InvalidApiVersionToken {
 		t.Errorf("token = %q, want %q", e.ErrorString, InvalidApiVersionToken)
 	}
@@ -316,13 +272,13 @@ func TestInvalidApiVersionError(t *testing.T) {
 		t.Errorf("token = %q, want underscored rippled spelling", e.ErrorString)
 	}
 	if !e.IsInvalidApiVersion() {
-		t.Error("RPCErrorInvalidApiVersion should report IsInvalidApiVersion")
+		t.Error("RpcErrorInvalidApiVersion should report IsInvalidApiVersion")
 	}
 	if e.Message != "" {
 		t.Errorf("error_message = %q, want empty (rippled omits it)", e.Message)
 	}
 	// Only the invalid-version error carries the transport marker.
-	if RPCErrorInternal("x").IsInvalidApiVersion() {
+	if RpcErrorInternal().IsInvalidApiVersion() {
 		t.Error("unrelated error must not report IsInvalidApiVersion")
 	}
 }

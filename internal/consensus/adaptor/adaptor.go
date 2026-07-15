@@ -95,6 +95,11 @@ type Adaptor struct {
 	// wiring — GenerateNegativeUNLPseudoTx degrades to no vote.
 	validationHistorian consensus.ValidationHistorian
 
+	// remoteFeeMu serializes validated-ledger callbacks so a delayed older
+	// notification cannot overwrite the fee computed for a newer ledger.
+	remoteFeeMu  sync.Mutex
+	remoteFeeSeq uint32
+
 	txSetCache *TxSetCache
 
 	// Peer-reported last-closed ledger hashes, keyed by overlay peer ID.
@@ -408,6 +413,9 @@ func New(cfg Config) *Adaptor {
 	}
 	if cfg.LedgerService != nil {
 		cfg.LedgerService.SetValidatedLedgerAgeClock(a.Now)
+		cfg.LedgerService.SetOnValidatedLedger(func(seq uint32, hash, parentHash [32]byte) {
+			a.refreshRemoteFee(seq, consensus.LedgerID(hash), consensus.LedgerID(parentHash))
+		})
 	}
 	return a
 }

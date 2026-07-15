@@ -177,6 +177,53 @@ func (s *Service) SetPendingValidationResolver(resolver PendingValidationResolve
 	s.pendingValidationResolver = resolver
 }
 
+// SetOnValidatedLedger registers a handler invoked after the validated tip
+// advances and the service lock has been released. Pass nil to unwire.
+func (s *Service) SetOnValidatedLedger(handler func(seq uint32, hash, parentHash [32]byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onValidatedLedger = handler
+}
+
+type validatedLedgerNotification struct {
+	handler    func(seq uint32, hash, parentHash [32]byte)
+	seq        uint32
+	hash       [32]byte
+	parentHash [32]byte
+}
+
+func (s *Service) validatedLedgerSeqLocked() uint32 {
+	if s.validatedLedger == nil {
+		return 0
+	}
+	return s.validatedLedger.Sequence()
+}
+
+// Caller must hold s.mu for writing and invoke notify only after unlocking.
+func (s *Service) validatedLedgerNotificationLocked(previousSeq uint32) validatedLedgerNotification {
+	if s.onValidatedLedger == nil || s.validatedLedger == nil || s.validatedLedger.Sequence() <= previousSeq {
+		return validatedLedgerNotification{}
+	}
+	return validatedLedgerNotification{
+		handler:    s.onValidatedLedger,
+		seq:        s.validatedLedger.Sequence(),
+		hash:       s.validatedLedger.Hash(),
+		parentHash: s.validatedLedger.ParentHash(),
+	}
+}
+
+func (s *Service) unlockAndNotifyValidatedLedger(previousSeq uint32) {
+	notification := s.validatedLedgerNotificationLocked(previousSeq)
+	s.mu.Unlock()
+	notification.notify()
+}
+
+func (n validatedLedgerNotification) notify() {
+	if n.handler != nil {
+		n.handler(n.seq, n.hash, n.parentHash)
+	}
+}
+
 // SetEventHooks registers structured event hooks (richer than SetEventCallback).
 func (s *Service) SetEventHooks(hooks *EventHooks) {
 	s.mu.Lock()

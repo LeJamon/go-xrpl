@@ -191,7 +191,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -286,7 +286,7 @@ func TestNoRippleCheckUserRoleNoProblems(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -336,7 +336,7 @@ func TestNoRippleCheckUserRoleWithProblems(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -388,7 +388,7 @@ func TestNoRippleCheckGatewayRoleNoProblems(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -433,7 +433,7 @@ func TestNoRippleCheckGatewayRoleWithProblems(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -485,7 +485,7 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -549,7 +549,7 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -627,7 +627,7 @@ func TestNoRippleCheckTransactionsFieldValidationAPIv2(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -649,7 +649,7 @@ func TestNoRippleCheckTransactionsFieldAPIv1(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -677,7 +677,7 @@ func TestNoRippleCheckTransactionsFieldAPIv1(t *testing.T) {
 // TestNoRippleCheckServiceUnavailable tests response when ledger service is unavailable
 func TestNoRippleCheckServiceUnavailable(t *testing.T) {
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -693,7 +693,7 @@ func TestNoRippleCheckServiceUnavailable(t *testing.T) {
 	resp, err := method.Handle(ctx, paramsJSON)
 
 	require.NotNil(t, err)
-	assert.Contains(t, err.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", err.Message)
 	assert.Nil(t, resp)
 }
 
@@ -705,7 +705,7 @@ func TestNoRippleCheckWithLimit(t *testing.T) {
 	services := newNoRippleCheckTestServices(mock)
 
 	method := &handlers.NoRippleCheckMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

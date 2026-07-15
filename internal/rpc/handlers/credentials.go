@@ -12,7 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (privateKeyHex, publicKeyHex, keyType string, rpcErr *types.RPCError) {
+func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (privateKeyHex, publicKeyHex, keyType string, rpcErr *types.RpcError) {
 	var fields map[string]json.RawMessage
 	_ = json.Unmarshal(params, &fields)
 
@@ -25,29 +25,29 @@ func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (p
 		}
 	}
 	if count == 0 {
-		return "", "", "", types.RPCErrorMissingField("secret")
+		return "", "", "", types.RpcErrorMissingField("secret")
 	}
 	if count > 1 {
-		return "", "", "", types.RPCErrorInvalidParams("Exactly one of the following must be specified: passphrase, secret, seed or seed_hex")
+		return "", "", "", types.RpcErrorInvalidParams("Exactly one of the following must be specified: passphrase, secret, seed or seed_hex")
 	}
 
 	keyTypeRaw, hasKeyType := fields["key_type"]
 	if hasKeyType {
 		var value string
 		if err := json.Unmarshal(keyTypeRaw, &value); err != nil || isJSONNull(keyTypeRaw) {
-			return "", "", "", types.RPCErrorExpectedField("key_type", "string")
+			return "", "", "", types.RpcErrorExpectedField("key_type", "string")
 		}
 		switch value {
 		case "secp256k1", "ed25519":
 			keyType = value
 		default:
 			if apiVersion > 1 {
-				return "", "", "", types.RPCErrorBadKeyType("Bad key type.")
+				return "", "", "", types.RpcErrorBadKeyType("Bad key type.")
 			}
-			return "", "", "", types.RPCErrorInvalidField("key_type")
+			return "", "", "", types.RpcErrorInvalidField("key_type")
 		}
 		if secretType == "secret" {
-			return "", "", "", types.RPCErrorInvalidParams("The secret field is not allowed if key_type is used.")
+			return "", "", "", types.RpcErrorInvalidParams("The secret field is not allowed if key_type is used.")
 		}
 	}
 
@@ -57,7 +57,7 @@ func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (p
 			if decoded, algorithm, err := addresscodec.DecodeSeed(value); err == nil {
 				if _, isEd := algorithm.(ed25519.Algorithm); isEd {
 					if hasKeyType && keyType != "ed25519" {
-						return "", "", "", types.NewRPCError(types.RpcBAD_SEED, "badSeed", "badSeed", "Specified seed is for an Ed25519 wallet.")
+						return "", "", "", types.NewRpcError(types.RpcBAD_SEED, "badSeed", "badSeed", "Specified seed is for an Ed25519 wallet.")
 					}
 					seedBytes = decoded
 					keyType = "ed25519"
@@ -73,7 +73,7 @@ func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (p
 		if hasKeyType {
 			value, ok := rawString(fields[secretType])
 			if !ok {
-				return "", "", "", types.RPCErrorExpectedField(secretType, "string")
+				return "", "", "", types.RpcErrorExpectedField(secretType, "string")
 			}
 			var err error
 			switch secretType {
@@ -91,12 +91,12 @@ func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (p
 				}
 			}
 			if seedBytes == nil {
-				return "", "", "", types.RPCErrorBadSeed()
+				return "", "", "", types.RpcErrorBadSeed()
 			}
 		} else {
 			value, ok := rawString(fields["secret"])
 			if !ok {
-				return "", "", "", types.RPCErrorExpectedField("secret", "string")
+				return "", "", "", types.RpcErrorExpectedField("secret", "string")
 			}
 			seedBytes = parseSigningGenericSeed(value)
 			if seedBytes == nil {
@@ -112,7 +112,7 @@ func parseCredentialsAndDeriveKeypair(apiVersion int, params json.RawMessage) (p
 		privateKeyHex, publicKeyHex, err = (secp256k1.Algorithm{}).DeriveKeypair(seedBytes, false)
 	}
 	if err != nil {
-		return "", "", "", types.RPCErrorBadSeed()
+		return "", "", "", types.RpcErrorBadSeed()
 	}
 	return privateKeyHex, publicKeyHex, keyType, nil
 }
@@ -160,6 +160,6 @@ func isSeedToken(value string) bool {
 	return false
 }
 
-func invalidSeedField(field string) *types.RPCError {
-	return types.NewRPCError(types.RpcBAD_SEED, "badSeed", "badSeed", "Invalid field '"+field+"'.")
+func invalidSeedField(field string) *types.RpcError {
+	return types.NewRpcError(types.RpcBAD_SEED, "badSeed", "badSeed", "Invalid field '"+field+"'.")
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -16,7 +15,7 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
 type NftBuyOffersMethod struct{ BaseHandler }
 
-func (m *NftBuyOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -27,35 +26,35 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 // difference between buy and sell is the fetch function. The caller guards the
 // ledger service before binding fetch.
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
-func handleNFTOffers(ctx *types.RPCContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RPCError) {
+func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
 	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
 		return nil, rpcErr
 	}
 	fields := make(map[string]json.RawMessage)
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
 	nftIDRaw, hasNFTID := fields["nft_id"]
 	if !hasNFTID {
-		return nil, types.RPCErrorMissingField("nft_id")
+		return nil, types.RpcErrorMissingField("nft_id")
 	}
 	nftIDValue, validString := jsonCppStringRaw(nftIDRaw)
 	if !validString {
-		return nil, types.RPCErrorInvalidField("nft_id")
+		return nil, types.RpcErrorInvalidField("nft_id")
 	}
 
 	// Validate and parse the NFT ID - must be a 64-character hex string (32 bytes)
 	nftIDHex := strings.ToUpper(nftIDValue)
 	if len(nftIDHex) != 64 {
-		return nil, types.RPCErrorInvalidField("nft_id")
+		return nil, types.RpcErrorInvalidField("nft_id")
 	}
 
 	nftIDBytes, err := hex.DecodeString(nftIDHex)
 	if err != nil {
-		return nil, types.RPCErrorInvalidField("nft_id")
+		return nil, types.RpcErrorInvalidField("nft_id")
 	}
 
 	var nftID [32]byte
@@ -85,12 +84,12 @@ func handleNFTOffers(ctx *types.RPCContext, params json.RawMessage, fetch func(c
 		marker, markerIsString = rawJSONString(markerRaw)
 		if !markerIsString || marker == "" {
 			if _, err := fetch(ctx.Context, nftID, ledgerIndex, limit, ""); errors.Is(err, svcerr.ErrObjectNotFound) {
-				return nil, types.RPCErrorObjectNotFound("The requested object was not found.")
+				return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
 			}
 			if !markerIsString {
-				return nil, types.RPCErrorExpectedField("marker", "string")
+				return nil, types.RpcErrorExpectedField("marker", "string")
 			}
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 
@@ -101,13 +100,14 @@ func handleNFTOffers(ctx *types.RPCContext, params json.RawMessage, fetch func(c
 		}
 		switch {
 		case errors.Is(err, svcerr.ErrObjectNotFound):
-			return nil, types.RPCErrorObjectNotFound("The requested object was not found.")
+			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
 		case errors.Is(err, svcerr.ErrInvalidMarker):
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get NFT offers: %v", err))
+		return nil, rpcInternalError("nft_offers: ledger query failed", err)
 	}
 
+	setLoadMedium(ctx)
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil
 }
 

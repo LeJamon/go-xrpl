@@ -40,7 +40,7 @@ func (s *accountInfoConformanceService) GetLedgerByHash([32]byte) (types.LedgerR
 	return s.ledger, nil
 }
 
-func newAccountInfoConformanceContext(info *types.AccountInfo, rules *amendment.Rules, closed bool) (*types.RPCContext, *accountInfoConformanceService, [32]byte) {
+func newAccountInfoConformanceContext(info *types.AccountInfo, rules *amendment.Rules, closed bool) (*types.RpcContext, *accountInfoConformanceService, [32]byte) {
 	var hash [32]byte
 	hash[0] = 0xAB
 	hash[31] = 0xCD
@@ -56,7 +56,7 @@ func newAccountInfoConformanceContext(info *types.AccountInfo, rules *amendment.
 	mock := newMockLedgerService()
 	mock.accountInfo = info
 	service := &accountInfoConformanceService{mockLedgerService: mock, ledger: reader}
-	return &types.RPCContext{
+	return &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,

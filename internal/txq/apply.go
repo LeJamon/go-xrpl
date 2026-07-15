@@ -501,14 +501,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		q.erase(replacingCandidate)
 	}
 
-	// q.erase drops the account from byAccount once its queue is empty — which
-	// happens when replacingCandidate was the account's only queued tx. Re-check
-	// the live map rather than the stale `exists` snapshot, otherwise the new
-	// candidate is added to an orphaned AccountQueue and byFee/byAccount diverge,
-	// hiding the queued tx from later blocker checks.
-	if liveAq, stillInMap := q.byAccount[account]; stillInMap {
-		aq = liveAq
-	} else {
+	if !exists {
 		aq = NewAccountQueue(account)
 		q.byAccount[account] = aq
 	}

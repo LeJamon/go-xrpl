@@ -14,13 +14,13 @@ import (
 // the current open ledger, allowing progression without consensus.
 type LedgerAcceptMethod struct{ AdminHandler }
 
-func (m *LedgerAcceptMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	if !ctx.Services.Ledger.IsStandalone() {
-		return nil, types.RPCErrorNotStandalone("ledger_accept is only available in standalone mode")
+		return nil, types.RpcErrorNotStandalone("ledger_accept is only available in standalone mode")
 	}
 
 	// Optional close_time (XRPL ripple-epoch seconds). Not a rippled
@@ -36,7 +36,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	closeTime := time.Time{}
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &req); err != nil {
-			return nil, types.NewRPCError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
+			return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
 				fmt.Sprintf("ledger_accept: malformed params: %v", err))
 		}
 		if req.CloseTime != nil {
@@ -46,7 +46,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 
 	closedSeq, err := ctx.Services.Ledger.AcceptLedgerAt(ctx.Context, closeTime)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to accept ledger: %v", err))
+		return nil, rpcInternalError("ledger_accept: accepting ledger failed", err)
 	}
 
 	response := map[string]any{

@@ -29,6 +29,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/internal/watchdog"
@@ -46,6 +47,13 @@ import (
 type minimumOnlineFloorFunc func() uint32
 
 func (f minimumOnlineFloorFunc) MinimumOnline() uint32 { return f() }
+
+func effectivePeerFetchDepth(fetchDepth uint32, onlineDelete int) uint32 {
+	if onlineDelete > 0 && uint64(onlineDelete) < uint64(fetchDepth) {
+		return uint32(onlineDelete)
+	}
+	return fetchDepth
+}
 
 // Run assembles and starts every node subsystem from the parsed config, then
 // blocks until a terminating signal or fatal error. It is the composition root
@@ -148,6 +156,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:   standalone,
+		FetchDepth:   effectivePeerFetchDepth(appConfig.GetFetchDepthUint32(), appConfig.NodeDB.OnlineDelete),
 		NetworkID:    uint32(networkID),
 		NodeStore:    db,
 		SHAMapFamily: nodeFamily,
@@ -733,10 +742,12 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		)
 	}
 
+	transportLoad := loadtrack.New()
+
 	// Create HTTP JSON-RPC server. The dispatch timeout stays strictly below
 	// the transport WriteTimeout (see httpWriteTimeout) so a timed-out request
 	// can still serialize its error envelope.
-	httpServer := rpc.NewServer(rpcDispatchTimeout, services)
+	httpServer := rpc.NewServerWithLoadTracker(rpcDispatchTimeout, services, transportLoad)
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		httpServer.SetPeerSource(consensusComponents.Overlay)
 	}
@@ -744,7 +755,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 	services.SetDispatcher(httpServer)
 
 	// Create WebSocket server for real-time subscriptions
-	wsServer = rpc.NewWebSocketServer(rpcDispatchTimeout, services)
+	wsServer = rpc.NewWebSocketServerWithLoadTracker(rpcDispatchTimeout, services, transportLoad)
 	if appConfig.WebsocketPingFrequency > 0 {
 		wsServer.SetPingInterval(time.Duration(appConfig.WebsocketPingFrequency) * time.Second)
 	}

@@ -14,7 +14,7 @@ import (
 
 func TestChannelVerify_MissingPublicKey(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -32,7 +32,7 @@ func TestChannelVerify_MissingPublicKey(t *testing.T) {
 
 func TestChannelVerify_MissingChannelID(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -50,7 +50,7 @@ func TestChannelVerify_MissingChannelID(t *testing.T) {
 
 func TestChannelVerify_MissingAmount(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -68,7 +68,7 @@ func TestChannelVerify_MissingAmount(t *testing.T) {
 
 func TestChannelVerify_MissingSignature(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -86,7 +86,7 @@ func TestChannelVerify_MissingSignature(t *testing.T) {
 
 func TestChannelVerify_PresentEmptyRequiredFields(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{ApiVersion: types.ApiVersion2}
+	ctx := &types.RpcContext{ApiVersion: types.ApiVersion2}
 	const publicKey = "021D93E21C44160A1B3B66DA1F37B86BE39FFEA3FC4B95FAA2063F82EE823599F6"
 	const channelID = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
 
@@ -134,7 +134,7 @@ func TestChannelVerify_PresentEmptyRequiredFields(t *testing.T) {
 
 func TestChannelVerify_MalformedPublicKey(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -154,7 +154,7 @@ func TestChannelVerify_MalformedPublicKey(t *testing.T) {
 
 func TestChannelVerify_MalformedHexPublicKey(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -173,7 +173,7 @@ func TestChannelVerify_MalformedHexPublicKey(t *testing.T) {
 
 func TestChannelVerify_InvalidChannelIDTooLong(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -192,7 +192,7 @@ func TestChannelVerify_InvalidChannelIDTooLong(t *testing.T) {
 
 func TestChannelVerify_InvalidChannelIDTooShort(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -210,7 +210,7 @@ func TestChannelVerify_InvalidChannelIDTooShort(t *testing.T) {
 
 func TestChannelVerify_AmountTooSmall(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -229,7 +229,7 @@ func TestChannelVerify_AmountTooSmall(t *testing.T) {
 
 func TestChannelVerify_AmountTooLarge(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -247,7 +247,7 @@ func TestChannelVerify_AmountTooLarge(t *testing.T) {
 
 func TestChannelVerify_NonHexSignature(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -266,7 +266,7 @@ func TestChannelVerify_NonHexSignature(t *testing.T) {
 
 func TestChannelVerify_ValidHexPublicKey(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -289,7 +289,7 @@ func TestChannelVerify_ValidHexPublicKey(t *testing.T) {
 
 func TestChannelVerify_ValidBase58PublicKey(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -312,7 +312,7 @@ func TestChannelVerify_ValidBase58PublicKey(t *testing.T) {
 
 func TestChannelVerify_MaxAmount(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -334,7 +334,7 @@ func TestChannelVerify_MaxAmount(t *testing.T) {
 
 func TestChannelVerify_ZeroAmount(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -356,7 +356,7 @@ func TestChannelVerify_ZeroAmount(t *testing.T) {
 func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 	// First create a valid signature for amount "1000000"
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RPCContext{
+	authorizeCtx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -375,7 +375,7 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 
 	// Now try to verify with a different amount - should fail
 	verifyHandler := &handlers.ChannelVerifyMethod{}
-	verifyCtx := &types.RPCContext{
+	verifyCtx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -399,7 +399,7 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 func TestChannelVerify_WrongChannelID(t *testing.T) {
 	// First create a valid signature for channel_id
 	authorizeHandler := &handlers.ChannelAuthorizeMethod{}
-	authorizeCtx := &types.RPCContext{
+	authorizeCtx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 
@@ -418,7 +418,7 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 
 	// Now try to verify with a different channel_id - should fail
 	verifyHandler := &handlers.ChannelVerifyMethod{}
-	verifyCtx := &types.RPCContext{
+	verifyCtx := &types.RpcContext{
 		ApiVersion: types.ApiVersion1,
 	}
 

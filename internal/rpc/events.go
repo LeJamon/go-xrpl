@@ -59,7 +59,7 @@ type ValidationEvent struct {
 	Full                bool     `json:"full"`                     // Whether this is a full validation
 	LedgerHash          string   `json:"ledger_hash"`              // Hash of proposed ledger
 	LedgerIndex         string   `json:"ledger_index"`             // Index of proposed ledger (as string)
-	LoadFee             uint32   `json:"load_fee,omitempty"`       // Local load-scaled transaction cost
+	LoadFee             *uint32  `json:"load_fee,omitempty"`       // Local load-scaled transaction cost
 	MasterKey           string   `json:"master_key,omitempty"`     // Master public key — emitted only when the manifest cache resolves a master distinct from the signing key (NetworkOPs.cpp:2434-2438)
 	NetworkID           uint32   `json:"network_id,omitempty"`     // Network identifier (NetworkOPs.cpp:2423)
 	ReserveBase         uint64   `json:"reserve_base,omitempty"`   // Minimum reserve

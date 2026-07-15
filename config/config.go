@@ -138,8 +138,8 @@ func (c *Config) ResolvedLedgerHistory() int {
 
 // defaultFetchDepth mirrors rippled's FETCH_DEPTH default (Config.h): the
 // unset value is 1e9, distinct from the "full" keyword which maps to the
-// uint32 max. Both are effectively unlimited, but matching the exact
-// sentinel keeps ResolvedFetchDepth faithful to rippled.
+// uint32 max. Both are effectively unlimited for normal histories, but the
+// protocol-width accessor preserves the distinction.
 const defaultFetchDepth = 1000000000
 
 // ResolvedFetchDepth returns the configured fetch depth as an integer.
@@ -151,6 +151,18 @@ func (c *Config) ResolvedFetchDepth() int {
 		return defaultFetchDepth
 	}
 	return c.FetchDepth.Value()
+}
+
+// GetFetchDepthUint32 returns the protocol-width fetch depth. Unlike the
+// legacy int accessor, "full" covers the entire uint32 ledger sequence space.
+func (c *Config) GetFetchDepthUint32() uint32 {
+	if !c.FetchDepth.Set {
+		return defaultFetchDepth
+	}
+	if c.FetchDepth.Full {
+		return ^uint32(0)
+	}
+	return uint32(c.FetchDepth.Count)
 }
 
 // IsValidator returns true if this node is configured as a validator

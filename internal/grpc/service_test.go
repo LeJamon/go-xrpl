@@ -152,12 +152,25 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 
 func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
 	t.Helper()
-	l, err := ledger.NewOpen(parent, time.Now())
-	if err != nil {
-		t.Fatalf("NewOpen: %v", err)
+	seq := parent.Sequence() + 1
+	hdr := header.LedgerHeader{
+		LedgerIndex:         seq,
+		ParentHash:          parent.Hash(),
+		Hash:                [32]byte{byte(seq), 0xCD},
+		Drops:               parent.TotalDrops(),
+		CloseTime:           time.Unix(1_700_000_000+int64(seq), 0).UTC(),
+		ParentCloseTime:     parent.CloseTime(),
+		CloseTimeResolution: 10,
+		Accepted:            true,
 	}
-	if err := l.Close(time.Now(), 0); err != nil {
-		t.Fatalf("Close: %v", err)
+	l, err := ledger.NewClosedFromHeader(
+		hdr,
+		shamap.New(shamap.TypeState),
+		shamap.New(shamap.TypeTransaction),
+		drops.Fees{},
+	)
+	if err != nil {
+		t.Fatalf("NewClosedFromHeader: %v", err)
 	}
 	return l
 }

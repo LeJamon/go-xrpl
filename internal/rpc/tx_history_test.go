@@ -56,7 +56,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -136,7 +136,7 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -174,7 +174,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -220,7 +220,7 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,
@@ -248,7 +248,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 	method := &handlers.TxHistoryMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -265,11 +265,11 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
@@ -286,7 +286,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -296,7 +296,7 @@ func TestTxHistoryInternalError(t *testing.T) {
 	services := newTxHistoryTestServices(mock)
 
 	method := &handlers.TxHistoryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleUser,
 		ApiVersion: types.ApiVersion1,

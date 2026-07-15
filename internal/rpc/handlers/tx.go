@@ -20,7 +20,7 @@ import (
 // TxMethod handles the tx RPC method
 type TxMethod struct{ BaseHandler }
 
-func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// notEnabled takes precedence over any parameter validation, matching
 	// rippled's useTxTables() gate as the first statement of doTxJson.
 	if err := RequireTxTables(ctx.Services); err != nil {
@@ -30,13 +30,13 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 	var fields map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	transactionRaw, hasTransaction := fields["transaction"]
 	ctidRaw, hasCTID := fields["ctid"]
 	if hasTransaction && hasCTID {
-		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	var transaction, ctid string
@@ -45,15 +45,15 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 	case hasTransaction:
 		transaction, valid = jsonCppStringRaw(transactionRaw)
 		if !valid {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	case hasCTID:
 		ctid, valid = jsonCppStringRaw(ctidRaw)
 		if !valid {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	default:
-		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	var txHash [32]byte
@@ -64,16 +64,16 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 		var err error
 		ctidLedgerSeq, ctidTxIndex, ctidNetworkID, err = parseCTID(ctid)
 		if err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 		if nodeNet := ctx.Services.Ledger.GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
-			return nil, types.RPCErrorWrongNetwork(fmt.Sprintf(
+			return nil, types.RpcErrorWrongNetwork(fmt.Sprintf(
 				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
 		}
 	} else {
 		txHashBytes, err := hex.DecodeString(transaction)
 		if err != nil || len(txHashBytes) != 32 {
-			return nil, types.RPCErrorNotImpl()
+			return nil, types.RpcErrorNotImpl()
 		}
 		copy(txHash[:], txHashBytes)
 	}
@@ -90,10 +90,10 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 			minLedger, minOK := txUint32Raw(minRaw)
 			maxLedger, maxOK := txUint32Raw(maxRaw)
 			if !minOK || !maxOK || maxLedger < minLedger {
-				return nil, types.RPCErrorInvalidLgrRange()
+				return nil, types.RpcErrorInvalidLgrRange()
 			}
 			if maxLedger-minLedger > 1000 {
-				return nil, types.RPCErrorExcessiveLgrRange()
+				return nil, types.RpcErrorExcessiveLgrRange()
 			}
 			rangeMin, rangeMax, hasLedgerRange = minLedger, maxLedger, true
 		}
@@ -116,14 +116,14 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 		txInfo, err = ctx.Services.Ledger.GetTransaction(txHash)
 	}
 	if err != nil && !errors.Is(err, svcerr.ErrTxnNotFound) {
-		return nil, types.RPCErrorInternal("Internal error.")
+		return nil, rpcInternalError("tx: transaction lookup failed", err)
 	}
 	if err != nil || txInfo == nil {
 		return nil, txNotFoundForSearch(hasLedgerRange, searched)
 	}
-	storedTx, err := decodeTxBlob(txInfo.TxData)
+	storedTx, err := decodeTxBlobForTx(txInfo.TxData)
 	if err != nil {
-		return nil, types.RPCErrorInternal("Failed to decode transaction data")
+		return nil, rpcDBDeserializationError("tx: transaction deserialization failed", err)
 	}
 
 	// Resolve close time from the containing ledger
@@ -137,8 +137,8 @@ func (m *TxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *
 	return m.buildResponse(ctx, storedTx, txInfo, strings.ToUpper(transaction), closeTimeSec, binaryMode), nil
 }
 
-func txNotFoundForSearch(hasRange bool, searched types.TxSearchResult) *types.RPCError {
-	err := types.RPCErrorTxnNotFound("Transaction not found.")
+func txNotFoundForSearch(hasRange bool, searched types.TxSearchResult) *types.RpcError {
+	err := types.RpcErrorTxnNotFound("Transaction not found.")
 	if !hasRange || searched == types.TxSearchUnknown {
 		return err
 	}
@@ -176,7 +176,7 @@ func txUint32Raw(raw json.RawMessage) (uint32, bool) {
 
 // buildResponse constructs the tx response, choosing v1 or v2 format based on ctx.ApiVersion.
 func (m *TxMethod) buildResponse(
-	ctx *types.RPCContext,
+	ctx *types.RpcContext,
 	storedTx StoredTransaction,
 	txInfo *types.TransactionInfo,
 	hashStr string,
@@ -311,10 +311,10 @@ func (m *TxMethod) buildResponseV2(
 }
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
-func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RPCError) {
+func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RpcError) {
 	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
-		return nil, types.RPCErrorTxnNotFound("Transaction not found.")
+		return nil, types.RpcErrorTxnNotFound("Transaction not found.")
 	}
 
 	// SHAMap iteration order differs from the metadata's transaction order.
@@ -335,7 +335,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex
 	})
 
 	if !found {
-		return nil, types.RPCErrorTxnNotFound("Transaction not found.")
+		return nil, types.RpcErrorTxnNotFound("Transaction not found.")
 	}
 
 	hashStr := protocol.Hash256Hex(foundHash)
@@ -343,16 +343,17 @@ func (m *TxMethod) lookupByCTID(ctx *types.RPCContext, ledgerSeq uint32, txIndex
 	closeTimeSec := ledger.CloseTime()
 	ledgerHashStr := protocol.Hash256Hex(ledger.Hash())
 
-	storedTx, decodeErr := decodeTxBlob(foundData)
+	storedTx, decodeErr := decodeTxBlobForTx(foundData)
+	if decodeErr != nil {
+		return nil, rpcDBDeserializationError("tx: CTID transaction deserialization failed", decodeErr)
+	}
 
-	return m.ctidResponse(ctx, storedTx, decodeErr, foundData, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
+	return m.ctidResponse(ctx, storedTx, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
 }
 
 func (m *TxMethod) ctidResponse(
-	ctx *types.RPCContext,
+	ctx *types.RpcContext,
 	storedTx StoredTransaction,
-	decodeErr error,
-	foundData []byte,
 	hashStr string,
 	ledgerSeq uint32,
 	txIndex uint16,
@@ -368,31 +369,24 @@ func (m *TxMethod) ctidResponse(
 		TxIndex:     uint32(txIndex),
 	}
 
-	tx := storedTx
-	if decodeErr != nil {
-		tx = StoredTransaction{}
-	}
-	response := m.buildResponse(ctx, tx, txInfo, hashStr, closeTimeSec, binary)
+	networkID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
+	response := m.buildResponse(ctx, storedTx, txInfo, hashStr, closeTimeSec, binary)
 
 	if binary {
-		if decodeErr != nil {
-			delete(response, "tx")
-			delete(response, "tx_blob")
-			key := "tx"
-			if ctx.ApiVersion > 1 {
-				key = "tx_blob"
-			}
-			response[key] = strings.ToUpper(hex.EncodeToString(foundData))
-		}
+		// buildResponseV1's "inLedger" and "date" fields have no CTID
+		// equivalent.
+		delete(response, "inLedger")
+		delete(response, "date")
 		return response
 	}
 
 	if ctx.ApiVersion > 1 {
-		if decodeErr != nil {
-			// On a decode failure the CTID format emits no tx_json at all,
-			// whereas buildResponseV2 always wraps one.
-			delete(response, "tx_json")
-			return response
+		if txJSON, ok := response["tx_json"].(map[string]any); ok {
+			// buildResponseV2 omits the ctid for ledger 0; the CTID lookup
+			// still reports it.
+			if ctid, ok := encodeCTID(ledgerSeq, uint32(txIndex), uint32(networkID)); ok {
+				txJSON["ctid"] = ctid
+			}
 		}
 		return response
 	}

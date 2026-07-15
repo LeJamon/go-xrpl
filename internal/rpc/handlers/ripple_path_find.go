@@ -51,7 +51,8 @@ type pathAlternativeJSON struct {
 // Reference: rippled RipplePathFind.cpp + PathRequest::parseJson/isValid.
 type RipplePathFindMethod struct{ BaseHandler }
 
-func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	setLoadHeavy(ctx)
 	release, rpcErr := AcquirePathfind(ctx)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -61,7 +62,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	probe := map[string]json.RawMessage{}
 	if params != nil {
 		if err := json.Unmarshal(params, &probe); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters: " + err.Error())
+			return nil, types.RpcErrorInvalidParams("Invalid parameters: " + err.Error())
 		}
 	}
 	ledgerSpec, hasLedgerSelector, ledgerSpecErr := parseLedgerSpecifier(params)
@@ -83,47 +84,47 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	// Field validation follows rippled PathRequest::parseJson order exactly.
 	rawSrc, ok := probe["source_account"]
 	if !ok {
-		return nil, types.RPCErrorSrcActMissing("Source account not provided.")
+		return nil, types.RpcErrorSrcActMissing("Source account not provided.")
 	}
 	rawDst, ok := probe["destination_account"]
 	if !ok {
-		return nil, types.RPCErrorDstActMissing("Destination account not provided.")
+		return nil, types.RpcErrorDstActMissing("Destination account not provided.")
 	}
 	rawDstAmount, ok := probe["destination_amount"]
 	if !ok {
-		return nil, types.RPCErrorDstAmtMissing("Destination amount/currency/issuer is missing.")
+		return nil, types.RpcErrorDstAmtMissing("Destination amount/currency/issuer is missing.")
 	}
 
 	srcAccount, ok := decodeAccountRaw(rawSrc)
 	if !ok {
-		return nil, types.RPCErrorSrcActMalformed("Source account is malformed.")
+		return nil, types.RpcErrorSrcActMalformed("Source account is malformed.")
 	}
 	dstAccount, ok := decodeAccountRaw(rawDst)
 	if !ok {
-		return nil, types.RPCErrorDstActMalformed("Destination account is malformed.")
+		return nil, types.RpcErrorDstActMalformed("Destination account is malformed.")
 	}
 
 	dstAmount, err := state.AmountFromJSON(rawDstAmount)
 	if err != nil || !pathfinder.IsValidAsset(dstAmount) {
-		return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// destination_amount of exactly -1 selects convert-all mode.
 	// Reference: rippled PathRequest::parseJson convert_all_ check.
 	convertAll := dstAmount.Value() == "-1"
 	if !convertAll && dstAmount.Signum() <= 0 {
-		return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	var sendMax *state.Amount
 	if rawSendMax, hasSendMax := probe["send_max"]; hasSendMax {
 		// send_max requires destination_amount to be -1.
 		if !convertAll {
-			return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+			return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
 		amt, smErr := state.AmountFromJSON(rawSendMax)
 		if smErr != nil || !pathfinder.IsValidAsset(amt) || (amt.Signum() <= 0 && amt.Value() != "-1") {
-			return nil, types.RPCErrorSendMaxMalformed("SendMax amount malformed.")
+			return nil, types.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
 	}
@@ -137,13 +138,13 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	if rawDomain, ok := probe["domain"]; ok {
 		var domainStr string
 		if err := json.Unmarshal(rawDomain, &domainStr); err != nil {
-			return nil, types.RPCErrorDomainMalformed("Domain is malformed.")
+			return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
 		}
 		domainID = new([32]byte)
 		if domainStr != "0" {
 			decoded, err := hex.DecodeString(domainStr)
 			if err != nil || len(decoded) != 32 {
-				return nil, types.RPCErrorDomainMalformed("Domain is malformed.")
+				return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
 			}
 			copy(domainID[:], decoded)
 		}
@@ -162,26 +163,26 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 
 	// Existence checks. Reference: rippled PathRequest::isValid.
 	if exists, _ := view.Exists(keylet.Account(srcAccount)); !exists {
-		return nil, types.RPCErrorSrcActNotFound("Source account not found.")
+		return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 	}
 	if exists, _ := view.Exists(keylet.Account(dstAccount)); !exists {
 		// Only XRP can be sent to a non-existent account, and the payment
 		// must meet the account reserve.
 		if !dstAmount.IsNative() {
-			return nil, types.RPCErrorActNotFound("Account not found.")
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if !convertAll {
 			feeData, feeErr := view.Read(keylet.Fees())
 			if feeErr != nil {
-				return nil, types.RPCErrorInternal("Internal error.")
+				return nil, rpcInternalError("ripple_path_find: fee settings lookup failed", feeErr)
 			}
 			fees, feeErr := state.ParseFeeSettings(feeData)
 			if feeErr != nil {
-				return nil, types.RPCErrorInternal("Internal error.")
+				return nil, rpcInternalError("ripple_path_find: fee settings parsing failed", feeErr)
 			}
 			reserveBase := fees.GetReserveBase()
 			if dstAmount.Drops() < int64(reserveBase) {
-				return nil, types.RPCErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+				return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 			}
 		}
 	}
@@ -191,7 +192,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	pr.SetDomainID(domainID)
 	result := pr.Execute(view)
 	if result.SourceCurrencyOverflow {
-		return nil, types.RPCErrorInternal("Internal error.")
+		return nil, rpcInternalInvariantError("ripple_path_find: source currency limit exceeded")
 	}
 
 	response := ripplePathFindResponse{
@@ -244,11 +245,11 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	// `result.data`, which no XRPL client understands.
 	encoded, mErr := json.Marshal(response)
 	if mErr != nil {
-		return nil, types.RPCErrorInternal("Internal error.")
+		return nil, rpcInternalError("ripple_path_find: response marshaling failed", mErr)
 	}
 	var flat map[string]any
 	if uErr := json.Unmarshal(encoded, &flat); uErr != nil {
-		return nil, types.RPCErrorInternal("Internal error.")
+		return nil, rpcInternalError("ripple_path_find: response normalization failed", uErr)
 	}
 	return flat, nil
 }
@@ -280,7 +281,7 @@ func parseSourceCurrencies(
 	probe map[string]json.RawMessage,
 	srcAccount [20]byte,
 	sendMax *state.Amount,
-) ([]payment.Issue, *types.RPCError) {
+) ([]payment.Issue, *types.RpcError) {
 	rawSC, ok := probe["source_currencies"]
 	if !ok {
 		return nil, nil
@@ -288,7 +289,7 @@ func parseSourceCurrencies(
 
 	var entries []json.RawMessage
 	if err := json.Unmarshal(rawSC, &entries); err != nil || len(entries) == 0 || len(entries) > maxSrcCurrencies {
-		return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+		return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 	}
 
 	var sendMaxIssue payment.Issue
@@ -308,22 +309,22 @@ func parseSourceCurrencies(
 	for _, raw := range entries {
 		var fields map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &fields); err != nil {
-			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		rawCurrency, hasCurrency := fields["currency"]
 		rawMPT, hasMPT := fields["mpt_issuance_id"]
 		_, hasIssuer := fields["issuer"]
 		if hasCurrency == hasMPT || hasMPT && hasIssuer {
-			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		if hasMPT {
 			var mptID string
 			if err := json.Unmarshal(rawMPT, &mptID); err != nil {
-				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			id, ok := pathfinder.ParseSourceMPTID(mptID)
 			if !ok {
-				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 			issue := payment.NewMPTIssue(id)
 			if sendMax != nil {
@@ -336,7 +337,7 @@ func parseSourceCurrencies(
 		}
 		var currencyValue string
 		if err := json.Unmarshal(rawCurrency, &currencyValue); err != nil || !keylet.IsValidCurrencyCode(currencyValue) {
-			return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		currency := canonCurrency(currencyValue)
 		isXRPCur := currency == "XRP"
@@ -345,18 +346,18 @@ func parseSourceCurrencies(
 		if rawIssuer, hasIssuer := fields["issuer"]; hasIssuer {
 			var issuerStr string
 			if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
-				return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
+				return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			id, err := state.DecodeAccountID(issuerStr)
 			if err != nil {
-				return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
+				return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			issuerID = id
 		}
 
 		if isXRPCur {
 			if issuerID != ([20]byte{}) {
-				return nil, types.RPCErrorSrcCurMalformed("Source currency is malformed.")
+				return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 			}
 		} else if issuerID == ([20]byte{}) {
 			issuerID = srcAccount
@@ -370,7 +371,7 @@ func parseSourceCurrencies(
 			// If neither issuer is the source and they are not equal, the
 			// source issuer is illegal.
 			if issuerID != srcAccount && sendMaxIssue.Issuer != srcAccount && issuerID != sendMaxIssue.Issuer {
-				return nil, types.RPCErrorSrcIsrMalformed("Source issuer is malformed.")
+				return nil, types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
 			}
 			// If both are the source, use the source; otherwise use the one
 			// that's not the source.
@@ -414,14 +415,14 @@ func (l selectedPathFindLedger) IsValidated() bool { return l.reader.IsValidated
 // resolvePathFindLedger selects the ledger to run pathfinding on. With no
 // selector the closed ledger is used and no metadata is reported.
 func resolvePathFindLedger(
-	ctx *types.RPCContext,
+	ctx *types.RpcContext,
 	spec types.LedgerSpecifier,
 	hasSelector bool,
-) (types.LedgerStateView, *pathFindLedgerMeta, *types.RPCError) {
+) (types.LedgerStateView, *pathFindLedgerMeta, *types.RpcError) {
 	if !hasSelector {
 		view, err := ctx.Services.Ledger.GetClosedLedgerView()
 		if err != nil {
-			return nil, nil, types.NewRPCError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
+			return nil, nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent", "Current ledger is unavailable.")
 		}
 		return view, nil, nil
 	}
@@ -432,7 +433,7 @@ func resolvePathFindLedger(
 
 	source, ok := ctx.Services.Ledger.(types.LedgerViewSource)
 	if !ok {
-		return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+		return nil, nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	bySequence := func(sequence uint32) (selectedPathFindLedger, bool, error) {
 		view, reader, err := source.GetLedgerViewBySeq(sequence)
@@ -463,7 +464,7 @@ func resolvePathFindLedger(
 		ByHash:     byHash,
 	})
 	if err != nil {
-		return nil, nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+		return nil, nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 	}
 	validatedResult := resolved.Validated
 	if selection.Kind() == ledgerselector.KindCurrent {

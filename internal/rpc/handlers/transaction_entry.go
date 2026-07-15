@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -17,7 +16,7 @@ type TransactionEntryMethod struct{ BaseHandler }
 
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
-func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
@@ -29,7 +28,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	fields := make(map[string]json.RawMessage)
 	if len(params) != 0 {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+			return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 		}
 	}
 	lookupExtra := make(map[string]any)
@@ -42,10 +41,10 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	lookupExtra["validated"] = validated
 	txHashRaw, hasTxHash := fields["tx_hash"]
 	if !hasTxHash {
-		return nil, types.RPCErrorFieldNotFoundTransaction().WithExtra(lookupExtra)
+		return nil, types.RpcErrorFieldNotFoundTransaction().WithExtra(lookupExtra)
 	}
 	if !targetLedger.IsClosed() {
-		return nil, types.RPCErrorNotYetImplemented().WithExtra(lookupExtra)
+		return nil, types.RpcErrorNotYetImplemented().WithExtra(lookupExtra)
 	}
 
 	var txHashString string
@@ -54,7 +53,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	if txHashString != "0" {
 		txHashBytes, err := hex.DecodeString(txHashString)
 		if err != nil || len(txHashBytes) != 32 {
-			return nil, types.RPCErrorMalformedRequestBare().WithExtra(lookupExtra)
+			return nil, types.RpcErrorMalformedRequestBare().WithExtra(lookupExtra)
 		}
 		copy(txHash[:], txHashBytes)
 	}
@@ -73,7 +72,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 		txData, found, readErr = source.GetLedgerTransaction(txHash)
 	}
 	if readErr != nil {
-		return nil, types.RPCErrorInternal("Failed to read transaction data")
+		return nil, rpcInternalError("transaction_entry: transaction read failed", readErr)
 	}
 	if hasSource {
 		if found {
@@ -93,31 +92,36 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 		txInfo, lookupErr = ctx.Services.Ledger.GetTransaction(txHash)
 	}
 	if lookupErr != nil || txInfo == nil {
-		return nil, types.RPCErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)
+		return nil, types.RpcErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)
 	}
 	targetSeq := targetLedger.Sequence()
 	if txInfo.LedgerIndex != targetSeq {
-		return nil, types.RPCErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
+		return nil, types.RpcErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
 	}
 
-	storedTx, err := decodeTxBlob(txInfo.TxData)
+	// Parse the stored transaction data (VL-encoded binary or JSON)
+	storedTx, err := decodeTxBlobForTransactionEntry(txInfo.TxData)
 	if err != nil {
-		return nil, types.RPCErrorInternal("Failed to parse transaction data")
+		return nil, rpcInternalError("transaction_entry: transaction decoding failed", err)
 	}
 
 	ledgerHash := FormatLedgerHash(targetLedger.Hash())
+	hashString := strings.ToUpper(txHashString)
 
-	response := maps.Clone(lookupExtra)
-	response["tx_json"] = projectTransactionJSON(storedTx.TxJSON, strings.ToUpper(txHashString), ctx.ApiVersion)
+	response := map[string]any{
+		"tx_json": projectTransactionJSON(storedTx.TxJSON, hashString, ctx.ApiVersion),
+	}
 
-	if ctx.ApiVersion > 1 {
-		response["meta"] = storedTx.Meta
-	} else {
-		response["metadata"] = storedTx.Meta
+	if storedTx.Meta != nil {
+		if ctx.ApiVersion > 1 {
+			response["meta"] = storedTx.Meta
+		} else {
+			response["metadata"] = storedTx.Meta
+		}
 	}
 
 	if ctx.ApiVersion > 1 {
-		response["hash"] = strings.ToUpper(txHashString)
+		response["hash"] = hashString
 		response["validated"] = validated
 
 		if ledgerHash != "" {

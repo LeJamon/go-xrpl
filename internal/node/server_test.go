@@ -31,6 +31,25 @@ type recordingSinkCall struct {
 	masterKeys [][33]byte
 }
 
+func TestEffectivePeerFetchDepth(t *testing.T) {
+	tests := []struct {
+		name         string
+		fetchDepth   uint32
+		onlineDelete int
+		want         uint32
+	}{
+		{name: "online delete clamps full history", fetchDepth: ^uint32(0), onlineDelete: 256, want: 256},
+		{name: "smaller fetch depth wins", fetchDepth: 512, onlineDelete: 1024, want: 512},
+		{name: "online delete disabled", fetchDepth: 512, onlineDelete: 0, want: 512},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, effectivePeerFetchDepth(tc.fetchDepth, tc.onlineDelete))
+		})
+	}
+}
+
 func (s *recordingSink) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -123,7 +142,7 @@ ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860
 
 func TestApplyValidatorReload_AppliesStaticValidators(t *testing.T) {
 	path := writeReloadConfig(t, `[validators]
-n9KorY8QtTdRx7TVDpwnG9NvyxsDwHUKUEeDLY3AkiGncVaSXZi5
+n949f75evCHwgyP4fPVgaHqNHxUVN15PsJEZ3B3HnXPcPjcZAoy7
 `)
 	sink := &recordingSink{}
 

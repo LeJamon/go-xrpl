@@ -100,7 +100,7 @@ func TestLedgerEntryDirectIndexLookup(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -243,7 +243,7 @@ func TestLedgerEntryCheck(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -349,7 +349,7 @@ func TestLedgerEntryPaymentChannel(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -456,7 +456,7 @@ func TestLedgerEntryDirectory(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -561,7 +561,7 @@ func TestLedgerEntryNFTPage(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -666,7 +666,7 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -726,7 +726,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -921,7 +921,7 @@ func TestLedgerEntryResponseFields(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1008,7 +1008,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 	method := &handlers.LedgerEntryMethod{}
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1026,11 +1026,11 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Services.Ledger is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1048,7 +1048,7 @@ func TestLedgerEntryServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -1077,7 +1077,7 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1123,7 +1123,7 @@ func TestLedgerEntryImplementedTypes(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1216,7 +1216,7 @@ func TestLedgerEntryInvalidParameters(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1294,7 +1294,7 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1337,7 +1337,7 @@ func TestLedgerEntryV3IndexShortcuts(t *testing.T) {
 		t.Run("v3 "+sc.name, func(t *testing.T) {
 			mock := newMockLedgerEntryService()
 			method := &handlers.LedgerEntryMethod{}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion3,
@@ -1352,7 +1352,7 @@ func TestLedgerEntryV3IndexShortcuts(t *testing.T) {
 		t.Run("v2 rejects "+sc.name, func(t *testing.T) {
 			mock := newMockLedgerEntryService()
 			method := &handlers.LedgerEntryMethod{}
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
@@ -1369,7 +1369,7 @@ func TestLedgerEntryV3IndexShortcuts(t *testing.T) {
 func TestLedgerEntryFixedLocationSelectors(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1417,7 +1417,7 @@ func TestLedgerEntryNotFoundReturnsIndex(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	mock.ledgerEntryErr = svcerr.ErrLedgerEntryNotFound
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -1441,7 +1441,7 @@ func TestLedgerEntryAccountRoot(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1563,7 +1563,7 @@ func TestLedgerEntryEscrow(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1661,7 +1661,7 @@ func TestLedgerEntryLoan(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1778,7 +1778,7 @@ func TestLedgerEntryLoanBroker(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1869,7 +1869,7 @@ func TestLedgerEntryLoanBroker(t *testing.T) {
 }
 
 // handleLedgerEntry marshals params and dispatches them through the handler.
-func handleLedgerEntry(t *testing.T, method *handlers.LedgerEntryMethod, ctx *types.RPCContext, params map[string]any) (any, *types.RPCError) {
+func handleLedgerEntry(t *testing.T, method *handlers.LedgerEntryMethod, ctx *types.RpcContext, params map[string]any) (any, *types.RpcError) {
 	t.Helper()
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -1885,7 +1885,7 @@ func TestLedgerEntryOffer(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1983,7 +1983,7 @@ func TestLedgerEntryRippleState(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2081,7 +2081,7 @@ func TestLedgerEntryTicket(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2179,7 +2179,7 @@ func TestLedgerEntryDepositPreauth(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2277,7 +2277,7 @@ func TestLedgerEntryAMM(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2375,7 +2375,7 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2457,7 +2457,7 @@ func TestLedgerEntryUnexpectedType(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2527,7 +2527,7 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2573,7 +2573,7 @@ func TestLedgerEntryMalformedRequests(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2667,7 +2667,7 @@ func TestLedgerEntryAPIVersions(t *testing.T) {
 
 	for _, version := range versions {
 		t.Run("API Version "+string(rune('0'+version)), func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: version,
@@ -2697,7 +2697,7 @@ func TestLedgerEntryHexValidation(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2869,7 +2869,7 @@ func TestLedgerEntryHexFallback(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -2939,7 +2939,7 @@ func TestLedgerEntryVault(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3001,7 +3001,7 @@ func TestLedgerEntryDelegate(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3061,7 +3061,7 @@ func TestLedgerEntryBridge(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3104,7 +3104,7 @@ func TestLedgerEntryXChainClaimID(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3147,7 +3147,7 @@ func TestLedgerEntryTicketConformance(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3193,7 +3193,7 @@ func TestLedgerEntryUppercaseHex(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3241,7 +3241,7 @@ func TestLedgerEntryEscrowHexFallback(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3286,7 +3286,7 @@ func TestLedgerEntryOfferHexFallback(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3331,7 +3331,7 @@ func TestLedgerEntryOracleHexFallback(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3376,7 +3376,7 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3437,7 +3437,7 @@ func TestLedgerEntryAccountSelector(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -3489,7 +3489,7 @@ func TestLedgerEntryLoanSelectors(t *testing.T) {
 	services := newLedgerEntryTestServices(mock)
 
 	method := &handlers.LedgerEntryMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

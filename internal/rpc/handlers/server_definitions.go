@@ -85,7 +85,7 @@ func buildServerDefinitions() {
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-func (m *ServerDefinitionsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	serverDefsOnce.Do(buildServerDefinitions)
 
 	// When the client echoes a matching hash, return just the hash so it can
@@ -96,7 +96,7 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RPCContext, params json.RawM
 			if hashRaw, ok := raw["hash"]; ok {
 				var hashStr string
 				if err := json.Unmarshal(hashRaw, &hashStr); err != nil || !isValidDefinitionsHash(hashStr) {
-					return nil, types.RPCErrorInvalidField("hash")
+					return nil, types.RpcErrorInvalidField("hash")
 				}
 				if strings.EqualFold(hashStr, serverDefsHash) {
 					return map[string]any{"hash": serverDefsHash}, nil

@@ -26,12 +26,12 @@ type channelAuthorizeRequest struct {
 	Amount    string `json:"amount"`
 }
 
-func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *ChannelAuthorizeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request channelAuthorizeRequest
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 	var fields map[string]json.RawMessage
@@ -40,10 +40,10 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	// Validate required fields: channel_id and amount
 	// rippled: for (auto const& p : {jss::channel_id, jss::amount}) if (!params.isMember(p)) return RPC::missing_field_error(p);
 	if _, ok := fields["channel_id"]; !ok {
-		return nil, types.RPCErrorMissingField("channel_id")
+		return nil, types.RpcErrorMissingField("channel_id")
 	}
 	if _, ok := fields["amount"]; !ok {
-		return nil, types.RPCErrorMissingField("amount")
+		return nil, types.RpcErrorMissingField("amount")
 	}
 
 	// Parse credentials and derive keypair
@@ -57,10 +57,10 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	// rippled: if (!channelId.parseHex(params[jss::channel_id].asString())) return rpcError(rpcCHANNEL_MALFORMED);
 	channelIDHex := strings.ToUpper(request.ChannelID)
 	if len(channelIDHex) != 64 {
-		return nil, types.RPCErrorChannelMalformed()
+		return nil, types.RpcErrorChannelMalformed()
 	}
 	if _, err := hex.DecodeString(channelIDHex); err != nil {
-		return nil, types.RPCErrorChannelMalformed()
+		return nil, types.RpcErrorChannelMalformed()
 	}
 
 	// Validate amount - must be a string that parses to uint64
@@ -68,7 +68,7 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	// rippled: if (!optDrops) return rpcError(rpcCHANNEL_AMT_MALFORMED);
 	drops, err := strconv.ParseUint(request.Amount, 10, 64)
 	if err != nil {
-		return nil, types.RPCErrorChannelAmountMalformed()
+		return nil, types.RpcErrorChannelAmountMalformed()
 	}
 
 	// Serialize the payment channel claim message using EncodeForSigningClaim
@@ -79,20 +79,20 @@ func (m *ChannelAuthorizeMethod) Handle(ctx *types.RPCContext, params json.RawMe
 	}
 	messageHex, err := binarycodec.EncodeForSigningClaim(claimJSON)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to encode claim: %v", err))
+		return nil, rpcInternalError("channel_authorize: claim encoding failed", err)
 	}
 
 	// Convert hex message to raw bytes for signing
 	messageBytes, err := hex.DecodeString(messageHex)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to decode message: %v", err))
+		return nil, rpcInternalError("channel_authorize: claim decoding failed", err)
 	}
 
 	// Sign the message
 	// The Sign functions expect the raw message bytes (as a string)
 	signature, err := signMessage(messageBytes, privateKeyHex, keyType)
 	if err != nil {
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Exception occurred during signing: %v", err))
+		return nil, rpcInternalError("channel_authorize: claim signing failed", err)
 	}
 
 	response := map[string]any{

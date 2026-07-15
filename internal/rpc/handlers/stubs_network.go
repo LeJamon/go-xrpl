@@ -18,7 +18,7 @@ import (
 // rippled's behavior too.
 type FetchInfoMethod struct{ AdminHandler }
 
-func (m *FetchInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Clear bool `json:"clear,omitempty"`
 	}
@@ -56,7 +56,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 // overlay is wired (standalone / RPC-only).
 type TxReduceRelayMethod struct{ BaseHandler }
 
-func (m *TxReduceRelayMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var metrics types.TxReduceRelayMetrics
 	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics != nil {
 		metrics = ctx.Services.TxReduceRelayMetrics()
@@ -73,7 +73,7 @@ func (m *TxReduceRelayMethod) RequiredRole() types.Role {
 // overlay().connect()); otherwise it reports that peers are unavailable.
 type ConnectMethod struct{ AdminHandler }
 
-func (m *ConnectMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		IP   string `json:"ip"`
 		Port int    `json:"port,omitempty"`
@@ -81,7 +81,7 @@ func (m *ConnectMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
@@ -91,7 +91,7 @@ func (m *ConnectMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	// run the handshake in the background and reply right away (Connect.cpp).
 	if ctx.Services != nil && ctx.Services.PeerConnect != nil {
 		if request.IP == "" {
-			return nil, types.RPCErrorInvalidParams("Missing required parameter: ip")
+			return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
 		}
 		port := connectPort(request.Port)
 		addr := net.JoinHostPort(request.IP, strconv.Itoa(port))
@@ -103,14 +103,14 @@ func (m *ConnectMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	// ip check (Connect.cpp:41), so connect in standalone reports notSynced
 	// regardless of the supplied params.
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RPCErrorInternal("Ledger service not available")
+		return nil, rpcInternalInvariantError("connect: ledger service unavailable")
 	}
 	if ctx.Services.Ledger.IsStandalone() {
-		return nil, types.NewRPCError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
+		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 			"Not synced to the network.")
 	}
 	if request.IP == "" {
-		return nil, types.RPCErrorInvalidParams("Missing required parameter: ip")
+		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
 	}
 	return connectMessage(request.IP, connectPort(request.Port)), nil
 }
@@ -142,7 +142,7 @@ func connectMessage(ip string, port int) map[string]any {
 // no publisher-trust subsystem configured (e.g. standalone) the list is empty.
 type UnlListMethod struct{ AdminHandler }
 
-func (m *UnlListMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	unl := make([]any, 0)
 	if ctx.Services != nil && ctx.Services.ValidatorList != nil {
 		for _, v := range ctx.Services.ValidatorList.ListedValidators() {
@@ -169,13 +169,13 @@ func (m *UnlListMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 // object directly). Empty when no overlay is wired (standalone / RPC-only).
 type BlackListMethod struct{ AdminHandler }
 
-func (m *BlackListMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Threshold *int `json:"threshold,omitempty"`
 	}
 	if params != nil {
 		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 

@@ -63,7 +63,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	// neither a hash, a sequence, nor ltCLOSED has nothing to resolve, and an
 	// ltype outside [ltACCEPTED, ltCLOSED] is invalid. Both are bad data —
 	// charge the peer and drop without disconnecting.
-	if len(req.LedgerHash) != 32 && req.LedgerSeq == 0 && req.LType != message.LedgerTypeClosed {
+	if len(req.LedgerHash) != 32 && !req.HasLedgerSeq() && req.LType != message.LedgerTypeClosed {
 		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
 		return
 	}
@@ -98,7 +98,10 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		var hash [32]byte
 		copy(hash[:], req.LedgerHash)
 		l, err = svc.GetLedgerByHash(hash)
-	} else if req.LedgerSeq > 0 {
+	} else if req.HasLedgerSeq() {
+		if req.LedgerSeq < svc.EarliestFetch() {
+			return
+		}
 		l, err = svc.GetLedgerBySequence(req.LedgerSeq)
 	} else if req.LType == message.LedgerTypeClosed {
 		l = svc.GetClosedLedger()
@@ -108,6 +111,16 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		// rippled's getLedger relay. Falls through to a silent drop when the
 		// request isn't relayable or no peer qualifies.
 		r.maybeRelayGetLedger(msg.PeerID, req)
+		return
+	}
+	if req.HasLedgerSeq() {
+		if l.Sequence() != req.LedgerSeq {
+			if !req.HasRequestCookie() {
+				r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-sequence-mismatch")
+			}
+			return
+		}
+	} else if l.Sequence() < svc.EarliestFetch() {
 		return
 	}
 
@@ -136,11 +149,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 
 	resp := &message.LedgerData{
-		LedgerHash:    hash[:],
-		LedgerSeq:     l.Sequence(),
-		InfoType:      req.InfoType,
-		Nodes:         nodes,
-		RequestCookie: uint32(req.RequestCookie),
+		LedgerHash:       hash[:],
+		LedgerSeq:        l.Sequence(),
+		InfoType:         req.InfoType,
+		Nodes:            nodes,
+		RequestCookie:    uint32(req.RequestCookie),
+		RequestCookieSet: req.HasRequestCookie(),
 	}
 
 	frame, err := message.EncodeFrame(resp)
@@ -255,11 +269,12 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		fmt.Sprintf("txset %x", txSetID[:8]))
 
 	resp := &message.LedgerData{
-		LedgerHash:    req.LedgerHash,
-		LedgerSeq:     0, // tx-set responses carry no ledger seq
-		InfoType:      message.LedgerInfoTsCandidate,
-		Nodes:         nodes,
-		RequestCookie: uint32(req.RequestCookie),
+		LedgerHash:       req.LedgerHash,
+		LedgerSeq:        0, // tx-set responses carry no ledger seq
+		InfoType:         message.LedgerInfoTsCandidate,
+		Nodes:            nodes,
+		RequestCookie:    uint32(req.RequestCookie),
+		RequestCookieSet: req.HasRequestCookie(),
 	}
 
 	frame, err := message.EncodeFrame(resp)

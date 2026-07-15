@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -98,4 +99,58 @@ func TestGetServerInfo_CompleteLedgers_FloorAboveWindow(t *testing.T) {
 	if got := svc.GetServerInfo().CompleteLedgers; got != "" {
 		t.Fatalf("floor above window = %q, want empty", got)
 	}
+}
+
+func TestGetServerInfo_CompleteLedgersDoesNotUseFetchDepth(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.FetchDepth = 10
+	svc, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	seedHistory(t, svc, 10, 100)
+
+	if got := svc.GetServerInfo().CompleteLedgers; got != "10-100" {
+		t.Fatalf("complete_ledgers = %q, want %q", got, "10-100")
+	}
+}
+
+func TestGetServerInfo_CallbacksRunUnlocked(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	waitForSetter := func(set func()) {
+		done := make(chan struct{})
+		go func() {
+			set()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("server-info callback ran while Service.mu was held")
+		}
+	}
+
+	svc.SetServerStateFunc(func() string {
+		waitForSetter(func() { svc.SetServerStateFunc(nil) })
+		return "tracking"
+	})
+	if got := svc.GetServerInfo().ServerState; got != "tracking" {
+		t.Fatalf("server state = %q, want tracking", got)
+	}
+
+	svc.SetMinimumOnlineFunc(func() uint32 {
+		waitForSetter(func() { svc.SetMinimumOnlineFunc(nil) })
+		return 0
+	})
+	_ = svc.GetServerInfo()
 }

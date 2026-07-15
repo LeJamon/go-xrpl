@@ -15,7 +15,7 @@ import (
 // Based on rippled Peers_test.cpp testRequest() - basic structure check
 func TestPeersResponseStructure(t *testing.T) {
 	method := &handlers.PeersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -40,7 +40,7 @@ func TestPeersResponseStructure(t *testing.T) {
 // Based on rippled Peers_test.cpp testRequest() - empty cluster before any nodes added
 func TestPeersEmptyList(t *testing.T) {
 	method := &handlers.PeersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -66,7 +66,7 @@ func TestPeersEmptyList(t *testing.T) {
 // TestPeersWithEmptyParams tests that peers works with empty params.
 func TestPeersWithEmptyParams(t *testing.T) {
 	method := &handlers.PeersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

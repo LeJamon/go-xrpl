@@ -11,6 +11,7 @@ package postgres
 
 import (
 	"context"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -409,6 +410,56 @@ func TestPostgresAccountTransactionPagination(t *testing.T) {
 	}
 	if page3.Marker != nil {
 		t.Fatal("expected no marker on last page")
+	}
+
+	maxLimitPage, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: accountID,
+		Limit:   math.MaxUint32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(maxLimitPage.Transactions) != 5 {
+		t.Fatalf("expected 5 txs with maximum limit, got %d", len(maxLimitPage.Transactions))
+	}
+	if maxLimitPage.Marker != nil {
+		t.Fatal("expected no marker with maximum limit")
+	}
+}
+
+func TestPostgresAccountTransactionPaginationZeroLimit(t *testing.T) {
+	rm := setupTestDB(t)
+	ctx := context.Background()
+
+	var accountID relationaldb.AccountID
+	accountID[0] = 0x01
+
+	tx := &relationaldb.TransactionInfo{
+		LedgerSeq: 1,
+		TxnSeq:    1,
+		Status:    "validated",
+		RawTxn:    []byte("raw"),
+	}
+	tx.Hash[0] = 0x01
+	if err := rm.Transaction().SaveTransaction(ctx, tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := rm.AccountTransaction().SaveAccountTransaction(ctx, accountID, tx); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := rm.AccountTransaction().GetOldestAccountTxsPage(ctx, relationaldb.AccountTxPageOptions{
+		Account: accountID,
+		Limit:   0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Transactions) != 0 {
+		t.Fatalf("expected 0 txs, got %d", len(page.Transactions))
+	}
+	if page.Marker != nil {
+		t.Fatal("expected no marker for zero limit")
 	}
 }
 

@@ -10,8 +10,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// Sentinel errors returned by LedgerProvider.GetProofPath so the handler
-// can map them back to the appropriate TMReplyError code on the wire.
+// Sentinel errors returned by LedgerProvider methods so handlers can map
+// them to protocol responses and resource charges.
 //
 // Mirrors rippled's reNO_LEDGER (ledger unknown / not yet immutable) and
 // reNO_NODE (the requested key is not present in the selected map) at
@@ -25,6 +25,9 @@ var (
 	// no leaf in the selected map. The handler responds with
 	// ReplyErrorNoNode.
 	ErrKeyNotFound = errors.New("key not found in ledger map")
+	// ErrFetchPackTooEarly signals that the requested HAVE ledger is below
+	// the configured peer-serving range.
+	ErrFetchPackTooEarly = errors.New("fetch pack ledger is too early")
 	// ErrPeerBadRequest is returned by LedgerSyncHandler.HandleMessage
 	// when the inbound request was malformed (e.g. bad field lengths,
 	// invalid enum values) and we replied with ReplyErrorBadRequest. The
@@ -93,10 +96,10 @@ type LedgerProvider interface {
 	// (LedgerMaster.cpp:2096-2225): the requester supplies a ledger hash it
 	// HAS, and the provider returns the SHAMap nodes of its parent ("want") —
 	// a header object followed by the account-state and transaction tree
-	// nodes, each tagged with want's sequence. Returns (nil, nil) when the
-	// ledger is unknown, still open, or its parent is unavailable, so the
-	// handler drops the request without replying. maxObjects <= 0 lets the
-	// provider apply its own cap.
+	// nodes, each tagged with want's sequence. Returns ErrFetchPackTooEarly
+	// when HAVE is below the configured range. Unknown, open, or parentless
+	// ledgers return (nil, nil), so the handler drops the request without
+	// replying. maxObjects <= 0 lets the provider apply its own cap.
 	MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error)
 }
 

@@ -98,7 +98,7 @@ func TestBookChangesMPTAmountParsing(t *testing.T) {
 
 func TestComputeBookChangesEmitsMPTAsset(t *testing.T) {
 	blob, err := json.Marshal(StoredTransaction{
-		TxJSON: map[string]any{"TransactionType": "Payment"},
+		TxJSON: validBookChangesTxJSON(),
 		Meta: map[string]any{
 			"AffectedNodes": []any{
 				map[string]any{
@@ -155,7 +155,7 @@ func computeMPTBookChange(t *testing.T, takerGets, takerPays string) map[string]
 	const otherMPTID = "00000005AE123A8556F3CF91154711376AFB0F894F832B3D"
 
 	blob, err := json.Marshal(StoredTransaction{
-		TxJSON: map[string]any{"TransactionType": "Payment"},
+		TxJSON: validBookChangesTxJSON(),
 		Meta: map[string]any{
 			"AffectedNodes": []any{
 				map[string]any{

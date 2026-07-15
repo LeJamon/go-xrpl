@@ -92,7 +92,7 @@ func TestAmendmentBlockedMethodsReturnError(t *testing.T) {
 	services := newTestServices(mock)
 
 	server := newTestServer()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -124,7 +124,7 @@ func TestAmendmentBlockedUnblockedMethodsStillWork(t *testing.T) {
 	services := newTestServices(mock)
 
 	server := newTestServer()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -156,7 +156,7 @@ func TestAmendmentNotBlockedAllMethodsWork(t *testing.T) {
 	services := newTestServices(mock)
 
 	server := newTestServer()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -186,7 +186,7 @@ func TestAmendmentBlockedErrorFormat(t *testing.T) {
 	services := newTestServices(mock)
 
 	server := newTestServer()
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,

@@ -142,6 +142,7 @@ func TestTypedFields_FetchDepth_Integer(t *testing.T) {
 	assert.False(t, cfg.FetchDepth.Full)
 	assert.Equal(t, 512, cfg.FetchDepth.Count)
 	assert.Equal(t, 512, cfg.ResolvedFetchDepth())
+	assert.Equal(t, uint32(512), cfg.GetFetchDepthUint32())
 }
 
 func TestTypedFields_FetchDepth_Full(t *testing.T) {
@@ -152,6 +153,7 @@ func TestTypedFields_FetchDepth_Full(t *testing.T) {
 	assert.True(t, cfg.FetchDepth.Set)
 	assert.True(t, cfg.FetchDepth.Full)
 	assert.Equal(t, math.MaxInt32, cfg.FetchDepth.Value())
+	assert.Equal(t, ^uint32(0), cfg.GetFetchDepthUint32())
 }
 
 // TestTypedFields_FetchDepth_None verifies parity with rippled's
@@ -312,6 +314,7 @@ func TestTypedFields_AbsentFields(t *testing.T) {
 	assert.Equal(t, 256, cfg.ResolvedLedgerHistory())
 	assert.True(t, cfg.FetchDepth.IsZero())
 	assert.Equal(t, defaultFetchDepth, cfg.ResolvedFetchDepth())
+	assert.Equal(t, uint32(defaultFetchDepth), cfg.GetFetchDepthUint32())
 }
 
 // TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete reproduces the

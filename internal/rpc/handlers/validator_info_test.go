@@ -67,8 +67,8 @@ func installServices(pk []byte, manifests types.ManifestLookup) *types.ServiceCo
 	}
 }
 
-func adminCtx(services *types.ServiceContainer) *types.RPCContext {
-	return &types.RPCContext{
+func adminCtx(services *types.ServiceContainer) *types.RpcContext {
+	return &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		ApiVersion: types.ApiVersion1,
@@ -248,7 +248,5 @@ func TestValidatorInfo_InvalidPublicKeyLength(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 	assert.Equal(t, "internal", rpcErr.ErrorString)
-	// The wire message is fixed; the detail is retained server-side only.
-	assert.Equal(t, types.InternalErrorMessage, rpcErr.Message)
-	assert.Contains(t, rpcErr.LogDetail(), "invalid length")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }

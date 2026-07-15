@@ -590,7 +590,11 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
 // Reference: rippled Batch.cpp applyBatchTransactions() with tfAllOrNothing
 func (b *Batch) applyAllOrNothing(ctx *tx.ApplyContext, innerTxns []tx.Transaction) ter.Result {
 	// Create a batch-level state table wrapping ctx.View
-	batchTable := applystate.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
+	base, ok := ctx.View.(applystate.AtomicLedgerView)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	batchTable := applystate.NewApplyStateTable(base, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	batchCtx := &tx.ApplyContext{
 		View:            batchTable,
@@ -696,7 +700,11 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) ter.Res
 	}
 
 	// Create per-tx state table for isolation
-	perTxTable := applystate.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
+	base, ok := ctx.View.(applystate.AtomicLedgerView)
+	if !ok {
+		return ter.TefINTERNAL
+	}
+	perTxTable := applystate.NewApplyStateTable(base, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	if isTicket {
 		// Ticket-based: consume the ticket (delete it, adjust owner/ticket counts).

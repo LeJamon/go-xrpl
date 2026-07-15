@@ -123,11 +123,20 @@ func (ctx *StrandContext) CheckXRPEndpointLoop(isLast bool) ter.Result {
 // XRPEndpointOfferCrossingStep). For payments, it creates a standard step.
 // isFirst indicates whether this is the first step in the strand (source).
 // Reference: rippled XRPEndpointOfferCrossingStep::computeReserveReduction
-func (ctx *StrandContext) newXRPEndpointStep(account [20]byte, isLast bool, isFirst bool) *XRPEndpointStep {
+func (ctx *StrandContext) newXRPEndpointStep(account [20]byte, isLast bool, isFirst bool) (*XRPEndpointStep, ter.Result) {
+	var step *XRPEndpointStep
 	if ctx.OfferCrossing {
-		return NewXRPEndpointStepForOfferCrossing(account, isLast, isFirst, ctx.StrandDeliver, ctx.View)
+		step = NewXRPEndpointStepForOfferCrossing(account, isLast, isFirst, ctx.StrandDeliver, ctx.View)
+	} else {
+		step = NewXRPEndpointStep(account, isLast)
 	}
-	return NewXRPEndpointStep(account, isLast)
+	if result := step.Check(ctx.View); result != ter.TesSUCCESS {
+		return nil, result
+	}
+	if result := ctx.CheckXRPEndpointLoop(isLast); result != ter.TesSUCCESS {
+		return nil, result
+	}
+	return step, ter.TesSUCCESS
 }
 
 // Path flags - indicate what type of element this path step contains
@@ -682,20 +691,18 @@ func (ctx *StrandContext) buildStrandSteps(
 				if curIssue.IsXRP() {
 					// XRP endpoint step
 					if i == 0 {
-						// Check for XRP loop
-						if result := ctx.CheckXRPEndpointLoop(false); result != ter.TesSUCCESS {
+						step, result := ctx.newXRPEndpointStep(cur.account, false, true) // source, isFirst=true
+						if result != ter.TesSUCCESS {
 							return nil, result
 						}
-						step := ctx.newXRPEndpointStep(cur.account, false, true) // source, isFirst=true
 						strand = append(strand, step)
 						prevStep = step
 					}
 					if isLast {
-						// Check for XRP loop
-						if result := ctx.CheckXRPEndpointLoop(true); result != ter.TesSUCCESS {
+						step, result := ctx.newXRPEndpointStep(next.account, true, false) // destination, isFirst=false
+						if result != ter.TesSUCCESS {
 							return nil, result
 						}
-						step := ctx.newXRPEndpointStep(next.account, true, false) // destination, isFirst=false
 						strand = append(strand, step)
 					}
 				} else {
@@ -739,11 +746,10 @@ func (ctx *StrandContext) buildStrandSteps(
 			// Reference: rippled PaySteps.cpp toStep() lines 80-85: creates XRPEndpointStep
 			// and returns immediately. The book step is created in the next iteration.
 			if curIssue.IsXRP() && i == 0 {
-				// Check for XRP loop
-				if result := ctx.CheckXRPEndpointLoop(false); result != ter.TesSUCCESS {
+				xrpStep, result := ctx.newXRPEndpointStep(cur.account, false, true) // source, isFirst=true
+				if result != ter.TesSUCCESS {
 					return nil, result
 				}
-				xrpStep := ctx.newXRPEndpointStep(cur.account, false, true) // source, isFirst=true
 				strand = append(strand, xrpStep)
 				prevStep = xrpStep
 				// If output is also XRP, defer book step to next iteration
@@ -795,12 +801,14 @@ func (ctx *StrandContext) buildStrandSteps(
 		} else if !cur.hasAccount && next.hasAccount {
 			// Offer to account
 			if curIssue.IsXRP() {
+				if !isLast {
+					return nil, ter.TemBAD_PATH
+				}
 				// XRP coming out of a book — need XRPEndpointStep for the recipient
-				// Check for XRP loop
-				if result := ctx.CheckXRPEndpointLoop(true); result != ter.TesSUCCESS {
+				step, result := ctx.newXRPEndpointStep(next.account, true, false) // destination, isFirst=false
+				if result != ter.TesSUCCESS {
 					return nil, result
 				}
-				step := ctx.newXRPEndpointStep(next.account, true, false) // destination, isFirst=false
 				strand = append(strand, step)
 			} else if curIssue.IsMPT {
 				if curIssue.Issuer != next.account {

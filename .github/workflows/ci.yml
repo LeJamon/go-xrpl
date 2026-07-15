@@ -82,8 +82,9 @@ jobs:
   # paths silently forks account_hash / transaction_hash. `int` is 64-bit on the
   # amd64 matrix, so an overflow like `len(x) > math.MaxUint32` only fails to
   # compile on a 32-bit target. This compiles the whole module for linux/386
-  # (CGO off → peertls uses its !cgo stub) and is fast. Runtime 386 tests run in
-  # the nightly workflow.
+  # (CGO off → peertls uses its !cgo stub), then exercises the SQLite pagination
+  # boundaries whose correctness depends on runtime int width. Broader runtime
+  # 386 tests run in the nightly workflow.
   build-386:
     name: Build (linux/386 — word-size guard)
     runs-on: ubuntu-latest
@@ -97,6 +98,7 @@ jobs:
         with:
           cgo: "false"
       - run: go build ./...
+      - run: go test -count=1 -timeout 5m ./storage/relationaldb/sqlite/...
 
   test:
     name: Test (${{ matrix.group }})

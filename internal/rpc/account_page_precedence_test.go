@@ -15,17 +15,17 @@ import (
 const accountPageTestAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 type accountPageMethod interface {
-	Handle(*types.RPCContext, json.RawMessage) (any, *types.RPCError)
+	Handle(*types.RpcContext, json.RawMessage) (any, *types.RpcError)
 }
 
-func accountPageContext(services *types.ServiceContainer) *types.RPCContext {
-	return &types.RPCContext{
+func accountPageContext(services *types.ServiceContainer) *types.RpcContext {
+	return &types.RpcContext{
 		Context: context.Background(), ApiVersion: types.ApiVersion1,
 		Role: types.RoleGuest, Services: services,
 	}
 }
 
-func accountPageCall(t *testing.T, method accountPageMethod, ctx *types.RPCContext, params map[string]any) *types.RPCError {
+func accountPageCall(t *testing.T, method accountPageMethod, ctx *types.RpcContext, params map[string]any) *types.RpcError {
 	t.Helper()
 	raw, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -96,7 +96,7 @@ func TestAccountPageLimitValidationPrecedesMarker(t *testing.T) {
 	tests := []struct {
 		name   string
 		method accountPageMethod
-		ctx    *types.RPCContext
+		ctx    *types.RpcContext
 	}{
 		{"account_lines", &handlers.AccountLinesMethod{}, accountPageContext(newAccountLinesTestServices(newMockAccountLinesLedgerService()))},
 		{"account_offers", &handlers.AccountOffersMethod{}, accountPageContext(newAccountOffersTestServices(newAccountOffersMock()))},

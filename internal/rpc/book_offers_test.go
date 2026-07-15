@@ -54,7 +54,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -506,7 +506,7 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -602,7 +602,7 @@ func TestBookOffersDomainForwarding(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -678,7 +678,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -800,7 +800,7 @@ func TestBookOffersLedgerShape(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -869,7 +869,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -926,7 +926,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1044,7 +1044,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1133,7 +1133,7 @@ func TestBookOffersOfferFields(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1265,7 +1265,7 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("Services is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1277,11 +1277,11 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 
 	t.Run("Ledger is nil", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion1,
@@ -1293,7 +1293,7 @@ func TestBookOffersServiceUnavailable(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-		assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+		assert.Equal(t, "Internal error.", rpcErr.Message)
 	})
 }
 
@@ -1303,7 +1303,7 @@ func TestBookOffersServiceError(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1331,14 +1331,15 @@ func TestBookOffersServiceError(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Failed to get book offers")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
+	assert.NotContains(t, rpcErr.Message, "ledger not found")
 }
 
 func TestBookOffersMarkerIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1393,7 +1394,7 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1432,7 +1433,7 @@ func TestBookOffersMarkerValuesIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1493,7 +1494,7 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1571,7 +1572,7 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 	services := newBookOffersTestServices(mock)
 
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1680,7 +1681,7 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			capturedLimit = 0
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       tc.role,
 				Unlimited:  tc.unlimited,
@@ -1711,7 +1712,7 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 	// rippled 3.1.3: limit=0 is rejected before the isUnlimited clamp, so admin
 	// (unlimited) callers are rejected too. Reference: RPCHelpers.cpp readLimitField.
 	t.Run("limit 0 rejected even for admin", func(t *testing.T) {
-		ctx := &types.RPCContext{
+		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			Unlimited:  true,
@@ -1745,7 +1746,7 @@ func TestBookOffersTakerXAddressRejected(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1801,7 +1802,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -1922,7 +1923,7 @@ func TestBookOffersProofIsIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

@@ -45,8 +45,8 @@ func (m *vaultInfoMockLedgerService) GetLedgerEntry(_ context.Context, key [32]b
 	return nil, svcerr.ErrLedgerEntryNotFound
 }
 
-func vaultInfoTestContext(mock *vaultInfoMockLedgerService) (*handlers.VaultInfoMethod, *types.RPCContext) {
-	return &handlers.VaultInfoMethod{}, &types.RPCContext{
+func vaultInfoTestContext(mock *vaultInfoMockLedgerService) (*handlers.VaultInfoMethod, *types.RpcContext) {
+	return &handlers.VaultInfoMethod{}, &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -40,7 +39,7 @@ const (
 // AccountInfoMethod handles the account_info RPC method.
 type AccountInfoMethod struct{ BaseHandler }
 
-func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	rawFields, fieldsErr := rawJSONFields(params)
 	if fieldsErr != nil {
 		return nil, fieldsErr
@@ -51,16 +50,16 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		var valid bool
 		account, valid = rawJSONString(accountRaw)
 		if !valid {
-			return nil, types.RPCErrorInvalidField("account")
+			return nil, types.RpcErrorInvalidField("account")
 		}
 	} else if identRaw, ok := rawFields["ident"]; ok {
 		var valid bool
 		account, valid = rawJSONString(identRaw)
 		if !valid {
-			return nil, types.RPCErrorInvalidField("ident")
+			return nil, types.RpcErrorInvalidField("ident")
 		}
 	} else {
-		return nil, types.RPCErrorMissingField("account")
+		return nil, types.RpcErrorMissingField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -75,13 +74,13 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
 	if decodeErr != nil {
-		rpcErr := types.RPCErrorActMalformed("Account malformed.")
+		rpcErr := types.RpcErrorActMalformed("Account malformed.")
 		rpcErr.Extra = lookupFields
 		return nil, rpcErr
 	}
 	canonicalAccount, encodeErr := addresscodec.EncodeAccountIDToClassicAddress(accountID)
 	if encodeErr != nil {
-		rpcErr := types.RPCErrorActMalformed("Account malformed.")
+		rpcErr := types.RpcErrorActMalformed("Account malformed.")
 		rpcErr.Extra = lookupFields
 		return nil, rpcErr
 	}
@@ -90,14 +89,14 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			lookupFields["account"] = canonicalAccount
-			rpcErr := types.RPCErrorActNotFound("Account not found.")
+			rpcErr := types.RpcErrorActNotFound("Account not found.")
 			rpcErr.Extra = lookupFields
 			return nil, rpcErr
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RPCErrorLgrNotFound("Ledger not found.")
+			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
 		}
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account info: %v", err))
+		return nil, rpcInternalError("account_info: ledger query failed", err)
 	}
 
 	queue := false
@@ -105,7 +104,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		queue = jsonCppBoolRaw(queueRaw)
 	}
 	if queue && ledger.IsClosed() {
-		rpcErr := types.RPCErrorInvalidParams("Invalid parameters.")
+		rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
 		rpcErr.Extra = lookupFields
 		return nil, rpcErr
 	}
@@ -167,7 +166,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 
 	if signerListsRaw, ok := rawFields["signer_lists"]; ctx.ApiVersion > 1 && ok {
 		if _, valid := rawJSONBool(signerListsRaw); !valid {
-			rpcErr := types.RPCErrorInvalidParams("Invalid parameters.")
+			rpcErr := types.RpcErrorInvalidParams("Invalid parameters.")
 			rpcErr.Extra = response
 			return nil, rpcErr
 		}

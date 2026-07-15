@@ -23,7 +23,7 @@ type VersionMethod struct{ BaseHandler }
 // RPCHelpers.cpp:1001-1003).
 const semanticVersion1 = "1.0.0"
 
-func (m *VersionMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var version map[string]any
 	if ctx.ApiVersion == types.ApiVersion1 {
 		version = map[string]any{

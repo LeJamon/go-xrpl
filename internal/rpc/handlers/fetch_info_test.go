@@ -13,7 +13,7 @@ import (
 
 func TestFetchInfoMethod_EmptyWhenNotAcquiring(t *testing.T) {
 	m := &handlers.FetchInfoMethod{}
-	ctx := &types.RPCContext{Context: context.Background(), Role: types.RoleAdmin, IsAdmin: true}
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, IsAdmin: true}
 
 	result, rpcErr := m.Handle(ctx, json.RawMessage(`{}`))
 	require.Nil(t, rpcErr)
@@ -36,7 +36,7 @@ func TestFetchInfoMethod_PassesThroughSnapshot(t *testing.T) {
 		},
 	}
 	m := &handlers.FetchInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
 		IsAdmin: true,
@@ -55,7 +55,7 @@ func TestFetchInfoMethod_PassesThroughSnapshot(t *testing.T) {
 func TestFetchInfoMethod_ClearInvokesResetAndEchoes(t *testing.T) {
 	cleared := false
 	m := &handlers.FetchInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context: context.Background(),
 		Role:    types.RoleAdmin,
 		IsAdmin: true,

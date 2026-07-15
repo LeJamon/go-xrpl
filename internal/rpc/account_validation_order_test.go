@@ -83,7 +83,7 @@ func TestAccountHandlerValidationOrder(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,
@@ -100,13 +100,13 @@ func TestAccountHandlerValidationOrder(t *testing.T) {
 
 func TestAccountInfoQueueAndSignerValidationFollowAccountLookup(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	newContext := func(accountErr error) *types.RPCContext {
+	newContext := func(accountErr error) *types.RpcContext {
 		service := &accountValidationOrderService{
 			mockLedgerService: newMockLedgerService(),
 			reader:            &mockLedgerReader{seq: 2, closed: true, validated: true},
 		}
 		service.accountInfoErr = accountErr
-		return &types.RPCContext{
+		return &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
 			ApiVersion: types.ApiVersion2,
@@ -177,7 +177,7 @@ func TestAccountHandlerOptionalValidationFollowsAccountSLE(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			service := newMockLedgerService()
 			service.accountInfoErr = svcerr.ErrAccountNotFound
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: types.ApiVersion2,

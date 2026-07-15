@@ -164,7 +164,7 @@ func TestApiVersionConstants(t *testing.T) {
 	// matching rippled setVersion when BETA_RPC_API is off. v2+ emits numeric
 	// first/last and no `good` field.
 	method := &handlers.VersionMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion2,
@@ -267,7 +267,7 @@ func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 	for name, m := range keyMethods {
 		for _, ver := range apiVersions {
 			t.Run(name+"/v"+string(rune('0'+ver)), func(t *testing.T) {
-				ctx := &types.RPCContext{
+				ctx := &types.RpcContext{
 					Context:    context.Background(),
 					Role:       types.RoleGuest,
 					ApiVersion: ver,
@@ -297,23 +297,23 @@ func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 	}
 }
 
-// Test 5: TestApiVersionRPCContextCarriesVersion
-// Ensure an RPCContext constructed with a given API version faithfully
+// Test 5: TestApiVersionRpcContextCarriesVersion
+// Ensure an RpcContext constructed with a given API version faithfully
 // delivers that version to the handler.  We verify by inspecting the
 // context in a trivial handler (ping).
 
-func TestApiVersionRPCContextCarriesVersion(t *testing.T) {
+func TestApiVersionRpcContextCarriesVersion(t *testing.T) {
 	apiVersions := []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 
 	for _, ver := range apiVersions {
 		t.Run("version_"+string(rune('0'+ver)), func(t *testing.T) {
-			ctx := &types.RPCContext{
+			ctx := &types.RpcContext{
 				Context:    context.Background(),
 				Role:       types.RoleGuest,
 				ApiVersion: ver,
 			}
 			assert.Equal(t, ver, ctx.ApiVersion,
-				"RPCContext.ApiVersion should be %d", ver)
+				"RpcContext.ApiVersion should be %d", ver)
 
 			// Invoke ping to show the handler actually receives the context.
 			handler := &handlers.PingMethod{}

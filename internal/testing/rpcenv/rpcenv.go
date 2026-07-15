@@ -55,17 +55,17 @@ func (e *Env) Services() *types.ServiceContainer { return e.services }
 // authenticates via admin_user/admin_password (see rippled
 // RPCCall.cpp:1530). Use RPCAs to downgrade. params may be a struct, a
 // map, or a json.RawMessage — anything else is marshaled to JSON.
-func (e *Env) RPC(method string, params any) (any, *types.RPCError) {
+func (e *Env) RPC(method string, params any) (any, *types.RpcError) {
 	return e.RPCAs(method, params, types.RoleAdmin, types.DefaultApiVersion)
 }
 
 // RPCAs is RPC with explicit role/version control.
-func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) (any, *types.RPCError) {
+func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) (any, *types.RpcError) {
 	e.t.Helper()
 
 	handler, ok := e.registry.Get(method)
 	if !ok {
-		return nil, types.RPCErrorMethodNotFound(method)
+		return nil, types.RpcErrorMethodNotFound()
 	}
 
 	var raw json.RawMessage
@@ -79,12 +79,12 @@ func (e *Env) RPCAs(method string, params any, role types.Role, apiVersion int) 
 	default:
 		b, err := json.Marshal(params)
 		if err != nil {
-			return nil, types.RPCErrorInvalidParams("rpcenv: marshal params: " + err.Error())
+			return nil, types.RpcErrorInvalidParams("rpcenv: marshal params: " + err.Error())
 		}
 		raw = b
 	}
 
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       role,
 		ApiVersion: apiVersion,

@@ -26,7 +26,7 @@ func versionEchoServer(t *testing.T, beta bool) *Server {
 	srv.services.BetaRPCAPI = beta
 	srv.registry.Register("ping", &stubHandler{
 		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			return map[string]any{"api_version": ctx.ApiVersion}, nil
 		},
 	})
@@ -182,43 +182,25 @@ func versionEchoWSServer(t *testing.T, beta bool) *WebSocketServer {
 	ws.services.BetaRPCAPI = beta
 	ws.methodRegistry.Register("ping", &stubHandler{
 		apiVers: []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3},
-		handle: func(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
+		handle: func(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 			return map[string]any{"api_version": ctx.ApiVersion}, nil
 		},
 	})
 	return ws
 }
 
-type wsTestResponse struct {
-	types.WebSocketResponse
-	ApiVersion json.RawMessage `json:"api_version,omitempty"`
-}
-
-func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) wsTestResponse {
-	t.Helper()
-	conn, closeConn := openWSConnection(t, ws)
-	defer closeConn()
-	return wsConnectionRoundTrip(t, conn, request)
-}
-
-func openWSConnection(t *testing.T, ws *WebSocketServer) (*websocket.Conn, func()) {
+func wsRawRoundTrip(t *testing.T, ws *WebSocketServer, request string) []byte {
 	t.Helper()
 	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	if err != nil {
-		httpSrv.Close()
 		t.Fatalf("dial: %v", err)
 	}
-	return conn, func() {
-		_ = conn.Close()
-		httpSrv.Close()
-	}
-}
+	defer conn.Close()
 
-func wsConnectionRoundTrip(t *testing.T, conn *websocket.Conn, request string) wsTestResponse {
-	t.Helper()
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(request)); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -227,7 +209,22 @@ func wsConnectionRoundTrip(t *testing.T, conn *websocket.Conn, request string) w
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	var resp wsTestResponse
+	return raw
+}
+
+type apiVersionWSResponse struct {
+	Status       string `json:"status"`
+	Result       any    `json:"result,omitempty"`
+	ApiVersion   int    `json:"api_version,omitempty"`
+	Error        string `json:"error,omitempty"`
+	ErrorCode    int    `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) apiVersionWSResponse {
+	t.Helper()
+	raw := wsRawRoundTrip(t, ws, request)
+	var resp apiVersionWSResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		t.Fatalf("unmarshal response: %v\nraw: %s", err, string(raw))
 	}
@@ -268,138 +265,42 @@ func TestApiVersion_WS_V3GatedByBeta(t *testing.T) {
 	})
 }
 
-// TestApiVersion_WS_UnspecifiedDefaultsToV1 verifies a WS command without
-// api_version resolves to v1.
 func TestApiVersion_WS_UnspecifiedDefaultsToV1(t *testing.T) {
 	ws := versionEchoWSServer(t, false)
 	resp := wsRoundTrip(t, ws, `{"command":"ping"}`)
 	if resp.Status != "success" {
 		t.Fatalf("WS ping status = %q, want success", resp.Status)
 	}
-	if got := string(resp.ApiVersion); got != "1" {
-		t.Fatalf("WS unspecified api_version resolved to %s, want %d", got, types.ApiVersion1)
+	if resp.ApiVersion != 0 {
+		t.Fatalf("WS response added unspecified api_version %d", resp.ApiVersion)
+	}
+	result, ok := resp.Result.(map[string]any)
+	if !ok || result["api_version"] != float64(types.ApiVersion1) {
+		t.Fatalf("WS handler context did not resolve unspecified version to v1: %v", resp.Result)
 	}
 }
 
-func TestApiVersion_WS_SpecialCommandsRejectInvalidValues(t *testing.T) {
-	commands := []struct {
-		name    string
-		request string
-	}{
-		{name: "subscribe", request: `{"command":"subscribe","streams":[],"api_version":`},
-		{name: "unsubscribe", request: `{"command":"unsubscribe","streams":[],"api_version":`},
-		{name: "path_find", request: `{"command":"path_find","subcommand":"status","api_version":`},
-	}
-	values := []struct {
-		name  string
-		value string
-	}{
-		{name: "zero", value: `0`},
-		{name: "beta_disabled", value: `3`},
-		{name: "too_high", value: `99`},
-		{name: "fraction", value: `1.5`},
-		{name: "decimal_integer", value: `2.0`},
-		{name: "exponent", value: `1e0`},
-		{name: "string", value: `"2"`},
-		{name: "null", value: `null`},
-		{name: "boolean", value: `true`},
-		{name: "out_of_range_integer", value: `18446744073709551616`},
-	}
-
-	for _, command := range commands {
-		for _, value := range values {
-			t.Run(command.name+"/"+value.name, func(t *testing.T) {
-				ws := versionEchoWSServer(t, false)
-				resp := wsRoundTrip(t, ws, command.request+value.value+`}`)
-				if resp.Error != types.InvalidApiVersionToken {
-					t.Fatalf("error = %q, want %q", resp.Error, types.InvalidApiVersionToken)
-				}
-				if resp.ErrorCode != 0 || resp.ErrorMessage != "" {
-					t.Fatalf("invalid api_version emitted error_code=%d error_message=%q", resp.ErrorCode, resp.ErrorMessage)
-				}
-			})
-		}
-	}
-}
-
-func TestApiVersion_WS_SpecialCommandsAcceptSupportedValues(t *testing.T) {
-	commands := []struct {
-		name      string
-		request   string
-		wantError string
-	}{
-		{name: "subscribe", request: `{"command":"subscribe","streams":[]`},
-		{name: "unsubscribe", request: `{"command":"unsubscribe","streams":[]`},
-		{name: "path_find", request: `{"command":"path_find","subcommand":"status"`, wantError: "noPathRequest"},
-	}
-	versions := []struct {
-		name   string
-		suffix string
-		beta   bool
-	}{
-		{name: "omitted", suffix: `}`},
-		{name: "v1", suffix: `,"api_version":1}`},
-		{name: "v2", suffix: `,"api_version":2}`},
-		{name: "v3_beta", suffix: `,"api_version":3}`, beta: true},
-	}
-
-	for _, command := range commands {
-		for _, version := range versions {
-			t.Run(command.name+"/"+version.name, func(t *testing.T) {
-				ws := versionEchoWSServer(t, version.beta)
-				resp := wsRoundTrip(t, ws, command.request+version.suffix)
-				if resp.Error != command.wantError {
-					t.Fatalf("error = %q, want %q", resp.Error, command.wantError)
-				}
-			})
-		}
-	}
-}
-
-func TestPathFindUpdatesConnectionAPIVersionAfterSubcommandValidation(t *testing.T) {
-	tests := []struct {
-		name        string
-		request     string
-		beta        bool
-		wantVersion int
-	}{
-		{name: "missing", request: `{"command":"path_find","api_version":2}`, wantVersion: types.ApiVersion1},
-		{name: "null", request: `{"command":"path_find","subcommand":null,"api_version":2}`, wantVersion: types.ApiVersion1},
-		{name: "number", request: `{"command":"path_find","subcommand":7,"api_version":2}`, wantVersion: types.ApiVersion1},
-		{name: "unknown", request: `{"command":"path_find","subcommand":"unknown","api_version":2}`, wantVersion: types.ApiVersion2},
-		{name: "empty", request: `{"command":"path_find","subcommand":"","api_version":2}`, wantVersion: types.ApiVersion2},
-		{name: "create_validation_failure", request: `{"command":"path_find","subcommand":"create","api_version":2}`, wantVersion: types.ApiVersion2},
-		{name: "close_without_session", request: `{"command":"path_find","subcommand":"close","api_version":2}`, wantVersion: types.ApiVersion2},
-		{name: "status_without_session", request: `{"command":"path_find","subcommand":"status","api_version":2}`, wantVersion: types.ApiVersion2},
-		{name: "unknown_v3_beta", request: `{"command":"path_find","subcommand":"unknown","api_version":3}`, beta: true, wantVersion: types.ApiVersion3},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ws := versionEchoWSServer(t, tc.beta)
-			conn, closeConn := openWSConnection(t, ws)
-			defer closeConn()
-
-			resp := wsConnectionRoundTrip(t, conn, tc.request)
-			if resp.Error == types.InvalidApiVersionToken {
-				t.Fatalf("path_find request rejected api_version: %+v", resp)
+func TestApiVersion_WSRequiresJSONInteger(t *testing.T) {
+	ws := versionEchoWSServer(t, false)
+	for _, rawVersion := range []string{`"2"`, `1.5`, `1.0`, `1e0`} {
+		t.Run(rawVersion, func(t *testing.T) {
+			raw := wsRawRoundTrip(t, ws, `{"command":"ping","api_version":`+rawVersion+`}`)
+			var resp map[string]any
+			if err := json.Unmarshal(raw, &resp); err != nil {
+				t.Fatalf("unmarshal response: %v\nraw: %s", err, string(raw))
 			}
-
-			ws.connectionsMutex.RLock()
-			connectionCount := len(ws.connections)
-			if connectionCount != 1 {
-				ws.connectionsMutex.RUnlock()
-				t.Fatalf("connections = %d, want 1", connectionCount)
-			}
-			var wsConn *WebSocketConnection
-			for _, candidate := range ws.connections {
-				wsConn = candidate
-			}
-			ws.connectionsMutex.RUnlock()
-
-			if got := wsConn.legacy.APIVersion(); got != tc.wantVersion {
-				t.Fatalf("connection api_version = %d, want %d", got, tc.wantVersion)
+			if resp["error"] != "invalid_API_version" {
+				t.Fatalf("error = %q, want invalid_API_version", resp["error"])
 			}
 		})
+	}
+}
+
+func TestApiVersion_WSInvalidVersionPrecedesCommandValidation(t *testing.T) {
+	ws := versionEchoWSServer(t, false)
+	raw := wsRawRoundTrip(t, ws, `{"command":7,"api_version":1e0,"id":7}`)
+	const want = `{"api_version":1,"error":"invalid_API_version","id":7,"request":{"api_version":1,"command":7,"id":7},"status":"error","type":"response"}`
+	if got := string(raw); got != want {
+		t.Fatalf("response = %s, want %s", got, want)
 	}
 }

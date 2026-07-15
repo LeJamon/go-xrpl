@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -14,7 +13,7 @@ import (
 // TxHistoryMethod handles the tx_history RPC method
 type TxHistoryMethod struct{ BaseHandler }
 
-func (m *TxHistoryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Start uint32 `json:"start,omitempty"`
 	}
@@ -24,6 +23,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
+	setLoadMedium(ctx)
 
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
@@ -32,9 +32,9 @@ func (m *TxHistoryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
-			return nil, types.RPCErrorNotEnabled("")
+			return nil, types.RpcErrorNotEnabled("")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
+		return nil, rpcInternalError("tx_history: transaction query failed", err)
 	}
 
 	// Build transactions array with deserialized JSON

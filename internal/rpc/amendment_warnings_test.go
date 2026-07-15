@@ -62,7 +62,7 @@ func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool
 	t.Helper()
 	services := &types.ServiceContainer{Ledger: mock, NodePublicKey: testNodePublicKey()}
 	method := &handlers.ServerInfoMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		IsAdmin:    isAdmin,
@@ -200,7 +200,7 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 	}
 	services := &types.ServiceContainer{Ledger: mock}
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest, // majority is emitted to all callers, not admin-gated
 		ApiVersion: types.ApiVersion1,

@@ -63,7 +63,7 @@ func TestResolveLedgerSelector(t *testing.T) {
 		if rpcErr == nil {
 			t.Fatalf("want rpcINVALID_PARAMS, got nil")
 		}
-		if rpcErr.Code != types.RPCErrorInvalidParams("").Code {
+		if rpcErr.Code != types.RpcErrorInvalidParams("").Code {
 			t.Errorf("error code = %d, want invalid_params", rpcErr.Code)
 		}
 		if rpcErr.Message != "Invalid field 'ledger_hash', not hex string." {

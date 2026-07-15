@@ -192,7 +192,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 	services := newAccountCurrenciesTestServices(mock)
 
 	method := &handlers.AccountCurrenciesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -329,7 +329,7 @@ func TestAccountCurrenciesBasic(t *testing.T) {
 	services := newAccountCurrenciesTestServices(mock)
 
 	method := &handlers.AccountCurrenciesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -542,7 +542,7 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 	services := newAccountCurrenciesTestServices(mock)
 
 	method := &handlers.AccountCurrenciesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -584,7 +584,7 @@ func TestAccountCurrenciesResponseFields(t *testing.T) {
 // TestAccountCurrenciesServiceUnavailable tests behavior when ledger service is not available
 func TestAccountCurrenciesServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountCurrenciesMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
 		ApiVersion: types.ApiVersion1,
@@ -602,7 +602,7 @@ func TestAccountCurrenciesServiceUnavailable(t *testing.T) {
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
-	assert.Contains(t, rpcErr.LogDetail(), "Ledger service not available")
+	assert.Equal(t, "Internal error.", rpcErr.Message)
 }
 
 // TestAccountCurrenciesMethodMetadata tests the method's metadata functions

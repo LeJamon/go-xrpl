@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"math"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,8 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/gorilla/websocket"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // pushOverDropThreshold charges key until the tracker reports it is over the
@@ -187,36 +186,106 @@ func TestHTTPBatchOverloadElement(t *testing.T) {
 	}
 }
 
-// TestWSOverloadBeforeForbid confirms the WebSocket ordering: an over-budget caller
-// invoking a forbidden admin command is rejected by the overload gate ahead of
-// FORBID, surfacing rippled's WS overload code rpcSLOW_DOWN (slowDown, 10) rather
-// than the forbidden token. A non-admin role is forced by AdminNets that exclude
-// the loopback peer.
-func TestWSOverloadBeforeForbid(t *testing.T) {
-	ws := NewWebSocketServer(2*time.Second, nil)
-	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
-	ws.loadTracker = loadtrack.New()
-	pushOverDropThreshold(t, ws.loadTracker, "127.0.0.1")
+func TestWSOverloadClosesBeforeRequestValidation(t *testing.T) {
+	tests := []string{
+		`{"command":"stop","id":1}`,
+		`{"command":"subscribe","streams":["ledger"]}`,
+		`{"command":"unsubscribe","streams":["ledger"]}`,
+		`{"command":"path_find","subcommand":"status"}`,
+		`{"command":7,"api_version":99}`,
+	}
+	for _, request := range tests {
+		t.Run(request, func(t *testing.T) {
+			ws := NewWebSocketServer(2*time.Second, nil)
+			ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})
+			ws.loadTracker = loadtrack.New()
+			pushOverDropThreshold(t, ws.loadTracker, "127.0.0.1")
 
-	_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")
-	pc := &PortContext{AdminNets: []net.IPNet{*adminNet}}
-	httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ws.ServeHTTP(w, r.WithContext(WithPortContext(r.Context(), pc)))
-	}))
-	defer httpSrv.Close()
-	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+			_, adminNet, _ := net.ParseCIDR("10.0.0.0/8")
+			pc := &PortContext{AdminNets: []net.IPNet{*adminNet}}
+			httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ws.ServeHTTP(w, r.WithContext(WithPortContext(r.Context(), pc)))
+			}))
+			defer httpSrv.Close()
 
-	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	require.NoError(t, err)
-	defer c.Close()
+			client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http"), nil)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			if err := client.WriteMessage(websocket.TextMessage, []byte(request)); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatalf("set read deadline: %v", err)
+			}
+			_, body, err := client.ReadMessage()
+			if err == nil {
+				t.Fatalf("received an application response before close: %s", body)
+			}
+			closeErr, ok := err.(*websocket.CloseError)
+			if !ok {
+				t.Fatalf("read error = %T %v, want WebSocket close error", err, err)
+			}
+			if closeErr.Code != websocket.ClosePolicyViolation || closeErr.Text != "threshold exceeded" {
+				t.Fatalf("close = %d %q, want %d %q", closeErr.Code, closeErr.Text, websocket.ClosePolicyViolation, "threshold exceeded")
+			}
+		})
+	}
+}
 
-	require.NoError(t, c.WriteJSON(map[string]any{"command": "stop", "id": float64(1)}))
-	require.NoError(t, c.SetReadDeadline(time.Now().Add(2*time.Second)))
-	var resp map[string]any
-	require.NoError(t, c.ReadJSON(&resp))
+func TestWSEarlyMalformedResponsesChargeWithoutLoadWarning(t *testing.T) {
+	tests := []struct {
+		name    string
+		request string
+		want    string
+	}{
+		{
+			name:    "invalid API version",
+			request: `{"command":"ping","api_version":99,"id":1}`,
+			want:    `{"api_version":99,"error":"invalid_API_version","id":1,"request":{"api_version":99,"command":"ping","id":1},"status":"error","type":"response"}`,
+		},
+		{
+			name:    "missing command",
+			request: `{"id":2}`,
+			want:    `{"error":"missingCommand","id":2,"request":{"id":2},"status":"error","type":"response"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ws := NewWebSocketServer(2*time.Second, nil)
+			ws.loadTracker.Import("warning-peer", loadtrack.Gossip{Items: []loadtrack.GossipItem{{
+				Key:     "127.0.0.1",
+				Balance: loadtrack.WarningThreshold - int(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)),
+			}}})
 
-	assert.Equal(t, "error", resp["status"])
-	assert.Equal(t, "slowDown", resp["error"], "overload must precede FORBID on the WS path")
-	assert.Equal(t, float64(types.RpcSLOW_DOWN), resp["error_code"])
-	assert.Equal(t, float64(1), resp["id"])
+			pc := &PortContext{AdminNets: []net.IPNet{mustParseCIDR("10.0.0.0/8")}}
+			httpSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ws.ServeHTTP(w, r.WithContext(WithPortContext(r.Context(), pc)))
+			}))
+			defer httpSrv.Close()
+
+			client, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(httpSrv.URL, "http"), nil)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer client.Close()
+			if err := client.WriteMessage(websocket.TextMessage, []byte(test.request)); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if err := client.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+				t.Fatalf("set read deadline: %v", err)
+			}
+			_, body, err := client.ReadMessage()
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if got := string(body); got != test.want {
+				t.Fatalf("response = %s, want %s", got, test.want)
+			}
+			if got, want := math.Round(ws.loadTracker.LocalBalance("127.0.0.1")), float64(loadtrack.ChargeMalformed/uint32(loadtrack.DecayWindow/time.Second)); got != want {
+				t.Fatalf("local charge = %v, want %v", got, want)
+			}
+		})
+	}
 }

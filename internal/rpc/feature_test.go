@@ -21,7 +21,7 @@ func TestFeatureNoParams(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
@@ -87,7 +87,7 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
@@ -121,7 +121,7 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
@@ -176,7 +176,7 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
@@ -231,7 +231,7 @@ func TestFeatureInvalidName(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,
@@ -274,7 +274,7 @@ func TestFeatureResponseStructure(t *testing.T) {
 	services := newTestServices(mock)
 
 	method := &handlers.FeatureMethod{}
-	ctx := &types.RPCContext{
+	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
 		IsAdmin:    true,

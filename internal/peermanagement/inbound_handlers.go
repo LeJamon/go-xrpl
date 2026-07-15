@@ -5,6 +5,7 @@
 package peermanagement
 
 import (
+	"errors"
 	"log/slog"
 	"math/rand/v2"
 	"net"
@@ -265,10 +266,10 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 // (PeerImp.cpp:2753-2784, LedgerMaster.cpp:2096-2225): build a pack of the
 // SHAMap nodes for the predecessor of the requested ledger and reply with a
 // query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes; an
-// unknown ledger or unavailable parent yields an empty pack which is dropped
-// (rippled charges the peer there; we mirror the more permissive go-xrpl stance
-// taken by serveDoTransactions and only charge a malformed hash there). A valid
-// request is charged feeHeavyBurdenPeer up front, mirroring rippled's
+// unknown ledger or unavailable parent yields an empty pack which is dropped.
+// A request below the serving range is dropped with an additional malformed
+// request charge. Every valid-hash request is charged feeHeavyBurdenPeer up
+// front, mirroring rippled's
 // doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
 // state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
 // rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
@@ -292,6 +293,9 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	// maxObjects=0 lets the provider apply its own per-pack cap.
 	objects, err := o.ledgerSync.MakeFetchPack(haveHash, 0)
 	if err != nil {
+		if errors.Is(err, ErrFetchPackTooEarly) {
+			peer.Charge(resource.FeeMalformedRequest, "fetch pack request too early")
+		}
 		slog.Debug("fetch-pack build failed",
 			"t", "Overlay", "peer", peerID, "err", err)
 		return

@@ -251,6 +251,9 @@ type Validation struct {
 
 	// LoadFee is the validator's current load-based fee.
 	LoadFee uint32
+	// loadFeePresent distinguishes an explicit sfLoadFee value of zero from an
+	// omitted field. Non-zero legacy struct literals are treated as present too.
+	loadFeePresent bool
 
 	// ConsensusHash is sfConsensusHash — the hash of the agreed-upon
 	// transaction set that produced the validated ledger. Rippled
@@ -326,6 +329,18 @@ type Validation struct {
 	// Used by the validation archive to persist the canonical blob
 	// without a parse → re-serialize round-trip.
 	Raw []byte
+}
+
+// SetLoadFee records sfLoadFee as present, including when fee is zero.
+func (v *Validation) SetLoadFee(fee uint32) {
+	v.LoadFee = fee
+	v.loadFeePresent = true
+}
+
+// HasLoadFee reports whether sfLoadFee was present on the wire or populated by
+// a legacy non-zero struct literal.
+func (v *Validation) HasLoadFee() bool {
+	return v != nil && (v.loadFeePresent || v.LoadFee != 0)
 }
 
 // ByzantineValidationError reports a validation that conflicts with one

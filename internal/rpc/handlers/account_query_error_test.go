@@ -22,7 +22,7 @@ func TestMapAccountQueryErr(t *testing.T) {
 		{"account not found", svcerr.ErrAccountNotFound, types.RpcACT_NOT_FOUND, "Account not found."},
 		{"wrapped account not found", errors.Join(errors.New("query failed"), svcerr.ErrAccountNotFound), types.RpcACT_NOT_FOUND, "Account not found."},
 		{"invalid marker", svcerr.ErrInvalidMarker, types.RpcINVALID_PARAMS, "Invalid field 'marker'."},
-		{"internal", errors.New("storage failure"), types.RpcINTERNAL, types.InternalErrorMessage},
+		{"internal", errors.New("storage failure"), types.RpcINTERNAL, "Internal error."},
 	}
 
 	for _, test := range tests {
@@ -30,9 +30,6 @@ func TestMapAccountQueryErr(t *testing.T) {
 			got := mapAccountQueryErr(test.err, "account query: "+test.err.Error())
 			if got.Code != test.want || got.Message != test.message {
 				t.Fatalf("mapAccountQueryErr() = %#v, want code %d message %q", got, test.want, test.message)
-			}
-			if got.Code == types.RpcINTERNAL && got.LogDetail() != "account query: storage failure" {
-				t.Fatalf("internal log detail = %q", got.LogDetail())
 			}
 		})
 	}

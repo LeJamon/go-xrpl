@@ -43,7 +43,7 @@ func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 		return nil, serializeErr
 	}
 
-	txn := recoveryTx(10, 1)
+	txn := successfulRecoveryTx{recoveryTx(10, 1)}
 	failed, err := bp.ApplyTransaction(txn, []byte{0x12, 0x03})
 	if !errors.Is(err, serializeErr) {
 		t.Fatalf("apply error = %v, want %v", err, serializeErr)
@@ -106,7 +106,7 @@ func TestBlockProcessor_StagingDoesNotFlushBackedSHAMaps(t *testing.T) {
 	}
 
 	bp := NewBlockProcessor(recoveryEngine(view, txcore.TapNONE))
-	result, err := bp.ApplyTransaction(recoveryTx(10, 1), []byte{0x12, 0x03})
+	result, err := bp.ApplyTransaction(successfulRecoveryTx{recoveryTx(10, 1)}, []byte{0x12, 0x03})
 	if err != nil {
 		t.Fatalf("apply with backed SHAMap: %v", err)
 	}

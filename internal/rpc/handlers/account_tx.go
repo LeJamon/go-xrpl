@@ -20,7 +20,7 @@ import (
 // affected the account over a validated-ledger range, oldest- or newest-first.
 type AccountTxMethod struct{ BaseHandler }
 
-func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -31,19 +31,19 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	fields := make(map[string]json.RawMessage)
 	if len(bytes.TrimSpace(params)) != 0 {
 		if err := json.Unmarshal(params, &fields); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
 
 	if ctx.ApiVersion > 1 {
 		if raw, ok := fields["binary"]; ok {
 			if _, isBool := accountTxBoolValue(raw); !isBool {
-				return nil, types.RPCErrorInvalidField("binary")
+				return nil, types.RpcErrorInvalidField("binary")
 			}
 		}
 		if raw, ok := fields["forward"]; ok {
 			if _, isBool := accountTxBoolValue(raw); !isBool {
-				return nil, types.RPCErrorInvalidField("forward")
+				return nil, types.RpcErrorInvalidField("forward")
 			}
 		}
 	}
@@ -58,18 +58,18 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 
 	accountRaw, ok := fields["account"]
 	if !ok {
-		return nil, types.RPCErrorMissingField("account")
+		return nil, types.RpcErrorMissingField("account")
 	}
 	accountValue, decodeErr := decodeAccountTxValue(accountRaw)
 	if decodeErr != nil {
-		return nil, types.RPCErrorInvalidField("account")
+		return nil, types.RpcErrorInvalidField("account")
 	}
 	account, ok := accountValue.(string)
 	if !ok {
-		return nil, types.RPCErrorInvalidField("account")
+		return nil, types.RpcErrorInvalidField("account")
 	}
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.")
+		return nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 
 	ledgerSelection, ledgerErr := parseAccountTxLedgerSelection(ctx, fields)
@@ -79,7 +79,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 
 	var marker *types.AccountTxMarker
 	if raw, ok := fields["marker"]; ok {
-		var markerErr *types.RPCError
+		var markerErr *types.RpcError
 		marker, markerErr = parseAccountTxMarker(raw)
 		if markerErr != nil {
 			return nil, markerErr
@@ -91,6 +91,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 		return nil, ledgerErr
 	}
 
+	setLoadMedium(ctx)
 	result, err := ctx.Services.Ledger.GetAccountTransactions(
 		ctx.Context,
 		account,
@@ -102,9 +103,9 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
-			return nil, types.RPCErrorNotEnabled("")
+			return nil, types.RpcErrorNotEnabled("")
 		}
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account transactions: %v", err))
+		return nil, mapAccountQueryErr(err, "account_tx: transaction query failed")
 	}
 
 	// Cache for ledger lookups by sequence, to avoid repeated lookups
@@ -310,19 +311,19 @@ type accountTxLedgerSelection struct {
 	spec     json.RawMessage
 }
 
-func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json.RawMessage) (accountTxLedgerSelection, *types.RPCError) {
+func parseAccountTxLedgerSelection(ctx *types.RpcContext, fields map[string]json.RawMessage) (accountTxLedgerSelection, *types.RpcError) {
 	minRaw, hasMin := fields["ledger_index_min"]
 	maxRaw, hasMax := fields["ledger_index_max"]
 	_, hasHash := fields["ledger_hash"]
 	_, hasIndex := fields["ledger_index"]
 
 	if ctx.ApiVersion > 1 && (hasMin || hasMax) && (hasHash || hasIndex) {
-		return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("invalidParams")
+		return accountTxLedgerSelection{}, types.RpcErrorInvalidParams("invalidParams")
 	}
 	if hasMin || hasMax {
 		min := uint32(0)
 		max := uint32(math.MaxUint32)
-		var err *types.RPCError
+		var err *types.RpcError
 		if hasMin {
 			min, err = accountTxRangeBound(minRaw, 0, "ledger_index_min")
 			if err != nil {
@@ -342,11 +343,11 @@ func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json
 		value, err := decodeAccountTxValue(hashRaw)
 		hash, isString := value.(string)
 		if err != nil || !isString {
-			return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("ledgerHashNotString")
+			return accountTxLedgerSelection{}, types.RpcErrorInvalidParams("ledgerHashNotString")
 		}
 		decoded, err := hex.DecodeString(hash)
 		if err != nil || len(decoded) != 32 {
-			return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("ledgerHashMalformed")
+			return accountTxLedgerSelection{}, types.RpcErrorInvalidParams("ledgerHashMalformed")
 		}
 		spec, _ := json.Marshal(map[string]json.RawMessage{"ledger_hash": hashRaw})
 		return accountTxLedgerSelection{spec: spec}, nil
@@ -362,20 +363,20 @@ func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json
 	}
 }
 
-func resolveAccountTxLedgerSelection(ctx *types.RPCContext, selection accountTxLedgerSelection) (int64, int64, *types.RPCError) {
+func resolveAccountTxLedgerSelection(ctx *types.RpcContext, selection accountTxLedgerSelection) (int64, int64, *types.RpcError) {
 	validatedMin, validatedMax, ok := accountTxValidatedRange(ctx.Services.Ledger.GetServerInfo().CompleteLedgers)
 	if !ok {
 		if ctx.ApiVersion == types.ApiVersion1 {
-			return 0, 0, types.NewRPCError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
+			return 0, 0, types.NewRpcError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
 		}
-		return 0, 0, types.NewRPCError(types.RpcNOT_SYNCED, "notSynced", "notSynced", "Not synced to the network.")
+		return 0, 0, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced", "Not synced to the network.")
 	}
 
 	if selection.hasRange {
 		if ctx.ApiVersion > 1 &&
 			((selection.max > validatedMax && selection.max != math.MaxUint32) ||
 				(selection.min < validatedMin && selection.min != 0)) {
-			return 0, 0, types.NewRPCError(types.RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "lgrIdxMalformed", "Ledger index malformed.")
+			return 0, 0, types.NewRpcError(types.RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "lgrIdxMalformed", "Ledger index malformed.")
 		}
 		min, max := validatedMin, validatedMax
 		if selection.min > min {
@@ -386,9 +387,9 @@ func resolveAccountTxLedgerSelection(ctx *types.RPCContext, selection accountTxL
 		}
 		if max < min {
 			if ctx.ApiVersion == types.ApiVersion1 {
-				return 0, 0, types.NewRPCError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
+				return 0, 0, types.NewRpcError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
 			}
-			return 0, 0, types.RPCErrorInvalidLgrRange()
+			return 0, 0, types.RpcErrorInvalidLgrRange()
 		}
 		return int64(min), int64(max), nil
 	}
@@ -401,7 +402,7 @@ func resolveAccountTxLedgerSelection(ctx *types.RPCContext, selection accountTxL
 		return 0, 0, err
 	}
 	if !validated || !ledger.IsValidated() || ledger.Sequence() < validatedMin || ledger.Sequence() > validatedMax {
-		return 0, 0, types.NewRPCError(types.RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
+		return 0, 0, types.NewRpcError(types.RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
 	}
 	return int64(ledger.Sequence()), int64(ledger.Sequence()), nil
 }
@@ -423,10 +424,10 @@ func accountTxValidatedRange(complete string) (uint32, uint32, bool) {
 	return min, max, minOK && maxOK && min <= max
 }
 
-func accountTxRangeBound(raw json.RawMessage, negativeDefault uint32, field string) (uint32, *types.RPCError) {
+func accountTxRangeBound(raw json.RawMessage, negativeDefault uint32, field string) (uint32, *types.RpcError) {
 	value, err := decodeAccountTxValue(raw)
 	if err != nil {
-		return 0, types.RPCErrorInvalidParams("Invalid field '" + field + "'.")
+		return 0, types.RpcErrorInvalidParams("Invalid field '" + field + "'.")
 	}
 	var number float64
 	switch value := value.(type) {
@@ -450,21 +451,21 @@ func accountTxRangeBound(raw json.RawMessage, negativeDefault uint32, field stri
 		err = errors.New("not numeric")
 	}
 	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
-		return 0, types.RPCErrorInvalidParams("Invalid field '" + field + "'.")
+		return 0, types.RpcErrorInvalidParams("Invalid field '" + field + "'.")
 	}
 	if number < 0 {
 		return negativeDefault, nil
 	}
 	if number > math.MaxUint32 {
-		return 0, types.RPCErrorInvalidParams("Invalid field '" + field + "'.")
+		return 0, types.RpcErrorInvalidParams("Invalid field '" + field + "'.")
 	}
 	return uint32(number), nil
 }
 
-func accountTxLedgerIndex(raw json.RawMessage) (types.LedgerIndex, *types.RPCError) {
+func accountTxLedgerIndex(raw json.RawMessage) (types.LedgerIndex, *types.RpcError) {
 	value, err := decodeAccountTxValue(raw)
 	if err != nil {
-		return "", types.RPCErrorInvalidParams("ledger_index string malformed")
+		return "", types.RpcErrorInvalidParams("ledger_index string malformed")
 	}
 	switch value := value.(type) {
 	case nil:
@@ -472,7 +473,7 @@ func accountTxLedgerIndex(raw json.RawMessage) (types.LedgerIndex, *types.RPCErr
 	case json.Number:
 		number, err := value.Float64()
 		if err != nil || number < 0 || number > math.MaxUint32 || math.IsNaN(number) || math.IsInf(number, 0) {
-			return "", types.RPCErrorInvalidParams("ledgerIndexMalformed")
+			return "", types.RpcErrorInvalidParams("ledgerIndexMalformed")
 		}
 		return types.LedgerIndex(strconv.FormatUint(uint64(uint32(number)), 10)), nil
 	case string:
@@ -482,16 +483,16 @@ func accountTxLedgerIndex(raw json.RawMessage) (types.LedgerIndex, *types.RPCErr
 		case "closed", "validated":
 			return types.LedgerIndex(value), nil
 		default:
-			return "", types.RPCErrorInvalidParams("ledger_index string malformed")
+			return "", types.RpcErrorInvalidParams("ledger_index string malformed")
 		}
 	default:
-		return "", types.RPCErrorInvalidParams("ledger_index string malformed")
+		return "", types.RpcErrorInvalidParams("ledger_index string malformed")
 	}
 }
 
-func parseAccountTxMarker(raw json.RawMessage) (*types.AccountTxMarker, *types.RPCError) {
-	invalid := func() *types.RPCError {
-		return types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+func parseAccountTxMarker(raw json.RawMessage) (*types.AccountTxMarker, *types.RpcError) {
+	invalid := func() *types.RpcError {
+		return types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 	}
 	value, err := decodeAccountTxValue(raw)
 	if err != nil {

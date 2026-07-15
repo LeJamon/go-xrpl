@@ -67,7 +67,7 @@ func newURLSubscriptionRegistry(ws *WebSocketServer) *URLSubscriptionRegistry {
 // rpcINVALID_PARAMS; on reuse, credentials are only updated via the
 // deprecated username/password members. The caller has already verified the
 // admin role.
-func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RPCContext, request types.SubscriptionRequest) (map[string]any, *types.RPCError) {
+func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
 	request.ApiVersion = ctx.ApiVersion
 	sub, rpcErr := r.findOrCreate(request)
 	if rpcErr != nil {
@@ -75,7 +75,16 @@ func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RPCContext, request types
 	}
 	// Like rippled, a failing stream/account/book parse leaves the freshly
 	// created registry entry in place.
-	if rpcErr := r.ws.subscriptionManager.HandleSubscribe(sub.conn, request, true); rpcErr != nil {
+	if rpcErr := r.ws.subscriptionManager.HandleSubscribe(sub.conn, request.WithoutBooks(), true); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := applyURLSubscriptionBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		if rpcErr := r.ws.subscriptionManager.HandleSubscribe(sub.conn, bookRequest, true); rpcErr != nil {
+			return rpcErr
+		}
+		setSubscriptionLoadCost(ctx, bookRequest)
+		return nil
+	}); rpcErr != nil {
 		return nil, rpcErr
 	}
 	return r.ws.buildSubscribeAck(ctx, request), nil
@@ -84,27 +93,46 @@ func (r *URLSubscriptionRegistry) Subscribe(ctx *types.RPCContext, request types
 // Unsubscribe removes the listed streams/accounts/books from the url's
 // subscriber and drops the registry entry once no stream subscriptions
 // remain. An unknown url is silent success (Unsubscribe.cpp:52-53).
-func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RPCContext, request types.SubscriptionRequest) (map[string]any, *types.RPCError) {
+func (r *URLSubscriptionRegistry) Unsubscribe(ctx *types.RpcContext, request types.SubscriptionRequest) (map[string]any, *types.RpcError) {
 	r.mu.Lock()
 	sub, ok := r.subs[request.URL]
 	r.mu.Unlock()
 	if !ok {
 		return map[string]any{}, nil
 	}
-	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribe(sub.conn, request, true); rpcErr != nil {
+	if rpcErr := r.ws.subscriptionManager.HandleUnsubscribe(sub.conn, request.WithoutBooks(), true); rpcErr != nil {
+		return nil, rpcErr
+	}
+	if rpcErr := applyURLSubscriptionBooks(request, func(bookRequest types.SubscriptionRequest) *types.RpcError {
+		return r.ws.subscriptionManager.HandleUnsubscribe(sub.conn, bookRequest, true)
+	}); rpcErr != nil {
 		return nil, rpcErr
 	}
 	r.tryRemove(request.URL)
 	return map[string]any{}, nil
 }
 
-func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest) (*rpcSub, *types.RPCError) {
+func applyURLSubscriptionBooks(request types.SubscriptionRequest, apply func(types.SubscriptionRequest) *types.RpcError) *types.RpcError {
+	wire := request.WireArrays()
+	if wire.Present {
+		return applySubscriptionBooks(wire.Books, apply)
+	}
+	for _, book := range request.Books {
+		if rpcErr := apply(types.SubscriptionRequest{Books: []types.BookRequest{book}}); rpcErr != nil {
+			return rpcErr
+		}
+	}
+	return nil
+}
+
+func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest) (*rpcSub, *types.RpcError) {
 	username, password, usernameSet, passwordSet := request.URLCredentials()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
-		return nil, types.RPCErrorInternal("Internal error.")
+		wsLog().Error("rpcsub: subscription requested after registry closed")
+		return nil, types.RpcErrorInternal()
 	}
 	if sub, ok := r.subs[request.URL]; ok {
 		// Credentials on an existing url subscription are only updated via
@@ -191,15 +219,15 @@ func (r *URLSubscriptionRegistry) Close() {
 // supported."). An empty host ("http://") is accepted, matching rippled's
 // parseUrl host group: registration succeeds and each delivery just fails
 // harmlessly at connect.
-func parseRPCSubURL(raw string) (string, *types.RPCError) {
-	parseErr := types.RPCErrorInvalidParams("Failed to parse url.")
+func parseRPCSubURL(raw string) (string, *types.RpcError) {
+	parseErr := types.RpcErrorInvalidParams("Failed to parse url.")
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Scheme == "" {
 		return "", parseErr
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return "", types.RPCErrorInvalidParams("Only http and https is supported.")
+		return "", types.RpcErrorInvalidParams("Only http and https is supported.")
 	}
 	port := u.Port()
 	if port == "" {
