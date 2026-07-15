@@ -102,7 +102,6 @@ func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlo
 	stagedEngine.SetBaseTxCount(bp.engine.TxCount())
 	stagedEngine.invariantViolationHook = bp.engine.invariantViolationHook
 
-	// Apply the transaction using an unpublished ledger snapshot.
 	// Pseudo-transactions (Amendment, SetFee, UNLModify) use ApplyPseudo()
 	// since Apply() rejects them (matching rippled's passesLocalChecks).
 	var applyResult txcore.ApplyResult
