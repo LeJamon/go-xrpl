@@ -3,6 +3,7 @@ package lending
 import (
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
@@ -11,9 +12,9 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// toLarge re-expresses a spendable-balance Number in the large lending scale so
-// it compares directly against cover amounts.
-func toLarge(n state.XRPLNumber) lmath.N { return lmath.Num(n.Mantissa(), n.Exponent()) }
+func toLargeForRules(n state.XRPLNumber, rules *amendment.Rules) lmath.N {
+	return lmath.NumScaled(n.Mantissa(), n.Exponent(), lendingNumberScale(rules))
+}
 
 // amountAssetMatches reports whether amount denominates the given asset.
 func amountAssetMatches(amount tx.Amount, asset tx.Asset) bool {
@@ -29,7 +30,8 @@ func amountAssetMatches(amount tx.Amount, asset tx.Asset) bool {
 
 // -------------------- LoanBrokerSet --------------------
 
-func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -69,8 +71,8 @@ func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Resu
 			return ter.TecNO_PERMISSION
 		}
 		if l.DebtMaximum != nil {
-			debtMax := lendNum(*l.DebtMaximum)
-			if debtMax.Signum() != 0 && debtMax.Cmp(lendNum(b.DebtTotal)) < 0 {
+			debtMax := number(*l.DebtMaximum)
+			if debtMax.Signum() != 0 && debtMax.Cmp(number(b.DebtTotal)) < 0 {
 				return ter.TecLIMIT_EXCEEDED
 			}
 		}
@@ -83,13 +85,14 @@ func (l *LoanBrokerSet) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Resu
 		}
 	}
 
-	if l.DebtMaximum != nil && !representableAsAsset(lendNum(*l.DebtMaximum), asset) {
+	if l.DebtMaximum != nil && !representableAsAsset(number(*l.DebtMaximum), asset) {
 		return ter.TecPRECISION_LOSS
 	}
 	return ter.TesSUCCESS
 }
 
 func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
+	number := func(value string) lmath.N { return lendNumForRules(value, ctx.Rules()) }
 	accountID := ctx.AccountID
 	vaultID, ok := hashBytes(l.VaultID)
 	if !ok {
@@ -113,9 +116,9 @@ func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			b.Data = *l.Data
 		}
 		if l.DebtMaximum != nil {
-			b.DebtMaximum = numStr(lendNum(*l.DebtMaximum))
+			b.DebtMaximum = numStr(number(*l.DebtMaximum))
 		}
-		associateBrokerAsset(b, integral)
+		associateBrokerAsset(b, integral, ctx.Rules())
 		return updateBroker(ctx, brokerKey, b)
 	}
 
@@ -171,7 +174,7 @@ func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		b.ManagementFeeRate = *l.ManagementFeeRate
 	}
 	if l.DebtMaximum != nil {
-		b.DebtMaximum = numStr(lendNum(*l.DebtMaximum))
+		b.DebtMaximum = numStr(number(*l.DebtMaximum))
 	}
 	if l.CoverRateMinimum != nil {
 		b.CoverRateMinimum = *l.CoverRateMinimum
@@ -179,9 +182,9 @@ func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	if l.CoverRateLiquidation != nil {
 		b.CoverRateLiquidation = *l.CoverRateLiquidation
 	}
-	associateBrokerAsset(b, integral)
+	associateBrokerAsset(b, integral, ctx.Rules())
 
-	data, serr := serializeLoanBroker(b)
+	data, serr := serializeLoanBrokerForRules(b, ctx.Rules())
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -194,7 +197,7 @@ func (l *LoanBrokerSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 // updateBroker serializes and updates a broker entry.
 func updateBroker(ctx *tx.ApplyContext, brokerKey keylet.Keylet, b *loanBrokerData) ter.Result {
-	data, serr := serializeLoanBroker(b)
+	data, serr := serializeLoanBrokerForRules(b, ctx.Rules())
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -206,7 +209,7 @@ func updateBroker(ctx *tx.ApplyContext, brokerKey keylet.Keylet, b *loanBrokerDa
 
 // -------------------- LoanBrokerDelete --------------------
 
-func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
+func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -228,7 +231,7 @@ func (l *LoanBrokerDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.R
 	if b.OwnerCount != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
-	if lendNum(b.DebtTotal).Signum() != 0 {
+	if lendNumForRules(b.DebtTotal, config.RequireRules()).Signum() != 0 {
 		return ter.TecHAS_OBLIGATIONS
 	}
 	return ter.TesSUCCESS
@@ -252,7 +255,7 @@ func (l *LoanBrokerDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	asset := vinfo.Asset
 
 	// Return remaining cover to the broker owner.
-	cover := lendNum(b.CoverAvailable)
+	cover := lendNumForRules(b.CoverAvailable, ctx.Rules())
 	if cover.Signum() > 0 {
 		if res := vault.SendAsset(ctx, b.Account, accountID, asset, cover); res != ter.TesSUCCESS {
 			return res
@@ -333,7 +336,7 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineCo
 		return res
 	}
 	amount, cres := roundCoverDeposit(config.RequireRules().FixCleanup3_2_0Enabled(),
-		lendNum(b.CoverAvailable), amountToLendNum(l.Amount), assetIntegral(asset))
+		lendNumForRules(b.CoverAvailable, config.RequireRules()), amountToLendNumForRules(l.Amount, config.RequireRules()), assetIntegral(asset))
 	if cres != ter.TesSUCCESS {
 		return cres
 	}
@@ -341,7 +344,7 @@ func (l *LoanBrokerCoverDeposit) Preclaim(view tx.LedgerView, config tx.EngineCo
 	if herr != nil {
 		return ter.TefINTERNAL
 	}
-	if toLarge(holds).Cmp(amount) < 0 {
+	if toLargeForRules(holds, config.RequireRules()).Cmp(amount) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 	return ter.TesSUCCESS
@@ -365,7 +368,7 @@ func (l *LoanBrokerCoverDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	asset := vinfo.Asset
 	integral := assetIntegral(asset)
 	amount, cres := roundCoverDeposit(ctx.Rules().FixCleanup3_2_0Enabled(),
-		lendNum(b.CoverAvailable), amountToLendNum(l.Amount), integral)
+		lendNumForRules(b.CoverAvailable, ctx.Rules()), amountToLendNumForRules(l.Amount, ctx.Rules()), integral)
 	if cres != ter.TesSUCCESS {
 		return ter.TecINTERNAL
 	}
@@ -373,8 +376,8 @@ func (l *LoanBrokerCoverDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	if res := vault.SendAsset(ctx, accountID, b.Account, asset, amount); res != ter.TesSUCCESS {
 		return res
 	}
-	b.CoverAvailable = numStr(lendNum(b.CoverAvailable).Add(amount))
-	associateBrokerAsset(b, integral)
+	b.CoverAvailable = numStr(lendNumForRules(b.CoverAvailable, ctx.Rules()).Add(amount))
+	associateBrokerAsset(b, integral, ctx.Rules())
 	return updateBroker(ctx, brokerKey, b)
 }
 
@@ -420,7 +423,7 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	}
 	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
 	integral := assetIntegral(asset)
-	if res := canApplyToBrokerCover(fix320, lendNum(b.CoverAvailable), amountToLendNum(l.Amount), integral); res != ter.TesSUCCESS {
+	if res := canApplyToBrokerCover(fix320, lendNumForRules(b.CoverAvailable, config.RequireRules()), amountToLendNumForRules(l.Amount, config.RequireRules()), integral); res != ter.TesSUCCESS {
 		return res
 	}
 	if accountID != dstID {
@@ -432,12 +435,12 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 		return res
 	}
 
-	amount := amountToLendNum(l.Amount)
-	coverAvail := lendNum(b.CoverAvailable)
-	debtTotal := lendNum(b.DebtTotal)
+	amount := amountToLendNumForRules(l.Amount, config.RequireRules())
+	coverAvail := lendNumForRules(b.CoverAvailable, config.RequireRules())
+	debtTotal := lendNumForRules(b.DebtTotal, config.RequireRules())
 	var minimumCover lmath.N
 	if fix320 {
-		minimumCover = minimumBrokerCover(debtTotal, b.CoverRateMinimum, vaultScaleOf(vinfo, integral), integral)
+		minimumCover = minimumBrokerCover(debtTotal, b.CoverRateMinimum, vaultScaleOfForRules(vinfo, integral, config.RequireRules()), integral)
 	} else {
 		minimumCover = brokerCoverRateAtScale(debtTotal, b.CoverRateMinimum, debtTotal.AssetExponent(integral, state.RoundToNearest), integral)
 	}
@@ -451,7 +454,7 @@ func (l *LoanBrokerCoverWithdraw) Preclaim(view tx.LedgerView, config tx.EngineC
 	if herr != nil {
 		return ter.TefINTERNAL
 	}
-	if toLarge(holds).Cmp(amount) < 0 {
+	if toLargeForRules(holds, config.RequireRules()).Cmp(amount) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 	return ter.TesSUCCESS
@@ -481,10 +484,10 @@ func (l *LoanBrokerCoverWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINTERNAL
 	}
 	asset := vinfo.Asset
-	amount := amountToLendNum(l.Amount)
+	amount := amountToLendNumForRules(l.Amount, ctx.Rules())
 
-	b.CoverAvailable = numStr(lendNum(b.CoverAvailable).Sub(amount))
-	associateBrokerAsset(b, assetIntegral(asset))
+	b.CoverAvailable = numStr(lendNumForRules(b.CoverAvailable, ctx.Rules()).Sub(amount))
+	associateBrokerAsset(b, assetIntegral(asset), ctx.Rules())
 	if res := updateBroker(ctx, brokerKey, b); res != ter.TesSUCCESS {
 		return res
 	}
@@ -533,23 +536,24 @@ func (l *LoanBrokerCoverClawback) determineBrokerID(view tx.LedgerView) ([32]byt
 // clawAmount computes the amount that may be clawed: capped at
 // CoverAvailable minus the minimum required cover, and at the requested Amount
 // when present.
-func (l *LoanBrokerCoverClawback) clawAmount(b *loanBrokerData, vinfo *vault.VaultLending, fix320 bool) (lmath.N, ter.Result) {
+func (l *LoanBrokerCoverClawback) clawAmount(b *loanBrokerData, vinfo *vault.VaultLending, rules *amendment.Rules) (lmath.N, ter.Result) {
+	fix320 := rules != nil && rules.FixCleanup3_2_0Enabled()
 	integral := assetIntegral(vinfo.Asset)
-	debtTotal := lendNum(b.DebtTotal)
+	debtTotal := lendNumForRules(b.DebtTotal, rules)
 	var minRequired lmath.N
 	if fix320 {
-		minRequired = minimumBrokerCover(debtTotal, b.CoverRateMinimum, vaultScaleOf(vinfo, integral), integral)
+		minRequired = minimumBrokerCover(debtTotal, b.CoverRateMinimum, vaultScaleOfForRules(vinfo, integral, rules), integral)
 	} else {
 		minRequired = brokerCoverRate(debtTotal, b.CoverRateMinimum)
 	}
-	maxClaw := lendNum(b.CoverAvailable).AddRounded(minRequired.Negate(), state.RoundDownward)
+	maxClaw := lendNumForRules(b.CoverAvailable, rules).AddRounded(minRequired.Negate(), state.RoundDownward)
 	if maxClaw.Signum() <= 0 {
-		return lmath.Zero(), ter.TecINSUFFICIENT_FUNDS
+		return lmath.NumScaled(0, 0, lendingNumberScale(rules)), ter.TecINSUFFICIENT_FUNDS
 	}
 	if l.Amount == nil || l.Amount.IsZero() {
 		return maxClaw, ter.TesSUCCESS
 	}
-	req := amountToLendNum(*l.Amount)
+	req := amountToLendNumForRules(*l.Amount, rules)
 	if req.Cmp(maxClaw) > 0 {
 		return maxClaw, ter.TesSUCCESS
 	}
@@ -599,11 +603,11 @@ func (l *LoanBrokerCoverClawback) Preclaim(view tx.LedgerView, config tx.EngineC
 		}
 	}
 	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
-	claw, cres := l.clawAmount(b, vinfo, fix320)
+	claw, cres := l.clawAmount(b, vinfo, config.RequireRules())
 	if cres != ter.TesSUCCESS {
 		return cres
 	}
-	if res := canApplyToBrokerCover(fix320, lendNum(b.CoverAvailable), claw, assetIntegral(asset)); res != ter.TesSUCCESS {
+	if res := canApplyToBrokerCover(fix320, lendNumForRules(b.CoverAvailable, config.RequireRules()), claw, assetIntegral(asset)); res != ter.TesSUCCESS {
 		return res
 	}
 	// Only IOU issuers with clawback enabled and no global freeze may claw.
@@ -635,12 +639,12 @@ func (l *LoanBrokerCoverClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINTERNAL
 	}
 	asset := vinfo.Asset
-	claw, cres := l.clawAmount(b, vinfo, ctx.Rules().FixCleanup3_2_0Enabled())
+	claw, cres := l.clawAmount(b, vinfo, ctx.Rules())
 	if cres != ter.TesSUCCESS {
 		return ter.TecINTERNAL
 	}
-	b.CoverAvailable = numStr(lendNum(b.CoverAvailable).Sub(claw))
-	associateBrokerAsset(b, assetIntegral(asset))
+	b.CoverAvailable = numStr(lendNumForRules(b.CoverAvailable, ctx.Rules()).Sub(claw))
+	associateBrokerAsset(b, assetIntegral(asset), ctx.Rules())
 	if res := updateBroker(ctx, brokerKey, b); res != ter.TesSUCCESS {
 		return res
 	}

@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -80,6 +80,7 @@ type DirectoryNode struct {
 	// sfPreviousTxnID). Reference: ApplyStateTable.cpp:156-157.
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+	decodedOptionals  map[string]any
 }
 
 // SetIndexNext sets the next-page link and marks it present, mirroring
@@ -175,11 +176,9 @@ func rateMantissa(a Amount) (uint64, int) {
 
 // SerializeDirectoryNode serializes a DirectoryNode to binary format
 func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) {
-	jsonObj := map[string]any{
-		"LedgerEntryType": "DirectoryNode",
-		"Flags":           dir.Flags,
-		"RootIndex":       strings.ToUpper(hex.EncodeToString(dir.RootIndex[:])),
-	}
+	entry := &ledgerfields.DirectoryNode{}
+	entry.SetFlags(dir.Flags)
+	entry.SetRootIndex(strings.ToUpper(hex.EncodeToString(dir.RootIndex[:])))
 
 	// sfIndexes is soeREQUIRED on ltDIR_NODE, so it is always serialized —
 	// even when empty. dirRemove keeps an emptied root page with an empty
@@ -189,25 +188,25 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 	for i, idx := range dir.Indexes {
 		indexes[i] = strings.ToUpper(hex.EncodeToString(idx[:]))
 	}
-	jsonObj["Indexes"] = indexes
+	entry.SetIndexes(indexes)
 
 	// Emit the link fields when present or non-zero. A multi-page directory
 	// that collapses back to a single root keeps zero-valued links present (see
 	// DirectoryNode.indexNextSet); emitting only on non-zero would drop them and
 	// fork the ledger.
 	if dir.IndexNext != 0 || dir.indexNextSet {
-		jsonObj["IndexNext"] = formatUint64Hex(dir.IndexNext)
+		entry.SetIndexNext(formatUint64Hex(dir.IndexNext))
 	}
 	if dir.IndexPrevious != 0 || dir.indexPreviousSet {
-		jsonObj["IndexPrevious"] = formatUint64Hex(dir.IndexPrevious)
+		entry.SetIndexPrevious(formatUint64Hex(dir.IndexPrevious))
 	}
 
-	// Include Owner field if set
-	if dir.Owner != [20]byte{} {
+	if dir.Owner != [20]byte{} || decodedFieldUnchanged(dir.decodedOptionals, "Owner", dir.Owner) {
 		ownerAddr, err := encodeAccountID(dir.Owner)
-		if err == nil {
-			jsonObj["Owner"] = ownerAddr
+		if err != nil {
+			return nil, fmt.Errorf("failed to encode directory owner: %w", err)
 		}
+		entry.SetOwner(ownerAddr)
 	}
 
 	// Include book directory fields if they exist
@@ -215,133 +214,164 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 	hasBookFields := isBookDir || dir.ExchangeRate != 0 ||
 		dir.TakerPaysCurrency != [20]byte{} || dir.TakerPaysIssuer != [20]byte{} ||
 		dir.TakerGetsCurrency != [20]byte{} || dir.TakerGetsIssuer != [20]byte{} ||
-		dir.TakerPaysMPT != nil || dir.TakerGetsMPT != nil
+		dir.TakerPaysMPT != nil || dir.TakerGetsMPT != nil ||
+		decodedFieldUnchanged(dir.decodedOptionals, "TakerPaysCurrency", dir.TakerPaysCurrency) ||
+		decodedFieldUnchanged(dir.decodedOptionals, "TakerPaysIssuer", dir.TakerPaysIssuer) ||
+		decodedFieldUnchanged(dir.decodedOptionals, "TakerGetsCurrency", dir.TakerGetsCurrency) ||
+		decodedFieldUnchanged(dir.decodedOptionals, "TakerGetsIssuer", dir.TakerGetsIssuer) ||
+		decodedFieldUnchanged(dir.decodedOptionals, "ExchangeRate", dir.ExchangeRate)
 
 	if hasBookFields {
-		// Each side is either an Issue (currency + issuer) or an MPT (the 192-bit
-		// issuance id), never both — matching rippled's setBookDir asset visit.
 		if dir.TakerPaysMPT != nil {
-			jsonObj["TakerPaysMPT"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysMPT[:]))
+			entry.SetTakerPaysMPT(strings.ToUpper(hex.EncodeToString(dir.TakerPaysMPT[:])))
 		} else {
-			jsonObj["TakerPaysCurrency"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysCurrency[:]))
-			jsonObj["TakerPaysIssuer"] = strings.ToUpper(hex.EncodeToString(dir.TakerPaysIssuer[:]))
+			if isBookDir || dir.TakerPaysCurrency != [20]byte{} || decodedFieldUnchanged(dir.decodedOptionals, "TakerPaysCurrency", dir.TakerPaysCurrency) {
+				entry.SetTakerPaysCurrency(strings.ToUpper(hex.EncodeToString(dir.TakerPaysCurrency[:])))
+			}
+			if isBookDir || dir.TakerPaysIssuer != [20]byte{} || decodedFieldUnchanged(dir.decodedOptionals, "TakerPaysIssuer", dir.TakerPaysIssuer) {
+				entry.SetTakerPaysIssuer(strings.ToUpper(hex.EncodeToString(dir.TakerPaysIssuer[:])))
+			}
 		}
 		if dir.TakerGetsMPT != nil {
-			jsonObj["TakerGetsMPT"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsMPT[:]))
+			entry.SetTakerGetsMPT(strings.ToUpper(hex.EncodeToString(dir.TakerGetsMPT[:])))
 		} else {
-			jsonObj["TakerGetsCurrency"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsCurrency[:]))
-			jsonObj["TakerGetsIssuer"] = strings.ToUpper(hex.EncodeToString(dir.TakerGetsIssuer[:]))
+			if isBookDir || dir.TakerGetsCurrency != [20]byte{} || decodedFieldUnchanged(dir.decodedOptionals, "TakerGetsCurrency", dir.TakerGetsCurrency) {
+				entry.SetTakerGetsCurrency(strings.ToUpper(hex.EncodeToString(dir.TakerGetsCurrency[:])))
+			}
+			if isBookDir || dir.TakerGetsIssuer != [20]byte{} || decodedFieldUnchanged(dir.decodedOptionals, "TakerGetsIssuer", dir.TakerGetsIssuer) {
+				entry.SetTakerGetsIssuer(strings.ToUpper(hex.EncodeToString(dir.TakerGetsIssuer[:])))
+			}
 		}
-		if dir.ExchangeRate != 0 {
-			jsonObj["ExchangeRate"] = formatUint64Hex(dir.ExchangeRate)
+		if dir.ExchangeRate != 0 || decodedFieldUnchanged(dir.decodedOptionals, "ExchangeRate", dir.ExchangeRate) {
+			entry.SetExchangeRate(formatUint64Hex(dir.ExchangeRate))
 		}
 	}
 
 	// Add optional Hash256 fields if set
 	var zeroHash [32]byte
-	if dir.NFTokenID != zeroHash {
-		jsonObj["NFTokenID"] = strings.ToUpper(hex.EncodeToString(dir.NFTokenID[:]))
+	if dir.NFTokenID != zeroHash || decodedFieldUnchanged(dir.decodedOptionals, "NFTokenID", dir.NFTokenID) {
+		entry.SetNFTokenID(strings.ToUpper(hex.EncodeToString(dir.NFTokenID[:])))
 	}
-	if dir.DomainID != zeroHash {
-		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(dir.DomainID[:]))
+	if dir.DomainID != zeroHash || decodedFieldUnchanged(dir.decodedOptionals, "DomainID", dir.DomainID) {
+		entry.SetDomainID(strings.ToUpper(hex.EncodeToString(dir.DomainID[:])))
 	}
 
 	// Preserve threading fields across the round-trip (set by metadata
 	// threading once fixPreviousTxnID is enabled). PreviousTxnLgrSeq is
 	// only meaningful alongside PreviousTxnID, so gate both on the id.
-	if dir.PreviousTxnID != zeroHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(dir.PreviousTxnID[:]))
-		jsonObj["PreviousTxnLgrSeq"] = dir.PreviousTxnLgrSeq
+	if dir.PreviousTxnID != zeroHash || decodedFieldUnchanged(dir.decodedOptionals, "PreviousTxnID", dir.PreviousTxnID) {
+		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(dir.PreviousTxnID[:])))
+	}
+	if dir.PreviousTxnLgrSeq != 0 || decodedFieldUnchanged(dir.decodedOptionals, "PreviousTxnLgrSeq", dir.PreviousTxnLgrSeq) {
+		entry.SetPreviousTxnLgrSeq(dir.PreviousTxnLgrSeq)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, err
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // ParseDirectoryNode parses a DirectoryNode from binary data
 func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
-	dir := &DirectoryNode{}
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			switch f.FieldCode {
-			case 2: // Flags
-				dir.Flags = f.UInt32()
-			case 5: // PreviousTxnLgrSeq
-				dir.PreviousTxnLgrSeq = f.UInt32()
-			}
-
-		case stUInt64:
-			switch f.FieldCode {
-			case 1: // IndexNext
-				dir.SetIndexNext(f.UInt64())
-			case 2: // IndexPrevious
-				dir.SetIndexPrevious(f.UInt64())
-			case 6: // ExchangeRate
-				dir.ExchangeRate = f.UInt64()
-			}
-
-		case stHash256:
-			switch f.FieldCode {
-			case 8: // RootIndex
-				dir.RootIndex = f.Hash256()
-			case 10: // NFTokenID
-				dir.NFTokenID = f.Hash256()
-			case 34: // DomainID
-				dir.DomainID = f.Hash256()
-			case 5: // PreviousTxnID
-				dir.PreviousTxnID = f.Hash256()
-			}
-
-		case stHash160:
-			switch f.FieldCode {
-			case 1: // TakerPaysCurrency
-				dir.TakerPaysCurrency = f.Hash160()
-			case 2: // TakerPaysIssuer
-				dir.TakerPaysIssuer = f.Hash160()
-			case 3: // TakerGetsCurrency
-				dir.TakerGetsCurrency = f.Hash160()
-			case 4: // TakerGetsIssuer
-				dir.TakerGetsIssuer = f.Hash160()
-			}
-
-		case stHash192:
-			switch f.FieldCode {
-			case 3: // TakerPaysMPT
-				id := f.Hash192()
-				dir.TakerPaysMPT = &id
-			case 4: // TakerGetsMPT
-				id := f.Hash192()
-				dir.TakerGetsMPT = &id
-			}
-
-		case stAccountID:
-			if f.FieldCode == 2 { // Owner
-				if id, ok := f.AccountID(); ok {
-					dir.Owner = id
-				}
-			}
-
-		case stVector256:
-			if f.FieldCode == 1 { // Indexes
-				idx, err := f.Vector256()
-				if err != nil {
-					return err
-				}
-				dir.Indexes = idx
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	var decoded ledgerfields.DirectoryNode
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode DirectoryNode: %w", err)
+	}
+	fields := decoded.ToMap()
+	dir := &DirectoryNode{
+		Flags:             decoded.Flags,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		Indexes:           make([][32]byte, len(decoded.Indexes)),
+		decodedOptionals:  make(map[string]any),
+	}
+	if err := decodeLedgerHex("DirectoryNode.RootIndex", decoded.RootIndex, dir.RootIndex[:]); err != nil {
 		return nil, err
 	}
-
+	for i, index := range decoded.Indexes {
+		if err := decodeLedgerHex(fmt.Sprintf("DirectoryNode.Indexes[%d]", i), index, dir.Indexes[i][:]); err != nil {
+			return nil, err
+		}
+	}
+	var err error
+	if _, ok := fields["IndexNext"]; ok {
+		dir.IndexNext, err = parseLedgerUint64("DirectoryNode.IndexNext", decoded.IndexNext)
+		if err != nil {
+			return nil, err
+		}
+		dir.indexNextSet = true
+	}
+	if _, ok := fields["IndexPrevious"]; ok {
+		dir.IndexPrevious, err = parseLedgerUint64("DirectoryNode.IndexPrevious", decoded.IndexPrevious)
+		if err != nil {
+			return nil, err
+		}
+		dir.indexPreviousSet = true
+	}
+	if _, ok := fields["Owner"]; ok {
+		dir.Owner, err = decodeLedgerAccount("DirectoryNode.Owner", decoded.Owner)
+		if err != nil {
+			return nil, err
+		}
+		dir.decodedOptionals["Owner"] = dir.Owner
+	}
+	for _, hash := range []struct {
+		field string
+		value string
+		dst   []byte
+	}{
+		{"TakerPaysCurrency", decoded.TakerPaysCurrency, dir.TakerPaysCurrency[:]},
+		{"TakerPaysIssuer", decoded.TakerPaysIssuer, dir.TakerPaysIssuer[:]},
+		{"TakerGetsCurrency", decoded.TakerGetsCurrency, dir.TakerGetsCurrency[:]},
+		{"TakerGetsIssuer", decoded.TakerGetsIssuer, dir.TakerGetsIssuer[:]},
+		{"NFTokenID", decoded.NFTokenID, dir.NFTokenID[:]},
+		{"DomainID", decoded.DomainID, dir.DomainID[:]},
+		{"PreviousTxnID", decoded.PreviousTxnID, dir.PreviousTxnID[:]},
+	} {
+		if _, ok := fields[hash.field]; !ok {
+			continue
+		}
+		if err := decodeLedgerHex("DirectoryNode."+hash.field, hash.value, hash.dst); err != nil {
+			return nil, err
+		}
+		switch hash.field {
+		case "TakerPaysCurrency":
+			dir.decodedOptionals[hash.field] = dir.TakerPaysCurrency
+		case "TakerPaysIssuer":
+			dir.decodedOptionals[hash.field] = dir.TakerPaysIssuer
+		case "TakerGetsCurrency":
+			dir.decodedOptionals[hash.field] = dir.TakerGetsCurrency
+		case "TakerGetsIssuer":
+			dir.decodedOptionals[hash.field] = dir.TakerGetsIssuer
+		case "NFTokenID":
+			dir.decodedOptionals[hash.field] = dir.NFTokenID
+		case "DomainID":
+			dir.decodedOptionals[hash.field] = dir.DomainID
+		case "PreviousTxnID":
+			dir.decodedOptionals[hash.field] = dir.PreviousTxnID
+		}
+	}
+	if _, ok := fields["TakerPaysMPT"]; ok {
+		var id [24]byte
+		if err := decodeLedgerHex("DirectoryNode.TakerPaysMPT", decoded.TakerPaysMPT, id[:]); err != nil {
+			return nil, err
+		}
+		dir.TakerPaysMPT = &id
+	}
+	if _, ok := fields["TakerGetsMPT"]; ok {
+		var id [24]byte
+		if err := decodeLedgerHex("DirectoryNode.TakerGetsMPT", decoded.TakerGetsMPT, id[:]); err != nil {
+			return nil, err
+		}
+		dir.TakerGetsMPT = &id
+	}
+	if _, ok := fields["ExchangeRate"]; ok {
+		dir.ExchangeRate, err = parseLedgerUint64("DirectoryNode.ExchangeRate", decoded.ExchangeRate)
+		if err != nil {
+			return nil, err
+		}
+		dir.decodedOptionals["ExchangeRate"] = dir.ExchangeRate
+	}
+	if _, ok := fields["PreviousTxnLgrSeq"]; ok {
+		dir.decodedOptionals["PreviousTxnLgrSeq"] = dir.PreviousTxnLgrSeq
+	}
 	return dir, nil
 }
 

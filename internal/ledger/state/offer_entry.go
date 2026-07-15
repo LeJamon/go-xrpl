@@ -2,11 +2,10 @@ package state
 
 import (
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strings"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // LedgerOffer represents an offer stored in the ledger
@@ -30,6 +29,7 @@ type LedgerOffer struct {
 	// that are placed in both domain and open books
 	AdditionalBookDirectory [32]byte
 	AdditionalBookNode      uint64
+	decodedOptionals        map[string]any
 }
 
 // OfferCreate flags (kept here for backwards compatibility and external references)
@@ -42,8 +42,7 @@ const (
 
 // SerializeLedgerOffer serializes a LedgerOffer to binary for storage
 func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
-	// Helper function to convert Amount to JSON format
-	amountToJSON := func(amt Amount) any {
+	amountValue := func(amt Amount) any {
 		if amt.IsNative() {
 			return amt.Value()
 		}
@@ -60,163 +59,144 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 		}
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType":   "Offer",
-		"Account":           offer.Account,
-		"Flags":             offer.Flags,
-		"Sequence":          offer.Sequence,
-		"TakerPays":         amountToJSON(offer.TakerPays),
-		"TakerGets":         amountToJSON(offer.TakerGets),
-		"BookDirectory":     strings.ToUpper(hex.EncodeToString(offer.BookDirectory[:])),
-		"BookNode":          fmt.Sprintf("%x", offer.BookNode),
-		"OwnerNode":         fmt.Sprintf("%x", offer.OwnerNode),
-		"PreviousTxnID":     strings.ToUpper(hex.EncodeToString(offer.PreviousTxnID[:])),
-		"PreviousTxnLgrSeq": offer.PreviousTxnLgrSeq,
-	}
+	entry := &ledgerfields.Offer{}
+	entry.SetAccount(offer.Account)
+	entry.SetFlags(offer.Flags)
+	entry.SetSequence(offer.Sequence)
+	entry.SetTakerPays(amountValue(offer.TakerPays))
+	entry.SetTakerGets(amountValue(offer.TakerGets))
+	entry.SetBookDirectory(strings.ToUpper(hex.EncodeToString(offer.BookDirectory[:])))
+	entry.SetBookNode(fmt.Sprintf("%x", offer.BookNode))
+	entry.SetOwnerNode(fmt.Sprintf("%x", offer.OwnerNode))
+	entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(offer.PreviousTxnID[:])))
+	entry.SetPreviousTxnLgrSeq(offer.PreviousTxnLgrSeq)
 
-	// Include optional fields only when set (non-zero)
-	if offer.Expiration > 0 {
-		jsonObj["Expiration"] = offer.Expiration
+	if offer.Expiration > 0 || decodedFieldUnchanged(offer.decodedOptionals, "Expiration", offer.Expiration) {
+		entry.SetExpiration(offer.Expiration)
 	}
 	var zeroDomainID [32]byte
-	if offer.DomainID != zeroDomainID {
-		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(offer.DomainID[:]))
+	if offer.DomainID != zeroDomainID || decodedFieldUnchanged(offer.decodedOptionals, "DomainID", offer.DomainID) {
+		entry.SetDomainID(strings.ToUpper(hex.EncodeToString(offer.DomainID[:])))
 	}
 
-	// Hybrid offers carry the open book they were also placed into as a
-	// single-entry AdditionalBooks STArray of Book inner objects.
 	var zeroBookDir [32]byte
-	if offer.AdditionalBookDirectory != zeroBookDir {
-		jsonObj["AdditionalBooks"] = []any{
+	additionalBookUnchanged := decodedFieldUnchanged(offer.decodedOptionals, "AdditionalBookDirectory", offer.AdditionalBookDirectory) &&
+		decodedFieldUnchanged(offer.decodedOptionals, "AdditionalBookNode", offer.AdditionalBookNode)
+	if raw, ok := offer.decodedOptionals["AdditionalBooks"].([]any); ok && additionalBookUnchanged {
+		entry.SetAdditionalBooks(raw)
+	} else if offer.AdditionalBookDirectory != zeroBookDir {
+		entry.SetAdditionalBooks([]any{
 			map[string]any{
 				"Book": map[string]any{
 					"BookDirectory": strings.ToUpper(hex.EncodeToString(offer.AdditionalBookDirectory[:])),
 					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
 				},
 			},
-		}
+		})
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode Offer: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // parseLedgerOffer parses a LedgerOffer from binary data
 func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
-	if len(data) < 20 {
-		return nil, errors.New("offer data too short")
+	var decoded ledgerfields.Offer
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode Offer: %w", err)
 	}
-
-	offer := &LedgerOffer{}
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			switch f.FieldCode {
-			case fieldCodeFlags:
-				offer.Flags = f.UInt32()
-			case 4: // Sequence
-				offer.Sequence = f.UInt32()
-			case 5: // PreviousTxnLgrSeq
-				offer.PreviousTxnLgrSeq = f.UInt32()
-			case 10: // Expiration
-				offer.Expiration = f.UInt32()
-			}
-
-		case stUInt64:
-			switch f.FieldCode {
-			case 3: // BookNode
-				offer.BookNode = f.UInt64()
-			case 4: // OwnerNode
-				offer.OwnerNode = f.UInt64()
-			}
-
-		case stHash256:
-			switch f.FieldCode {
-			case 16: // BookDirectory
-				offer.BookDirectory = f.Hash256()
-			case 5: // PreviousTxnID
-				offer.PreviousTxnID = f.Hash256()
-			case 34: // DomainID (PermissionedDEX)
-				offer.DomainID = f.Hash256()
-			}
-
-		case stAmount:
-			var amt Amount
-			switch len(f.Value) {
-			case 48: // IOU
-				a, err := ParseIOUAmountBinary(f.Value)
-				if err != nil {
-					return fmt.Errorf("Offer IOU amount (field %d) parse failed: %w", f.FieldCode, err)
-				}
-				amt = a
-			case 33: // MPT
-				a, err := ParseMPTAmountBinary(f.Value)
-				if err != nil {
-					return fmt.Errorf("Offer MPT amount (field %d) parse failed: %w", f.FieldCode, err)
-				}
-				amt = a
-			case 8: // XRP
-				amt = NewXRPAmountFromInt(int64(xrpDrops(f.Value)))
-			default:
-				return fmt.Errorf("Offer amount (field %d) unexpected width %d", f.FieldCode, len(f.Value))
-			}
-			switch f.FieldCode {
-			case 4: // TakerPays
-				offer.TakerPays = amt
-			case 5: // TakerGets
-				offer.TakerGets = amt
-			}
-
-		case stAccountID:
-			if id, ok := f.AccountID(); ok && f.FieldCode == 1 {
-				offer.Account, _ = EncodeAccountID(id)
-			}
-
-		case stArray:
-			if f.FieldCode == 13 { // AdditionalBooks
-				if err := parseAdditionalBooks(f.Value, offer); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
+	takerPays, err := decodeLedgerAmount("Offer.TakerPays", decoded.TakerPays)
+	if err != nil {
+		return nil, err
+	}
+	takerGets, err := decodeLedgerAmount("Offer.TakerGets", decoded.TakerGets)
+	if err != nil {
+		return nil, err
+	}
+	bookNode, err := parseLedgerUint64("Offer.BookNode", decoded.BookNode)
+	if err != nil {
+		return nil, err
+	}
+	ownerNode, err := parseLedgerUint64("Offer.OwnerNode", decoded.OwnerNode)
 	if err != nil {
 		return nil, err
 	}
 
+	fields := decoded.ToMap()
+	offer := &LedgerOffer{
+		Account:           decoded.Account,
+		Sequence:          decoded.Sequence,
+		TakerPays:         takerPays,
+		TakerGets:         takerGets,
+		BookNode:          bookNode,
+		OwnerNode:         ownerNode,
+		Expiration:        decoded.Expiration,
+		Flags:             decoded.Flags,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+		decodedOptionals:  make(map[string]any),
+	}
+	for _, hash := range []struct {
+		field string
+		value string
+		dst   []byte
+	}{
+		{"BookDirectory", decoded.BookDirectory, offer.BookDirectory[:]},
+		{"PreviousTxnID", decoded.PreviousTxnID, offer.PreviousTxnID[:]},
+		{"DomainID", decoded.DomainID, offer.DomainID[:]},
+	} {
+		if _, ok := fields[hash.field]; !ok {
+			continue
+		}
+		if err := decodeLedgerHex("Offer."+hash.field, hash.value, hash.dst); err != nil {
+			return nil, err
+		}
+	}
+	if _, ok := fields["Expiration"]; ok {
+		offer.decodedOptionals["Expiration"] = offer.Expiration
+	}
+	if _, ok := fields["DomainID"]; ok {
+		offer.decodedOptionals["DomainID"] = offer.DomainID
+	}
+	if _, ok := fields["AdditionalBooks"]; ok {
+		if err := decodeAdditionalBook(decoded.AdditionalBooks, offer); err != nil {
+			return nil, err
+		}
+		offer.decodedOptionals["AdditionalBooks"] = decoded.AdditionalBooks
+		offer.decodedOptionals["AdditionalBookDirectory"] = offer.AdditionalBookDirectory
+		offer.decodedOptionals["AdditionalBookNode"] = offer.AdditionalBookNode
+	}
 	return offer, nil
 }
 
-// parseAdditionalBooks records the first Book entry of an AdditionalBooks
-// STArray onto offer; hybrid offers carry exactly one entry. content is the
-// array's inner bytes as delimited by WalkFields.
-func parseAdditionalBooks(content []byte, offer *LedgerOffer) error {
-	first := true
-	return WalkFields(content, func(elem Field) error {
-		if elem.TypeCode != stObject || elem.FieldCode != 36 || !first { // Book
-			return nil
-		}
-		first = false
-		return WalkFields(elem.Value, func(inner Field) error {
-			switch inner.TypeCode {
-			case stUInt64:
-				if inner.FieldCode == 3 { // BookNode
-					offer.AdditionalBookNode = inner.UInt64()
-				}
-			case stHash256:
-				if inner.FieldCode == 16 { // BookDirectory
-					offer.AdditionalBookDirectory = inner.Hash256()
-				}
-			}
-			return nil
-		})
-	})
+func decodeAdditionalBook(books []any, offer *LedgerOffer) error {
+	if len(books) == 0 {
+		return nil
+	}
+	element, ok := books[0].(map[string]any)
+	if !ok {
+		return fmt.Errorf("Offer.AdditionalBooks[0]: decoded element has type %T", books[0])
+	}
+	bookValue, ok := element["Book"]
+	if !ok {
+		return fmt.Errorf("Offer.AdditionalBooks[0]: missing Book")
+	}
+	book, ok := bookValue.(map[string]any)
+	if !ok {
+		return fmt.Errorf("Offer.AdditionalBooks[0].Book: decoded value has type %T", bookValue)
+	}
+	directory, ok := book["BookDirectory"].(string)
+	if !ok {
+		return fmt.Errorf("Offer.AdditionalBooks[0].BookDirectory: decoded value has type %T", book["BookDirectory"])
+	}
+	if err := decodeLedgerHex("Offer.AdditionalBooks[0].BookDirectory", directory, offer.AdditionalBookDirectory[:]); err != nil {
+		return err
+	}
+	node, ok := book["BookNode"].(string)
+	if !ok {
+		return fmt.Errorf("Offer.AdditionalBooks[0].BookNode: decoded value has type %T", book["BookNode"])
+	}
+	var err error
+	offer.AdditionalBookNode, err = parseLedgerUint64("Offer.AdditionalBooks[0].BookNode", node)
+	return err
 }
 
 // ParseLedgerOffer parses a LedgerOffer from binary data.

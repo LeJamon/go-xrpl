@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // BenchmarkBuildModifiedNode_AccountRoot isolates the metadata-build path
@@ -13,17 +12,7 @@ import (
 // every Payment produces on both sender and destination.
 func BenchmarkBuildModifiedNode_AccountRoot(b *testing.B) {
 	original, current, key := buildAccountRootPair(b)
-
-	b.Run("typed", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(false)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
-	b.Run("generic", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(true)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
+	runBuildModifiedBench(b, key, original, current)
 }
 
 func runBuildModifiedBench(b *testing.B, key [32]byte, original, current []byte) {
@@ -78,17 +67,7 @@ func buildAccountRootPair(b *testing.B) (original, current []byte, key [32]byte)
 // covered.
 func BenchmarkBuildModifiedNode_Offer(b *testing.B) {
 	original, current, key := buildOfferPair(b)
-
-	b.Run("typed", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(false)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
-	b.Run("generic", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(true)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
+	runBuildModifiedBench(b, key, original, current)
 }
 
 func buildOfferPair(b *testing.B) (original, current []byte, key [32]byte) {
@@ -134,30 +113,12 @@ func buildOfferPair(b *testing.B) (original, current []byte, key [32]byte) {
 
 func BenchmarkBuildModifiedNode_DirectoryNode(b *testing.B) {
 	original, current, key := buildDirectoryNodePair(b)
-	b.Run("typed", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(false)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
-	b.Run("generic", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(true)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
+	runBuildModifiedBench(b, key, original, current)
 }
 
 func BenchmarkBuildModifiedNode_RippleState(b *testing.B) {
 	original, current, key := buildRippleStatePair(b)
-	b.Run("typed", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(false)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
-	b.Run("generic", func(b *testing.B) {
-		prev := ledgerfields.SetDisabledForBenchmarks(true)
-		defer ledgerfields.SetDisabledForBenchmarks(prev)
-		runBuildModifiedBench(b, key, original, current)
-	})
+	runBuildModifiedBench(b, key, original, current)
 }
 
 func buildDirectoryNodePair(b *testing.B) (original, current []byte, key [32]byte) {

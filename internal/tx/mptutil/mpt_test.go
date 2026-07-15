@@ -381,14 +381,16 @@ func TestRequireAuthAtRejectsExpiredDomainCredential(t *testing.T) {
 	view.data[keylet.PermissionedDomainByID(domainID).Key] = domainRaw
 
 	credentialHex, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "Credential",
-		"Subject":         state.EncodeAccountIDSafe(holder),
-		"Issuer":          state.EncodeAccountIDSafe(credentialIssuer),
-		"CredentialType":  hex.EncodeToString(credentialType),
-		"Expiration":      uint32(100),
-		"Flags":           entry.LsfAccepted,
-		"IssuerNode":      "0",
-		"SubjectNode":     "0",
+		"LedgerEntryType":   "Credential",
+		"Subject":           state.EncodeAccountIDSafe(holder),
+		"Issuer":            state.EncodeAccountIDSafe(credentialIssuer),
+		"CredentialType":    hex.EncodeToString(credentialType),
+		"Expiration":        uint32(100),
+		"Flags":             entry.LsfAccepted,
+		"IssuerNode":        "0",
+		"SubjectNode":       "0",
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	require.NoError(t, err)
 	credentialRaw, err := hex.DecodeString(credentialHex)
@@ -568,15 +570,17 @@ func putTestHolding(t *testing.T, view *mptTestView, id [24]byte, account [20]by
 func putTestVault(t *testing.T, view *mptTestView, vaultID [32]byte, owner, pseudo [20]byte, shareID, assetID [24]byte) {
 	t.Helper()
 	hexRaw, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType":  "Vault",
-		"Flags":            uint32(0),
-		"Sequence":         uint32(1),
-		"OwnerNode":        "0",
-		"Owner":            state.EncodeAccountIDSafe(owner),
-		"Account":          state.EncodeAccountIDSafe(pseudo),
-		"Asset":            map[string]any{"mpt_issuance_id": EncodeID(assetID)},
-		"ShareMPTID":       EncodeID(shareID),
-		"WithdrawalPolicy": uint8(0),
+		"LedgerEntryType":   "Vault",
+		"Flags":             uint32(0),
+		"Sequence":          uint32(1),
+		"OwnerNode":         "0",
+		"Owner":             state.EncodeAccountIDSafe(owner),
+		"Account":           state.EncodeAccountIDSafe(pseudo),
+		"Asset":             map[string]any{"mpt_issuance_id": EncodeID(assetID)},
+		"ShareMPTID":        EncodeID(shareID),
+		"WithdrawalPolicy":  uint8(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	require.NoError(t, err)
 	raw, err := hex.DecodeString(hexRaw)

@@ -43,6 +43,7 @@ func (l *LoanSet) loanSetValueFields() []string {
 }
 
 func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	number := func(value string) lmath.N { return lendNumForRules(value, config.RequireRules()) }
 	accountID, err := state.DecodeAccountID(l.Account)
 	if err != nil {
 		return ter.TemBAD_SRC_ACCOUNT
@@ -83,12 +84,12 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 	if verr != nil || vinfo == nil {
 		return ter.TefBAD_LEDGER
 	}
-	if lendNum(vinfo.AssetsMaximum).Signum() != 0 && lendNum(vinfo.AssetsTotal).Cmp(lendNum(vinfo.AssetsMaximum)) >= 0 {
+	if number(vinfo.AssetsMaximum).Signum() != 0 && number(vinfo.AssetsTotal).Cmp(number(vinfo.AssetsMaximum)) >= 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
 	asset := vinfo.Asset
 	for _, f := range l.loanSetValueFields() {
-		if !representableAsAsset(lendNum(f), asset) {
+		if !representableAsAsset(number(f), asset) {
 			return ter.TecPRECISION_LOSS
 		}
 	}
@@ -105,6 +106,7 @@ func (l *LoanSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resul
 }
 
 func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
+	number := func(value string) lmath.N { return lendNumForRules(value, ctx.Rules()) }
 	accountID := ctx.AccountID
 	brokerID, ok := hashBytes(l.LoanBrokerID)
 	if !ok {
@@ -128,10 +130,10 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	mAsset := mathAsset(asset)
 	integral := mAsset.Integral
 
-	principal := lendNum(l.PrincipalRequested)
-	vaultAvailable := lendNum(vinfo.AssetsAvailable)
-	vaultTotal := lendNum(vinfo.AssetsTotal)
-	vaultScale := vaultScaleOf(vinfo, integral)
+	principal := number(l.PrincipalRequested)
+	vaultAvailable := number(vinfo.AssetsAvailable)
+	vaultTotal := number(vinfo.AssetsTotal)
+	vaultScale := vaultScaleOfForRules(vinfo, integral, ctx.Rules())
 	if vaultAvailable.Cmp(principal) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
@@ -143,12 +145,12 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	props := lmath.ComputeLoanProperties(ctx.Rules().FixCleanup3_2_0Enabled(), mAsset, principal, interestRate, paymentInterval, paymentTotal, uint32(b.ManagementFeeRate), vaultScale)
 	loanState := lmath.ConstructLoanState(props.LoanState.ValueOutstanding, principal, props.LoanState.ManagementFeeDue)
 
-	vaultMaximum := lendNum(vinfo.AssetsMaximum)
+	vaultMaximum := number(vinfo.AssetsMaximum)
 	if vaultMaximum.Signum() != 0 && loanState.InterestDue.Cmp(vaultMaximum.Sub(vaultTotal)) > 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
 	for _, f := range l.loanSetValueFields() {
-		if !lmath.IsRounded(mAsset, lendNum(f), props.LoanScale) {
+		if !lmath.IsRounded(mAsset, number(f), props.LoanScale) {
 			return ter.TecPRECISION_LOSS
 		}
 	}
@@ -159,15 +161,15 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecINTERNAL
 	}
 
-	originationFee := lmath.Zero()
+	originationFee := lmath.NumScaled(0, 0, lendingNumberScale(ctx.Rules()))
 	if l.LoanOriginationFee != nil {
-		originationFee = lendNum(*l.LoanOriginationFee)
+		originationFee = number(*l.LoanOriginationFee)
 	}
 	loanToBorrower := principal.Sub(originationFee)
 
 	newDebtDelta := principal.Add(loanState.InterestDue)
-	newDebtTotal := lendNum(b.DebtTotal).Add(newDebtDelta)
-	if lendNum(b.DebtMaximum).Signum() != 0 && lendNum(b.DebtMaximum).Cmp(newDebtTotal) < 0 {
+	newDebtTotal := number(b.DebtTotal).Add(newDebtDelta)
+	if number(b.DebtMaximum).Signum() != 0 && number(b.DebtMaximum).Cmp(newDebtTotal) < 0 {
 		return ter.TecLIMIT_EXCEEDED
 	}
 	var minCover lmath.N
@@ -176,7 +178,7 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	} else {
 		minCover = brokerCoverRate(newDebtTotal, b.CoverRateMinimum)
 	}
-	if lendNum(b.CoverAvailable).Cmp(minCover) < 0 {
+	if number(b.CoverAvailable).Cmp(minCover) < 0 {
 		return ter.TecINSUFFICIENT_FUNDS
 	}
 
@@ -256,18 +258,18 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		loan.LoanOriginationFee = numStr(originationFee)
 	}
 	if l.LoanServiceFee != nil {
-		loan.LoanServiceFee = numStr(lendNum(*l.LoanServiceFee))
+		loan.LoanServiceFee = numStr(number(*l.LoanServiceFee))
 	}
 	if l.LatePaymentFee != nil {
-		loan.LatePaymentFee = numStr(lendNum(*l.LatePaymentFee))
+		loan.LatePaymentFee = numStr(number(*l.LatePaymentFee))
 	}
 	if l.ClosePaymentFee != nil {
-		loan.ClosePaymentFee = numStr(lendNum(*l.ClosePaymentFee))
+		loan.ClosePaymentFee = numStr(number(*l.ClosePaymentFee))
 	}
 	if l.GetFlags()&TfLoanOverpayment != 0 {
 		loan.Flags |= LsfLoanOverpayment
 	}
-	associateLoanAsset(loan, integral)
+	associateLoanAsset(loan, integral, ctx.Rules())
 
 	// Vault: draw principal, book the interest into total value.
 	newAvailable := vaultAvailable.Sub(principal)
@@ -277,18 +279,18 @@ func (l *LoanSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Broker: grow debt, count the loan, advance the loan sequence.
-	b.DebtTotal = numStr(lmath.AdjustImprecise(mAsset, lendNum(b.DebtTotal), newDebtDelta, vaultScale))
+	b.DebtTotal = numStr(lmath.AdjustImprecise(mAsset, number(b.DebtTotal), newDebtDelta, vaultScale))
 	b.OwnerCount++
 	b.LoanSequence++
 	if b.LoanSequence == 0 {
 		return ter.TecINTERNAL
 	}
-	associateBrokerAsset(b, integral)
+	associateBrokerAsset(b, integral, ctx.Rules())
 	if r := updateBroker(ctx, brokerKey, b); r != ter.TesSUCCESS {
 		return r
 	}
 
-	loanBytes, serr := serializeLoan(loan)
+	loanBytes, serr := serializeLoanForRules(loan, ctx.Rules())
 	if serr != nil {
 		return ter.TefINTERNAL
 	}

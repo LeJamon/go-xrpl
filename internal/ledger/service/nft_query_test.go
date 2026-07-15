@@ -38,13 +38,15 @@ func insertNFTokenOfferEntry(t *testing.T, svc *Service, ownerAddr string, seq u
 	copy(ownerID[:], ownerBytes)
 
 	jsonObj := map[string]any{
-		"LedgerEntryType":  "NFTokenOffer",
-		"Owner":            ownerAddr,
-		"Amount":           amount,
-		"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
-		"OwnerNode":        "0",
-		"NFTokenOfferNode": "0",
-		"Flags":            flags,
+		"LedgerEntryType":   "NFTokenOffer",
+		"Owner":             ownerAddr,
+		"Amount":            amount,
+		"NFTokenID":         strings.ToUpper(hex.EncodeToString(tokenID[:])),
+		"OwnerNode":         "0",
+		"NFTokenOfferNode":  "0",
+		"Flags":             flags,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	if expiration != nil {
 		jsonObj["Expiration"] = *expiration
@@ -260,13 +262,15 @@ func TestParseNFTokenOfferForQuery_OwnerDualRead(t *testing.T) {
 	build := func(ownerField string) []byte {
 		t.Helper()
 		data, err := binarycodec.EncodeBytes(map[string]any{
-			"LedgerEntryType":  "NFTokenOffer",
-			ownerField:         ownerAddr,
-			"Amount":           "1000000",
-			"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
-			"OwnerNode":        "0",
-			"NFTokenOfferNode": "0",
-			"Flags":            uint32(1),
+			"LedgerEntryType":   "NFTokenOffer",
+			ownerField:          ownerAddr,
+			"Amount":            "1000000",
+			"NFTokenID":         strings.ToUpper(hex.EncodeToString(tokenID[:])),
+			"OwnerNode":         "0",
+			"NFTokenOfferNode":  "0",
+			"Flags":             uint32(1),
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
 		})
 		if err != nil {
 			t.Fatalf("encode (%s): %v", ownerField, err)
@@ -276,7 +280,7 @@ func TestParseNFTokenOfferForQuery_OwnerDualRead(t *testing.T) {
 
 	for _, ownerField := range []string{"Owner", "Account"} {
 		t.Run(ownerField, func(t *testing.T) {
-			offer, err := state.ParseNFTokenOffer(build(ownerField))
+			offer, err := state.ParseNFTokenOfferLegacy(build(ownerField))
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}

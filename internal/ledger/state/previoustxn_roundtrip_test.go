@@ -1,6 +1,9 @@
 package state
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // PR #1131 regression guard: the Delegate/DID/Oracle/PermissionedDomain
 // serializers must round-trip PreviousTxnID/PreviousTxnLgrSeq so a no-op modify
@@ -31,14 +34,18 @@ func assertPrevTxnPresent(t *testing.T, data []byte, wantSeq uint32) {
 	}
 }
 
-func assertPrevTxnAbsent(t *testing.T, data []byte) {
+func assertPrevTxnDefaults(t *testing.T, data []byte) {
 	t.Helper()
 	fields := decodeSLE(t, data)
-	if _, ok := fields["PreviousTxnID"]; ok {
-		t.Error("fresh entry must not serialize PreviousTxnID")
+	if got, ok := fields["PreviousTxnID"]; !ok || got != strings.Repeat("0", 64) {
+		t.Errorf("PreviousTxnID = %v, want 64 zeroes", got)
 	}
-	if _, ok := fields["PreviousTxnLgrSeq"]; ok {
-		t.Error("fresh entry must not serialize PreviousTxnLgrSeq")
+	seq, ok := fields["PreviousTxnLgrSeq"]
+	if !ok {
+		t.Fatal("PreviousTxnLgrSeq must be present in the serialized entry")
+	}
+	if got, _ := soeToUint64(seq); got != 0 {
+		t.Errorf("PreviousTxnLgrSeq = %v, want 0", seq)
 	}
 }
 
@@ -64,12 +71,12 @@ func TestDelegate_ThreadingPointersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDelegate_FreshEntryOmitsThreadingPointers(t *testing.T) {
+func TestDelegate_FreshEntryIncludesDefaultThreadingPointers(t *testing.T) {
 	data, err := SerializeDelegate([20]byte{0x01}, [20]byte{0x02}, []uint32{1}, 7, nil, [32]byte{}, 0)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	assertPrevTxnAbsent(t, data)
+	assertPrevTxnDefaults(t, data)
 }
 
 func TestDID_ThreadingPointersRoundTrip(t *testing.T) {
@@ -99,7 +106,7 @@ func TestDID_ThreadingPointersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDID_FreshEntryOmitsThreadingPointers(t *testing.T) {
+func TestDID_FreshEntryIncludesDefaultThreadingPointers(t *testing.T) {
 	addr, err := EncodeAccountID([20]byte{0x01})
 	if err != nil {
 		t.Fatalf("encode account: %v", err)
@@ -108,7 +115,7 @@ func TestDID_FreshEntryOmitsThreadingPointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	assertPrevTxnAbsent(t, data)
+	assertPrevTxnDefaults(t, data)
 }
 
 func TestOracle_ThreadingPointersRoundTrip(t *testing.T) {
@@ -140,13 +147,13 @@ func TestOracle_ThreadingPointersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestOracle_FreshEntryOmitsThreadingPointers(t *testing.T) {
+func TestOracle_FreshEntryIncludesDefaultThreadingPointers(t *testing.T) {
 	o := &OracleData{Owner: [20]byte{0x01}, Provider: "464F4F", AssetClass: "63757272656E6379", LastUpdateTime: 100}
 	data, err := SerializeOracle(o)
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	assertPrevTxnAbsent(t, data)
+	assertPrevTxnDefaults(t, data)
 }
 
 func TestPermissionedDomain_ThreadingPointersRoundTrip(t *testing.T) {
@@ -184,7 +191,7 @@ func TestPermissionedDomain_ThreadingPointersRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPermissionedDomain_FreshEntryOmitsThreadingPointers(t *testing.T) {
+func TestPermissionedDomain_FreshEntryIncludesDefaultThreadingPointers(t *testing.T) {
 	addr, err := EncodeAccountID([20]byte{0x01})
 	if err != nil {
 		t.Fatalf("encode account: %v", err)
@@ -200,5 +207,5 @@ func TestPermissionedDomain_FreshEntryOmitsThreadingPointers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("serialize: %v", err)
 	}
-	assertPrevTxnAbsent(t, data)
+	assertPrevTxnDefaults(t, data)
 }

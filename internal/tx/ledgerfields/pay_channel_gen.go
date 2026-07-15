@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // PayChannel is the typed representation of a PayChannel ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type PayChannel struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	Destination       string // AccountID (base58)
 	Sequence          uint32
@@ -59,16 +64,208 @@ const (
 	paychannelBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (p *PayChannel) SetAccount(value string) {
+	p.Account = value
+	p.dirty = true
+	p.present |= paychannelBitAccount
+}
+
+// SetDestination assigns Destination and updates its serialized presence.
+func (p *PayChannel) SetDestination(value string) {
+	p.Destination = value
+	p.dirty = true
+	p.present |= paychannelBitDestination
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (p *PayChannel) SetSequence(value uint32) {
+	p.Sequence = value
+	p.dirty = true
+	p.present |= paychannelBitSequence
+}
+
+// SetAmount assigns Amount and updates its serialized presence.
+func (p *PayChannel) SetAmount(value any) {
+	p.Amount = value
+	p.dirty = true
+	p.present |= paychannelBitAmount
+}
+
+// SetBalance assigns Balance and updates its serialized presence.
+func (p *PayChannel) SetBalance(value any) {
+	p.Balance = value
+	p.dirty = true
+	p.present |= paychannelBitBalance
+}
+
+// SetPublicKey assigns PublicKey and updates its serialized presence.
+func (p *PayChannel) SetPublicKey(value string) {
+	p.PublicKey = value
+	p.dirty = true
+	p.present |= paychannelBitPublicKey
+}
+
+// SetSettleDelay assigns SettleDelay and updates its serialized presence.
+func (p *PayChannel) SetSettleDelay(value uint32) {
+	p.SettleDelay = value
+	p.dirty = true
+	p.present |= paychannelBitSettleDelay
+}
+
+// SetExpiration assigns Expiration and updates its serialized presence.
+func (p *PayChannel) SetExpiration(value uint32) {
+	p.Expiration = value
+	p.dirty = true
+	p.present |= paychannelBitExpiration
+}
+
+// SetCancelAfter assigns CancelAfter and updates its serialized presence.
+func (p *PayChannel) SetCancelAfter(value uint32) {
+	p.CancelAfter = value
+	p.dirty = true
+	p.present |= paychannelBitCancelAfter
+}
+
+// SetSourceTag assigns SourceTag and updates its serialized presence.
+func (p *PayChannel) SetSourceTag(value uint32) {
+	p.SourceTag = value
+	p.dirty = true
+	p.present |= paychannelBitSourceTag
+}
+
+// SetDestinationTag assigns DestinationTag and updates its serialized presence.
+func (p *PayChannel) SetDestinationTag(value uint32) {
+	p.DestinationTag = value
+	p.dirty = true
+	p.present |= paychannelBitDestinationTag
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (p *PayChannel) SetOwnerNode(value string) {
+	p.OwnerNode = value
+	p.dirty = true
+	p.present |= paychannelBitOwnerNode
+}
+
+// SetDestinationNode assigns DestinationNode and updates its serialized presence.
+func (p *PayChannel) SetDestinationNode(value string) {
+	p.DestinationNode = value
+	p.dirty = true
+	p.present |= paychannelBitDestinationNode
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (p *PayChannel) SetFlags(value uint32) {
+	p.Flags = value
+	p.dirty = true
+	p.present |= paychannelBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (p *PayChannel) SetPreviousTxnID(value string) {
+	p.PreviousTxnID = value
+	p.dirty = true
+	p.present |= paychannelBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (p *PayChannel) SetPreviousTxnLgrSeq(value uint32) {
+	p.PreviousTxnLgrSeq = value
+	p.dirty = true
+	p.present |= paychannelBitPreviousTxnLgrSeq
+}
+
+func (p *PayChannel) validateRequired() error {
+	if p.decoded && !p.dirty {
+		return nil
+	}
+	if p.present&paychannelBitAccount == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Account is not set")
+	}
+	if p.present&paychannelBitDestination == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Destination is not set")
+	}
+	if p.present&paychannelBitAmount == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Amount is not set")
+	}
+	if p.present&paychannelBitBalance == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Balance is not set")
+	}
+	if p.present&paychannelBitPublicKey == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PublicKey is not set")
+	}
+	if p.present&paychannelBitSettleDelay == 0 {
+		return errors.New("ledgerfields: PayChannel: required field SettleDelay is not set")
+	}
+	if p.present&paychannelBitOwnerNode == 0 {
+		return errors.New("ledgerfields: PayChannel: required field OwnerNode is not set")
+	}
+	if p.present&paychannelBitFlags == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Flags is not set")
+	}
+	return nil
+}
+
+func (p *PayChannel) validateDecoded() error {
+	if p.present&paychannelBitAccount == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Account is missing")
+	}
+	if p.present&paychannelBitDestination == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Destination is missing")
+	}
+	if p.present&paychannelBitAmount == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Amount is missing")
+	}
+	if p.present&paychannelBitBalance == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Balance is missing")
+	}
+	if p.present&paychannelBitPublicKey == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PublicKey is missing")
+	}
+	if p.present&paychannelBitSettleDelay == 0 {
+		return errors.New("ledgerfields: PayChannel: required field SettleDelay is missing")
+	}
+	if p.present&paychannelBitOwnerNode == 0 {
+		return errors.New("ledgerfields: PayChannel: required field OwnerNode is missing")
+	}
+	if p.present&paychannelBitFlags == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Flags is missing")
+	}
+	if p.present&paychannelBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PreviousTxnID is missing")
+	}
+	if p.present&paychannelBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (p *PayChannel) Decode(data []byte) error {
+	return p.decode(data, false)
+}
+
+func (p *PayChannel) decodeLegacy(data []byte) error {
+	return p.decode(data, true)
+}
+
+func (p *PayChannel) decode(data []byte, legacy bool) error {
 	*p = PayChannel{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: PayChannel: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -78,7 +275,10 @@ func (p *PayChannel) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 120 {
+					return fmt.Errorf("ledgerfields: PayChannel: LedgerEntryType is %d, want 120", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
@@ -191,6 +391,13 @@ func (p *PayChannel) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("PayChannel", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: PayChannel: missing LedgerEntryType")
+	}
+	p.decoded = true
+	if !legacy {
+		return p.validateDecoded()
 	}
 	return nil
 }
@@ -418,11 +625,20 @@ func (p *PayChannel) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (p *PayChannel) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(p.ToMap())
+	if err := p.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := p.ToMap()
+	if p.present&paychannelBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if p.present&paychannelBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

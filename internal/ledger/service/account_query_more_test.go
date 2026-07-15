@@ -57,8 +57,11 @@ func insertNFTokenPageEntry(t *testing.T, svc *Service, ownerAddr string, tokens
 		})
 	}
 	jsonObj := map[string]any{
-		"LedgerEntryType": "NFTokenPage",
-		"NFTokens":        nftArray,
+		"LedgerEntryType":   "NFTokenPage",
+		"NFTokens":          nftArray,
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	data, err := binarycodec.EncodeBytes(jsonObj)
 	if err != nil {
@@ -248,12 +251,15 @@ func insertCredentialEntry(t *testing.T, svc *Service, subjectID, issuerID [20]b
 		t.Fatalf("encode issuer: %v", err)
 	}
 	jsonObj := map[string]any{
-		"LedgerEntryType": "Credential",
-		"Subject":         subjectAddr,
-		"Issuer":          issuerAddr,
-		"CredentialType":  hex.EncodeToString(credType),
-		"IssuerNode":      "0",
-		"SubjectNode":     "0",
+		"LedgerEntryType":   "Credential",
+		"Subject":           subjectAddr,
+		"Issuer":            issuerAddr,
+		"CredentialType":    hex.EncodeToString(credType),
+		"IssuerNode":        "0",
+		"SubjectNode":       "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	if accepted {
 		jsonObj["Flags"] = lsfCredentialAccepted

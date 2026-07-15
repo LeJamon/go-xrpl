@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // Offer is the typed representation of a Offer ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type Offer struct {
 	present           uint64
+	decoded           bool
+	dirty             bool
 	Account           string // AccountID (base58)
 	Sequence          uint32
 	TakerPays         any    // Amount (XRP string | IOU map)
@@ -53,16 +58,187 @@ const (
 	offerBitPreviousTxnLgrSeq
 )
 
+// SetAccount assigns Account and updates its serialized presence.
+func (o *Offer) SetAccount(value string) {
+	o.Account = value
+	o.dirty = true
+	o.present |= offerBitAccount
+}
+
+// SetSequence assigns Sequence and updates its serialized presence.
+func (o *Offer) SetSequence(value uint32) {
+	o.Sequence = value
+	o.dirty = true
+	o.present |= offerBitSequence
+}
+
+// SetTakerPays assigns TakerPays and updates its serialized presence.
+func (o *Offer) SetTakerPays(value any) {
+	o.TakerPays = value
+	o.dirty = true
+	o.present |= offerBitTakerPays
+}
+
+// SetTakerGets assigns TakerGets and updates its serialized presence.
+func (o *Offer) SetTakerGets(value any) {
+	o.TakerGets = value
+	o.dirty = true
+	o.present |= offerBitTakerGets
+}
+
+// SetBookDirectory assigns BookDirectory and updates its serialized presence.
+func (o *Offer) SetBookDirectory(value string) {
+	o.BookDirectory = value
+	o.dirty = true
+	o.present |= offerBitBookDirectory
+}
+
+// SetBookNode assigns BookNode and updates its serialized presence.
+func (o *Offer) SetBookNode(value string) {
+	o.BookNode = value
+	o.dirty = true
+	o.present |= offerBitBookNode
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (o *Offer) SetOwnerNode(value string) {
+	o.OwnerNode = value
+	o.dirty = true
+	o.present |= offerBitOwnerNode
+}
+
+// SetExpiration assigns Expiration and updates its serialized presence.
+func (o *Offer) SetExpiration(value uint32) {
+	o.Expiration = value
+	o.dirty = true
+	o.present |= offerBitExpiration
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (o *Offer) SetFlags(value uint32) {
+	o.Flags = value
+	o.dirty = true
+	o.present |= offerBitFlags
+}
+
+// SetDomainID assigns DomainID and updates its serialized presence.
+func (o *Offer) SetDomainID(value string) {
+	o.DomainID = value
+	o.dirty = true
+	o.present |= offerBitDomainID
+}
+
+// SetAdditionalBooks assigns AdditionalBooks and updates its serialized presence.
+func (o *Offer) SetAdditionalBooks(value []any) {
+	o.AdditionalBooks = value
+	o.dirty = true
+	o.present |= offerBitAdditionalBooks
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (o *Offer) SetPreviousTxnID(value string) {
+	o.PreviousTxnID = value
+	o.dirty = true
+	o.present |= offerBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (o *Offer) SetPreviousTxnLgrSeq(value uint32) {
+	o.PreviousTxnLgrSeq = value
+	o.dirty = true
+	o.present |= offerBitPreviousTxnLgrSeq
+}
+
+func (o *Offer) validateRequired() error {
+	if o.decoded && !o.dirty {
+		return nil
+	}
+	if o.present&offerBitAccount == 0 {
+		return errors.New("ledgerfields: Offer: required field Account is not set")
+	}
+	if o.present&offerBitSequence == 0 {
+		return errors.New("ledgerfields: Offer: required field Sequence is not set")
+	}
+	if o.present&offerBitTakerPays == 0 {
+		return errors.New("ledgerfields: Offer: required field TakerPays is not set")
+	}
+	if o.present&offerBitTakerGets == 0 {
+		return errors.New("ledgerfields: Offer: required field TakerGets is not set")
+	}
+	if o.present&offerBitBookDirectory == 0 {
+		return errors.New("ledgerfields: Offer: required field BookDirectory is not set")
+	}
+	if o.present&offerBitBookNode == 0 {
+		return errors.New("ledgerfields: Offer: required field BookNode is not set")
+	}
+	if o.present&offerBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Offer: required field OwnerNode is not set")
+	}
+	if o.present&offerBitFlags == 0 {
+		return errors.New("ledgerfields: Offer: required field Flags is not set")
+	}
+	return nil
+}
+
+func (o *Offer) validateDecoded() error {
+	if o.present&offerBitAccount == 0 {
+		return errors.New("ledgerfields: Offer: required field Account is missing")
+	}
+	if o.present&offerBitSequence == 0 {
+		return errors.New("ledgerfields: Offer: required field Sequence is missing")
+	}
+	if o.present&offerBitTakerPays == 0 {
+		return errors.New("ledgerfields: Offer: required field TakerPays is missing")
+	}
+	if o.present&offerBitTakerGets == 0 {
+		return errors.New("ledgerfields: Offer: required field TakerGets is missing")
+	}
+	if o.present&offerBitBookDirectory == 0 {
+		return errors.New("ledgerfields: Offer: required field BookDirectory is missing")
+	}
+	if o.present&offerBitBookNode == 0 {
+		return errors.New("ledgerfields: Offer: required field BookNode is missing")
+	}
+	if o.present&offerBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Offer: required field OwnerNode is missing")
+	}
+	if o.present&offerBitFlags == 0 {
+		return errors.New("ledgerfields: Offer: required field Flags is missing")
+	}
+	if o.present&offerBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Offer: required field PreviousTxnID is missing")
+	}
+	if o.present&offerBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Offer: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (o *Offer) Decode(data []byte) error {
+	return o.decode(data, false)
+}
+
+func (o *Offer) decodeLegacy(data []byte) error {
+	return o.decode(data, true)
+}
+
+func (o *Offer) decode(data []byte, legacy bool) error {
 	*o = Offer{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Offer: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -72,7 +248,10 @@ func (o *Offer) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 111 {
+					return fmt.Errorf("ledgerfields: Offer: LedgerEntryType is %d, want 111", val)
+				}
+				sawLedgerEntryType = true
 			default:
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
@@ -176,6 +355,13 @@ func (o *Offer) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("Offer", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: Offer: missing LedgerEntryType")
+	}
+	o.decoded = true
+	if !legacy {
+		return o.validateDecoded()
 	}
 	return nil
 }
@@ -373,11 +559,20 @@ func (o *Offer) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (o *Offer) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(o.ToMap())
+	if err := o.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := o.ToMap()
+	if o.present&offerBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if o.present&offerBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

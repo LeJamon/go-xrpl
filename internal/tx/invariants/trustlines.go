@@ -25,17 +25,14 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 		if data == nil {
 			continue
 		}
-		rs, err := state.ParseRippleState(data)
+		hasXRP, err := rippleStateHasXRPTrustLimit(data)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "NoXRPTrustLines",
 				Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
 			}
 		}
-		// rippled fires only on issue() == xrpIssue() — the all-zero currency; a
-		// badCurrency limit does not trip this invariant (it is rejected at
-		// TrustSet preflight with temBAD_CURRENCY and never reaches a ledger).
-		if isNativeXRPCurrency(rs.LowLimit.Currency) || isNativeXRPCurrency(rs.HighLimit.Currency) {
+		if hasXRP {
 			return &InvariantViolation{
 				Name:    "NoXRPTrustLines",
 				Message: "RippleState entry uses XRP as currency (trust lines must use IOU currencies)",
@@ -43,6 +40,55 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 		}
 	}
 	return nil
+}
+
+func rippleStateHasXRPTrustLimit(data []byte) (bool, error) {
+	if state.EntryType(data) != "RippleState" {
+		return false, fmt.Errorf("not a RippleState entry")
+	}
+
+	// Inspect the asset bytes directly: badCurrency is a deserializable IOU
+	// sentinel in rippled, but the JSON-oriented amount decoder rejects it.
+	var lowFound, highFound, hasXRP bool
+	err := state.WalkFields(data, func(field state.Field) error {
+		if field.TypeCode != 6 || (field.FieldCode != 6 && field.FieldCode != 7) {
+			return nil
+		}
+		if field.FieldCode == 6 {
+			lowFound = true
+		} else {
+			highFound = true
+		}
+		if len(field.Value) == 0 {
+			return fmt.Errorf("empty trust limit amount")
+		}
+
+		if field.Value[0]&0x80 == 0 {
+			if field.Value[0]&0x20 == 0 {
+				hasXRP = true
+			}
+			return nil
+		}
+		if len(field.Value) != 48 {
+			return fmt.Errorf("issued trust limit has width %d", len(field.Value))
+		}
+		currencyIsZero := true
+		for _, b := range field.Value[8:28] {
+			if b != 0 {
+				currencyIsZero = false
+				break
+			}
+		}
+		hasXRP = hasXRP || currencyIsZero
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	if !lowFound || !highFound {
+		return false, fmt.Errorf("missing required trust limit amount")
+	}
+	return hasXRP, nil
 }
 
 // checkNoDeepFreezeTrustLinesWithoutFreeze verifies that no RippleState entry

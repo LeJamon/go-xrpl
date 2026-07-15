@@ -79,13 +79,13 @@ func (d LoanStateDeltas) Total() N { return d.Principal.Add(d.Interest).Add(d.Ma
 // nonNegative floors each delta at zero.
 func (d *LoanStateDeltas) nonNegative() {
 	if isNeg(d.Principal) {
-		d.Principal = zeroN()
+		d.Principal = zeroLike(d.Principal)
 	}
 	if isNeg(d.Interest) {
-		d.Interest = zeroN()
+		d.Interest = zeroLike(d.Interest)
 	}
 	if isNeg(d.ManagementFee) {
-		d.ManagementFee = zeroN()
+		d.ManagementFee = zeroLike(d.ManagementFee)
 	}
 }
 
@@ -136,8 +136,9 @@ func (p *LoanPaymentParts) add(o LoanPaymentParts) {
 	p.FeePaid = p.FeePaid.Add(o.FeePaid)
 }
 
-func newParts() LoanPaymentParts {
-	return LoanPaymentParts{PrincipalPaid: zeroN(), InterestPaid: zeroN(), ValueChange: zeroN(), FeePaid: zeroN()}
+func newParts(reference N) LoanPaymentParts {
+	zero := zeroLike(reference)
+	return LoanPaymentParts{PrincipalPaid: zero, InterestPaid: zero, ValueChange: zero, FeePaid: zero}
 }
 
 // subStates returns the per-component delta lhs - rhs (rippled operator-).
@@ -174,9 +175,10 @@ func ConstructLoanState(totalValue, principal, managementFee N) LoanState {
 // in the amortization schedule (rippled computeTheoreticalLoanState, eqs. 30-33).
 func computeTheoreticalLoanState(fix320 bool, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) LoanState {
 	if paymentRemaining == 0 {
-		return LoanState{zeroN(), zeroN(), zeroN(), zeroN()}
+		zero := zeroLike(periodicPayment)
+		return LoanState{zero, zero, zero, zero}
 	}
-	totalValueOutstanding := periodicPayment.Mul(numU(paymentRemaining))
+	totalValueOutstanding := periodicPayment.Mul(numULike(periodicPayment, paymentRemaining))
 	principalOutstanding := loanPrincipalFromPeriodicPayment(fix320, periodicPayment, periodicRate, paymentRemaining)
 	interestGross := totalValueOutstanding.Sub(principalOutstanding)
 	managementFee := tenthBipsOfValue(interestGross, managementFeeRate)
@@ -200,7 +202,7 @@ func ComputeLoanPropertiesRate(fix320 bool, asset Asset, principalOutstanding N,
 	if periodicRate.IsZero() {
 		guardMode = state.RoundToNearest
 	}
-	product := periodicPayment.MulRounded(numU(paymentsRemaining), guardMode)
+	product := periodicPayment.MulRounded(numULike(periodicPayment, paymentsRemaining), guardMode)
 	loanScale := minimumScale
 	if e := product.AssetExponent(asset.Integral, guardMode); e > loanScale {
 		loanScale = e
@@ -212,7 +214,8 @@ func ComputeLoanPropertiesRate(fix320 bool, asset Asset, principalOutstanding N,
 	feeOwed := computeManagementFee(asset, totalInterest, managementFeeRate, loanScale)
 
 	startingState := computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentsRemaining, managementFeeRate)
-	firstPaymentState := LoanState{zeroN(), zeroN(), zeroN(), zeroN()}
+	zero := zeroLike(principalOutstanding)
+	firstPaymentState := LoanState{zero, zero, zero, zero}
 	if paymentsRemaining >= 1 {
 		firstPaymentState = computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentsRemaining-1, managementFeeRate)
 	}
@@ -229,7 +232,7 @@ func ComputeLoanPropertiesRate(fix320 bool, asset Asset, principalOutstanding N,
 // ComputeLoanProperties derives a loan's properties from the annualized interest
 // rate and payment interval (rippled computeLoanProperties, the rate overload).
 func ComputeLoanProperties(fix320 bool, asset Asset, principalOutstanding N, interestRate uint32, paymentInterval uint32, paymentsRemaining uint32, managementFeeRate uint32, minimumScale int) LoanProperties {
-	periodicRate := LoanPeriodicRate(interestRate, paymentInterval)
+	periodicRate := loanPeriodicRateLike(principalOutstanding, interestRate, paymentInterval)
 	return ComputeLoanPropertiesRate(fix320, asset, principalOutstanding, periodicRate, paymentsRemaining, managementFeeRate, minimumScale)
 }
 
@@ -309,7 +312,7 @@ func computePaymentComponents(fix320 bool, asset Asset, scale int, totalValueOut
 	deltas.nonNegative()
 
 	deltas.Principal = minN(deltas.Principal, currentLedgerState.PrincipalOutstanding)
-	deltas.Interest = minN(minN(deltas.Interest, maxN(zeroN(), roundedPeriodicPayment.Sub(deltas.Principal))), currentLedgerState.InterestDue)
+	deltas.Interest = minN(minN(deltas.Interest, maxN(zeroLike(roundedPeriodicPayment), roundedPeriodicPayment.Sub(deltas.Principal))), currentLedgerState.InterestDue)
 	deltas.ManagementFee = minN(minN(deltas.ManagementFee, roundedPeriodicPayment.Sub(deltas.Principal.Add(deltas.Interest))), currentLedgerState.ManagementFeeDue)
 
 	takeFrom := func(component, excess *N) {
@@ -337,8 +340,8 @@ func computePaymentComponents(fix320 bool, asset Asset, scale int, totalValueOut
 	}
 
 	return PaymentComponents{
-		TrackedValueDelta:         clampN(deltas.Total(), zeroN(), currentLedgerState.ValueOutstanding),
-		TrackedPrincipalDelta:     clampN(deltas.Principal, zeroN(), currentLedgerState.PrincipalOutstanding),
-		TrackedManagementFeeDelta: clampN(deltas.ManagementFee, zeroN(), currentLedgerState.ManagementFeeDue),
+		TrackedValueDelta:         clampN(deltas.Total(), zeroLike(currentLedgerState.ValueOutstanding), currentLedgerState.ValueOutstanding),
+		TrackedPrincipalDelta:     clampN(deltas.Principal, zeroLike(currentLedgerState.PrincipalOutstanding), currentLedgerState.PrincipalOutstanding),
+		TrackedManagementFeeDelta: clampN(deltas.ManagementFee, zeroLike(currentLedgerState.ManagementFeeDue), currentLedgerState.ManagementFeeDue),
 	}
 }

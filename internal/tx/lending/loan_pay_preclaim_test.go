@@ -50,14 +50,17 @@ func TestLoanPay_OverpaymentOnNonOverpaymentLoan(t *testing.T) {
 		t.Fatalf("encode account: %v", err)
 	}
 
-	var loanID [32]byte
+	var loanID, previousTxnID [32]byte
 	for i := range loanID {
 		loanID[i] = 0x55
+		previousTxnID[i] = 0x56
 	}
 	loanIDHex := strings.ToUpper(hex.EncodeToString(loanID[:]))
 
 	// Loan owned by the submitter, without the lsfLoanOverpayment flag.
-	loanBytes, err := serializeLoan(&loanData{Borrower: accountID})
+	loanBytes, err := serializeLoan(&loanData{
+		Borrower: accountID, PreviousTxnID: previousTxnID, PreviousTxnLgrSeq: 1,
+	})
 	if err != nil {
 		t.Fatalf("serializeLoan: %v", err)
 	}
@@ -85,11 +88,12 @@ func TestLoanPay_OverpaymentOnNonOverpaymentLoan(t *testing.T) {
 // loanPaymentsPerFeeIncrement (20) increments post-amendment, while pre-amendment
 // the estimate scales unbounded with the Amount.
 func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
-	var brokerID, vaultID, loanID [32]byte
+	var brokerID, vaultID, loanID, previousTxnID [32]byte
 	for i := range brokerID {
 		brokerID[i] = 0x66
 		vaultID[i] = 0x77
 		loanID[i] = 0x88
+		previousTxnID[i] = 0x99
 	}
 	var ownerID, pseudoID [20]byte
 	for i := range ownerID {
@@ -104,24 +108,29 @@ func TestLoanPay_CalculateBaseFeeCap(t *testing.T) {
 		LoanBrokerID:     brokerID,
 		PeriodicPayment:  "10",
 		PaymentRemaining: 10, // > loanPaymentsPerFeeIncrement
+		PreviousTxnID:    previousTxnID, PreviousTxnLgrSeq: 1,
 	})
 	if err != nil {
 		t.Fatalf("serializeLoan: %v", err)
 	}
-	brokerBytes, err := serializeLoanBroker(&loanBrokerData{VaultID: vaultID})
+	brokerBytes, err := serializeLoanBroker(&loanBrokerData{
+		VaultID: vaultID, PreviousTxnID: previousTxnID, PreviousTxnLgrSeq: 1,
+	})
 	if err != nil {
 		t.Fatalf("serializeLoanBroker: %v", err)
 	}
 	vaultBytes, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType":  "Vault",
-		"Flags":            0,
-		"Sequence":         1,
-		"OwnerNode":        "0",
-		"Owner":            ownerAddr,
-		"Account":          pseudoAddr,
-		"Asset":            map[string]any{"currency": "XRP"},
-		"ShareMPTID":       strings.Repeat("0", 48),
-		"WithdrawalPolicy": 1,
+		"LedgerEntryType":   "Vault",
+		"Flags":             0,
+		"Sequence":          1,
+		"OwnerNode":         "0",
+		"Owner":             ownerAddr,
+		"Account":           pseudoAddr,
+		"Asset":             map[string]any{"currency": "XRP"},
+		"ShareMPTID":        strings.Repeat("0", 48),
+		"WithdrawalPolicy":  1,
+		"PreviousTxnID":     strings.ToUpper(hex.EncodeToString(previousTxnID[:])),
+		"PreviousTxnLgrSeq": 1,
 	})
 	if err != nil {
 		t.Fatalf("encode vault: %v", err)

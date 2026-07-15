@@ -19,15 +19,17 @@ import (
 func offerSLE(t *testing.T, takerPays, takerGets any) []byte {
 	t.Helper()
 	hexStr, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "Offer",
-		"Account":         addrHolderA,
-		"Sequence":        uint32(1),
-		"TakerPays":       takerPays,
-		"TakerGets":       takerGets,
-		"BookDirectory":   "0000000000000000000000000000000000000000000000000000000000000000",
-		"BookNode":        "0",
-		"OwnerNode":       "0",
-		"Flags":           uint32(0),
+		"LedgerEntryType":   "Offer",
+		"Account":           addrHolderA,
+		"Sequence":          uint32(1),
+		"TakerPays":         takerPays,
+		"TakerGets":         takerGets,
+		"BookDirectory":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"BookNode":          "0",
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	if err != nil {
 		t.Fatalf("binarycodec.Encode: %v", err)

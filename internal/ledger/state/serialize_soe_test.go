@@ -76,6 +76,55 @@ func TestSerializeFeeSettings_FlagsPresent(t *testing.T) {
 	}
 }
 
+func TestParseFeeSettingsGeneratedDecoderShapes(t *testing.T) {
+	cases := map[string]*FeeSettings{
+		"modern present zeros": {
+			XRPFeesMode:       true,
+			PreviousTxnID:     [32]byte{1},
+			PreviousTxnLgrSeq: 9,
+		},
+		"legacy": {
+			BaseFee:           10,
+			ReferenceFeeUnits: 10,
+			ReserveBase:       10_000_000,
+			ReserveIncrement:  2_000_000,
+			PreviousTxnID:     [32]byte{1},
+			PreviousTxnLgrSeq: 9,
+		},
+	}
+	for name, want := range cases {
+		t.Run(name, func(t *testing.T) {
+			data, err := SerializeFeeSettings(want)
+			if err != nil {
+				t.Fatalf("serialize: %v", err)
+			}
+			got, err := ParseFeeSettings(data)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got.XRPFeesMode != want.XRPFeesMode ||
+				got.BaseFeeDrops != want.BaseFeeDrops ||
+				got.ReserveBaseDrops != want.ReserveBaseDrops ||
+				got.ReserveIncrementDrops != want.ReserveIncrementDrops ||
+				got.BaseFee != want.BaseFee ||
+				got.ReferenceFeeUnits != want.ReferenceFeeUnits ||
+				got.ReserveBase != want.ReserveBase ||
+				got.ReserveIncrement != want.ReserveIncrement ||
+				got.PreviousTxnID != want.PreviousTxnID ||
+				got.PreviousTxnLgrSeq != want.PreviousTxnLgrSeq {
+				t.Fatalf("parsed FeeSettings differs:\nwant %+v\n got %+v", want, got)
+			}
+			roundTrip, err := SerializeFeeSettings(got)
+			if err != nil {
+				t.Fatalf("reserialize: %v", err)
+			}
+			if string(roundTrip) != string(data) {
+				t.Fatalf("round-trip bytes differ:\nwant %X\n got %X", data, roundTrip)
+			}
+		})
+	}
+}
+
 // TestSerializeSignerList_FlagsAlwaysPresent asserts sfFlags is serialized even
 // when 0 (the MultiSignReserve-disabled path). rippled's writeSignersToSLE only
 // *overwrites* the template default; the field is present at 0 regardless.
@@ -160,5 +209,122 @@ func TestSerializeCheck_DestinationNodeAlwaysPresent(t *testing.T) {
 	v1, _ := soeToUint64(f1["DestinationNode"])
 	if v1 != 7 {
 		t.Errorf("DestinationNode = %v, want 7", f1["DestinationNode"])
+	}
+}
+
+func TestSerializeCheck_PreservesThreading(t *testing.T) {
+	check := &CheckData{
+		Account:           [20]byte{0x01},
+		DestinationID:     [20]byte{0x02},
+		SendMax:           1,
+		SendMaxAmount:     NewXRPAmountFromInt(1),
+		IsNativeSendMax:   true,
+		Sequence:          1,
+		PreviousTxnID:     [32]byte{0xAB},
+		PreviousTxnLgrSeq: 7,
+	}
+
+	data, err := SerializeCheckFromData(check)
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	parsed, err := ParseCheck(data)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	roundTrip, err := SerializeCheckFromData(parsed)
+	if err != nil {
+		t.Fatalf("re-serialize: %v", err)
+	}
+	if string(roundTrip) != string(data) {
+		t.Fatal("Check threading fields changed across parse and serialize")
+	}
+}
+
+func TestSerializeMPToken_LockedAmountPresentAtZero(t *testing.T) {
+	zero := uint64(0)
+	cases := map[string][]byte{}
+
+	issuance, err := SerializeMPTokenIssuance(&MPTokenIssuanceData{
+		Issuer:            [20]byte{0x01},
+		Sequence:          1,
+		OutstandingAmount: 0,
+		LockedAmount:      &zero,
+	})
+	if err != nil {
+		t.Fatalf("serialize issuance: %v", err)
+	}
+	cases["issuance"] = issuance
+
+	token, err := SerializeMPToken(&MPTokenData{
+		Account:      [20]byte{0x02},
+		LockedAmount: &zero,
+	})
+	if err != nil {
+		t.Fatalf("serialize token: %v", err)
+	}
+	cases["token"] = token
+
+	for name, data := range cases {
+		t.Run(name, func(t *testing.T) {
+			fields := decodeSLE(t, data)
+			if value, ok := fields["LockedAmount"]; !ok || value != "0" {
+				t.Fatalf("LockedAmount = %v, present = %v; want present zero", value, ok)
+			}
+		})
+	}
+}
+
+func TestSerializeRippleState_PreservesNodePresence(t *testing.T) {
+	low, _ := EncodeAccountID([20]byte{0x01})
+	high, _ := EncodeAccountID([20]byte{0x02})
+	newLine := func() *RippleState {
+		return &RippleState{
+			Balance:   NewIssuedAmountFromValue(0, zeroExponent, "USD", accountOne),
+			LowLimit:  NewIssuedAmountFromValue(0, zeroExponent, "USD", low),
+			HighLimit: NewIssuedAmountFromValue(0, zeroExponent, "USD", high),
+		}
+	}
+
+	absent, err := SerializeRippleState(newLine())
+	if err != nil {
+		t.Fatalf("serialize absent nodes: %v", err)
+	}
+	absentFields := decodeSLE(t, absent)
+	if _, ok := absentFields["LowNode"]; ok {
+		t.Fatal("LowNode must remain absent")
+	}
+	if _, ok := absentFields["HighNode"]; ok {
+		t.Fatal("HighNode must remain absent")
+	}
+
+	presentLine := newLine()
+	presentLine.HasLowNode = true
+	presentLine.HasHighNode = true
+	present, err := SerializeRippleState(presentLine)
+	if err != nil {
+		t.Fatalf("serialize present nodes: %v", err)
+	}
+	presentFields := decodeSLE(t, present)
+	if _, ok := presentFields["LowNode"]; !ok {
+		t.Fatal("present-zero LowNode was omitted")
+	}
+	if _, ok := presentFields["HighNode"]; !ok {
+		t.Fatal("present-zero HighNode was omitted")
+	}
+}
+
+func TestSerializeNFTokenPage_EmptyTokensPresent(t *testing.T) {
+	data, err := SerializeNFTokenPage(&NFTokenPageData{})
+	if err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	fields := decodeSLE(t, data)
+	tokens, ok := fields["NFTokens"]
+	if !ok {
+		t.Fatal("required NFTokens array was omitted")
+	}
+	if values, ok := tokens.([]any); !ok || len(values) != 0 {
+		t.Fatalf("NFTokens = %#v, want empty array", tokens)
 	}
 }

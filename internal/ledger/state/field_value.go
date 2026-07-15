@@ -103,12 +103,3 @@ func (f Field) Vector256() ([][32]byte, error) {
 	}
 	return out, nil
 }
-
-// xrpDrops decodes the drops carried by an 8-byte native Amount value, masking
-// off the not-XRP (bit 63) and sign (bit 62) flags.
-func xrpDrops(v []byte) uint64 {
-	if len(v) < 8 {
-		return 0
-	}
-	return binary.BigEndian.Uint64(v) & 0x3FFFFFFFFFFFFFFF
-}

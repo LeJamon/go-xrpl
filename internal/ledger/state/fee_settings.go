@@ -5,9 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // FeeSettings represents the singleton fee settings ledger entry.
@@ -38,95 +37,65 @@ type FeeSettings struct {
 	feeFieldsPresent bool
 }
 
-// Ledger entry type for FeeSettings
-const ledgerEntryTypeFeeSettings = uint16(entry.TypeFeeSettings)
-
-// Field codes for FeeSettings
-// Reference: XRPL binary codec field definitions
-const (
-	// UInt32 fields (legacy)
-	fieldCodeReferenceFeeUnits uint8 = 30 // sfReferenceFeeUnits
-	fieldCodeReserveBase       uint8 = 31 // sfReserveBase (legacy)
-	fieldCodeReserveIncrement  uint8 = 32 // sfReserveIncrement (legacy)
-
-	// UInt64 fields
-	fieldCodeBaseFee uint8 = 5 // sfBaseFee (legacy)
-
-	// XRPAmount fields (Amount type) - modern XRPFees amendment
-	// Field codes from definitions.json: BaseFeeDrops=22, ReserveBaseDrops=23, ReserveIncrementDrops=24
-	fieldCodeBaseFeeDrops          uint8 = 22 // sfBaseFeeDrops
-	fieldCodeReserveBaseDrops      uint8 = 23 // sfReserveBaseDrops
-	fieldCodeReserveIncrementDrops uint8 = 24 // sfReserveIncrementDrops
-)
-
 // ParseFeeSettings parses fee settings data from binary format
 func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	if len(data) < 4 {
 		return nil, errors.New("fee settings data too short")
 	}
 
-	fee := &FeeSettings{}
+	var decoded ledgerfields.FeeSettings
+	if err := decoded.Decode(data); err != nil {
+		return nil, fmt.Errorf("failed to decode FeeSettings: %w", err)
+	}
+	fields := decoded.ToMap()
+	fee := &FeeSettings{
+		ReferenceFeeUnits: decoded.ReferenceFeeUnits,
+		ReserveBase:       decoded.ReserveBase,
+		ReserveIncrement:  decoded.ReserveIncrement,
+		PreviousTxnLgrSeq: decoded.PreviousTxnLgrSeq,
+	}
 
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt16:
-			if f.FieldCode == fieldCodeLedgerEntryType {
-				if f.UInt16() != ledgerEntryTypeFeeSettings {
-					return errors.New("not a FeeSettings entry")
-				}
-			}
-
-		case stUInt32:
-			switch f.FieldCode {
-			case 5: // PreviousTxnLgrSeq
-				fee.PreviousTxnLgrSeq = f.UInt32()
-			case int(fieldCodeReferenceFeeUnits):
-				fee.feeFieldsPresent = true
-				fee.ReferenceFeeUnits = f.UInt32()
-			case int(fieldCodeReserveBase):
-				fee.feeFieldsPresent = true
-				fee.ReserveBase = f.UInt32()
-			case int(fieldCodeReserveIncrement):
-				fee.feeFieldsPresent = true
-				fee.ReserveIncrement = f.UInt32()
-			}
-
-		case stUInt64:
-			if f.FieldCode == int(fieldCodeBaseFee) {
-				fee.feeFieldsPresent = true
-				fee.BaseFee = f.UInt64()
-			}
-
-		case stAmount:
-			// FeeSettings' fee amounts are native XRP (8 bytes); an IOU value
-			// (48 bytes) is foreign here and is skipped.
-			if len(f.Value) == 8 {
-				drops := xrpDrops(f.Value)
-				switch f.FieldCode {
-				case int(fieldCodeBaseFeeDrops):
-					fee.feeFieldsPresent = true
-					fee.BaseFeeDrops = drops
-					fee.XRPFeesMode = true
-				case int(fieldCodeReserveBaseDrops):
-					fee.feeFieldsPresent = true
-					fee.ReserveBaseDrops = drops
-					fee.XRPFeesMode = true
-				case int(fieldCodeReserveIncrementDrops):
-					fee.feeFieldsPresent = true
-					fee.ReserveIncrementDrops = drops
-					fee.XRPFeesMode = true
-				}
-			}
-
-		case stHash256:
-			if f.FieldCode == 5 { // PreviousTxnID
-				fee.PreviousTxnID = f.Hash256()
-			}
+	var err error
+	if _, ok := fields["BaseFee"]; ok {
+		fee.BaseFee, err = parseLedgerUint64("FeeSettings.BaseFee", decoded.BaseFee)
+		if err != nil {
+			return nil, err
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
+		fee.feeFieldsPresent = true
+	}
+	for _, name := range []string{"ReferenceFeeUnits", "ReserveBase", "ReserveIncrement"} {
+		if _, ok := fields[name]; ok {
+			fee.feeFieldsPresent = true
+			break
+		}
+	}
+	for _, amount := range []struct {
+		name  string
+		value any
+		dst   *uint64
+	}{
+		{"BaseFeeDrops", decoded.BaseFeeDrops, &fee.BaseFeeDrops},
+		{"ReserveBaseDrops", decoded.ReserveBaseDrops, &fee.ReserveBaseDrops},
+		{"ReserveIncrementDrops", decoded.ReserveIncrementDrops, &fee.ReserveIncrementDrops},
+	} {
+		if _, ok := fields[amount.name]; !ok {
+			continue
+		}
+		decodedAmount, err := decodeLedgerAmount("FeeSettings."+amount.name, amount.value)
+		if err != nil {
+			return nil, err
+		}
+		if !decodedAmount.IsNative() {
+			continue
+		}
+		*amount.dst = nativeMagnitude(decodedAmount)
+		fee.feeFieldsPresent = true
+		fee.XRPFeesMode = true
+	}
+	if _, ok := fields["PreviousTxnID"]; ok {
+		if err := decodeLedgerHex("FeeSettings.PreviousTxnID", decoded.PreviousTxnID, fee.PreviousTxnID[:]); err != nil {
+			return nil, err
+		}
 	}
 
 	return fee, nil
@@ -142,38 +111,34 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 	// SLE template. The genesis FeeSettings (genesis.go) already emits Flags=0;
 	// the runtime serializer (SetFee re-serialization) must match or the
 	// post-fee-vote FeeSettings state diverges (account_hash fork).
-	jsonObj := map[string]any{
-		"LedgerEntryType": "FeeSettings",
-		"Flags":           uint32(0),
-	}
+	entry := &ledgerfields.FeeSettings{}
+	entry.SetFlags(0)
 
 	if fee.XRPFeesMode {
-		jsonObj["BaseFeeDrops"] = fmt.Sprintf("%d", fee.BaseFeeDrops)
-		jsonObj["ReserveBaseDrops"] = fmt.Sprintf("%d", fee.ReserveBaseDrops)
-		jsonObj["ReserveIncrementDrops"] = fmt.Sprintf("%d", fee.ReserveIncrementDrops)
+		entry.SetBaseFeeDrops(fmt.Sprintf("%d", fee.BaseFeeDrops))
+		entry.SetReserveBaseDrops(fmt.Sprintf("%d", fee.ReserveBaseDrops))
+		entry.SetReserveIncrementDrops(fmt.Sprintf("%d", fee.ReserveIncrementDrops))
 	} else {
-		jsonObj["BaseFee"] = fmt.Sprintf("%x", fee.BaseFee) // Hex string per rippled
-		jsonObj["ReferenceFeeUnits"] = fee.ReferenceFeeUnits
-		jsonObj["ReserveBase"] = fee.ReserveBase
-		jsonObj["ReserveIncrement"] = fee.ReserveIncrement
+		entry.SetBaseFee(fmt.Sprintf("%x", fee.BaseFee))
+		entry.SetReferenceFeeUnits(fee.ReferenceFeeUnits)
+		entry.SetReserveBase(fee.ReserveBase)
+		entry.SetReserveIncrement(fee.ReserveIncrement)
 	}
 
 	// Add tracking fields if present
 	var zeroHash [32]byte
 	if fee.PreviousTxnID != zeroHash {
-		jsonObj["PreviousTxnID"] = hex.EncodeToString(fee.PreviousTxnID[:])
+		entry.SetPreviousTxnID(hex.EncodeToString(fee.PreviousTxnID[:]))
 	}
 	if fee.PreviousTxnLgrSeq > 0 {
-		jsonObj["PreviousTxnLgrSeq"] = fee.PreviousTxnLgrSeq
+		entry.SetPreviousTxnLgrSeq(fee.PreviousTxnLgrSeq)
 	}
 
-	// Encode using the binary codec
-	hexStr, err := binarycodec.Encode(jsonObj)
+	data, err := entry.Encode()
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode FeeSettings: %w", err)
 	}
-
-	return hex.DecodeString(hexStr)
+	return data, nil
 }
 
 // GetBaseFee returns the base transaction fee in drops.

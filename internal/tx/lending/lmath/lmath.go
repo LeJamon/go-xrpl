@@ -35,6 +35,11 @@ func num(mantissa int64, exponent int) N {
 // the transactor SLE seam).
 func Num(mantissa int64, exponent int) N { return num(mantissa, exponent) }
 
+// NumScaled builds a lending Number in the transaction-selected mantissa range.
+func NumScaled(mantissa int64, exponent int, scale state.MantissaScale) N {
+	return state.NewXRPLNumberScaled(mantissa, exponent, scale, state.RoundToNearest)
+}
+
 // Zero returns the large-scale lending zero.
 func Zero() N { return zeroN() }
 
@@ -44,8 +49,19 @@ func FromInt(v int64) N { return num(v, 0) }
 // FromDrops builds a large-scale Number from an XRP drops / MPT unit count.
 func FromDrops(v int64) N { return num(v, 0) }
 
+// FromDropsScaled builds an XRP drops or MPT unit count in the transaction-selected range.
+func FromDropsScaled(v int64, scale state.MantissaScale) N { return NumScaled(v, 0, scale) }
+
 // numU builds a large-scale Number from an unsigned integer.
 func numU(v uint32) N { return num(int64(v), 0) }
+
+func numLike(reference N, mantissa int64, exponent int) N {
+	return NumScaled(mantissa, exponent, reference.MantissaScale())
+}
+
+func numULike(reference N, v uint32) N { return numLike(reference, int64(v), 0) }
+func zeroLike(reference N) N           { return numLike(reference, 0, 0) }
+func oneLike(reference N) N            { return numLike(reference, 1, 0) }
 
 // zero and one in the lending scale.
 func zeroN() N { return num(0, 0) }
@@ -71,9 +87,9 @@ func roundPeriodicPayment(asset Asset, periodicPayment N, scale int) N {
 // tenthBipsOfValue returns value * tenthBips / 100000 (rippled tenthBipsOfValue).
 func tenthBipsOfValue(value N, tenthBips uint32) N {
 	if tenthBips == 0 || value.IsZero() {
-		return zeroN()
+		return zeroLike(value)
 	}
-	return value.Mul(numU(tenthBips)).Div(numU(protocol.TenthBipsPerUnity))
+	return value.Mul(numULike(value, tenthBips)).Div(numULike(value, protocol.TenthBipsPerUnity))
 }
 
 // TenthBipsOfValue returns value * tenthBips / 100000 (exported for the cover /
@@ -85,9 +101,9 @@ func TenthBipsOfValue(value N, tenthBips uint32) N { return tenthBipsOfValue(val
 // broker cover-rate computations.
 func TenthBipsOfValueRounded(value N, tenthBips uint32, mode state.RoundingMode) N {
 	if tenthBips == 0 || value.IsZero() {
-		return zeroN()
+		return zeroLike(value)
 	}
-	return value.MulRounded(numU(tenthBips), mode).DivRounded(numU(protocol.TenthBipsPerUnity), mode)
+	return value.MulRounded(numULike(value, tenthBips), mode).DivRounded(numULike(value, protocol.TenthBipsPerUnity), mode)
 }
 
 // RoundAssetUpward / RoundAssetDownward / RoundAssetNearest expose roundToAsset
@@ -114,7 +130,7 @@ func RoundAssetTowardsZero(asset Asset, value N, scale int) N {
 func AdjustImprecise(asset Asset, value, adjustment N, vaultScale int) N {
 	v := roundToAssetNearest(asset, value.Add(adjustment), vaultScale)
 	if v.Signum() < 0 {
-		return zeroN()
+		return zeroLike(value)
 	}
 	return v
 }
@@ -135,10 +151,15 @@ func LoanPeriodicRate(interestRate uint32, paymentInterval uint32) N {
 	return tenthBipsOfValue(numU(paymentInterval), interestRate).Div(numU(protocol.SecondsInYear))
 }
 
+func loanPeriodicRateLike(reference N, interestRate uint32, paymentInterval uint32) N {
+	return tenthBipsOfValue(numULike(reference, paymentInterval), interestRate).
+		Div(numULike(reference, protocol.SecondsInYear))
+}
+
 // computeRaisedRate returns (1 + periodicRate)^paymentsRemaining (rippled
 // computeRaisedRate, eq. 5).
 func computeRaisedRate(periodicRate N, paymentsRemaining uint32) N {
-	return oneN().Add(periodicRate).Power(paymentsRemaining)
+	return oneLike(periodicRate).Add(periodicRate).Power(paymentsRemaining)
 }
 
 // computePowerMinusOne evaluates (1 + r)^n - 1 by summing the binomial
@@ -147,12 +168,12 @@ func computeRaisedRate(periodicRate N, paymentsRemaining uint32) N {
 // a term falls below Number precision (rippled computePowerMinusOne).
 func computePowerMinusOne(periodicRate N, paymentsRemaining uint32) N {
 	if paymentsRemaining == 0 || periodicRate.IsZero() {
-		return zeroN()
+		return zeroLike(periodicRate)
 	}
-	term := numU(paymentsRemaining).Mul(periodicRate)
+	term := numULike(periodicRate, paymentsRemaining).Mul(periodicRate)
 	sum := term
 	for k := uint32(1); k < paymentsRemaining; k++ {
-		term = term.Mul(periodicRate).Mul(numU(paymentsRemaining - k)).Div(numU(k + 1))
+		term = term.Mul(periodicRate).Mul(numULike(periodicRate, paymentsRemaining-k)).Div(numULike(periodicRate, k+1))
 		next := sum.Add(term)
 		if next.Equal(sum) {
 			break
@@ -167,10 +188,10 @@ func computePowerMinusOne(periodicRate N, paymentsRemaining uint32) N {
 // through the faster closed form (rippled computePowerMinusOneHybrid).
 func computePowerMinusOneHybrid(periodicRate N, paymentsRemaining uint32) N {
 	if paymentsRemaining == 0 || periodicRate.IsZero() {
-		return zeroN()
+		return zeroLike(periodicRate)
 	}
-	if numU(paymentsRemaining).Mul(periodicRate).Cmp(num(1, -9)) >= 0 {
-		return computeRaisedRate(periodicRate, paymentsRemaining).Sub(oneN())
+	if numULike(periodicRate, paymentsRemaining).Mul(periodicRate).Cmp(numLike(periodicRate, 1, -9)) >= 0 {
+		return computeRaisedRate(periodicRate, paymentsRemaining).Sub(oneLike(periodicRate))
 	}
 	return computePowerMinusOne(periodicRate, paymentsRemaining)
 }
@@ -180,27 +201,27 @@ func computePowerMinusOneHybrid(periodicRate N, paymentsRemaining uint32) N {
 // uses the hybrid evaluator, avoiding cancellation at near-zero rates.
 func computePaymentFactor(fix320 bool, periodicRate N, paymentsRemaining uint32) N {
 	if paymentsRemaining == 0 {
-		return zeroN()
+		return zeroLike(periodicRate)
 	}
 	if periodicRate.IsZero() {
-		return oneN().Div(numU(paymentsRemaining))
+		return oneLike(periodicRate).Div(numULike(periodicRate, paymentsRemaining))
 	}
 	if fix320 {
 		raisedMinusOne := computePowerMinusOneHybrid(periodicRate, paymentsRemaining)
-		return periodicRate.Mul(oneN().Add(raisedMinusOne)).Div(raisedMinusOne)
+		return periodicRate.Mul(oneLike(periodicRate).Add(raisedMinusOne)).Div(raisedMinusOne)
 	}
 	raised := computeRaisedRate(periodicRate, paymentsRemaining)
-	return periodicRate.Mul(raised).Div(raised.Sub(oneN()))
+	return periodicRate.Mul(raised).Div(raised.Sub(oneLike(periodicRate)))
 }
 
 // loanPeriodicPayment returns the standard amortized periodic payment (rippled
 // loanPeriodicPayment, eq. 7).
 func loanPeriodicPayment(fix320 bool, principalOutstanding N, periodicRate N, paymentsRemaining uint32) N {
 	if principalOutstanding.IsZero() || paymentsRemaining == 0 {
-		return zeroN()
+		return zeroLike(principalOutstanding)
 	}
 	if periodicRate.IsZero() {
-		return principalOutstanding.Div(numU(paymentsRemaining))
+		return principalOutstanding.Div(numULike(principalOutstanding, paymentsRemaining))
 	}
 	return principalOutstanding.Mul(computePaymentFactor(fix320, periodicRate, paymentsRemaining))
 }
@@ -209,10 +230,10 @@ func loanPeriodicPayment(fix320 bool, principalOutstanding N, periodicRate N, pa
 // payment (rippled loanPrincipalFromPeriodicPayment, eq. 10).
 func loanPrincipalFromPeriodicPayment(fix320 bool, periodicPayment N, periodicRate N, paymentsRemaining uint32) N {
 	if paymentsRemaining == 0 {
-		return zeroN()
+		return zeroLike(periodicPayment)
 	}
 	if periodicRate.IsZero() {
-		return periodicPayment.Mul(numU(paymentsRemaining))
+		return periodicPayment.Mul(numULike(periodicPayment, paymentsRemaining))
 	}
 	return periodicPayment.Div(computePaymentFactor(fix320, periodicRate, paymentsRemaining))
 }
@@ -236,13 +257,13 @@ func computeInterestAndFeeParts(asset Asset, interest N, managementFeeRate uint3
 // seconds since the Ripple epoch.
 func loanLatePaymentInterest(principalOutstanding N, lateInterestRate uint32, now uint32, nextPaymentDueDate uint32) N {
 	if principalOutstanding.IsZero() || lateInterestRate == 0 {
-		return zeroN()
+		return zeroLike(principalOutstanding)
 	}
 	if now <= nextPaymentDueDate {
-		return zeroN()
+		return zeroLike(principalOutstanding)
 	}
 	secondsOverdue := now - nextPaymentDueDate
-	rate := LoanPeriodicRate(lateInterestRate, secondsOverdue)
+	rate := loanPeriodicRateLike(principalOutstanding, lateInterestRate, secondsOverdue)
 	return principalOutstanding.Mul(rate)
 }
 
@@ -250,18 +271,18 @@ func loanLatePaymentInterest(principalOutstanding N, lateInterestRate uint32, no
 // loanAccruedInterest, eq. 27). Returns zero if the loan is paid ahead.
 func loanAccruedInterest(principalOutstanding N, periodicRate N, now uint32, startDate uint32, prevPaymentDate uint32, paymentInterval uint32) N {
 	if periodicRate.IsZero() || paymentInterval == 0 {
-		return zeroN()
+		return zeroLike(principalOutstanding)
 	}
 	lastPaymentDate := prevPaymentDate
 	if startDate > lastPaymentDate {
 		lastPaymentDate = startDate
 	}
 	if now <= lastPaymentDate {
-		return zeroN()
+		return zeroLike(principalOutstanding)
 	}
 	secondsSinceLastPayment := now - lastPaymentDate
 	// Multiply before dividing to limit rounding error amplification.
-	return principalOutstanding.Mul(periodicRate).Mul(numU(secondsSinceLastPayment)).Div(numU(paymentInterval))
+	return principalOutstanding.Mul(periodicRate).Mul(numULike(principalOutstanding, secondsSinceLastPayment)).Div(numULike(principalOutstanding, paymentInterval))
 }
 
 // ComputeFullPaymentInterest returns accrued interest plus prepayment penalty
@@ -270,7 +291,7 @@ func ComputeFullPaymentInterest(theoreticalPrincipalOutstanding N, periodicRate 
 	accrued := loanAccruedInterest(theoreticalPrincipalOutstanding, periodicRate, now, startDate, prevPaymentDate, paymentInterval)
 	var penalty N
 	if closeInterestRate == 0 {
-		penalty = zeroN()
+		penalty = zeroLike(theoreticalPrincipalOutstanding)
 	} else {
 		penalty = tenthBipsOfValue(theoreticalPrincipalOutstanding, closeInterestRate)
 	}

@@ -6,6 +6,9 @@
 package ledgerfields
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -18,10 +21,12 @@ func init() {
 // LoanBroker is the typed representation of a LoanBroker ledger entry.
 // The present bitset tracks which fields appear on the decoded blob so the
 // emit methods only write entries that actually exist. The struct carries
-// every on-wire field — including those excluded from metadata
-// (sMD_Never) — so Decode → Encode is byte-identical.
+// every canonical field declared in the spec — including those excluded from
+// metadata (sMD_Never) — so decoding and re-encoding does not drop them.
 type LoanBroker struct {
 	present              uint64
+	decoded              bool
+	dirty                bool
 	Sequence             uint32
 	OwnerNode            string // UInt64 (lowercase hex, no leading zeros)
 	VaultNode            string // UInt64 (lowercase hex, no leading zeros)
@@ -63,16 +68,278 @@ const (
 	loanbrokerBitPreviousTxnLgrSeq
 )
 
+// SetSequence assigns Sequence and updates its serialized presence.
+func (l *LoanBroker) SetSequence(value uint32) {
+	l.Sequence = value
+	l.dirty = true
+	l.present |= loanbrokerBitSequence
+}
+
+// SetOwnerNode assigns OwnerNode and updates its serialized presence.
+func (l *LoanBroker) SetOwnerNode(value string) {
+	l.OwnerNode = value
+	l.dirty = true
+	l.present |= loanbrokerBitOwnerNode
+}
+
+// SetVaultNode assigns VaultNode and updates its serialized presence.
+func (l *LoanBroker) SetVaultNode(value string) {
+	l.VaultNode = value
+	l.dirty = true
+	l.present |= loanbrokerBitVaultNode
+}
+
+// SetVaultID assigns VaultID and updates its serialized presence.
+func (l *LoanBroker) SetVaultID(value string) {
+	l.VaultID = value
+	l.dirty = true
+	l.present |= loanbrokerBitVaultID
+}
+
+// SetAccount assigns Account and updates its serialized presence.
+func (l *LoanBroker) SetAccount(value string) {
+	l.Account = value
+	l.dirty = true
+	l.present |= loanbrokerBitAccount
+}
+
+// SetOwner assigns Owner and updates its serialized presence.
+func (l *LoanBroker) SetOwner(value string) {
+	l.Owner = value
+	l.dirty = true
+	l.present |= loanbrokerBitOwner
+}
+
+// SetLoanSequence assigns LoanSequence and updates its serialized presence.
+func (l *LoanBroker) SetLoanSequence(value uint32) {
+	l.LoanSequence = value
+	l.dirty = true
+	l.present |= loanbrokerBitLoanSequence
+}
+
+// SetData assigns Data and updates its serialized presence.
+func (l *LoanBroker) SetData(value string) {
+	l.Data = value
+	l.dirty = true
+	if value == "" {
+		l.present &^= loanbrokerBitData
+		return
+	}
+	l.present |= loanbrokerBitData
+}
+
+// SetManagementFeeRate assigns ManagementFeeRate and updates its serialized presence.
+func (l *LoanBroker) SetManagementFeeRate(value uint16) {
+	l.ManagementFeeRate = int(value)
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanbrokerBitManagementFeeRate
+		return
+	}
+	l.present |= loanbrokerBitManagementFeeRate
+}
+
+// SetOwnerCount assigns OwnerCount and updates its serialized presence.
+func (l *LoanBroker) SetOwnerCount(value uint32) {
+	l.OwnerCount = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanbrokerBitOwnerCount
+		return
+	}
+	l.present |= loanbrokerBitOwnerCount
+}
+
+// SetDebtTotal assigns DebtTotal and updates its serialized presence.
+func (l *LoanBroker) SetDebtTotal(value any) {
+	l.DebtTotal = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanbrokerBitDebtTotal
+		return
+	}
+	l.present |= loanbrokerBitDebtTotal
+}
+
+// SetDebtMaximum assigns DebtMaximum and updates its serialized presence.
+func (l *LoanBroker) SetDebtMaximum(value any) {
+	l.DebtMaximum = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanbrokerBitDebtMaximum
+		return
+	}
+	l.present |= loanbrokerBitDebtMaximum
+}
+
+// SetCoverAvailable assigns CoverAvailable and updates its serialized presence.
+func (l *LoanBroker) SetCoverAvailable(value any) {
+	l.CoverAvailable = value
+	l.dirty = true
+	if value == nil || (numberIsDefault(value)) {
+		l.present &^= loanbrokerBitCoverAvailable
+		return
+	}
+	l.present |= loanbrokerBitCoverAvailable
+}
+
+// SetCoverRateMinimum assigns CoverRateMinimum and updates its serialized presence.
+func (l *LoanBroker) SetCoverRateMinimum(value uint32) {
+	l.CoverRateMinimum = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanbrokerBitCoverRateMinimum
+		return
+	}
+	l.present |= loanbrokerBitCoverRateMinimum
+}
+
+// SetCoverRateLiquidation assigns CoverRateLiquidation and updates its serialized presence.
+func (l *LoanBroker) SetCoverRateLiquidation(value uint32) {
+	l.CoverRateLiquidation = value
+	l.dirty = true
+	if value == 0 {
+		l.present &^= loanbrokerBitCoverRateLiquidation
+		return
+	}
+	l.present |= loanbrokerBitCoverRateLiquidation
+}
+
+// SetFlags assigns Flags and updates its serialized presence.
+func (l *LoanBroker) SetFlags(value uint32) {
+	l.Flags = value
+	l.dirty = true
+	l.present |= loanbrokerBitFlags
+}
+
+// SetPreviousTxnID assigns PreviousTxnID and updates its serialized presence.
+func (l *LoanBroker) SetPreviousTxnID(value string) {
+	l.PreviousTxnID = value
+	l.dirty = true
+	l.present |= loanbrokerBitPreviousTxnID
+}
+
+// SetPreviousTxnLgrSeq assigns PreviousTxnLgrSeq and updates its serialized presence.
+func (l *LoanBroker) SetPreviousTxnLgrSeq(value uint32) {
+	l.PreviousTxnLgrSeq = value
+	l.dirty = true
+	l.present |= loanbrokerBitPreviousTxnLgrSeq
+}
+
+func (l *LoanBroker) validateRequired() error {
+	if l.decoded && !l.dirty {
+		return nil
+	}
+	if l.present&loanbrokerBitSequence == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Sequence is not set")
+	}
+	if l.present&loanbrokerBitOwnerNode == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field OwnerNode is not set")
+	}
+	if l.present&loanbrokerBitVaultNode == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field VaultNode is not set")
+	}
+	if l.present&loanbrokerBitVaultID == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field VaultID is not set")
+	}
+	if l.present&loanbrokerBitAccount == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Account is not set")
+	}
+	if l.present&loanbrokerBitOwner == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Owner is not set")
+	}
+	if l.present&loanbrokerBitLoanSequence == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field LoanSequence is not set")
+	}
+	if l.present&loanbrokerBitFlags == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Flags is not set")
+	}
+	return nil
+}
+
+func (l *LoanBroker) validateDecoded() error {
+	if l.present&loanbrokerBitSequence == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Sequence is missing")
+	}
+	if l.present&loanbrokerBitOwnerNode == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field OwnerNode is missing")
+	}
+	if l.present&loanbrokerBitVaultNode == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field VaultNode is missing")
+	}
+	if l.present&loanbrokerBitVaultID == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field VaultID is missing")
+	}
+	if l.present&loanbrokerBitAccount == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Account is missing")
+	}
+	if l.present&loanbrokerBitOwner == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Owner is missing")
+	}
+	if l.present&loanbrokerBitLoanSequence == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field LoanSequence is missing")
+	}
+	if l.present&loanbrokerBitData != 0 && l.Data == "" {
+		return errors.New("ledgerfields: LoanBroker: default field Data is explicitly set")
+	}
+	if l.present&loanbrokerBitManagementFeeRate != 0 && l.ManagementFeeRate == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field ManagementFeeRate is explicitly set")
+	}
+	if l.present&loanbrokerBitOwnerCount != 0 && l.OwnerCount == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field OwnerCount is explicitly set")
+	}
+	if l.present&loanbrokerBitDebtTotal != 0 && numberIsDefault(l.DebtTotal) {
+		return errors.New("ledgerfields: LoanBroker: default field DebtTotal is explicitly set")
+	}
+	if l.present&loanbrokerBitDebtMaximum != 0 && numberIsDefault(l.DebtMaximum) {
+		return errors.New("ledgerfields: LoanBroker: default field DebtMaximum is explicitly set")
+	}
+	if l.present&loanbrokerBitCoverAvailable != 0 && numberIsDefault(l.CoverAvailable) {
+		return errors.New("ledgerfields: LoanBroker: default field CoverAvailable is explicitly set")
+	}
+	if l.present&loanbrokerBitCoverRateMinimum != 0 && l.CoverRateMinimum == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field CoverRateMinimum is explicitly set")
+	}
+	if l.present&loanbrokerBitCoverRateLiquidation != 0 && l.CoverRateLiquidation == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field CoverRateLiquidation is explicitly set")
+	}
+	if l.present&loanbrokerBitFlags == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Flags is missing")
+	}
+	if l.present&loanbrokerBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field PreviousTxnID is missing")
+	}
+	if l.present&loanbrokerBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Unknown / sMD_Never fields are skipped without allocation.
+// reader and enforces the current rippled ledger template.
 func (l *LoanBroker) Decode(data []byte) error {
+	return l.decode(data, false)
+}
+
+func (l *LoanBroker) decodeLegacy(data []byte) error {
+	return l.decode(data, true)
+}
+
+func (l *LoanBroker) decode(data []byte, legacy bool) error {
 	*l = LoanBroker{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
+	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: LoanBroker: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -82,7 +349,10 @@ func (l *LoanBroker) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // synthetic LedgerEntryType; discard
+				if val != 136 {
+					return fmt.Errorf("ledgerfields: LoanBroker: LedgerEntryType is %d, want 136", val)
+				}
+				sawLedgerEntryType = true
 			case 22:
 				l.ManagementFeeRate = val
 				l.present |= loanbrokerBitManagementFeeRate
@@ -201,6 +471,13 @@ func (l *LoanBroker) Decode(data []byte) error {
 		default:
 			return newErrUnknownField("LoanBroker", typeCode, fieldCode)
 		}
+	}
+	if !sawLedgerEntryType {
+		return errors.New("ledgerfields: LoanBroker: missing LedgerEntryType")
+	}
+	l.decoded = true
+	if !legacy {
+		return l.validateDecoded()
 	}
 	return nil
 }
@@ -448,11 +725,20 @@ func (l *LoanBroker) ToMap() map[string]any {
 	return out
 }
 
-// Encode serializes the receiver to canonical XRPL binary. Round-trip
-// invariant: Decode(data); Encode() == data for any byte sequence that
-// Decode accepts.
+// Encode serializes the receiver to canonical XRPL binary. Legacy decode
+// aliases and non-canonical input ordering are emitted in canonical form.
 func (l *LoanBroker) Encode() ([]byte, error) {
-	return binarycodec.EncodeBytes(l.ToMap())
+	if err := l.validateRequired(); err != nil {
+		return nil, err
+	}
+	out := l.ToMap()
+	if l.present&loanbrokerBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if l.present&loanbrokerBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

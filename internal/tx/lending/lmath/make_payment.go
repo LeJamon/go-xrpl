@@ -41,12 +41,13 @@ func hasExpired(now, exp uint32) bool { return exp != 0 && now >= exp }
 // own dates.
 func doPayment(payment ExtendedPaymentComponents, loan *LoanAccount) LoanPaymentParts {
 	if payment.SpecialCase == SpecialFinal {
+		zero := zeroLike(loan.PrincipalOutstanding)
 		loan.PaymentRemaining = 0
 		loan.PrevPaymentDueDate = loan.NextPaymentDueDate
 		loan.NextPaymentDueDate = 0
-		loan.PrincipalOutstanding = zeroN()
-		loan.TotalValueOutstanding = zeroN()
-		loan.ManagementFeeOutstanding = zeroN()
+		loan.PrincipalOutstanding = zero
+		loan.TotalValueOutstanding = zero
+		loan.ManagementFeeOutstanding = zero
 	} else {
 		if payment.SpecialCase != SpecialExtra {
 			loan.PaymentRemaining--
@@ -116,7 +117,7 @@ func computeFullPayment(fix320 bool, asset Asset, now uint32, principalOutstandi
 func tryOverpayment(fix320 bool, asset Asset, loanScale int, overpaymentComponents ExtendedPaymentComponents, roundedOldState LoanState, periodicPayment, periodicRate N, paymentRemaining uint32, managementFeeRate uint32) (parts LoanPaymentParts, props LoanProperties, ok bool, err ter.Result) {
 	theoreticalState := computeTheoreticalLoanState(fix320, periodicPayment, periodicRate, paymentRemaining, managementFeeRate)
 	errors := subStates(roundedOldState, theoreticalState)
-	newTheoreticalPrincipal := maxN(theoreticalState.PrincipalOutstanding.Sub(overpaymentComponents.TrackedPrincipalDelta), zeroN())
+	newTheoreticalPrincipal := maxN(theoreticalState.PrincipalOutstanding.Sub(overpaymentComponents.TrackedPrincipalDelta), zeroLike(theoreticalState.PrincipalOutstanding))
 	newLoanProperties := ComputeLoanPropertiesRate(fix320, asset, newTheoreticalPrincipal, periodicRate, paymentRemaining, managementFeeRate, loanScale)
 	newTheoreticalState := addStateDeltas(
 		computeTheoreticalLoanState(fix320, newLoanProperties.PeriodicPayment, periodicRate, paymentRemaining, managementFeeRate),
@@ -131,9 +132,9 @@ func tryOverpayment(fix320 bool, asset Asset, loanScale int, overpaymentComponen
 		newTheoreticalState = ConstructLoanState(newTheoreticalState.ValueOutstanding, principal, managementFee)
 	}
 
-	principalOutstanding := clampN(roundToAsset(asset, newTheoreticalState.PrincipalOutstanding, loanScale, state.RoundUpward), zeroN(), roundedOldState.PrincipalOutstanding)
-	totalValueOutstanding := clampN(roundToAsset(asset, principalOutstanding.Add(newTheoreticalState.InterestOutstanding()), loanScale, state.RoundUpward), zeroN(), roundedOldState.ValueOutstanding)
-	managementFeeOutstanding := clampN(roundToAssetNearest(asset, newTheoreticalState.ManagementFeeDue, loanScale), zeroN(), roundedOldState.ManagementFeeDue)
+	principalOutstanding := clampN(roundToAsset(asset, newTheoreticalState.PrincipalOutstanding, loanScale, state.RoundUpward), zeroLike(roundedOldState.PrincipalOutstanding), roundedOldState.PrincipalOutstanding)
+	totalValueOutstanding := clampN(roundToAsset(asset, principalOutstanding.Add(newTheoreticalState.InterestOutstanding()), loanScale, state.RoundUpward), zeroLike(roundedOldState.ValueOutstanding), roundedOldState.ValueOutstanding)
+	managementFeeOutstanding := clampN(roundToAssetNearest(asset, newTheoreticalState.ManagementFeeDue, loanScale), zeroLike(roundedOldState.ManagementFeeDue), roundedOldState.ManagementFeeDue)
 
 	roundedNewState := ConstructLoanState(totalValueOutstanding, principalOutstanding, managementFeeOutstanding)
 	newLoanProperties.LoanState = roundedNewState
@@ -192,7 +193,7 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 		return LoanPaymentParts{}, ter.TecINTERNAL
 	}
 	loanScale := loan.LoanScale
-	periodicRate := LoanPeriodicRate(loan.InterestRate, loan.PaymentInterval)
+	periodicRate := loanPeriodicRateLike(loan.PrincipalOutstanding, loan.InterestRate, loan.PaymentInterval)
 
 	if paymentType != PaymentLate && hasExpired(now, loan.NextPaymentDueDate) {
 		return LoanPaymentParts{}, ter.TecEXPIRED
@@ -213,7 +214,7 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 	periodicOf := func() ExtendedPaymentComponents {
 		return newExtended(computePaymentComponents(fix320, asset, loanScale, loan.TotalValueOutstanding, loan.PrincipalOutstanding,
 			loan.ManagementFeeOutstanding, loan.PeriodicPayment, periodicRate, loan.PaymentRemaining, managementFeeRate),
-			loan.LoanServiceFee, zeroN())
+			loan.LoanServiceFee, zeroLike(loan.LoanServiceFee))
 	}
 	periodic := periodicOf()
 
@@ -226,8 +227,8 @@ func LoanMakePayment(asset Asset, now uint32, loan *LoanAccount, managementFeeRa
 		return doPayment(late, loan), ter.TesSUCCESS
 	}
 
-	totalParts := newParts()
-	totalPaid := zeroN()
+	totalParts := newParts(loan.PrincipalOutstanding)
+	totalPaid := zeroLike(loan.PrincipalOutstanding)
 	numPayments := 0
 	for amount.Cmp(totalPaid.Add(periodic.TotalDue)) >= 0 && loan.PaymentRemaining > 0 && numPayments < protocol.LoanMaximumPaymentsPerTransaction {
 		totalPaid = totalPaid.Add(periodic.TotalDue)

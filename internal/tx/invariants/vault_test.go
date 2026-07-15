@@ -53,15 +53,17 @@ func vvTestAccount(t *testing.T, fill byte) ([20]byte, string) {
 func vvCraftVaultAsset(t *testing.T, ownerAddr, pseudoAddr string, asset map[string]any, shareMPTID [24]byte, total, available, maximum, loss string) []byte {
 	t.Helper()
 	m := map[string]any{
-		"LedgerEntryType":  "Vault",
-		"Flags":            0,
-		"Sequence":         1,
-		"OwnerNode":        "0",
-		"Owner":            ownerAddr,
-		"Account":          pseudoAddr,
-		"Asset":            asset,
-		"ShareMPTID":       strings.ToUpper(hex.EncodeToString(shareMPTID[:])),
-		"WithdrawalPolicy": 1,
+		"LedgerEntryType":   "Vault",
+		"Flags":             0,
+		"Sequence":          1,
+		"OwnerNode":         "0",
+		"Owner":             ownerAddr,
+		"Account":           pseudoAddr,
+		"Asset":             asset,
+		"ShareMPTID":        strings.ToUpper(hex.EncodeToString(shareMPTID[:])),
+		"WithdrawalPolicy":  1,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	if total != "" {
 		m["AssetsTotal"] = total

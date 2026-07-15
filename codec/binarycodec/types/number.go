@@ -3,7 +3,9 @@ package types
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"math"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -16,10 +18,11 @@ import (
 // It is encoded as 12 bytes: 8-byte signed mantissa + 4-byte signed exponent, both big-endian.
 type Number struct{}
 
-// Constants for mantissa and exponent normalization per XRPL Number spec.
+// Constants for the large mantissa range used by every serialized STNumber.
 var (
-	minMantissa       = big.NewInt(1000000000000000) // 10^15
-	maxMantissa       = big.NewInt(9999999999999999) // 10^16 - 1
+	minMantissa, _    = new(big.Int).SetString("1000000000000000000", 10) // 10^18
+	maxMantissa, _    = new(big.Int).SetString("9999999999999999999", 10) // 10^19 - 1
+	maxWireMantissa   = big.NewInt(math.MaxInt64)
 	minExponent       = int32(-32768)
 	maxExponent       = int32(32768)
 	defaultZeroExp    = int32(-2147483648) // 0x80000000
@@ -27,35 +30,103 @@ var (
 	ErrNumberOverflow = errors.New("mantissa and exponent are too large")
 )
 
-// numberRangeLog is log10 of the normalized mantissa minimum. It drives
-// to_string's scientific-vs-decimal threshold and padding. STNumber serializes
-// and normalizes at the small scale (rangeLog 15) on the current chain; the
-// large scale (rangeLog 18) is threaded in when SingleAssetVault /
-// LendingProtocol activate (Number/codec Phase B). formatNumberText is faithful
-// for either value.
-const numberRangeLog = 15
+// numberRangeLog is log10 of the normalized mantissa minimum. STNumber is only
+// used by Vault, LoanBroker, and Loan, whose amendments install the large range.
+const numberRangeLog = 18
 
 // numberRegex matches decimal/float/scientific number strings.
 // Pattern: optional sign, integer part, optional decimal, optional exponent
-var numberRegex = regexp.MustCompile(`^([-+]?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+var (
+	numberRegex      = regexp.MustCompile(`^([-+]?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+	jsonIntegerRegex = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+)
 
-// FromJSON converts a JSON value (string) into a serialized 12-byte slice.
+// FromJSON converts a JSON string or integer into a serialized 12-byte slice.
 func (n *Number) FromJSON(value any) ([]byte, error) {
-	s, ok := value.(string)
-	if !ok {
-		return nil, ErrInvalidNumber
+	s, err := numberInputString(value)
+	if err != nil {
+		return nil, err
 	}
 
 	mantissa, exponent, err := parseAndNormalize(s)
 	if err != nil {
 		return nil, err
 	}
+	wireMantissa, wireExponent, err := numberExternal(mantissa, exponent)
+	if err != nil {
+		return nil, err
+	}
 
 	buf := make([]byte, 12)
-	writeInt64BE(buf, mantissa.Int64(), 0)
-	writeInt32BE(buf, exponent, 8)
+	writeInt64BE(buf, wireMantissa, 0)
+	writeInt32BE(buf, wireExponent, 8)
 
 	return buf, nil
+}
+
+func numberInputString(value any) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return v, nil
+	case json.Number:
+		if !jsonIntegerRegex.MatchString(string(v)) {
+			return "", ErrInvalidNumber
+		}
+		if strings.HasPrefix(string(v), "-") {
+			n, err := strconv.ParseInt(string(v), 10, 32)
+			if err != nil {
+				return "", ErrInvalidNumber
+			}
+			return strconv.FormatInt(n, 10), nil
+		}
+		n, err := strconv.ParseUint(string(v), 10, 32)
+		if err != nil {
+			return "", ErrInvalidNumber
+		}
+		return strconv.FormatUint(n, 10), nil
+	case int:
+		return signedJSONInteger(int64(v))
+	case int8:
+		return signedJSONInteger(int64(v))
+	case int16:
+		return signedJSONInteger(int64(v))
+	case int32:
+		return signedJSONInteger(int64(v))
+	case int64:
+		return signedJSONInteger(v)
+	case uint:
+		return unsignedJSONInteger(uint64(v))
+	case uint8:
+		return unsignedJSONInteger(uint64(v))
+	case uint16:
+		return unsignedJSONInteger(uint64(v))
+	case uint32:
+		return unsignedJSONInteger(uint64(v))
+	case uint64:
+		return unsignedJSONInteger(v)
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) ||
+			v < math.MinInt32 || v > math.MaxUint32 {
+			return "", ErrInvalidNumber
+		}
+		return strconv.FormatInt(int64(v), 10), nil
+	default:
+		return "", ErrInvalidNumber
+	}
+}
+
+func signedJSONInteger(value int64) (string, error) {
+	if value < math.MinInt32 || value > math.MaxUint32 {
+		return "", ErrInvalidNumber
+	}
+	return strconv.FormatInt(value, 10), nil
+}
+
+func unsignedJSONInteger(value uint64) (string, error) {
+	if value > math.MaxUint32 {
+		return "", ErrInvalidNumber
+	}
+	return strconv.FormatUint(value, 10), nil
 }
 
 // ToJSON takes a BinaryParser and converts the serialized byte data back to a JSON string.
@@ -91,30 +162,30 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	fracPart := match[3]
 	expPart := match[4]
 
-	// Remove leading zeros (unless entire intPart is zeros)
-	intPart = strings.TrimLeft(intPart, "0")
-	if intPart == "" {
-		intPart = "0"
-	}
-
 	mantissaStr := intPart
-	exponent := int32(0)
+	exponent := int64(0)
 
 	if fracPart != "" {
 		mantissaStr += fracPart
-		exponent -= int32(len(fracPart))
+		exponent -= int64(len(fracPart))
 	}
 
 	if expPart != "" {
-		expVal, err := strconv.ParseInt(expPart, 10, 64)
-		if err != nil {
+		expVal, err := strconv.ParseInt(expPart, 10, 32)
+		if err != nil || expVal == math.MinInt32 {
 			return nil, 0, ErrInvalidNumber
 		}
-		exponent += int32(expVal)
+		exponent += expVal
+	}
+	if exponent < math.MinInt32 || exponent > math.MaxInt32 {
+		return nil, 0, ErrInvalidNumber
 	}
 
-	mantissa := new(big.Int)
-	mantissa.SetString(mantissaStr, 10)
+	magnitude, err := strconv.ParseUint(mantissaStr, 10, 64)
+	if err != nil {
+		return nil, 0, ErrInvalidNumber
+	}
+	mantissa := new(big.Int).SetUint64(magnitude)
 
 	if sign == "-" {
 		mantissa.Neg(mantissa)
@@ -126,17 +197,17 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	}
 
 	// Normalize
-	mantissa, exponent, err := normalize(mantissa, exponent)
+	mantissa, normalizedExponent, err := normalize(mantissa, int32(exponent))
 	if err != nil {
 		return nil, 0, err
 	}
 
-	return mantissa, exponent, nil
+	return mantissa, normalizedExponent, nil
 }
 
-// normalize adjusts mantissa and exponent to XRPL constraints, mirroring
-// rippled's Number::normalize (Number.cpp): it rounds the discarded low-order
-// digits half-to-even and clamps to canonical zero on underflow.
+// normalize adjusts mantissa and exponent to the large XRPL Number range. The
+// extra maxWireMantissa step mirrors Number's signed external representation:
+// values above int64 are rounded one decimal place before serialization.
 func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	if mantissa.Sign() == 0 {
 		return big.NewInt(0), defaultZeroExp, nil
@@ -158,14 +229,17 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	dropped := new(big.Int)
 	scale := big.NewInt(1)
 	rem := new(big.Int)
-	for m.Cmp(maxMantissa) > 0 {
-		if exponent >= maxExponent {
-			return nil, 0, ErrNumberOverflow
-		}
+	dropDigit := func() {
 		exponent++
 		m.DivMod(m, ten, rem)
 		dropped.Add(dropped, new(big.Int).Mul(rem, scale))
 		scale.Mul(scale, ten)
+	}
+	for m.Cmp(maxMantissa) > 0 {
+		if exponent >= maxExponent {
+			return nil, 0, ErrNumberOverflow
+		}
+		dropDigit()
 	}
 
 	// Underflow clamps to canonical zero.
@@ -173,17 +247,45 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 		return big.NewInt(0), defaultZeroExp, nil
 	}
 
-	// Round half-to-even on the discarded digits. When any digit was dropped
-	// scale is 10^k with k>=1, so half (scale/2) is exact.
-	if scale.Cmp(big.NewInt(1)) > 0 {
-		half := new(big.Int).Div(scale, big.NewInt(2))
-		if cmp := dropped.Cmp(half); cmp > 0 || (cmp == 0 && m.Bit(0) == 1) {
+	// Large normalized values may exceed int64 internally, but the serialized
+	// mantissa may not. Drop once more so rounding occurs in the wire range.
+	if m.Cmp(maxWireMantissa) > 0 {
+		if exponent >= maxExponent {
+			return nil, 0, ErrNumberOverflow
+		}
+		dropDigit()
+	}
+
+	shouldRoundUp := func() bool {
+		if scale.Cmp(big.NewInt(1)) == 0 {
+			return false
+		}
+		half := new(big.Int).Div(new(big.Int).Set(scale), big.NewInt(2))
+		cmp := dropped.Cmp(half)
+		return cmp > 0 || (cmp == 0 && m.Bit(0) == 1)
+	}
+	if shouldRoundUp() {
+		if m.Cmp(maxMantissa) < 0 && m.Cmp(maxWireMantissa) < 0 {
 			m.Add(m, big.NewInt(1))
-			if m.Cmp(maxMantissa) > 0 {
-				m.Div(m, ten)
-				exponent++
+		} else {
+			// fixCleanup3_2_0 cusp behavior: dividing first preserves the digit
+			// that made an increment unsafe, then rounds the shorter mantissa.
+			if exponent >= maxExponent {
+				return nil, 0, ErrNumberOverflow
+			}
+			dropDigit()
+			if shouldRoundUp() {
+				m.Add(m, big.NewInt(1))
 			}
 		}
+	}
+
+	if m.Cmp(minMantissa) < 0 {
+		m.Mul(m, ten)
+		exponent--
+	}
+	if exponent < minExponent {
+		return big.NewInt(0), defaultZeroExp, nil
 	}
 
 	if exponent > maxExponent {
@@ -195,6 +297,30 @@ func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	}
 
 	return m, exponent, nil
+}
+
+// numberExternal returns Number's signed, on-wire mantissa and exponent. A
+// large internal mantissa above int64 is guaranteed to end in zero and is
+// exposed by rippled as mantissa/10 with exponent+1.
+func numberExternal(mantissa *big.Int, exponent int32) (int64, int32, error) {
+	if mantissa.Sign() == 0 {
+		return 0, defaultZeroExp, nil
+	}
+	negative := mantissa.Sign() < 0
+	m := new(big.Int).Abs(mantissa)
+	if m.Cmp(maxWireMantissa) > 0 {
+		q, r := new(big.Int), new(big.Int)
+		q.QuoRem(m, big.NewInt(10), r)
+		if r.Sign() != 0 || q.Cmp(maxWireMantissa) > 0 || exponent >= maxExponent {
+			return 0, 0, ErrNumberOverflow
+		}
+		m = q
+		exponent++
+	}
+	if negative {
+		m.Neg(m)
+	}
+	return m.Int64(), exponent, nil
 }
 
 // formatNumberText renders a normalized (mantissa, exponent) as rippled's

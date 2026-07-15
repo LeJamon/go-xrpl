@@ -1,11 +1,11 @@
 package state
 
 import (
-	"encoding/hex"
 	"fmt"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // SerializeEscrow serializes an Escrow ledger entry from its creation inputs.
@@ -51,49 +51,42 @@ func SerializeEscrow(ownerID, destID [20]byte, amount Amount, transferRate uint3
 		}
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType": "Escrow",
-		"Account":         ownerAddress,
-		"Destination":     destAddress,
-		"Amount":          amountVal,
-		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
-		"Flags":           uint32(0),
-	}
+	entry := &ledgerfields.Escrow{}
+	entry.SetAccount(ownerAddress)
+	entry.SetDestination(destAddress)
+	entry.SetAmount(amountVal)
+	entry.SetOwnerNode(fmt.Sprintf("%x", ownerNode))
+	entry.SetFlags(0)
 
 	if hasDestNode {
-		jsonObj["DestinationNode"] = fmt.Sprintf("%x", destNode)
+		entry.SetDestinationNode(fmt.Sprintf("%x", destNode))
 	}
 	if hasIssuerNode {
-		jsonObj["IssuerNode"] = fmt.Sprintf("%x", issuerNode)
+		entry.SetIssuerNode(fmt.Sprintf("%x", issuerNode))
 	}
 	if finishAfter != nil {
-		jsonObj["FinishAfter"] = *finishAfter
+		entry.SetFinishAfter(*finishAfter)
 	}
 	if cancelAfter != nil {
-		jsonObj["CancelAfter"] = *cancelAfter
+		entry.SetCancelAfter(*cancelAfter)
 	}
 	if condition != "" {
-		jsonObj["Condition"] = condition
+		entry.SetCondition(condition)
 	}
 	if sourceTag != nil {
-		jsonObj["SourceTag"] = *sourceTag
+		entry.SetSourceTag(*sourceTag)
 	}
 	if destinationTag != nil {
-		jsonObj["DestinationTag"] = *destinationTag
+		entry.SetDestinationTag(*destinationTag)
 	}
 	if transferRate > 0 && transferRate != 1_000_000_000 {
-		jsonObj["TransferRate"] = transferRate
+		entry.SetTransferRate(transferRate)
 	}
 	if sequence != nil {
-		jsonObj["Sequence"] = *sequence
+		entry.SetSequence(*sequence)
 	}
 
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode Escrow: %w", err)
-	}
-
-	return hex.DecodeString(hexStr)
+	return entry.Encode()
 }
 
 // EscrowData represents an Escrow ledger entry
@@ -124,88 +117,75 @@ type EscrowData struct {
 
 // ParseEscrow parses an Escrow ledger entry from binary data
 func ParseEscrow(data []byte) (*EscrowData, error) {
-	escrow := &EscrowData{}
-
-	err := WalkFields(data, func(f Field) error {
-		switch f.TypeCode {
-		case stUInt32:
-			switch f.FieldCode {
-			case 2: // Flags
-				escrow.Flags = f.UInt32()
-			case 3: // SourceTag
-				escrow.SourceTag = f.UInt32()
-				escrow.HasSourceTag = true
-			case 11: // TransferRate
-				escrow.TransferRate = f.UInt32()
-				escrow.HasTransferRate = true
-			case 14: // DestinationTag
-				escrow.DestinationTag = f.UInt32()
-				escrow.HasDestTag = true
-			case 36: // CancelAfter
-				escrow.CancelAfter = f.UInt32()
-			case 37: // FinishAfter
-				escrow.FinishAfter = f.UInt32()
-			}
-
-		case stUInt64:
-			switch f.FieldCode {
-			case 4: // OwnerNode
-				escrow.OwnerNode = f.UInt64()
-			case 9: // DestinationNode
-				escrow.DestinationNode = f.UInt64()
-				escrow.HasDestNode = true
-			case 27: // IssuerNode
-				escrow.IssuerNode = f.UInt64()
-				escrow.HasIssuerNode = true
-			}
-
-		case stAmount:
-			if f.FieldCode != 1 { // sfAmount only
-				return nil
-			}
-			// XRP (8), MPT (33), IOU (48) are distinguished by WalkFields' own
-			// width discrimination, so len(Value) is the reliable selector.
-			switch len(f.Value) {
-			case 48: // IOU
-				amt, err := ParseIOUAmountBinary(f.Value)
-				if err != nil {
-					return fmt.Errorf("Escrow IOU amount parse failed: %w", err)
-				}
-				escrow.IOUAmount = &amt
-			case 33: // MPT
-				mptAmt, err := ParseMPTAmountBinary(f.Value)
-				if err != nil {
-					return fmt.Errorf("Escrow MPT amount parse failed: %w", err)
-				}
-				escrow.IOUAmount = &mptAmt
-				if raw, ok := mptAmt.MPTRaw(); ok {
-					escrow.MPTAmount = &raw
-				}
-				escrow.MPTIssuanceID = mptAmt.MPTIssuanceID()
-			case 8: // XRP
-				escrow.Amount = xrpDrops(f.Value)
-				escrow.IsXRP = true
-			}
-
-		case stAccountID:
-			if id, ok := f.AccountID(); ok {
-				switch f.FieldCode {
-				case 1: // Account
-					escrow.Account = id
-				case 3: // Destination
-					escrow.DestinationID = id
-				}
-			}
-
-		case stBlob:
-			if f.FieldCode == 17 { // Condition
-				escrow.Condition = hex.EncodeToString(f.VLBytes())
-			}
-		}
-		return nil
-	})
-	if err != nil {
+	entry := &ledgerfields.Escrow{}
+	if err := entry.Decode(data); err != nil {
 		return nil, err
+	}
+	fields := entry.ToMap()
+	escrow := &EscrowData{
+		Condition:       strings.ToLower(entry.Condition),
+		CancelAfter:     entry.CancelAfter,
+		FinishAfter:     entry.FinishAfter,
+		SourceTag:       entry.SourceTag,
+		HasSourceTag:    fields["SourceTag"] != nil,
+		DestinationTag:  entry.DestinationTag,
+		HasDestTag:      fields["DestinationTag"] != nil,
+		HasDestNode:     fields["DestinationNode"] != nil,
+		HasIssuerNode:   fields["IssuerNode"] != nil,
+		TransferRate:    entry.TransferRate,
+		HasTransferRate: fields["TransferRate"] != nil,
+		Flags:           entry.Flags,
+	}
+
+	var err error
+	if fields["Account"] != nil {
+		escrow.Account, err = decodeLedgerAccount("Escrow.Account", entry.Account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if fields["Destination"] != nil {
+		escrow.DestinationID, err = decodeLedgerAccount("Escrow.Destination", entry.Destination)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if fields["OwnerNode"] != nil {
+		escrow.OwnerNode, err = parseLedgerUint64("Escrow.OwnerNode", entry.OwnerNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if escrow.HasDestNode {
+		escrow.DestinationNode, err = parseLedgerUint64("Escrow.DestinationNode", entry.DestinationNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if escrow.HasIssuerNode {
+		escrow.IssuerNode, err = parseLedgerUint64("Escrow.IssuerNode", entry.IssuerNode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if fields["Amount"] != nil {
+		amount, err := decodeLedgerAmount("Escrow.Amount", entry.Amount)
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case amount.IsNative():
+			escrow.Amount = nativeMagnitude(amount)
+			escrow.IsXRP = true
+		case amount.IsMPT():
+			escrow.IOUAmount = &amount
+			if raw, ok := amount.MPTRaw(); ok {
+				escrow.MPTAmount = &raw
+			}
+			escrow.MPTIssuanceID = amount.MPTIssuanceID()
+		default:
+			escrow.IOUAmount = &amount
+		}
 	}
 
 	return escrow, nil

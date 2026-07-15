@@ -1,6 +1,10 @@
 package entry
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+)
 
 // Type represents a ledger entry type.
 type Type uint16
@@ -25,14 +29,17 @@ const (
 
 	// Account & Directory
 	TypeAccountRoot   Type = 0x0061 // Account objects
+	TypeContract      Type = 0x0063 // Deprecated contract objects
 	TypeDirectoryNode Type = 0x0064 // Directory nodes
 
 	// System Singletons
 	TypeAmendments   Type = 0x0066 // Protocol amendments (singleton)
+	TypeGeneratorMap Type = 0x0067 // Deprecated generator maps
 	TypeLedgerHashes Type = 0x0068 // Historical hashes (singleton)
 
 	// Cross-Chain Bridge
-	TypeBridge Type = 0x0069 // Sidechain bridges
+	TypeBridge   Type = 0x0069 // Sidechain bridges
+	TypeNickname Type = 0x006e // Deprecated nickname objects
 
 	// DEX & Trust
 	TypeOffer          Type = 0x006f // DEX offers
@@ -72,67 +79,16 @@ const (
 // String returns the string representation of the Type.
 func (t Type) String() string {
 	switch t {
-	case TypeNFTokenOffer:
-		return "NFTokenOffer"
-	case TypeCheck:
-		return "Check"
-	case TypeDID:
-		return "DID"
-	case TypeNegativeUNL:
-		return "NegativeUNL"
-	case TypeNFTokenPage:
-		return "NFTokenPage"
-	case TypeSignerList:
-		return "SignerList"
-	case TypeTicket:
-		return "Ticket"
-	case TypeAccountRoot:
-		return "AccountRoot"
-	case TypeDirectoryNode:
-		return "DirectoryNode"
-	case TypeAmendments:
-		return "Amendments"
-	case TypeLedgerHashes:
-		return "LedgerHashes"
-	case TypeBridge:
-		return "Bridge"
-	case TypeOffer:
-		return "Offer"
-	case TypeDepositPreauth:
-		return "DepositPreauth"
-	case TypeXChainOwnedClaimID:
-		return "XChainOwnedClaimID"
-	case TypeRippleState:
-		return "RippleState"
-	case TypeFeeSettings:
-		return "FeeSettings"
-	case TypeXChainOwnedCreateAccountClaimID:
-		return "XChainOwnedCreateAccountClaimID"
-	case TypeEscrow:
-		return "Escrow"
-	case TypePayChannel:
-		return "PayChannel"
-	case TypeAMM:
-		return "AMM"
-	case TypeMPTokenIssuance:
-		return "MPTokenIssuance"
-	case TypeMPToken:
-		return "MPToken"
-	case TypeOracle:
-		return "Oracle"
-	case TypeCredential:
-		return "Credential"
-	case TypePermissionedDomain:
-		return "PermissionedDomain"
-	case TypeDelegate:
-		return "Delegate"
-	case TypeVault:
-		return "Vault"
-	case TypeLoanBroker:
-		return "LoanBroker"
-	case TypeLoan:
-		return "Loan"
-	default:
-		return fmt.Sprintf("Unknown(%#x)", uint16(t))
+	case TypeContract:
+		return "Contract"
+	case TypeGeneratorMap:
+		return "GeneratorMap"
+	case TypeNickname:
+		return "Nickname"
 	}
+	name, err := definitions.Get().LedgerEntryTypeName(int32(t))
+	if err != nil {
+		return fmt.Sprintf("Unknown(0x%04x)", uint16(t))
+	}
+	return name
 }

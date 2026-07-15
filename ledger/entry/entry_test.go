@@ -74,7 +74,7 @@ func TestTypeString(t *testing.T) {
 
 func TestTypeStringUnknown(t *testing.T) {
 	for _, code := range []uint16{0x0000, 0x0001, 0x00ff, 0xffff} {
-		want := fmt.Sprintf("Unknown(%#x)", code)
+		want := fmt.Sprintf("Unknown(0x%04x)", code)
 		if got := Type(code).String(); got != want {
 			t.Errorf("Type(0x%04X).String() = %q, want %q", code, got, want)
 		}

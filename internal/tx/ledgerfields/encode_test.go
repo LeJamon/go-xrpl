@@ -36,15 +36,17 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 		{
 			name: "Offer_IOU_Amounts",
 			json: map[string]any{
-				"LedgerEntryType": "Offer",
-				"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"Sequence":        uint32(7),
-				"TakerPays":       map[string]any{"value": "100", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
-				"TakerGets":       "1000000",
-				"BookDirectory":   "0000000000000000000000000000000000000000000000000000000000000000",
-				"BookNode":        "0",
-				"OwnerNode":       "0",
-				"Flags":           uint32(0),
+				"LedgerEntryType":   "Offer",
+				"Account":           "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"Sequence":          uint32(7),
+				"TakerPays":         map[string]any{"value": "100", "currency": "USD", "issuer": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
+				"TakerGets":         "1000000",
+				"BookDirectory":     "0000000000000000000000000000000000000000000000000000000000000000",
+				"BookNode":          "0",
+				"OwnerNode":         "0",
+				"Flags":             uint32(0),
+				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+				"PreviousTxnLgrSeq": uint32(0),
 			},
 		},
 		{
@@ -97,6 +99,7 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 					"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				},
 				"OwnerNode":         "0",
+				"Flags":             uint32(0),
 				"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
 				"PreviousTxnLgrSeq": uint32(1),
 			},
@@ -191,7 +194,7 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 				"AssetsTotal":       "1000",
 				"AssetsAvailable":   "500",
 				"AssetsMaximum":     "10000",
-				"LossUnrealized":    "0",
+				"LossUnrealized":    "1",
 				"ShareMPTID":        "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
 				"WithdrawalPolicy":  uint32(1),
 				"Flags":             uint32(0),
@@ -263,7 +266,7 @@ func TestSignerList_LegacyAccountDecodeTolerance(t *testing.T) {
 	}
 
 	entry := New("SignerList")
-	if err := entry.Decode(legacyBytes); err != nil {
+	if err := DecodeLegacy(entry, legacyBytes); err != nil {
 		t.Fatalf("typed decoder must tolerate a legacy Account blob: %v", err)
 	}
 
