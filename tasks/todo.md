@@ -234,6 +234,67 @@ Verification:
 - The staged merge has no unmerged paths, conflict markers, or whitespace
   errors.
 
+# Issue #1301 — testnet readiness R1
+
+## Plan
+
+- [x] Record the exact `origin/v3.0.0` base and clean local rippled v3.2.0
+      oracle, then map each of the seven reported defects to existing Go and
+      rippled behavior.
+- [x] Make peer limits derived from `peers_max` in shipped/generated configs and
+      cover small/default limits plus actionable validation errors.
+- [x] Emit testnet validator-list defaults, reject an empty trusted validator
+      set outside standalone mode, and correct version-appropriate examples.
+- [x] Wire the configured data directory through production node startup and
+      verify identity, peerfinder cache, and reservation persistence.
+- [x] Remove implicit localhost RPC administration while preserving explicit
+      admin configuration and covering reverse-proxy requests.
+- [x] Correct inbound handshake feature negotiation and compression state,
+      including the HTTP 101 response feature header.
+- [x] Preserve fixed/bootstrap discovery sources and add bounded failed-dial
+      backoff without starving healthy candidates.
+- [x] Represent unavailable/expired validator-list quorum as unreachable and
+      ensure full-validation gating cannot fire.
+- [x] Format and run focused tests, race-sensitive tests where applicable,
+      full changed-area suites, vet, lint, build, and relevant conformance.
+- [x] Review every changed file and reachable caller for correctness, failure
+      paths, lifecycle/concurrency, wiring, and rippled v3.2.0 parity; record the
+      coverage matrix and unresolved scope honestly.
+- [x] Commit only intentional files, push the issue branch, and open a PR against
+      `v3.0.0` with the verified test plan.
+
+## Review
+
+- Base: `origin/v3.0.0` at `48bc716f7f9f9d92a07a494500b7294547f505ac`
+  (refetched immediately before commit; worktree merge-base is identical).
+- Oracle: clean detached rippled tag `3.2.0` at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Coverage matrix:
+  - Peer limits: generated/shipped `peers_max = 21`; default, small, private,
+    listenerless, and 100-peer splits cover rippled's 15%/minimum-10 rule.
+  - Validator trust: exact mainnet/testnet publisher anchors are emitted beside
+    generated configs; non-standalone startup rejects an empty trust source.
+  - Persistence: `database_path/peers` now owns node identity, boot-cache, and
+    reservation files; identity save failures are fatal and file mode is tested.
+  - RPC roles: loopback is guest unless its socket peer matches an explicit
+    `admin` network; HTTP, WebSocket, and proxy-header cases are covered.
+  - Handshake: outbound offers and inbound 101 responses use request/response
+    feature intersection; inbound peers retain the local compression policy.
+  - Discovery: configured bootstrap/fixed endpoints survive pruning and cache
+    pressure; in-flight reservations and bounded fixed-peer retry delays prevent
+    duplicate or hot-looping dials while healthy candidates remain selectable.
+  - Validator lists: unavailable-publisher thresholds follow rippled's
+    `min(threshold, publishers-threshold+1)` cutoff; unreachable quorum is
+    propagated atomically with trust so full validation cannot be declared.
+- Verification: `just fmt`, `just vet`, `just build-all`, `just build-nocgo`,
+  `just test-core`, `just test`, and `just lint` all pass. Race-enabled tests pass
+  for CLI, node, RPC, peer management, validator-list, adaptor, and RCL packages.
+  Conformance is 879/879 in scope; the 117 failures are all in the documented
+  out-of-scope Batch, Vault, XChain, and XChainSim suites.
+- No unresolved in-scope conformance gaps were found. The fail-fast empty-trust
+  check is an intentional startup safety requirement from issue #1301.
+- Delivery: PR #1317 is open and mergeable from
+  `fix/issue-1301-testnet-readiness-r1` into `v3.0.0`.
 # Issue #1306 — shared synthetic transaction metadata
 
 ## Plan

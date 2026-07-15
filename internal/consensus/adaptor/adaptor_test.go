@@ -195,6 +195,19 @@ func TestAdaptorQuorumCalculation(t *testing.T) {
 	}
 }
 
+func TestAdaptorQuorumUnavailableValidatorList(t *testing.T) {
+	a := New(Config{Validators: []consensus.NodeID{{1}, {2}, {3}}})
+	a.SetUNLBlockedFunc(func() bool { return true })
+	a.SetQuorumUnavailableFunc(func() bool { return false })
+	assert.Equal(t, 3, a.GetQuorum(), "UNL lock-down alone does not disable quorum")
+
+	a.SetQuorumUnavailableFunc(func() bool { return true })
+	assert.Equal(t, math.MaxInt, a.GetQuorum())
+
+	a.SetQuorumUnavailableFunc(func() bool { return false })
+	assert.Equal(t, 3, a.GetQuorum())
+}
+
 // TestSetTrustedValidators_AtomicSwap pins the runtime UNL-reload
 // primitive: every reader (GetTrustedValidators, IsTrusted, GetQuorum,
 // and the master-key snapshot consumed by NegativeUNL voting) must
@@ -217,7 +230,7 @@ func TestSetTrustedValidators_AtomicSwap(t *testing.T) {
 	}
 	a.SetTrustedValidators(next, masterKeys)
 
-	got := a.GetTrustedValidators()
+	got, quorum := a.GetTrustedValidatorsAndQuorum()
 	assert.ElementsMatch(t, next, got, "GetTrustedValidators reflects new set")
 	gotMasters := a.GetTrustedMasterKeys()
 	assert.Equal(t, masterKeys, gotMasters, "GetTrustedMasterKeys reflects new set")
@@ -225,19 +238,22 @@ func TestSetTrustedValidators_AtomicSwap(t *testing.T) {
 	assert.Equal(t, masterKeys, a.GetTrustedMasterKeys(), "GetTrustedMasterKeys returns a copy")
 	assert.True(t, a.IsTrusted(consensus.NodeID{0x04}), "newly added is trusted")
 	assert.False(t, a.IsTrusted(consensus.NodeID{0x02}), "removed is no longer trusted")
-	assert.Equal(t, 4, a.GetQuorum(), "quorum recomputes: ceil(0.8*5) = 4")
+	assert.Equal(t, 4, quorum, "quorum recomputes in the same snapshot: ceil(0.8*5) = 4")
 
 	// Master keys must be visible to the NegativeUNL voting path. Read
 	// under the lock the same way GenerateNegativeUNLPseudoTx does.
+	a.trustUpdateMu.Lock()
 	a.mu.Lock()
 	mkLen := len(a.trustedMasterKeys)
 	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
 	assert.Equal(t, len(masterKeys), mkLen, "trustedMasterKeys swapped atomically")
 
 	// Empty swap clears the set (standalone-mode transition).
 	a.SetTrustedValidators(nil, nil)
-	assert.Empty(t, a.GetTrustedValidators())
-	assert.Equal(t, 0, a.GetQuorum(), "empty trusted set → quorum 0 (no gate)")
+	got, quorum = a.GetTrustedValidatorsAndQuorum()
+	assert.Empty(t, got)
+	assert.Equal(t, 0, quorum, "empty trusted set → quorum 0 (no gate)")
 }
 
 func TestNewRetainsTrustedMasterKeysWithoutLocalIdentity(t *testing.T) {
