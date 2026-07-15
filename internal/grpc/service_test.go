@@ -139,6 +139,18 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
 }
 
+func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
+	t.Helper()
+	l, err := ledger.NewOpen(parent, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	if err := l.Close(time.Now(), 0); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return l
+}
+
 func ledgerShortcutSpec(shortcut rpcv1.LedgerSpecifier_Shortcut) *rpcv1.LedgerSpecifier {
 	return &rpcv1.LedgerSpecifier{
 		Ledger: &rpcv1.LedgerSpecifier_Shortcut_{Shortcut: shortcut},
@@ -477,6 +489,24 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	}
 }
 
+func TestGRPC_GetLedger_MalformedExpandedTransactionReturnsPartialSuccess(t *testing.T) {
+	badKey := [32]byte{0xAA}
+	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{badKey: pad("bad", 12)})
+	srv := NewServer(&fakeLookup{openLedger: l})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
+	if err != nil {
+		t.Fatalf("GetLedger expand: %v", err)
+	}
+	full, ok := resp.Transactions.(*rpcv1.GetLedgerResponse_TransactionsList)
+	if !ok {
+		t.Fatalf("expected TransactionsList, got %T", resp.Transactions)
+	}
+	if len(full.TransactionsList.Transactions) != 0 {
+		t.Fatalf("expanded transactions = %d, want partial empty response", len(full.TransactionsList.Transactions))
+	}
+}
+
 func TestGRPC_GetLedger_LookupBySequenceAndHash(t *testing.T) {
 	l := newTestLedger(t, 42, nil, nil)
 	lookup := &fakeLookup{
@@ -523,23 +553,31 @@ func TestGRPC_GetLedger_NoLedgerAvailableReturnsNotFound(t *testing.T) {
 
 func TestGRPC_GetLedgerEntry_KeyValidation(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: []byte("short")})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("short key: expected InvalidArgument, got %v", err)
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "index malformed" {
+		t.Errorf("short key: expected InvalidArgument index malformed, got %v", err)
 	}
 }
 
 func TestGRPC_GetLedgerEntry_NotFound(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	key := make([]byte, 32)
 	key[0] = 0xCC
 	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: key})
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("expected NotFound, got %v", err)
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "object not found" {
+		t.Errorf("expected NotFound object not found, got %v", err)
+	}
+}
+
+func TestGRPC_GetLedgerEntry_ResolvesLedgerBeforeKeyValidation(t *testing.T) {
+	srv := NewServer(&fakeLookup{})
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: []byte("short")})
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+		t.Fatalf("GetLedgerEntry() error = %v, want NotFound notSynced", err)
 	}
 }
 
@@ -759,6 +797,58 @@ func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
 	}
 }
 
+func TestGRPC_GetLedgerDiff_RequiresImmutableLedgers(t *testing.T) {
+	baseParent := newTestLedger(t, 9, nil, nil)
+	base := newTestLedger(t, 10, nil, nil)
+	desired := newTestLedger(t, 11, nil, nil)
+	openBase, err := ledger.NewOpen(baseParent, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen base: %v", err)
+	}
+	openDesired, err := ledger.NewOpen(desired, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen desired: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		base    *ledger.Ledger
+		desired *ledger.Ledger
+		message string
+	}{
+		{name: "base", base: openBase, desired: desired, message: "base ledger not validated"},
+		{name: "desired", base: base, desired: openDesired, message: "desired ledger not validated"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+				test.base.Sequence():    test.base,
+				test.desired.Sequence(): test.desired,
+			}})
+			_, err := srv.GetLedgerDiff(context.Background(), &rpcv1.GetLedgerDiffRequest{
+				BaseLedger:    ledgerSequenceSpec(test.base.Sequence()),
+				DesiredLedger: ledgerSequenceSpec(test.desired.Sequence()),
+			})
+			if status.Code(err) != codes.NotFound || status.Convert(err).Message() != test.message {
+				t.Fatalf("GetLedgerDiff() error = %v, want NotFound %q", err, test.message)
+			}
+		})
+	}
+
+	closedBase := newClosedTestLedger(t, newTestLedger(t, 20, nil, nil))
+	closedDesired := newClosedTestLedger(t, closedBase)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+		closedBase.Sequence():    closedBase,
+		closedDesired.Sequence(): closedDesired,
+	}})
+	if _, err := srv.GetLedgerDiff(context.Background(), &rpcv1.GetLedgerDiffRequest{
+		BaseLedger:    ledgerSequenceSpec(closedBase.Sequence()),
+		DesiredLedger: ledgerSequenceSpec(closedDesired.Sequence()),
+	}); err != nil {
+		t.Fatalf("GetLedgerDiff() rejected immutable unvalidated ledgers: %v", err)
+	}
+}
+
 // TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected mirrors rippled
 // LedgerData.cpp:182-186: an end_marker that sorts before the marker is
 // an explicit InvalidArgument, not a silent empty-page response.
@@ -965,6 +1055,56 @@ func TestGRPC_GetLedger_GetObjectsParentMissing(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("expected NotFound when parent absent, got %v", err)
+	}
+}
+
+func TestGRPC_GetLedger_GetObjectsRequiresImmutableLedgers(t *testing.T) {
+	parent := newTestLedger(t, 9, nil, nil)
+	openParent, err := ledger.NewOpen(newTestLedger(t, 8, nil, nil), time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen parent: %v", err)
+	}
+	openDesired, err := ledger.NewOpen(parent, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen desired: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		parent  *ledger.Ledger
+		desired *ledger.Ledger
+		message string
+	}{
+		{name: "parent", parent: openParent, desired: newTestLedger(t, 10, nil, nil), message: "parent ledger not validated"},
+		{name: "desired", parent: parent, desired: openDesired, message: "ledger not validated"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+				test.parent.Sequence():  test.parent,
+				test.desired.Sequence(): test.desired,
+			}})
+			_, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+				Ledger:     ledgerSequenceSpec(test.desired.Sequence()),
+				GetObjects: true,
+			})
+			if status.Code(err) != codes.NotFound || status.Convert(err).Message() != test.message {
+				t.Fatalf("GetLedger() error = %v, want NotFound %q", err, test.message)
+			}
+		})
+	}
+
+	closedParent := newClosedTestLedger(t, newTestLedger(t, 20, nil, nil))
+	closedDesired := newClosedTestLedger(t, closedParent)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+		closedParent.Sequence():  closedParent,
+		closedDesired.Sequence(): closedDesired,
+	}})
+	if _, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     ledgerSequenceSpec(closedDesired.Sequence()),
+		GetObjects: true,
+	}); err != nil {
+		t.Fatalf("GetLedger() rejected immutable unvalidated ledgers: %v", err)
 	}
 }
 

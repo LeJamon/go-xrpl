@@ -22,12 +22,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	if !types.IsValidClassicAddress(account) {
 		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -98,7 +97,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	response := map[string]any{
 		"account_nfts": nfts,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	mergeLedgerFields(response, ledgerFields)
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker

@@ -109,13 +109,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
 	if selErr != nil {
 		return nil, selErr
-	}
-	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
-	if limitErr != nil {
-		return nil, limitErr
 	}
 	deletionBlockersOnly := false
 	if raw, ok := fields["deletion_blockers_only"]; ok {
@@ -143,9 +139,13 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 			return nil, typeErr
 		}
 	}
+	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
+	}
 	markerStr := ""
 	var mErr *types.RPCError
-	if markerRaw, ok := fields["marker"]; ok && !isJSONNull(markerRaw) {
+	if markerRaw, ok := fields["marker"]; ok {
 		markerStr, mErr = markerString(markerRaw)
 	}
 	if mErr != nil {
@@ -204,7 +204,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		"account":         result.Account,
 		"account_objects": objects,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	mergeLedgerFields(response, ledgerFields)
 
 	if result.Marker != "" {
 		response["limit"] = limit

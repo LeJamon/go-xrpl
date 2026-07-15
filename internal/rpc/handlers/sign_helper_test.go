@@ -38,7 +38,7 @@ func TestSigningRequestUnmarshal(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"tx_json":{"TransactionType":"Payment"},"seed":"seed","key_type":"ed25519","offline":true,"build_path":true,"signature_target":"CounterpartySignature"}`), &request); err != nil {
 		t.Fatal(err)
 	}
-	if request.Seed != "seed" || request.KeyType != "ed25519" || !request.Offline || !request.BuildPath || request.SignatureTarget != counterpartySignatureField || len(request.TxJson) == 0 {
+	if string(request.Seed) != `"seed"` || string(request.KeyType) != `"ed25519"` || !request.Offline || !request.BuildPath || request.SignatureTarget != counterpartySignatureField || len(request.TxJson) == 0 {
 		t.Fatalf("unexpected signing request: %+v", request)
 	}
 }

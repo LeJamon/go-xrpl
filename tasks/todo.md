@@ -290,6 +290,22 @@ Target: `v3.0.0`. Protocol oracle: local rippled tag `3.2.0`
   No conflict markers, whitespace errors, or unrelated worktree changes are
   present.
 
+## PR #1321 finalization
+
+- [x] Pin the PR head, current `v3.0.0` base, feature worktree, and clean local
+      rippled `3.2.0` oracle.
+- [x] Resolve and push the base-branch conflicts without discarding either
+      branch's intended behavior.
+- [x] Review the complete merged diff for Go correctness and rippled `3.2.0`
+      behavioral parity.
+- [x] Correct confirmed transaction lookup, RPC/gRPC response, selector,
+      credential, channel, CTID, and compatibility regressions.
+- [ ] Commit and push the conformance corrections; require green CI at the exact
+      reviewed remote head.
+- [ ] Run the separate AI-comment cleanup phase and require green CI at the exact
+      final remote head.
+- [ ] Record the final reviewed heads, verification, and audit result below.
+
 # Issue #1306 — shared synthetic transaction metadata
 
 ## Plan

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -157,11 +158,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, limitErr
 	}
 
-	// Rippled enables proof handling solely when the member is present,
-	// regardless of its JSON value (BookOffers.cpp:201).
-	_, withProofs := probe["proof"]
-
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", withProofs)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", false)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrStaleMarker) {
 			return nil, types.RPCErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
@@ -369,8 +366,9 @@ func preResolveLedger(ctx *types.RPCContext, probe map[string]json.RawMessage) (
 	if rpcErr != nil {
 		return "", rpcErr
 	}
-	if _, rpcErr := resolveLedgerSelection(ctx, selection); rpcErr != nil {
+	resolved, rpcErr := resolveLedgerSelection(ctx, selection)
+	if rpcErr != nil {
 		return "", rpcErr
 	}
-	return selection.String(), nil
+	return strconv.FormatUint(uint64(resolved.Sequence), 10), nil
 }

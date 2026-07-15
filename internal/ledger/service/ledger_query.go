@@ -170,7 +170,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	result := &LedgerDataResult{
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
-		State:       make([]LedgerDataItem, 0, limit),
+		State:       make([]LedgerDataItem, 0),
 		Validated:   validated,
 	}
 

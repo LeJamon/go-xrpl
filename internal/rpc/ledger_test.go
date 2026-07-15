@@ -143,8 +143,10 @@ func TestLedgerBasicRequest(t *testing.T) {
 
 		resp := resultToMap(t, result)
 		assert.NotContains(t, resp, "ledger")
-		assert.Equal(t, true, resp["closed"].(map[string]any)["closed"])
-		assert.Equal(t, false, resp["open"].(map[string]any)["closed"])
+		closed := resp["closed"].(map[string]any)["ledger"].(map[string]any)
+		open := resp["open"].(map[string]any)["ledger"].(map[string]any)
+		assert.Equal(t, true, closed["closed"])
+		assert.Equal(t, false, open["closed"])
 	})
 
 	t.Run("Options without selector are ignored", func(t *testing.T) {

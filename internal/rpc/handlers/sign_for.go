@@ -53,15 +53,9 @@ func (m *SignForMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	}
 
 	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion)
+	privateKey, publicKey, keyType, rpcErr := request.signCredentials.deriveKeypair(ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
-	}
-
-	// Determine key type for signing (needed by signPayload)
-	keyType := strings.ToLower(request.KeyType)
-	if keyType == "" {
-		keyType = "secp256k1"
 	}
 
 	// Parse the transaction JSON

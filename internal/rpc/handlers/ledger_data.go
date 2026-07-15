@@ -12,6 +12,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -32,6 +33,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledgerIndex = strconv.FormatUint(uint64(targetLedger.Sequence()), 10)
 	fields := make(map[string]json.RawMessage)
 	if params != nil {
 		if err := json.Unmarshal(params, &fields); err != nil {
@@ -64,41 +66,14 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		}
 	}
 
-	maxLimit := int64(LimitLedgerData.Max)
-	if binaryMode {
-		maxLimit = int64(LimitLedgerDataBinary.Max)
+	limit, limitErr := ledgerDataLimit(fields, binaryMode, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
 	}
-	limitValue := int64(-1)
-	if raw, ok := fields["limit"]; ok {
-		value, err := decodeRawJSONValue(raw)
-		if boolean, ok := value.(bool); ok {
-			if boolean {
-				limitValue = 1
-			} else {
-				limitValue = 0
-			}
-		} else if number, valid := value.(json.Number); err == nil && valid && !strings.ContainsAny(number.String(), ".eE") {
-			limitValue, err = number.Int64()
-			if err != nil || limitValue < math.MinInt32 || limitValue > math.MaxInt32 {
-				return nil, types.RPCErrorExpectedField("limit", "integer")
-			}
-		} else {
-			return nil, types.RPCErrorExpectedField("limit", "integer")
-		}
-	}
-	if limitValue < 0 || (limitValue > maxLimit && !ctx.Unlimited) {
-		limitValue = maxLimit
-	}
-	limit := uint32(limitValue)
 
-	typeFilter := ""
-	if raw, ok := fields["type"]; ok {
-		if err := json.Unmarshal(raw, &typeFilter); err != nil {
-			return nil, types.RPCErrorExpectedField("type", "string")
-		}
-		if !validLedgerDataType(typeFilter) {
-			return nil, types.RPCErrorInvalidField("type")
-		}
+	entryType, typeErr := ledgerDataEntryType(fields)
+	if typeErr != nil {
+		return nil, typeErr
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
@@ -117,17 +92,14 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// Build state array based on binary flag
 	state := make([]map[string]any, 0, len(result.State))
 	for _, item := range result.State {
+		if entryType != 0 && ledgerstate.EntryTypeCode(item.Data) != entryType {
+			continue
+		}
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
 
 		decoded, decodeErr := deserializeLedgerEntry(item.Data)
 		decodedMap, _ := decoded.(map[string]any)
-		if typeFilter != "" {
-			actualType, _ := decodedMap["LedgerEntryType"].(string)
-			if !ledgerDataTypeMatches(typeFilter, actualType) {
-				continue
-			}
-		}
 
 		if binaryMode {
 			// Binary format: data as uppercase hex and index
@@ -204,11 +176,11 @@ func ledgerDataLimit(params map[string]json.RawMessage, binary, unlimited bool) 
 	if err != nil {
 		return 0, types.RPCErrorExpectedField("limit", "integer")
 	}
+	if parsed > math.MaxInt32 {
+		return 0, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
 	if !unlimited && parsed > maxLimit {
 		parsed = maxLimit
-	}
-	if parsed > uint64(^uint32(0)) {
-		return 0, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 	return uint32(parsed), nil
 }
@@ -318,19 +290,6 @@ func ledgerDataHeader(header *types.LedgerHeaderInfo, binary bool, apiVersion in
 		}
 	}
 	return ledger
-}
-
-func validLedgerDataType(filter string) bool {
-	for _, entry := range ledgerEntryFilterTypes {
-		if filter == entry.key || strings.EqualFold(entry.typeName, filter) {
-			return true
-		}
-	}
-	return false
-}
-
-func ledgerDataTypeMatches(filter, actual string) bool {
-	return strings.EqualFold(filter, actual) || filter == sleTypeToRPCName(actual)
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format

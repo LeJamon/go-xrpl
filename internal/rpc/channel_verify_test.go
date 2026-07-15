@@ -84,6 +84,54 @@ func TestChannelVerify_MissingSignature(t *testing.T) {
 	assert.Contains(t, err.Message, "signature")
 }
 
+func TestChannelVerify_PresentEmptyRequiredFields(t *testing.T) {
+	handler := &handlers.ChannelVerifyMethod{}
+	ctx := &types.RPCContext{ApiVersion: types.ApiVersion2}
+	const publicKey = "021D93E21C44160A1B3B66DA1F37B86BE39FFEA3FC4B95FAA2063F82EE823599F6"
+	const channelID = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+
+	tests := []struct {
+		name    string
+		params  string
+		code    int
+		message string
+	}{
+		{
+			name:    "empty public key is malformed",
+			params:  `{"public_key":"","channel_id":"` + channelID + `","amount":"1","signature":"AA"}`,
+			code:    types.RpcPUBLIC_MALFORMED,
+			message: "Public key is malformed.",
+		},
+		{
+			name:    "empty channel id is malformed",
+			params:  `{"public_key":"` + publicKey + `","channel_id":"","amount":"1","signature":"AA"}`,
+			code:    types.RpcCHANNEL_MALFORMED,
+			message: "Payment channel is malformed.",
+		},
+		{
+			name:    "empty amount is malformed",
+			params:  `{"public_key":"` + publicKey + `","channel_id":"` + channelID + `","amount":"","signature":"AA"}`,
+			code:    types.RpcCHANNEL_AMT_MALFORMED,
+			message: "Payment channel amount is malformed.",
+		},
+		{
+			name:    "empty signature is invalid",
+			params:  `{"public_key":"` + publicKey + `","channel_id":"` + channelID + `","amount":"1","signature":""}`,
+			code:    types.RpcINVALID_PARAMS,
+			message: "Invalid parameters.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, rpcErr := handler.Handle(ctx, json.RawMessage(tc.params))
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+}
+
 func TestChannelVerify_MalformedPublicKey(t *testing.T) {
 	handler := &handlers.ChannelVerifyMethod{}
 	ctx := &types.RPCContext{

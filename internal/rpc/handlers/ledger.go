@@ -47,17 +47,9 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		return nil, err
 	}
 	if !hasLedgerSelector {
-		closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
-		if err != nil || closed == nil {
-			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
-		if err != nil || open == nil {
-			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
-		}
-		response := map[string]any{
-			"closed": buildLedgerJSON(closed, false, false, ctx.ApiVersion),
-			"open":   buildLedgerJSON(open, false, false, ctx.ApiVersion),
+		response, rpcErr := ledgerDefaultResponse(ctx)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
 		addLedgerTypeWarning(response, params)
 		return response, nil

@@ -276,6 +276,15 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 			assert.Equal(t, "Invalid field 'limit', not integer.", rpcErr.Message)
 		})
 	}
+
+	t.Run("Limit above signed 32-bit range is rejected", func(t *testing.T) {
+		ctx.Unlimited = true
+		t.Cleanup(func() { ctx.Unlimited = false })
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"current","limit":2147483648}`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
 }
 
 // TestLedgerDataBinaryMode tests binary vs JSON response format
@@ -407,6 +416,8 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 
 	for _, input := range []string{
 		`{"ledger_index":"current","type":"MPT_Issuance"}`,
+		`{"ledger_index":"current","type":"account_root"}`,
+		`{"ledger_index":"current","type":"ripple_state"}`,
 		`{"ledger_index":"current","type":"unknown"}`,
 		`{"ledger_index":"current","type":123}`,
 	} {
@@ -762,7 +773,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		// ledger_data should be an uppercase hex string
 		dataStr, ok := ledger["ledger_data"].(string)
 		assert.True(t, ok, "ledger_data should be a string in binary mode")
-		const expectedLedgerData = "00000003016345785D89FFEC0200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002E40D2142E40D21E0A00"
+		const expectedLedgerData = "00000002016345785D89FFEC0200000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000002E40D2142E40D21E0A00"
 		assert.Equal(t, expectedLedgerData, dataStr)
 		_, err := hex.DecodeString(dataStr)
 		assert.NoError(t, err, "ledger_data should be valid hex")

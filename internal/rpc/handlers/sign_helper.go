@@ -24,19 +24,26 @@ const counterpartySignatureField = "CounterpartySignature"
 // signCredentials holds the signing credential parameters common to both
 // the sign and submit RPC methods.
 type signCredentials struct {
-	Secret     string `json:"secret,omitempty"`
-	Seed       string `json:"seed,omitempty"`
-	SeedHex    string `json:"seed_hex,omitempty"`
-	Passphrase string `json:"passphrase,omitempty"`
-	KeyType    string `json:"key_type,omitempty"`
+	Secret     json.RawMessage `json:"secret,omitempty"`
+	Seed       json.RawMessage `json:"seed,omitempty"`
+	SeedHex    json.RawMessage `json:"seed_hex,omitempty"`
+	Passphrase json.RawMessage `json:"passphrase,omitempty"`
+	KeyType    json.RawMessage `json:"key_type,omitempty"`
 }
 
-func (c signCredentials) any() bool {
-	return c.Secret != "" || c.Seed != "" || c.SeedHex != "" || c.Passphrase != ""
+func (c signCredentials) any(params json.RawMessage) bool {
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(params, &fields)
+	for _, field := range []string{"secret", "seed", "seed_hex", "passphrase"} {
+		if _, ok := fields[field]; ok {
+			return true
+		}
+	}
+	return false
 }
 
-func (c signCredentials) deriveKeypair(apiVersion int) (string, string, *types.RPCError) {
-	return parseCredentialsAndDeriveKeypair(c.Secret, c.Seed, c.SeedHex, c.Passphrase, c.KeyType, apiVersion)
+func (c signCredentials) deriveKeypair(apiVersion int, params json.RawMessage) (string, string, string, *types.RPCError) {
+	return parseCredentialsAndDeriveKeypair(apiVersion, params)
 }
 
 type signingRequest struct {
@@ -204,7 +211,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	}
 
 	// Parse credentials and derive keypair using the shared helper
-	privateKey, publicKey, rpcErr := creds.deriveKeypair(apiVersion)
+	privateKey, publicKey, _, rpcErr := creds.deriveKeypair(apiVersion, rawParams)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}

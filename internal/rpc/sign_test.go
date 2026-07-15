@@ -295,6 +295,131 @@ func TestSign_MissingCredentials(t *testing.T) {
 	assert.Contains(t, err.Message, "Missing field 'secret'.")
 }
 
+func TestSign_CredentialFieldPresence(t *testing.T) {
+	handler := &handlers.SignMethod{}
+
+	tests := []struct {
+		name        string
+		apiVersion  int
+		credentials string
+		code        int
+		message     string
+	}{
+		{
+			name:        "empty secret is still selected",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"secret":""`,
+			code:        types.RpcBAD_SEED,
+			message:     "Invalid field 'secret'.",
+		},
+		{
+			name:        "empty secret counts alongside seed",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"secret":"","seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Exactly one of the following must be specified: passphrase, secret, seed or seed_hex",
+		},
+		{
+			name:        "empty key type is present",
+			apiVersion:  types.ApiVersion2,
+			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":""`,
+			code:        types.RpcBAD_KEY_TYPE,
+			message:     "Bad key type.",
+		},
+		{
+			name:        "key type must be a string",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":null`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'key_type', not string.",
+		},
+		{
+			name:        "key type is case sensitive",
+			apiVersion:  types.ApiVersion2,
+			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb","key_type":"SECP256K1"`,
+			code:        types.RpcBAD_KEY_TYPE,
+			message:     "Bad key type.",
+		},
+		{
+			name:        "passphrase must be a string",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"passphrase":null,"key_type":"secp256k1"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'passphrase', not string.",
+		},
+		{
+			name:        "seed must be a string",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"seed":1,"key_type":"secp256k1"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'seed', not string.",
+		},
+		{
+			name:        "seed hex must be a string",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"seed_hex":false,"key_type":"secp256k1"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'seed_hex', not string.",
+		},
+		{
+			name:        "ordinary passphrase without key type uses legacy secret path",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"passphrase":"masterpassphrase"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'secret', not string.",
+		},
+		{
+			name:        "ordinary seed without key type uses legacy secret path",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"seed":"snoPBrXtMeMyMHUVTgbuqAfg1SUTb"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'secret', not string.",
+		},
+		{
+			name:        "ordinary seed hex without key type uses legacy secret path",
+			apiVersion:  types.ApiVersion1,
+			credentials: `"seed_hex":"DEDCE9CE67B451D852FD4E846FCDE31C"`,
+			code:        types.RpcINVALID_PARAMS,
+			message:     "Invalid field 'secret', not string.",
+		},
+		{
+			name:        "ed seed rejects explicit secp key type",
+			apiVersion:  types.ApiVersion2,
+			credentials: `"seed":"sEdTzRkEgPoxDG1mJ6WkSucHWnMkm1H","key_type":"secp256k1"`,
+			code:        types.RpcBAD_SEED,
+			message:     "Specified seed is for an Ed25519 wallet.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			params := json.RawMessage(`{"tx_json":{},"offline":true,` + tc.credentials + `}`)
+			_, rpcErr := handler.Handle(&types.RPCContext{ApiVersion: tc.apiVersion}, params)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, tc.code, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+}
+
+func TestSign_LegacySecretRejectsKeyTokens(t *testing.T) {
+	for _, secret := range []string{
+		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"aBQG8RQAzjs1eTKFEAQXr2gS4utcDiEC9wmi7pfUPTi27VCahwgw",
+		"n94a1u4jAz288pZLtw6yFWVbi89YamiC6JBXPVUj5zmExe5fTVg9",
+		"p9JfM6HHi64m6mvB6v5k7G2b1cXzGmYiCNJf6GHPKvFTWdeRVjh",
+		"pnen77YEeUd4fFKG7iycBWcwKpTaeFRkW2WFostaATy1DSupwXe",
+	} {
+		t.Run(secret[:1], func(t *testing.T) {
+			params := json.RawMessage(`{"tx_json":{},"offline":true,"secret":"` + secret + `"}`)
+			_, rpcErr := (&handlers.SignMethod{}).Handle(&types.RPCContext{ApiVersion: types.ApiVersion1}, params)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+			assert.Equal(t, "Invalid field 'secret'.", rpcErr.Message)
+		})
+	}
+}
+
 func TestSign_InvalidKeyType(t *testing.T) {
 	mock := newMockLedgerService()
 	services := &types.ServiceContainer{Ledger: mock}
@@ -371,7 +496,8 @@ func TestSign_AccountMismatch(t *testing.T) {
 			"Destination": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Amount": "1000000"
 		},
-		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C"
+		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
+		"key_type": "secp256k1"
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
@@ -394,7 +520,8 @@ func TestSign_LedgerServiceUnavailable(t *testing.T) {
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000"
 		},
-		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C"
+		"seed_hex": "DEDCE9CE67B451D852FD4E846FCDE31C",
+		"key_type": "secp256k1"
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
@@ -423,6 +550,7 @@ func TestSign_OfflineMode(t *testing.T) {
 			"LastLedgerSequence": 100
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`)
 	result, err := handler.Handle(ctx, params)
@@ -465,7 +593,8 @@ func TestSign_SrcActNotFound(t *testing.T) {
 			"Fee": "10",
 			"Sequence": 1
 		},
-		"passphrase": "masterpassphrase"
+		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1"
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
@@ -494,7 +623,8 @@ func TestSign_AutofillSequence(t *testing.T) {
 			"Amount": "1000000",
 			"Fee": "10"
 		},
-		"passphrase": "masterpassphrase"
+		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1"
 	}`)
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
@@ -524,6 +654,7 @@ func TestSign_Offline_MissingSequence(t *testing.T) {
 			"Fee": "10"
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -550,6 +681,7 @@ func TestSign_Offline_MissingFee(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -580,7 +712,8 @@ func TestSign_TicketSequence_AutofillsSequenceZero(t *testing.T) {
 			"Fee": "10",
 			"TicketSequence": 7
 		},
-		"passphrase": "masterpassphrase"
+		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1"
 	}`)
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
@@ -630,6 +763,7 @@ func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
 			"Amount": "1000000"
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": false
 	}`)
 	result, err := handler.Handle(ctx, params)
@@ -663,6 +797,7 @@ func TestSign_FeeMultMax_ZeroRejects(t *testing.T) {
 			"Amount": "1000000"
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_mult_max": 0
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -692,6 +827,7 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 			"Amount": "1000000"
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_div_max": 100
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -722,6 +858,7 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_mult_max": -1
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -753,6 +890,7 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_div_max": 0
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -784,6 +922,7 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_div_max": -5
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -814,6 +953,7 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_mult_max": 1.5
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -844,6 +984,7 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"fee_mult_max": "ten"
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -875,6 +1016,7 @@ func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
 			"LastLedgerSequence": 100
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true,
 		"fee_mult_max": "garbage"
 	}`)
@@ -904,6 +1046,7 @@ func TestSign_DeliverMax_APIv1(t *testing.T) {
 			"LastLedgerSequence": 100
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`)
 	result, err := handler.Handle(ctx, params)
@@ -936,6 +1079,7 @@ func TestSign_DeliverMax_APIv2(t *testing.T) {
 			"LastLedgerSequence": 100
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`)
 	result, err := handler.Handle(ctx, params)
@@ -970,6 +1114,7 @@ func TestSign_NoDeliverMax_NonPayment(t *testing.T) {
 			"LastLedgerSequence": 100
 		},
 		"passphrase": "masterpassphrase",
+		"key_type": "secp256k1",
 		"offline": true
 	}`)
 	result, err := handler.Handle(ctx, params)
@@ -1141,6 +1286,7 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 			"Sequence":        uint32(1),
 		},
 		"passphrase": "masterpassphrase",
+		"key_type":   "secp256k1",
 	}
 	paramsJSON, _ := json.Marshal(paramsMap)
 

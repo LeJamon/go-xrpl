@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -206,19 +207,13 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 
 	if req.GetTransactions() {
 		if req.GetExpand() {
-			list, err := expandTransactions(l)
-			if err != nil {
-				return nil, err
-			}
-			resp.Transactions = &rpcv1.GetLedgerResponse_TransactionsList{TransactionsList: list}
+			resp.Transactions = &rpcv1.GetLedgerResponse_TransactionsList{TransactionsList: expandTransactions(l)}
 		} else {
 			hashes := &rpcv1.TransactionHashList{}
-			if err := l.ForEachTransaction(func(h [32]byte, _ []byte) bool {
+			_ = l.ForEachTransaction(func(h [32]byte, _ []byte) bool {
 				hashes.Hashes = append(hashes.Hashes, cloneHash(h))
 				return true
-			}); err != nil {
-				return nil, status.Errorf(codes.Internal, "iterating transactions: %v", err)
-			}
+			})
 			resp.Transactions = &rpcv1.GetLedgerResponse_HashesList{HashesList: hashes}
 		}
 	}
@@ -234,13 +229,11 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 
 // expandTransactions splits each stored tx+metadata blob into its separate
 // transaction and metadata serializations, the shape Clio expects.
-func expandTransactions(l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, error) {
+func expandTransactions(l *ledger.Ledger) *rpcv1.TransactionAndMetadataList {
 	list := &rpcv1.TransactionAndMetadataList{}
-	var splitErr error
-	if err := l.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+	_ = l.ForEachTransaction(func(_ [32]byte, data []byte) bool {
 		txBlob, metaBlob, e := tx.SplitTxWithMetaBlob(data)
 		if e != nil {
-			splitErr = e
 			return false
 		}
 		list.Transactions = append(list.Transactions, &rpcv1.TransactionAndMetadata{
@@ -248,13 +241,8 @@ func expandTransactions(l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, er
 			MetadataBlob:    append([]byte(nil), metaBlob...),
 		})
 		return true
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterating transactions: %v", err)
-	}
-	if splitErr != nil {
-		return nil, status.Errorf(codes.Internal, "splitting transaction blob: %v", splitErr)
-	}
-	return list, nil
+	})
+	return list
 }
 
 // appendChangedObjects fills the response with the state objects that differ
@@ -265,6 +253,12 @@ func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.L
 	parent, err := s.lookup.GetLedgerBySequence(l.Sequence() - 1)
 	if err != nil {
 		return status.Error(codes.NotFound, "parent ledger not validated")
+	}
+	if parent == nil || !parent.IsImmutable() {
+		return status.Error(codes.NotFound, "parent ledger not validated")
+	}
+	if !l.IsImmutable() {
+		return status.Error(codes.NotFound, "ledger not validated")
 	}
 	diff, baseMap, desiredMap, err := stateDiff(parent, l)
 	if err != nil {
@@ -390,21 +384,21 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	key, err := hash32(req.GetKey(), "entry key")
+	resolved, err := s.resolveLedger(req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
-
-	ledgerIdx, err := s.specToIndex(req.GetLedger())
-	if err != nil {
-		return nil, err
+	if len(req.GetKey()) != 32 {
+		return nil, status.Error(codes.InvalidArgument, "index malformed")
 	}
+	var key [32]byte
+	copy(key[:], req.GetKey())
 
-	entry, err := s.lookup.GetLedgerEntry(ctx, key, ledgerIdx)
+	entry, err := s.lookup.GetLedgerEntry(ctx, key, strconv.FormatUint(uint64(resolved.Sequence()), 10))
 	if err != nil {
 		switch {
 		case errors.Is(err, svcerr.ErrLedgerEntryNotFound):
-			return nil, status.Error(codes.NotFound, "ledger entry not found")
+			return nil, status.Error(codes.NotFound, "object not found")
 		case errors.Is(err, svcerr.ErrLedgerNotFound), errors.Is(err, svcerr.ErrNoOpenLedger):
 			return nil, status.Error(codes.NotFound, err.Error())
 		default:
@@ -503,11 +497,17 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 	}
 	base, err := s.resolveLedger(req.GetBaseLedger())
 	if err != nil {
-		return nil, err
+		return nil, status.Error(codes.NotFound, "base ledger not found")
 	}
 	desired, err := s.resolveLedger(req.GetDesiredLedger())
 	if err != nil {
-		return nil, err
+		return nil, status.Error(codes.NotFound, "desired ledger not found")
+	}
+	if !base.IsImmutable() {
+		return nil, status.Error(codes.NotFound, "base ledger not validated")
+	}
+	if !desired.IsImmutable() {
+		return nil, status.Error(codes.NotFound, "desired ledger not validated")
 	}
 
 	diff, _, _, err := stateDiff(base, desired)

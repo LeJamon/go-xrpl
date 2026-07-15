@@ -1415,7 +1415,7 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 
 	// Sanity: the malformed-marker branch still produces the invalid_field
 	// shape so callers can distinguish the two on the wire.
@@ -1425,7 +1425,7 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 }
 
 func TestBookOffersMarkerValuesIgnored(t *testing.T) {
@@ -1918,11 +1918,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	})
 }
 
-// TestBookOffersProofFlagPlumbing pins how the handler forwards the JSON
-// `proof` field through to LedgerService.GetBookOffers as the withProofs
-// flag. Rippled's BookOffers.cpp:201 (`isMember(jss::proof)`) treats any
-// presence — including explicit `false` and `null` — as truthy.
-func TestBookOffersProofFlagPlumbing(t *testing.T) {
+func TestBookOffersProofIsIgnored(t *testing.T) {
 	mock := newBookOffersMock()
 	services := newBookOffersTestServices(mock)
 	method := &handlers.BookOffersMethod{}
@@ -1950,14 +1946,13 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 	cases := []struct {
 		name      string
 		proof     any
-		want      bool
 		omitProof bool
 	}{
-		{name: "absent → false", omitProof: true, want: false},
-		{name: "explicit false → true", proof: false, want: true},
-		{name: "explicit true → true", proof: true, want: true},
-		{name: "non-bool present → true", proof: "yes", want: true},
-		{name: "null → true", proof: nil, want: true},
+		{name: "absent", omitProof: true},
+		{name: "false", proof: false},
+		{name: "true", proof: true},
+		{name: "non-bool", proof: "yes"},
+		{name: "null", proof: nil},
 	}
 
 	for _, tc := range cases {
@@ -1973,7 +1968,7 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 
 			_, rpcErr := method.Handle(ctx, body)
 			require.Nil(t, rpcErr)
-			assert.Equal(t, tc.want, captured, "withProofs flag mismatch")
+			assert.False(t, captured)
 		})
 	}
 }

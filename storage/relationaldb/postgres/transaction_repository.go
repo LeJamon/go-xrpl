@@ -66,17 +66,12 @@ func (r *transactionRepository) GetTransactionCount(ctx context.Context) (int64,
 func (r *transactionRepository) GetTransaction(ctx context.Context, hash relationaldb.Hash, ledgerRange *relationaldb.LedgerRange) (*relationaldb.TransactionInfo, relationaldb.TxSearchResult, error) {
 	query := `SELECT trans_id, ledger_seq, status, raw_txn, txn_meta
 			  FROM transactions WHERE trans_id = $1`
-	args := []any{hash[:]}
-	if ledgerRange != nil {
-		query += ` AND ledger_seq >= $2 AND ledger_seq <= $3`
-		args = append(args, ledgerRange.Min, ledgerRange.Max)
-	}
 
 	var info relationaldb.TransactionInfo
 	var hashBytes []byte
 	var txnMeta sql.NullString
 
-	err := r.getExecutor().QueryRowContext(ctx, query, args...).Scan(
+	err := r.getExecutor().QueryRowContext(ctx, query, hash[:]).Scan(
 		&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta)
 
 	if errors.Is(err, sql.ErrNoRows) {

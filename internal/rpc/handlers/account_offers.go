@@ -21,7 +21,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -62,7 +62,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		"account": result.Account,
 		"offers":  result.Offers,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	mergeLedgerFields(response, ledgerFields)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

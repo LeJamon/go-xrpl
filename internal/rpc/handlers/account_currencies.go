@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -47,8 +48,10 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledgerIndex = strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	ledgerFields := ledgerEntryResponseFields(ledger, validated)
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
 	// Get account currencies from the ledger service
@@ -68,7 +71,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 	}
 
 	// Build response
-	response := ledgerEntryResponseFields(ledger, validated)
+	response := ledgerFields
 	response["receive_currencies"] = result.ReceiveCurrencies
 	response["send_currencies"] = result.SendCurrencies
 

@@ -524,11 +524,6 @@ func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledger
 		if err != nil {
 			return nil, err
 		}
-		if ledgerRange != nil &&
-			(relationaldb.LedgerIndex(result.LedgerIndex) < ledgerRange.Min ||
-				relationaldb.LedgerIndex(result.LedgerIndex) > ledgerRange.Max) {
-			return &TransactionSearchResult{Searched: relationaldb.TxSearchUnknown}, nil
-		}
 		return &TransactionSearchResult{Transaction: result, Searched: relationaldb.TxSearchUnknown}, nil
 	}
 
@@ -556,13 +551,17 @@ func (s *Service) SearchTransaction(ctx context.Context, txHash [32]byte, ledger
 	if err != nil {
 		return nil, err
 	}
+	txIndex, ok := tx.TransactionIndexFromMetadata(info.TxnMeta)
+	if !ok {
+		txIndex = invalidTransactionIndex
+	}
 	return &TransactionSearchResult{
 		Transaction: &TransactionResult{
 			TxData:      txData,
 			LedgerIndex: uint32(info.LedgerSeq),
 			LedgerHash:  contextInfo.Hash,
 			Validated:   true,
-			TxIndex:     info.TxnSeq,
+			TxIndex:     txIndex,
 			CloseTime:   contextInfo.CloseTime,
 		},
 		Searched: searched,

@@ -229,6 +229,9 @@ func (m *TxMethod) buildResponseV1(
 		response["ledger_index"] = txInfo.LedgerIndex
 	}
 	response["validated"] = txInfo.Validated
+	if ctid, ok := transactionJSONCTID(storedTx, txInfo, networkID); ok {
+		response["ctid"] = ctid
+	}
 	if ctid, ok := txResultCTID(storedTx.Meta, txInfo, networkID); ok {
 		response["ctid"] = ctid
 	}
@@ -270,6 +273,9 @@ func (m *TxMethod) buildResponseV2(
 			txJSON["ledger_index"] = txInfo.LedgerIndex
 			if closeTimeSec > 0 {
 				txJSON["date"] = closeTimeSec
+			}
+			if ctid, ok := transactionJSONCTID(storedTx, txInfo, networkID); ok {
+				txJSON["ctid"] = ctid
 			}
 		}
 		response["tx_json"] = txJSON
@@ -404,6 +410,17 @@ func txResultCTID(meta map[string]any, txInfo *types.TransactionInfo, networkID 
 		return "", false
 	}
 	return encodeTxResponseCTID(txInfo.LedgerIndex, transactionIndex, networkID)
+}
+
+func transactionJSONCTID(storedTx StoredTransaction, txInfo *types.TransactionInfo, networkID uint32) (string, bool) {
+	if txInfo.LedgerIndex == 0 {
+		return "", false
+	}
+	transactionIndex, ok := jsonUint32(storedTx.Meta["TransactionIndex"])
+	if !ok {
+		return "", false
+	}
+	return encodeCTID(txInfo.LedgerIndex, transactionIndex, transactionNetworkID(storedTx.TxJSON, networkID))
 }
 
 // StoredTransaction represents a transaction stored in the ledger

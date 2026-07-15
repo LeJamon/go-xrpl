@@ -40,7 +40,7 @@ func (m *SubmitMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	var txBlobHex string
 
 	// Determine if this is a sign-and-submit request (tx_json + credentials)
-	hasSigningCreds := request.signCredentials.any()
+	hasSigningCreds := request.signCredentials.any(params)
 
 	if request.TxBlob != "" {
 		// Decode tx_blob to get tx_json

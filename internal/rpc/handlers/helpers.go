@@ -258,28 +258,38 @@ func preflightAccountPage(
 	params json.RawMessage,
 	account string,
 	internalDetail string,
-) (string, *types.RPCError) {
+	includeLedgerFieldsOnError bool,
+) (string, map[string]any, *types.RPCError) {
 	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
 	if rpcErr != nil {
-		return "", rpcErr
+		return "", nil, rpcErr
 	}
 	ledgerIndex := selection.String()
-	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, ledgerIndex); err != nil {
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			switch selection.Kind() {
-			case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
-				if ctx.ApiVersion <= types.ApiVersion1 {
-					return "", types.RPCErrorNoNetwork("InsufficientNetworkMode")
-				}
-				return "", types.RPCErrorNotSynced("notSynced")
-			}
-		}
-		return "", mapAccountQueryErr(err, internalDetail)
+	resolved, rpcErr := resolveLedgerSelection(ctx, selection)
+	if rpcErr != nil {
+		return "", nil, rpcErr
 	}
+	reader := resolved.Value
+	ledgerIndex = strconv.FormatUint(uint64(reader.Sequence()), 10)
+	ledgerFields := make(map[string]any, 3)
+	fillResolvedLedgerFields(ledgerFields, reader, resolved.Validated)
 	if rpcErr := ValidateAccount(account); rpcErr != nil {
-		return "", rpcErr
+		if includeLedgerFieldsOnError {
+			rpcErr = rpcErr.WithExtra(ledgerFields)
+		}
+		return "", nil, rpcErr
 	}
-	return ledgerIndex, nil
+	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, account, ledgerIndex); err != nil {
+		rpcErr := mapAccountQueryErr(err, internalDetail)
+		return "", nil, rpcErr
+	}
+	return ledgerIndex, ledgerFields, nil
+}
+
+func mergeLedgerFields(response, ledgerFields map[string]any) {
+	for key, value := range ledgerFields {
+		response[key] = value
+	}
 }
 
 func accountPageParams(params json.RawMessage) (map[string]json.RawMessage, string, *types.RPCError) {
@@ -298,26 +308,6 @@ func accountPageParams(params json.RawMessage) (map[string]json.RawMessage, stri
 		return fields, "", types.RPCErrorInvalidField("account")
 	}
 	return fields, account, nil
-}
-
-func legacyBoolValue(raw json.RawMessage) bool {
-	if raw == nil || isJSONNull(raw) {
-		return false
-	}
-	var value any
-	if json.Unmarshal(raw, &value) != nil {
-		return false
-	}
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case string:
-		return typed != ""
-	case float64:
-		return typed != 0
-	default:
-		return false
-	}
 }
 
 func parseLedgerSelectorParams(

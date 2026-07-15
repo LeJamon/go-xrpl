@@ -18,6 +18,9 @@ var (
 	ErrInvalidTimeout         = errors.New("timeout must be positive")
 	ErrInvalidConnMaxLifetime = errors.New("connection max lifetime must be >= 0")
 	ErrInvalidConnMaxIdleTime = errors.New("connection max idle time must be >= 0")
+	ErrInvalidMaxRetries      = errors.New("max retries must be >= 0")
+	ErrInvalidRetryDelay      = errors.New("retry delay must be >= 0")
+	ErrInvalidRetryMaxDelay   = errors.New("retry max delay must be >= retry delay")
 	ErrInvalidMinFreeSpace    = errors.New("minimum free space must be >= 100MB")
 
 	// ErrDatabaseClosed is returned when an operation runs against a closed connection.

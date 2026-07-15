@@ -147,8 +147,8 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	isV2 := ctx.ApiVersion > 1
 
 	// Build transactions array
-	transactions := make([]map[string]any, len(result.Transactions))
-	for i, txn := range result.Transactions {
+	transactions := make([]map[string]any, 0, len(result.Transactions))
+	for _, txn := range result.Transactions {
 		txEntry := map[string]any{
 			"validated": true,
 		}
@@ -180,10 +180,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			// Decode tx_blob into JSON
 			txJSON, decErr := decodeBinaryObject(txn.TxBlob)
 			if decErr != nil {
-				// Fallback to hex if decode fails
-				txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txn.TxBlob))
-				txEntry["hash"] = txHashHex
-				txEntry["ledger_index"] = txn.LedgerIndex
+				continue
 			} else {
 				sourceTxJSON = maps.Clone(txJSON)
 				ctidNetworkID := networkID
@@ -241,7 +238,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			}
 		}
 
-		transactions[i] = txEntry
+		transactions = append(transactions, txEntry)
 	}
 
 	response := map[string]any{

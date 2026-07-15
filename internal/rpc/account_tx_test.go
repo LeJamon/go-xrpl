@@ -731,6 +731,28 @@ func TestAccountTxBinaryMode(t *testing.T) {
 		assert.NotContains(t, tx0, "hash")
 		assert.Equal(t, true, tx0["validated"])
 	})
+
+	t.Run("JSON mode skips corrupt transaction rows", func(t *testing.T) {
+		ctx := &types.RPCContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+		mock.getAccountTransactionsFn = func(_ context.Context, account string, _, _ int64, _ uint32, _ *types.AccountTxMarker, _ bool) (*types.AccountTxResult, error) {
+			return &types.AccountTxResult{
+				Account: account,
+				Transactions: []types.AccountTransaction{{
+					TxBlob: []byte{0xff},
+				}},
+				Validated: true,
+			}, nil
+		}
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"account":"`+validAccount+`"}`))
+		require.Nil(t, rpcErr)
+		response := resultToMap(t, result)
+		assert.Empty(t, response["transactions"])
+	})
 }
 
 func TestAccountTxJSONProjectionByAPIVersion(t *testing.T) {

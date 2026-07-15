@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -70,6 +71,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledgerIndex = strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	response := ledgerEntryResponseFields(ledger, validated)
 	if transactions {
 		response["transactions"] = []map[string]any{}

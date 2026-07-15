@@ -27,6 +27,11 @@ type Config struct {
 	// Transaction settings
 	DefaultTimeout time.Duration `json:"default_timeout" yaml:"default_timeout"`
 
+	// Retry settings
+	MaxRetries    int           `json:"max_retries" yaml:"max_retries"`
+	RetryDelay    time.Duration `json:"retry_delay" yaml:"retry_delay"`
+	RetryMaxDelay time.Duration `json:"retry_max_delay" yaml:"retry_max_delay"`
+
 	// Maintenance settings
 	MinFreeSpaceMB     uint64 `json:"min_free_space_mb" yaml:"min_free_space_mb"`
 	VacuumIntervalDays int    `json:"vacuum_interval_days" yaml:"vacuum_interval_days"`
@@ -51,6 +56,9 @@ func NewConfig() *Config {
 		ConnMaxLifetime:    time.Hour,
 		ConnMaxIdleTime:    time.Minute * 15,
 		DefaultTimeout:     time.Second * 30,
+		MaxRetries:         3,
+		RetryDelay:         time.Millisecond * 100,
+		RetryMaxDelay:      time.Second * 5,
 		MinFreeSpaceMB:     512,
 		VacuumIntervalDays: 7,
 		UseTxTables:        true,
@@ -118,6 +126,17 @@ func (c *Config) Validate() error {
 	}
 	if c.ConnMaxIdleTime < 0 {
 		return ErrInvalidConnMaxIdleTime
+	}
+
+	// Validate retry settings
+	if c.MaxRetries < 0 {
+		return ErrInvalidMaxRetries
+	}
+	if c.RetryDelay < 0 {
+		return ErrInvalidRetryDelay
+	}
+	if c.RetryMaxDelay < c.RetryDelay {
+		return ErrInvalidRetryMaxDelay
 	}
 
 	// Validate maintenance settings

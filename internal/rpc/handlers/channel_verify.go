@@ -35,19 +35,21 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(params, &fields)
 
 	// Validate required fields
 	// rippled: for (auto const& p : {jss::public_key, jss::channel_id, jss::amount, jss::signature}) if (!params.isMember(p)) return RPC::missing_field_error(p);
-	if request.PublicKey == "" {
+	if _, ok := fields["public_key"]; !ok {
 		return nil, types.RPCErrorMissingField("public_key")
 	}
-	if request.ChannelID == "" {
+	if _, ok := fields["channel_id"]; !ok {
 		return nil, types.RPCErrorMissingField("channel_id")
 	}
-	if request.Amount == "" {
+	if _, ok := fields["amount"]; !ok {
 		return nil, types.RPCErrorMissingField("amount")
 	}
-	if request.Signature == "" {
+	if _, ok := fields["signature"]; !ok {
 		return nil, types.RPCErrorMissingField("signature")
 	}
 
@@ -83,7 +85,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	sigHex := strings.ToUpper(request.Signature)
 	sigBytes, err := hex.DecodeString(sigHex)
 	if err != nil || len(sigBytes) == 0 {
-		return nil, types.RPCErrorInvalidField("signature")
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
 	// Serialize the payment channel claim message

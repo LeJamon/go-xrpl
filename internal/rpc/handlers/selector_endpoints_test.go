@@ -120,15 +120,6 @@ func newSelectorEndpointService(t *testing.T) (*selectorEndpointService, string)
 	}, hashString
 }
 
-func selectorProbe(t *testing.T, raw string) map[string]json.RawMessage {
-	t.Helper()
-	var probe map[string]json.RawMessage
-	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
-		t.Fatal(err)
-	}
-	return probe
-}
-
 func TestResolvePathFindLedgerSelectors(t *testing.T) {
 	t.Run("omitted uses closed view without metadata", func(t *testing.T) {
 		service, _ := newSelectorEndpointService(t)

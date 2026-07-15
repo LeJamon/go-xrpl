@@ -874,7 +874,7 @@ func TestLedgerEntryLedgerSpecification(t *testing.T) {
 			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "current", mock.lastLedgerIndex)
 				assert.Contains(t, resp, "index")
-				assert.Equal(t, float64(2), resp["ledger_current_index"])
+				assert.Equal(t, float64(3), resp["ledger_current_index"])
 				assert.NotContains(t, resp, "ledger_hash")
 				assert.NotContains(t, resp, "ledger_index")
 			},

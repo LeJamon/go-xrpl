@@ -22,7 +22,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", true)
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -36,7 +36,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		}
 	}
 	if peer != "" && !types.IsValidClassicAddress(peer) {
-		return nil, types.RPCErrorActMalformed("Account malformed.")
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountLines, ctx.Unlimited)
@@ -127,7 +127,7 @@ func (m *AccountLinesMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 		"account": result.Account,
 		"lines":   jsonLines,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	mergeLedgerFields(response, ledgerFields)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
