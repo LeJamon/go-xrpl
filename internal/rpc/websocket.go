@@ -1080,14 +1080,14 @@ func (c *WebSocketConnection) closeSocket() {
 	c.conn.Close()
 }
 
-func (wsConn *WebSocketConnection) closeWithPolicyViolation(reason string) {
-	wsConn.cancel()
-	_ = wsConn.conn.WriteControl(
+func (c *WebSocketConnection) closeWithPolicyViolation(reason string) {
+	c.cancel()
+	_ = c.conn.WriteControl(
 		websocket.CloseMessage,
 		websocket.FormatCloseMessage(websocket.ClosePolicyViolation, reason),
 		time.Now().Add(time.Second),
 	)
-	wsConn.conn.Close()
+	c.conn.Close()
 }
 
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {

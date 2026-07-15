@@ -10,11 +10,9 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LedgerDataMethod handles the ledger_data RPC method
@@ -235,57 +233,6 @@ func ledgerDataEntryType(params map[string]json.RawMessage) (uint16, *types.RpcE
 		}
 	}
 	return 0, types.RpcErrorInvalidField("type")
-}
-
-func ledgerDataHeader(header *types.LedgerHeaderInfo, binary bool, apiVersion int) map[string]any {
-	if binary {
-		ledger := map[string]any{"closed": header.Closed}
-		if !header.Closed {
-			return ledger
-		}
-		rawHeader := ledgerheader.AddRaw(ledgerheader.LedgerHeader{
-			LedgerIndex:         header.LedgerIndex,
-			ParentCloseTime:     protocol.FromRippleTime(uint32(max(header.ParentCloseTime, 0))),
-			ParentHash:          header.ParentHash,
-			TxHash:              header.TransactionHash,
-			AccountHash:         header.AccountHash,
-			Drops:               header.TotalCoins,
-			CloseFlags:          header.CloseFlags,
-			CloseTimeResolution: header.CloseTimeResolution,
-			CloseTime:           protocol.FromRippleTime(uint32(max(header.CloseTime, 0))),
-		}, false)
-		ledger["ledger_data"] = strings.ToUpper(hex.EncodeToString(rawHeader))
-		return ledger
-	}
-
-	var ledgerIndex any = header.LedgerIndex
-	if apiVersion <= types.ApiVersion1 {
-		ledgerIndex = strconv.FormatUint(uint64(header.LedgerIndex), 10)
-	}
-	ledger := map[string]any{
-		"parent_hash":  FormatLedgerHash(header.ParentHash),
-		"ledger_index": ledgerIndex,
-		"closed":       header.Closed,
-	}
-	if !header.Closed {
-		return ledger
-	}
-	ledger["account_hash"] = FormatLedgerHash(header.AccountHash)
-	ledger["close_flags"] = header.CloseFlags
-	ledger["close_time"] = header.CloseTime
-	ledger["close_time_resolution"] = header.CloseTimeResolution
-	ledger["ledger_hash"] = FormatLedgerHash(header.LedgerHash)
-	ledger["parent_close_time"] = header.ParentCloseTime
-	ledger["total_coins"] = fmt.Sprintf("%d", header.TotalCoins)
-	ledger["transaction_hash"] = FormatLedgerHash(header.TransactionHash)
-	if header.CloseTime != 0 {
-		ledger["close_time_human"] = header.CloseTimeHuman
-		ledger["close_time_iso"] = header.CloseTimeISO
-		if header.CloseFlags&ledgerheader.LCFNoConsensusTime != 0 {
-			ledger["close_time_estimated"] = true
-		}
-	}
-	return ledger
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format

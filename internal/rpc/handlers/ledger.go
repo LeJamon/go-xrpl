@@ -365,26 +365,6 @@ func ledgerDefaultResponse(ctx *types.RpcContext) (map[string]any, *types.RpcErr
 	}, nil
 }
 
-func ledgerHeaderInfo(l types.LedgerReader) *types.LedgerHeaderInfo {
-	closeTime := l.CloseTime()
-	close := protocol.FromRippleTime(uint32(max(closeTime, 0)))
-	return &types.LedgerHeaderInfo{
-		AccountHash:         l.StateMapHash(),
-		CloseFlags:          l.CloseFlags(),
-		CloseTime:           closeTime,
-		CloseTimeHuman:      close.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC"),
-		CloseTimeISO:        protocol.FormatCloseTimeISO(close),
-		CloseTimeResolution: l.CloseTimeResolution(),
-		Closed:              l.IsClosed(),
-		LedgerHash:          l.Hash(),
-		LedgerIndex:         l.Sequence(),
-		ParentCloseTime:     l.ParentCloseTime(),
-		ParentHash:          l.ParentHash(),
-		TotalCoins:          l.TotalDrops(),
-		TransactionHash:     l.TxMapHash(),
-	}
-}
-
 // ownerFundsLedgerView resolves the state view for the target ledger so
 // owner_funds can be computed against it, mirroring rippled's accountFunds
 // call against fill.ledger (LedgerToJson.cpp:216-221). Returns nil when the
