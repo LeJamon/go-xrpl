@@ -373,6 +373,7 @@ var txTemplates = map[Type]map[string]fieldStyle{
 		"DomainID":         soeOPTIONAL,
 		"WithdrawalPolicy": soeOPTIONAL,
 		"Data":             soeOPTIONAL,
+		"Scale":            soeOPTIONAL,
 	},
 	TypeVaultSet: {
 		"VaultID":       soeREQUIRED,

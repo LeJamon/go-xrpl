@@ -1,3 +1,37 @@
+# Issue #1331 — VaultCreate Scale template allowlist
+
+## Goal
+
+- Accept codec-valid `VaultCreate` transactions that carry the optional `Scale`
+  field, matching rippled v3.2.0.
+- Preserve the existing IOU-only and maximum-scale validation in the VaultCreate
+  transactor.
+- Cover the binary parse/prepare path that rejected the devnet replay transaction
+  before application.
+
+## Plan
+
+- [x] Validate the issue, linked work, clean worktree, exact base, and local oracle.
+- [x] Trace the template allowlist, binary parser, and existing VaultCreate validation.
+- [x] Add `Scale` as an optional VaultCreate template field and a focused binary regression.
+- [x] Run formatting, focused tests, broader transaction tests, vet, lint, build, and diff checks.
+- [x] Review the completed change against rippled v3.2.0 and record the results below.
+
+## Review
+
+- Rippled v3.2.0 declares `VaultCreate.sfScale` as `SoeOptional`; its separate
+  preflight permits values 0 through 18 only for IOU assets. The existing Go
+  transactor already matches those validation and application semantics.
+- The production fix is limited to the missing optional template entry. The
+  regression exercises replay's binary `ParseAndPrepare` path, checks the
+  decoded non-zero scale, and verifies byte-exact blob preservation.
+- Focused and full transaction/Vault tests pass, including the focused race
+  test. `just fmt`, `just build-all`, `just vet`, required CI lint, advisory
+  lint, and `git diff --check` pass.
+- The original devnet replay database is not available in this workspace, so
+  the ledger-range replay was not rerun; the reported parse failure is covered
+  directly by the serialized transaction regression.
+
 # Issue #1322 — nodestore fallback for ledger hash lookup
 
 ## Goal
