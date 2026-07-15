@@ -730,6 +730,32 @@ func (l *Ledger) MutableSnapshot() (*Ledger, error) {
 	}, nil
 }
 
+// MutableSnapshotUnflushed returns a mutable copy without persisting dirty
+// SHAMap nodes, for short-lived transactional staging that is then adopted or
+// discarded.
+func (l *Ledger) MutableSnapshotUnflushed() (*Ledger, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	stateMapCopy, err := l.stateMap.SnapshotMutableUnflushed()
+	if err != nil {
+		return nil, err
+	}
+	txMapCopy, err := l.txMap.SnapshotMutableUnflushed()
+	if err != nil {
+		return nil, err
+	}
+	return &Ledger{
+		stateMap:       stateMapCopy,
+		txMap:          txMapCopy,
+		header:         l.header,
+		fees:           l.fees,
+		state:          l.state,
+		dropsDestroyed: l.dropsDestroyed,
+		rules:          l.rules,
+	}, nil
+}
+
 func (l *Ledger) StateMapHash() ([32]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
@@ -84,5 +85,35 @@ func TestBlockProcessor_MetadataSerializationFailureIsAtomic(t *testing.T) {
 	}
 	if !view.TxExists(succeeded.Hash) {
 		t.Fatal("successful transaction state was published without its transaction leaf")
+	}
+}
+
+func TestBlockProcessor_StagingDoesNotFlushBackedSHAMaps(t *testing.T) {
+	genesisResult, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatalf("create genesis: %v", err)
+	}
+	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("create open ledger: %v", err)
+	}
+	family := shamap.NewMemoryNodeStoreFamily()
+	family.SetMinimumLedgerSeq(view.Sequence() + 1)
+	view.SetStateMapFamily(family)
+	if _, err := view.MutableSnapshot(); !errors.Is(err, shamap.ErrStoreBelowMinimum) {
+		t.Fatalf("flushing snapshot error = %v, want %v", err, shamap.ErrStoreBelowMinimum)
+	}
+
+	bp := NewBlockProcessor(recoveryEngine(view, txcore.TapNONE))
+	result, err := bp.ApplyTransaction(recoveryTx(10, 1), []byte{0x12, 0x03})
+	if err != nil {
+		t.Fatalf("apply with backed SHAMap: %v", err)
+	}
+	if !result.ApplyResult.Applied {
+		t.Fatalf("transaction result = %s, want applied", result.ApplyResult.Result)
+	}
+	if view.TxCount() != 1 || !view.TxExists(result.Hash) {
+		t.Fatal("applied transaction was not committed atomically")
 	}
 }

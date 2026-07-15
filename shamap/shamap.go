@@ -669,13 +669,20 @@ func (sm *SHAMap) consolidateAfterDelete(stack *nodeStack, key [32]byte) (Node, 
 // SnapshotMutable returns a structurally-shared copy that may be modified.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotMutable() (*SHAMap, error) {
-	return sm.snapshot(true)
+	return sm.snapshot(true, true)
+}
+
+// SnapshotMutableUnflushed returns a mutable structurally-shared copy without
+// persisting dirty nodes first. It is for short-lived transactional staging;
+// callers must publish or discard the copy before releasing shared children.
+func (sm *SHAMap) SnapshotMutableUnflushed() (*SHAMap, error) {
+	return sm.snapshot(true, false)
 }
 
 // SnapshotImmutable returns a read-only structurally-shared copy.
 // See snapshot for the sharing and flushing semantics.
 func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
-	return sm.snapshot(false)
+	return sm.snapshot(false, true)
 }
 
 // snapshot returns a structurally-shared copy of the SHAMap in O(1).
@@ -684,16 +691,16 @@ func (sm *SHAMap) SnapshotImmutable() (*SHAMap, error) {
 // each touched inner node), so the snapshot's tree is never observed
 // being mutated.
 //
-// For backed maps, dirty nodes present at entry are flushed to the store
-// before the root is shared. flushDirty and the subsequent RLock are
+// When requested for backed maps, dirty nodes present at entry are flushed to
+// the store before the root is shared. flushDirty and the subsequent RLock are
 // separate critical sections, so a writer racing between the two can
 // produce a snapshot whose root references dirty inner nodes that are
 // not yet in the store; those will be flushed on the next flush.
 // Flushing a structurally-shared subtree from either map is safe: the
 // dirty flag is atomic and node hashes are read and written under each
 // node's own lock.
-func (sm *SHAMap) snapshot(mutable bool) (*SHAMap, error) {
-	if sm.backed && sm.family != nil {
+func (sm *SHAMap) snapshot(mutable, flush bool) (*SHAMap, error) {
+	if flush && sm.backed && sm.family != nil {
 		if err := sm.StoreDirty(func(entries []FlushEntry) error {
 			return sm.family.StoreBatch(context.Background(), entries)
 		}); err != nil {
