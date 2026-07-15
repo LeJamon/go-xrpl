@@ -16,13 +16,15 @@ type Config struct {
 	Ports map[string]PortConfig `toml:"-" mapstructure:"-"`
 
 	// 2. Peer Protocol
-	Compression      bool                   `toml:"compression" mapstructure:"compression"`
-	IPs              []string               `toml:"ips" mapstructure:"ips"`
-	IPsFixed         []string               `toml:"ips_fixed" mapstructure:"ips_fixed"`
-	PeerPrivate      int                    `toml:"peer_private" mapstructure:"peer_private"`
-	PeersMax         int                    `toml:"peers_max" mapstructure:"peers_max"`
-	ClusterNodes     []string               `toml:"cluster_nodes" mapstructure:"cluster_nodes"`
-	MaxTransactions  int                    `toml:"max_transactions" mapstructure:"max_transactions"` // 0 = use default (250)
+	Compression     bool     `toml:"compression" mapstructure:"compression"`
+	IPs             []string `toml:"ips" mapstructure:"ips"`
+	IPsFixed        []string `toml:"ips_fixed" mapstructure:"ips_fixed"`
+	PeerPrivate     int      `toml:"peer_private" mapstructure:"peer_private"`
+	PeersMax        int      `toml:"peers_max" mapstructure:"peers_max"`
+	ClusterNodes    []string `toml:"cluster_nodes" mapstructure:"cluster_nodes"`
+	MaxTransactions int      `toml:"max_transactions" mapstructure:"max_transactions"` // 0 = use default (250)
+	// FeeDefault is the legacy reference-fee override applied after [voting].
+	FeeDefault       *int                   `toml:"fee_default" mapstructure:"fee_default"`
 	Overlay          OverlayConfig          `toml:"overlay" mapstructure:"overlay"`
 	TransactionQueue TransactionQueueConfig `toml:"transaction_queue" mapstructure:"transaction_queue"`
 

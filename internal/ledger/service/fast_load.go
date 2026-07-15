@@ -3,14 +3,24 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
+
+var errStoredLedgerUnavailable = errors.New("stored ledger is incomplete or invalid")
+
+func isUnavailableSHAMapNode(err error) bool {
+	return errors.Is(err, shamap.ErrNodeNotInStore) || errors.Is(err, shamap.ErrInvalidNodeData)
+}
 
 func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) {
 	if s.nodeStore == nil || s.relationalDB == nil || s.shamapFamily == nil {
@@ -31,23 +41,15 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 		len(tip.Data) != 32 || !bytes.Equal(tip.Data, info.Hash[:]) {
 		return nil, fmt.Errorf("newest relational ledger %d is not the persisted validated tip", info.Sequence)
 	}
-	stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(info.Hash))
+	loaded, err := s.loadStoredLedgerByHash(ctx, [32]byte(info.Hash))
 	if err != nil {
 		return nil, err
 	}
-	if stored == nil || stored.Type != nodestore.NodeLedger {
+	if loaded == nil {
 		return nil, fmt.Errorf("ledger %d header is missing", info.Sequence)
 	}
-	h, err := header.DeserializeHeader(stored.Data, true)
-	if err != nil {
-		return nil, err
-	}
-	if h.Hash != [32]byte(info.Hash) || h.LedgerIndex != uint32(info.Sequence) ||
-		h.AccountHash != [32]byte(info.AccountHash) || h.TxHash != [32]byte(info.TransactionHash) ||
-		h.ParentHash != [32]byte(info.ParentHash) || h.Drops != uint64(info.TotalCoins) ||
-		!h.CloseTime.Equal(info.CloseTime) || !h.ParentCloseTime.Equal(info.ParentCloseTime) ||
-		h.CloseTimeResolution != uint32(info.CloseTimeRes) || h.CloseFlags != uint8(info.CloseFlags) ||
-		header.CalculateHash(*h) != h.Hash {
+	h := loaded.Header()
+	if !storedHeaderMatchesInfo(h, info) {
 		return nil, fmt.Errorf("ledger %d header does not match persisted metadata", info.Sequence)
 	}
 	if err := s.verifyStoredSHAMap(ctx, h.AccountHash, shamap.TypeState); err != nil {
@@ -58,19 +60,69 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 			return nil, fmt.Errorf("ledger %d transaction tree: %w", info.Sequence, err)
 		}
 	}
+	if err := loaded.SetValidated(); err != nil {
+		return nil, fmt.Errorf("mark newest ledger %d validated: %w", info.Sequence, err)
+	}
+	return loaded, nil
+}
 
-	stateMap, err := shamap.NewFromRootHash(shamap.TypeState, h.AccountHash, s.shamapFamily)
+func (s *Service) loadStoredLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	if s.nodeStore == nil || s.shamapFamily == nil {
+		return nil, nil
+	}
+	stored, err := s.nodeStore.Fetch(ctx, nodestore.Hash256(hash))
 	if err != nil {
 		return nil, err
+	}
+	if stored == nil {
+		return nil, nil
+	}
+	if stored.Type != nodestore.NodeLedger {
+		return nil, fmt.Errorf("%w: stored object is %s, not a ledger header", errStoredLedgerUnavailable, stored.Type)
+	}
+	h, err := header.DeserializeHeader(stored.Data, true)
+	if err != nil {
+		return nil, fmt.Errorf("%w: deserialize ledger header: %v", errStoredLedgerUnavailable, err)
+	}
+	if h.Hash != hash || header.CalculateHash(*h) != hash {
+		return nil, fmt.Errorf("%w: stored ledger header does not match requested hash", errStoredLedgerUnavailable)
+	}
+	if stored.LedgerSeq != 0 && stored.LedgerSeq != h.LedgerIndex {
+		return nil, fmt.Errorf("%w: stored ledger sequence %d does not match header %d", errStoredLedgerUnavailable, stored.LedgerSeq, h.LedgerIndex)
+	}
+
+	stateMap, err := shamap.NewFromRootHashContext(ctx, shamap.TypeState, h.AccountHash, s.shamapFamily)
+	if err != nil {
+		if isUnavailableSHAMapNode(err) {
+			return nil, fmt.Errorf("%w: state root: %v", errStoredLedgerUnavailable, err)
+		}
+		return nil, err
+	}
+	stateRoot, err := stateMap.Hash()
+	if err != nil {
+		return nil, err
+	}
+	if stateRoot != h.AccountHash {
+		return nil, fmt.Errorf("%w: stored state root does not match ledger header", errStoredLedgerUnavailable)
 	}
 	var txMap *shamap.SHAMap
 	if h.TxHash == ([32]byte{}) {
 		txMap, err = shamap.NewBacked(shamap.TypeTransaction, s.shamapFamily)
 	} else {
-		txMap, err = shamap.NewFromRootHash(shamap.TypeTransaction, h.TxHash, s.shamapFamily)
+		txMap, err = shamap.NewFromRootHashContext(ctx, shamap.TypeTransaction, h.TxHash, s.shamapFamily)
 	}
 	if err != nil {
+		if isUnavailableSHAMapNode(err) {
+			return nil, fmt.Errorf("%w: transaction root: %v", errStoredLedgerUnavailable, err)
+		}
 		return nil, err
+	}
+	txRoot, err := txMap.Hash()
+	if err != nil {
+		return nil, err
+	}
+	if txRoot != h.TxHash {
+		return nil, fmt.Errorf("%w: stored transaction root does not match ledger header", errStoredLedgerUnavailable)
 	}
 	stateMap.SetLedgerSeq(h.LedgerIndex)
 	txMap.SetLedgerSeq(h.LedgerIndex)
@@ -80,9 +132,77 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	if err := txMap.SetImmutable(); err != nil {
 		return nil, err
 	}
-	h.Validated = true
+	rules, err := ledger.LoadAmendmentsFromSHAMapContext(ctx, stateMap)
+	if err != nil {
+		if isUnavailableSHAMapNode(err) {
+			return nil, fmt.Errorf("%w: amendment state: %v", errStoredLedgerUnavailable, err)
+		}
+		return nil, err
+	}
+	fees, err := storedLedgerFees(ctx, stateMap, rules.XRPFeesEnabled(), s.configuredFees)
+	if err != nil {
+		if isUnavailableSHAMapNode(err) || errors.Is(err, state.ErrInvalidFeeSettings) || errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, fmt.Errorf("%w: fee settings: %v", errStoredLedgerUnavailable, err)
+		}
+		return nil, err
+	}
+	h.Validated = false
 	h.Accepted = true
-	return ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	loaded, err := ledger.NewClosedFromHeaderContext(ctx, *h, stateMap, txMap, fees)
+	if err != nil && isUnavailableSHAMapNode(err) {
+		return nil, fmt.Errorf("%w: ledger state: %v", errStoredLedgerUnavailable, err)
+	}
+	return loaded, err
+}
+
+func storedHeaderMatchesInfo(h header.LedgerHeader, info *relationaldb.LedgerInfo) bool {
+	return info != nil &&
+		h.Hash == [32]byte(info.Hash) && h.LedgerIndex == uint32(info.Sequence) &&
+		h.AccountHash == [32]byte(info.AccountHash) && h.TxHash == [32]byte(info.TransactionHash) &&
+		h.ParentHash == [32]byte(info.ParentHash) && h.Drops == uint64(info.TotalCoins) &&
+		h.CloseTime.Equal(info.CloseTime) && h.ParentCloseTime.Equal(info.ParentCloseTime) &&
+		h.CloseTimeResolution == uint32(info.CloseTimeRes) && h.CloseFlags == uint8(info.CloseFlags) &&
+		header.CalculateHash(h) == h.Hash
+}
+
+func storedLedgerFees(ctx context.Context, stateMap *shamap.SHAMap, xrpFeesEnabled bool, fees drops.Fees) (drops.Fees, error) {
+	item, found, err := stateMap.GetContext(ctx, keylet.Fees().Key)
+	if err != nil {
+		return drops.Fees{}, fmt.Errorf("read stored fee settings: %w", err)
+	}
+	if !found || item == nil {
+		return fees, nil
+	}
+	settings, err := state.ParseFeeSettings(item.Data())
+	if err != nil {
+		return drops.Fees{}, fmt.Errorf("parse stored fee settings: %w", err)
+	}
+	if settings.IsUsingModernFees() && !xrpFeesEnabled {
+		return drops.Fees{}, fmt.Errorf("%w: XRPFees fields are present before the amendment is enabled", errStoredLedgerUnavailable)
+	}
+	return mergeFeeSettings(fees, settings), nil
+}
+
+func mergeFeeSettings(fees drops.Fees, settings *state.FeeSettings) drops.Fees {
+	if settings.HasBaseFeeDrops {
+		fees.Base = drops.XRPAmount(settings.BaseFeeDrops)
+	}
+	if settings.HasReserveBaseDrops {
+		fees.Reserve = drops.XRPAmount(settings.ReserveBaseDrops)
+	}
+	if settings.HasReserveIncrementDrops {
+		fees.Increment = drops.XRPAmount(settings.ReserveIncrementDrops)
+	}
+	if settings.HasBaseFee {
+		fees.Base = drops.XRPAmount(settings.BaseFee)
+	}
+	if settings.HasReserveBase {
+		fees.Reserve = drops.XRPAmount(settings.ReserveBase)
+	}
+	if settings.HasReserveIncrement {
+		fees.Increment = drops.XRPAmount(settings.ReserveIncrement)
+	}
+	return fees
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {

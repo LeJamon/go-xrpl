@@ -18,25 +18,33 @@ func TestGetLedgerForQuerySelectors(t *testing.T) {
 		name          string
 		selection     string
 		want          *ledger.Ledger
+		wantSnapshot  bool
 		wantValidated bool
 	}{
-		{name: "empty defaults open", selection: "", want: open},
-		{name: "current", selection: "current", want: open},
+		{name: "empty defaults open", selection: "", want: open, wantSnapshot: true},
+		{name: "current", selection: "current", want: open, wantSnapshot: true},
 		{name: "closed", selection: "closed", want: closed},
 		{name: "validated", selection: "validated", want: validated, wantValidated: true},
 		{name: "numeric history", selection: strconv.FormatUint(uint64(closed.Sequence()), 10), want: closed},
-		{name: "numeric open after history miss", selection: strconv.FormatUint(uint64(open.Sequence()), 10), want: open},
-		{name: "leading plus numeric open", selection: "+" + strconv.FormatUint(uint64(open.Sequence()), 10), want: open},
+		{name: "numeric open after history miss", selection: strconv.FormatUint(uint64(open.Sequence()), 10), want: open, wantSnapshot: true},
+		{name: "leading plus numeric open", selection: "+" + strconv.FormatUint(uint64(open.Sequence()), 10), want: open, wantSnapshot: true},
 		{name: "hash", selection: protocol.Hash256Hex(closed.Hash()), want: closed},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, gotValidated, err := getLedgerForQueryLocked(svc, test.selection)
+			got, gotValidated, err := svc.getLedgerForQuery(test.selection)
 			if err != nil {
 				t.Fatalf("getLedgerForQuery(%q) returned error: %v", test.selection, err)
 			}
-			if got != test.want {
+			if test.wantSnapshot {
+				if got == test.want {
+					t.Fatalf("getLedgerForQuery(%q) returned the mutable open ledger", test.selection)
+				}
+				if got.Sequence() != test.want.Sequence() || got.Hash() != test.want.Hash() || got.State() != test.want.State() {
+					t.Fatalf("getLedgerForQuery(%q) snapshot does not match the selected open ledger", test.selection)
+				}
+			} else if got != test.want {
 				t.Fatalf("getLedgerForQuery(%q) returned ledger %v, want %d", test.selection, got, test.want.Sequence())
 			}
 			if gotValidated != test.wantValidated {
@@ -65,7 +73,7 @@ func TestGetLedgerForQueryInvalidSelectors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, validated, err := getLedgerForQueryLocked(svc, test.selection)
+			got, validated, err := svc.getLedgerForQuery(test.selection)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("getLedgerForQuery(%q) error = %v, want %v", test.selection, err, test.want)
 			}
@@ -97,7 +105,7 @@ func TestGetLedgerForQueryMissingTargets(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got, validated, err := getLedgerForQueryLocked(svc, test.selection)
+			got, validated, err := svc.getLedgerForQuery(test.selection)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("getLedgerForQuery(%q) error = %v, want %v", test.selection, err, test.want)
 			}
@@ -125,7 +133,7 @@ func TestGetLedgerForQueryUsesLedgerValidatedState(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.selection, func(t *testing.T) {
-			l, got, err := getLedgerForQueryLocked(svc, test.selection)
+			l, got, err := svc.getLedgerForQuery(test.selection)
 			if err != nil {
 				t.Fatalf("getLedgerForQuery(%q) returned error: %v", test.selection, err)
 			}
@@ -163,10 +171,4 @@ func ledgerSelectorService(t *testing.T) (*Service, *ledger.Ledger, *ledger.Ledg
 	svc.putHistoryLocked(closed)
 	svc.mu.Unlock()
 	return svc, open, closed, validated
-}
-
-func getLedgerForQueryLocked(svc *Service, selection string) (*ledger.Ledger, bool, error) {
-	svc.mu.RLock()
-	defer svc.mu.RUnlock()
-	return svc.getLedgerForQuery(selection)
 }

@@ -8,6 +8,7 @@ package grpc
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"math"
 	"strconv"
@@ -55,12 +56,32 @@ func NewServer(lookup LedgerLookup) *Server {
 	return &Server{lookup: lookup}
 }
 
+func grpcStorageError(operation string, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
+	return status.Errorf(codes.Internal, "%s: %v", operation, err)
+}
+
+func (s *Server) lookupLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	if contextual, ok := s.lookup.(interface {
+		GetLedgerByHashContext(context.Context, [32]byte) (*ledger.Ledger, error)
+	}); ok {
+		return contextual.GetLedgerByHashContext(ctx, hash)
+	}
+	return s.lookup.GetLedgerByHash(hash)
+}
+
 func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, error) {
+	return s.resolveLedgerContext(context.Background(), spec)
+}
+
+func (s *Server) resolveLedgerContext(ctx context.Context, spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, error) {
 	selection, err := selectorFromSpecifier(spec)
 	if err != nil {
 		return nil, err
 	}
-	result, err := s.resolveLedgerSelection(selection)
+	result, err := s.resolveLedgerSelection(ctx, selection)
 	return result.Value, err
 }
 
@@ -95,7 +116,7 @@ func selectorFromSpecifier(spec *rpcv1.LedgerSpecifier) (ledgerselector.Selector
 	}
 }
 
-func (s *Server) resolveLedgerSelection(selection ledgerselector.Selector) (ledgerselector.Result[*ledger.Ledger], error) {
+func (s *Server) resolveLedgerSelection(ctx context.Context, selection ledgerselector.Selector) (ledgerselector.Result[*ledger.Ledger], error) {
 	current := func() (*ledger.Ledger, bool, error) {
 		if stale, _ := s.validatedLedgerState(); stale {
 			return nil, false, errLedgerNotSynced
@@ -136,7 +157,7 @@ func (s *Server) resolveLedgerSelection(selection ledgerselector.Selector) (ledg
 			return l, l != nil, err
 		},
 		ByHash: func(hash [32]byte) (*ledger.Ledger, bool, error) {
-			l, err := s.lookup.GetLedgerByHash(hash)
+			l, err := s.lookupLedgerByHash(ctx, hash)
 			return l, l != nil, err
 		},
 	})
@@ -166,11 +187,19 @@ func (s *Server) shortcutLedgerLagged(l *ledger.Ledger) bool {
 }
 
 func ledgerSelectorError(selection ledgerselector.Selector, err error) error {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return status.FromContextError(err).Err()
+	}
 	if errors.Is(err, ledgerselector.ErrInvalidSelector) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	if errors.Is(err, errLedgerNotSynced) {
 		return status.Error(codes.NotFound, errLedgerNotSynced.Error())
+	}
+	if selection.Kind() == ledgerselector.KindHash &&
+		!errors.Is(err, ledgerselector.ErrLedgerNotFound) &&
+		!errors.Is(err, svcerr.ErrLedgerNotFound) {
+		return status.Errorf(codes.Internal, "ledger hash lookup: %v", err)
 	}
 
 	switch selection.Kind() {
@@ -195,7 +224,7 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	l, err := s.resolveLedger(req.GetLedger())
+	l, err := s.resolveLedgerContext(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
@@ -207,19 +236,25 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 
 	if req.GetTransactions() {
 		if req.GetExpand() {
-			resp.Transactions = &rpcv1.GetLedgerResponse_TransactionsList{TransactionsList: expandTransactions(l)}
+			list, err := expandTransactions(ctx, l)
+			if err != nil {
+				return nil, err
+			}
+			resp.Transactions = &rpcv1.GetLedgerResponse_TransactionsList{TransactionsList: list}
 		} else {
 			hashes := &rpcv1.TransactionHashList{}
-			_ = l.ForEachTransaction(func(h [32]byte, _ []byte) bool {
+			if err := l.ForEachTransactionContext(ctx, func(h [32]byte, _ []byte) bool {
 				hashes.Hashes = append(hashes.Hashes, cloneHash(h))
 				return true
-			})
+			}); err != nil {
+				return nil, grpcStorageError("iterating transactions", err)
+			}
 			resp.Transactions = &rpcv1.GetLedgerResponse_HashesList{HashesList: hashes}
 		}
 	}
 
 	if req.GetGetObjects() {
-		if err := s.appendChangedObjects(resp, l, req.GetGetObjectNeighbors()); err != nil {
+		if err := s.appendChangedObjects(ctx, resp, l, req.GetGetObjectNeighbors()); err != nil {
 			return nil, err
 		}
 	}
@@ -229,9 +264,9 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 
 // expandTransactions splits each stored tx+metadata blob into its separate
 // transaction and metadata serializations, the shape Clio expects.
-func expandTransactions(l *ledger.Ledger) *rpcv1.TransactionAndMetadataList {
+func expandTransactions(ctx context.Context, l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, error) {
 	list := &rpcv1.TransactionAndMetadataList{}
-	_ = l.ForEachTransaction(func(_ [32]byte, data []byte) bool {
+	if err := l.ForEachTransactionContext(ctx, func(_ [32]byte, data []byte) bool {
 		txBlob, metaBlob, e := tx.SplitTxWithMetaBlob(data)
 		if e != nil {
 			return false
@@ -241,18 +276,23 @@ func expandTransactions(l *ledger.Ledger) *rpcv1.TransactionAndMetadataList {
 			MetadataBlob:    append([]byte(nil), metaBlob...),
 		})
 		return true
-	})
-	return list
+	}); err != nil {
+		return nil, grpcStorageError("iterating transactions", err)
+	}
+	return list, nil
 }
 
 // appendChangedObjects fills the response with the state objects that differ
 // between l and its parent (sequence-1), tagging each CREATED, MODIFIED or
 // DELETED. When wantNeighbors is set it also fills each created/deleted
 // object's predecessor and successor and any order-book successors.
-func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.Ledger, wantNeighbors bool) error {
-	parent, err := s.lookup.GetLedgerBySequence(l.Sequence() - 1)
-	if err != nil {
+func (s *Server) appendChangedObjects(ctx context.Context, resp *rpcv1.GetLedgerResponse, l *ledger.Ledger, wantNeighbors bool) error {
+	parent, err := s.lookupLedgerByHash(ctx, l.ParentHash())
+	if errors.Is(err, svcerr.ErrLedgerNotFound) || (err == nil && parent == nil) {
 		return status.Error(codes.NotFound, "parent ledger not validated")
+	}
+	if err != nil {
+		return grpcStorageError("looking up parent ledger", err)
 	}
 	if parent == nil || !parent.IsImmutable() {
 		return status.Error(codes.NotFound, "parent ledger not validated")
@@ -260,9 +300,9 @@ func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.L
 	if !l.IsImmutable() {
 		return status.Error(codes.NotFound, "ledger not validated")
 	}
-	diff, baseMap, desiredMap, err := stateDiff(parent, l)
+	diff, baseMap, desiredMap, err := stateDiff(ctx, parent, l)
 	if err != nil {
-		return status.Errorf(codes.Internal, "comparing state maps: %v", err)
+		return grpcStorageError("comparing state maps", err)
 	}
 	if !diff.Complete {
 		return status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
@@ -283,7 +323,9 @@ func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.L
 		// Neighbours are computed only for created and deleted objects, not
 		// modified ones.
 		if wantNeighbors && d.Type != shamap.DiffModified {
-			appendNeighbors(obj, resp, d, baseMap, desiredMap)
+			if err := appendNeighbors(ctx, obj, resp, d, baseMap, desiredMap); err != nil {
+				return grpcStorageError("finding object neighbors", err)
+			}
 		}
 		objects.Objects = append(objects.Objects, obj)
 	}
@@ -299,13 +341,17 @@ func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.L
 // Predecessor and successor come from the desired (new) state map; the book
 // successor is keyed by the deleted book in the base map or the created book
 // in the desired map.
-func appendNeighbors(obj *rpcv1.RawLedgerObject, resp *rpcv1.GetLedgerResponse, d shamap.DifferenceItem, baseMap, desiredMap *shamap.SHAMap) {
+func appendNeighbors(ctx context.Context, obj *rpcv1.RawLedgerObject, resp *rpcv1.GetLedgerResponse, d shamap.DifferenceItem, baseMap, desiredMap *shamap.SHAMap) error {
 	k := d.Key
-	if it := desiredMap.LowerBound(k); it.Valid() {
+	if it := desiredMap.LowerBoundContext(ctx, k); it.Valid() {
 		obj.Predecessor = cloneHash(it.Item().Key())
+	} else if err := it.Err(); err != nil {
+		return err
 	}
-	if it := desiredMap.UpperBound(k); it.Valid() {
+	if it := desiredMap.UpperBoundContext(ctx, k); it.Valid() {
 		obj.Successor = cloneHash(it.Item().Key())
+	} else if err := it.Err(); err != nil {
+		return err
 	}
 
 	var blob []byte
@@ -316,7 +362,7 @@ func appendNeighbors(obj *rpcv1.RawLedgerObject, resp *rpcv1.GetLedgerResponse, 
 		blob = d.FirstItem.DataUnsafe()
 	}
 	if !isBookDirectory(blob) {
-		return
+		return nil
 	}
 
 	bookBase := keylet.Quality(keylet.Keylet{Type: entry.TypeDirectoryNode, Key: k}, 0).Key
@@ -325,27 +371,34 @@ func appendNeighbors(obj *rpcv1.RawLedgerObject, resp *rpcv1.GetLedgerResponse, 
 
 	switch d.Type {
 	case shamap.DiffAdded:
-		if it := desiredMap.UpperBound(bookBase); it.Valid() {
+		if it := desiredMap.UpperBoundContext(ctx, bookBase); it.Valid() {
 			if first := it.Item().Key(); inBook(first) && first == k {
 				resp.BookSuccessors = append(resp.BookSuccessors, &rpcv1.BookSuccessor{
 					BookBase:  cloneHash(bookBase),
 					FirstBook: cloneHash(first),
 				})
 			}
+		} else if err := it.Err(); err != nil {
+			return err
 		}
 	case shamap.DiffRemoved:
-		if it := baseMap.UpperBound(bookBase); it.Valid() {
+		if it := baseMap.UpperBoundContext(ctx, bookBase); it.Valid() {
 			if old := it.Item().Key(); inBook(old) && old == k {
 				succ := &rpcv1.BookSuccessor{BookBase: cloneHash(bookBase)}
-				if it2 := desiredMap.UpperBound(bookBase); it2.Valid() {
+				if it2 := desiredMap.UpperBoundContext(ctx, bookBase); it2.Valid() {
 					if next := it2.Item().Key(); inBook(next) {
 						succ.FirstBook = cloneHash(next)
 					}
+				} else if err := it2.Err(); err != nil {
+					return err
 				}
 				resp.BookSuccessors = append(resp.BookSuccessors, succ)
 			}
+		} else if err := it.Err(); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
 // isBookDirectory reports whether blob is a serialized directory node that
@@ -384,7 +437,7 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	resolved, err := s.resolveLedger(req.GetLedger())
+	resolved, err := s.resolveLedgerContext(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
@@ -394,7 +447,11 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	var key [32]byte
 	copy(key[:], req.GetKey())
 
-	entry, err := s.lookup.GetLedgerEntry(ctx, key, strconv.FormatUint(uint64(resolved.Sequence()), 10))
+	ledgerIndex := strconv.FormatUint(uint64(resolved.Sequence()), 10)
+	if spec := req.GetLedger(); spec != nil && len(spec.GetHash()) == 32 {
+		ledgerIndex = hex.EncodeToString(spec.GetHash())
+	}
+	entry, err := s.lookup.GetLedgerEntry(ctx, key, ledgerIndex)
 	if err != nil {
 		switch {
 		case errors.Is(err, svcerr.ErrLedgerEntryNotFound):
@@ -402,7 +459,7 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 		case errors.Is(err, svcerr.ErrLedgerNotFound), errors.Is(err, svcerr.ErrNoOpenLedger):
 			return nil, status.Error(codes.NotFound, err.Error())
 		default:
-			return nil, status.Errorf(codes.Internal, "lookup: %v", err)
+			return nil, grpcStorageError("lookup", err)
 		}
 	}
 
@@ -422,7 +479,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	l, err := s.resolveLedger(req.GetLedger())
+	l, err := s.resolveLedgerContext(ctx, req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
@@ -495,13 +552,13 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	base, err := s.resolveLedger(req.GetBaseLedger())
+	base, err := s.resolveLedgerContext(ctx, req.GetBaseLedger())
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "base ledger not found")
+		return nil, err
 	}
-	desired, err := s.resolveLedger(req.GetDesiredLedger())
+	desired, err := s.resolveLedgerContext(ctx, req.GetDesiredLedger())
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "desired ledger not found")
+		return nil, err
 	}
 	if !base.IsImmutable() {
 		return nil, status.Error(codes.NotFound, "base ledger not validated")
@@ -510,9 +567,9 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 		return nil, status.Error(codes.NotFound, "desired ledger not validated")
 	}
 
-	diff, _, _, err := stateDiff(base, desired)
+	diff, _, _, err := stateDiff(ctx, base, desired)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "comparing state maps: %v", err)
+		return nil, grpcStorageError("comparing state maps", err)
 	}
 	if !diff.Complete {
 		return nil, status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
@@ -550,7 +607,7 @@ const maxStateDifferences = math.MaxInt32
 // neighbours). The snapshots share the immutable ledger nodes and Compare
 // walks only the differing subtrees, so neither ledger is materialised in
 // full.
-func stateDiff(base, desired *ledger.Ledger) (*shamap.DifferenceSet, *shamap.SHAMap, *shamap.SHAMap, error) {
+func stateDiff(ctx context.Context, base, desired *ledger.Ledger) (*shamap.DifferenceSet, *shamap.SHAMap, *shamap.SHAMap, error) {
 	baseMap, err := base.StateMapSnapshot()
 	if err != nil {
 		return nil, nil, nil, err
@@ -559,7 +616,7 @@ func stateDiff(base, desired *ledger.Ledger) (*shamap.DifferenceSet, *shamap.SHA
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	diff, err := baseMap.Compare(desiredMap, maxStateDifferences)
+	diff, err := baseMap.CompareContext(ctx, desiredMap, maxStateDifferences)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -577,7 +634,7 @@ func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	if selection.Kind() != ledgerselector.KindHash {
 		return selection.String(), nil
 	}
-	result, err := s.resolveLedgerSelection(selection)
+	result, err := s.resolveLedgerSelection(context.Background(), selection)
 	if err != nil {
 		return "", err
 	}

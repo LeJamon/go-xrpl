@@ -9,6 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
+var ErrInvalidFeeSettings = errors.New("invalid FeeSettings field combination")
+
 // FeeSettings represents the singleton fee settings ledger entry.
 // This entry stores the current network fee configuration.
 // Reference: rippled LedgerFormats.h and Fees.h
@@ -28,7 +30,13 @@ type FeeSettings struct {
 	// field set. SerializeFeeSettings emits the matching triple/quad even when
 	// values are zero, mirroring rippled Change.cpp:362-379 which uses
 	// STObject::operator= (assignment) rather than a value-is-nonzero gate.
-	XRPFeesMode bool
+	XRPFeesMode              bool
+	HasBaseFeeDrops          bool
+	HasReserveBaseDrops      bool
+	HasReserveIncrementDrops bool
+	HasBaseFee               bool
+	HasReserveBase           bool
+	HasReserveIncrement      bool
 
 	// Tracking fields (not always present)
 	PreviousTxnID     [32]byte
@@ -61,22 +69,24 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 		if err != nil {
 			return nil, err
 		}
-		fee.feeFieldsPresent = true
+		fee.HasBaseFee = true
 	}
-	for _, name := range []string{"ReferenceFeeUnits", "ReserveBase", "ReserveIncrement"} {
-		if _, ok := fields[name]; ok {
-			fee.feeFieldsPresent = true
-			break
-		}
+	_, hasReferenceFeeUnits := fields["ReferenceFeeUnits"]
+	if _, ok := fields["ReserveBase"]; ok {
+		fee.HasReserveBase = true
+	}
+	if _, ok := fields["ReserveIncrement"]; ok {
+		fee.HasReserveIncrement = true
 	}
 	for _, amount := range []struct {
-		name  string
-		value any
-		dst   *uint64
+		name    string
+		value   any
+		dst     *uint64
+		present *bool
 	}{
-		{"BaseFeeDrops", decoded.BaseFeeDrops, &fee.BaseFeeDrops},
-		{"ReserveBaseDrops", decoded.ReserveBaseDrops, &fee.ReserveBaseDrops},
-		{"ReserveIncrementDrops", decoded.ReserveIncrementDrops, &fee.ReserveIncrementDrops},
+		{"BaseFeeDrops", decoded.BaseFeeDrops, &fee.BaseFeeDrops, &fee.HasBaseFeeDrops},
+		{"ReserveBaseDrops", decoded.ReserveBaseDrops, &fee.ReserveBaseDrops, &fee.HasReserveBaseDrops},
+		{"ReserveIncrementDrops", decoded.ReserveIncrementDrops, &fee.ReserveIncrementDrops, &fee.HasReserveIncrementDrops},
 	} {
 		if _, ok := fields[amount.name]; !ok {
 			continue
@@ -86,17 +96,23 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 			return nil, err
 		}
 		if !decodedAmount.IsNative() {
-			continue
+			return nil, fmt.Errorf("%w: FeeSettings contains a non-native XRP fee", ErrInvalidFeeSettings)
 		}
 		*amount.dst = nativeMagnitude(decodedAmount)
-		fee.feeFieldsPresent = true
-		fee.XRPFeesMode = true
+		*amount.present = true
 	}
 	if _, ok := fields["PreviousTxnID"]; ok {
 		if err := decodeLedgerHex("FeeSettings.PreviousTxnID", decoded.PreviousTxnID, fee.PreviousTxnID[:]); err != nil {
 			return nil, err
 		}
 	}
+	modern := fee.HasBaseFeeDrops || fee.HasReserveBaseDrops || fee.HasReserveIncrementDrops
+	legacy := fee.HasBaseFee || fee.HasReserveBase || fee.HasReserveIncrement
+	if modern && legacy {
+		return nil, fmt.Errorf("%w: FeeSettings mixes legacy and XRPFees fields", ErrInvalidFeeSettings)
+	}
+	fee.XRPFeesMode = modern
+	fee.feeFieldsPresent = modern || legacy || hasReferenceFeeUnits
 
 	return fee, nil
 }

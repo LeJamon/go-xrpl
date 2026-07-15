@@ -34,6 +34,9 @@ func LoadConfig(paths Paths) (*Config, error) {
 	))); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	config.Voting.ReferenceFeeSet = v.IsSet("voting.reference_fee")
+	config.Voting.AccountReserveSet = v.IsSet("voting.account_reserve")
+	config.Voting.OwnerReserveSet = v.IsSet("voting.owner_reserve")
 
 	if !paths.SkipValidators {
 		validators, err := loadValidatorsConfig(paths, config.ValidatorsFile)

@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -104,13 +104,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	targetLedger, validated, err := s.resolveLedgerForQuery(ctx, ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
+	view := contextLedgerView{Ledger: targetLedger, ctx: ctx}
 
 	bookBase, err := computeBookBase(takerPays, takerGets, domainHex)
 	if err != nil {
@@ -134,8 +132,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		if err := decodeHex32Into(marker, &markerKey); err != nil {
 			return nil, fmt.Errorf("%w: %v", svcerr.ErrInvalidMarker, err)
 		}
-		offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: markerKey})
-		if rerr != nil || offerData == nil {
+		offerData, rerr := targetLedger.ReadContext(ctx, keylet.Keylet{Type: entry.TypeOffer, Key: markerKey})
+		if rerr != nil {
+			return nil, rerr
+		}
+		if offerData == nil {
 			return nil, svcerr.ErrStaleMarker
 		}
 		markerOffer, perr := state.ParseLedgerOffer(offerData)
@@ -160,10 +161,14 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}
 
 	getsIssuer := amountIssuer(takerGets)
-	bGlobalFreeze := amountGlobalFrozen(targetLedger, takerGets) ||
-		amountGlobalFrozen(targetLedger, takerPays)
-	rate := amountTransferRate(targetLedger, takerGets)
-	_, reserveBase, reserveIncrement := readFeesFromLedger(targetLedger)
+	bGlobalFreeze := amountGlobalFrozen(view, takerGets) ||
+		amountGlobalFrozen(view, takerPays)
+	rate := amountTransferRate(view, takerGets)
+	_, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(ctx, targetLedger)
+	if err != nil {
+		return nil, err
+	}
+	parentCloseTime := targetLedger.ParentCloseTime()
 
 	// balances tracks each owner's remaining funds across the iteration.
 	// Presence in the map mirrors rippled's umBalanceEntry lookup at
@@ -206,7 +211,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			nextKey = resumeDir
 			resumePending = false
 		} else {
-			nk, _, ok, serr := targetLedger.Succ(uTipIndex)
+			nk, _, ok, serr := targetLedger.SuccContext(ctx, uTipIndex)
 			if serr != nil {
 				return nil, serr
 			}
@@ -232,7 +237,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		saDirRate := newDirRate(dirQuality, takerPays)
 
 		walkErr := state.DirForEach(
-			targetLedger,
+			view,
 			keylet.Keylet{Type: entry.TypeDirectoryNode, Key: nextKey},
 			func(offerKey [32]byte) error {
 				if skipping {
@@ -246,8 +251,11 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return errStopBookWalk
 				}
 				remaining--
-				offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: offerKey})
-				if rerr != nil || offerData == nil {
+				offerData, rerr := targetLedger.ReadContext(ctx, keylet.Keylet{Type: entry.TypeOffer, Key: offerKey})
+				if rerr != nil {
+					return rerr
+				}
+				if offerData == nil {
 					return nil
 				}
 				offer, perr := state.ParseLedgerOffer(offerData)
@@ -255,7 +263,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return nil
 				}
 				bookOffer, berr := s.buildBookOffer(
-					targetLedger, offer, offerKey, dirQuality, saDirRate,
+					view, parentCloseTime, offer, offerKey, dirQuality, saDirRate,
 					takerGets, taker, getsIssuer, rate, bGlobalFreeze,
 					reserveBase, reserveIncrement, balances,
 				)
@@ -263,7 +271,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return berr
 				}
 				if stateSnap != nil {
-					proofHex, perr := extractOfferProof(stateSnap, offerKey)
+					proofHex, perr := extractOfferProof(ctx, stateSnap, offerKey)
 					if perr != nil {
 						return perr
 					}
@@ -314,7 +322,8 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 // unconditional `umBalance[uOfferOwnerID] = saOwnerFunds - saOwnerPays`
 // at NetworkOPs.cpp:4601.
 func (s *Service) buildBookOffer(
-	view *ledger.Ledger,
+	view tx.LedgerView,
+	parentCloseTime time.Time,
 	offer *state.LedgerOffer,
 	key [32]byte,
 	dirQuality uint64,
@@ -389,7 +398,7 @@ func (s *Service) buildBookOffer(
 			if decErr != nil {
 				return BookOffer{}, decErr
 			}
-			funds, fundsErr := accountBookFunds(view, accountID, takerGets, reserveBase, reserveIncrement)
+			funds, fundsErr := accountBookFunds(view, parentCloseTime, accountID, takerGets, reserveBase, reserveIncrement)
 			if fundsErr != nil {
 				return BookOffer{}, fundsErr
 			}
@@ -521,7 +530,7 @@ func amountTransferRate(view tx.LedgerView, amount tx.Amount) uint32 {
 	return tx.GetTransferRate(view, issuer)
 }
 
-func accountBookFunds(view *ledger.Ledger, account [20]byte, amount tx.Amount, reserveBase, reserveIncrement uint64) (tx.Amount, error) {
+func accountBookFunds(view tx.LedgerView, closeTime time.Time, account [20]byte, amount tx.Amount, reserveBase, reserveIncrement uint64) (tx.Amount, error) {
 	id, ok := amountMPTID(amount)
 	if !ok {
 		return tx.AccountFunds(view, account, amount, true, reserveBase, reserveIncrement), nil
@@ -534,7 +543,7 @@ func accountBookFunds(view *ledger.Ledger, account [20]byte, amount tx.Amount, r
 		value = 0
 	}
 	var parentCloseTime uint32
-	if closeTime := view.ParentCloseTime(); !closeTime.IsZero() {
+	if !closeTime.IsZero() {
 		switch seconds := protocol.RippleSeconds(closeTime); {
 		case seconds > math.MaxUint32:
 			parentCloseTime = math.MaxUint32
@@ -638,8 +647,8 @@ func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 // walk: that one offer surfaces in the walk but not in the snapshot, so
 // its proof is omitted (per `omitempty`) rather than mis-attributed to a
 // different account_hash.
-func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
-	proof, err := snap.GetProofPath(key)
+func extractOfferProof(ctx context.Context, snap *shamap.SHAMap, key [32]byte) ([]string, error) {
+	proof, err := snap.GetProofPathContext(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("offer proof %s: %w", protocol.Hash256Hex(key), err)
 	}

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -99,7 +100,7 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	if request.Transactions {
 		var txList []any
 		apiVersion := ctx.ApiVersion
-		targetLedger.ForEachTransaction(func(txHashKey [32]byte, txData []byte) bool {
+		visit := func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
 			if request.Expand {
 				txEntry := expandTransaction(txData, hashStr, request.Binary, apiVersion, syntheticContext)
@@ -127,7 +128,18 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 				txList = append(txList, hashStr)
 			}
 			return true
-		})
+		}
+		var iterErr error
+		if contextual, ok := targetLedger.(interface {
+			ForEachTransactionContext(context.Context, func([32]byte, []byte) bool) error
+		}); ok {
+			iterErr = contextual.ForEachTransactionContext(ctx.Context, visit)
+		} else {
+			iterErr = targetLedger.ForEachTransaction(visit)
+		}
+		if iterErr != nil {
+			return nil, types.RPCErrorInternal(fmt.Sprintf("iterate ledger transactions: %v", iterErr))
+		}
 		if txList == nil {
 			txList = []any{}
 		}
@@ -137,7 +149,11 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	// accounts (LedgerFill::dumpState) dumps the full state tree into the
 	// ledger object under accountState (LedgerToJson.cpp fillJsonState).
 	if request.Accounts {
-		ledgerInfo["accountState"] = dumpAccountState(ctx, targetLedger, request.Binary, request.Expand)
+		accountState, err := dumpAccountState(ctx, targetLedger, request.Binary, request.Expand)
+		if err != nil {
+			return nil, types.RPCErrorInternal(fmt.Sprintf("dump ledger state: %v", err))
+		}
+		ledgerInfo["accountState"] = accountState
 	}
 
 	response := map[string]any{
@@ -150,7 +166,6 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		response["ledger_hash"] = ledgerHash
 		response["ledger_index"] = targetLedger.Sequence()
 	}
-	response["validated"] = validated
 
 	if dumpQueue {
 		queueData, queueInternalError := buildLedgerQueueData(
@@ -437,10 +452,50 @@ func ledgerOwnerFundsUnsupportedMPT(txJSON map[string]any) bool {
 // dumpAccountState walks the full state tree and returns the accountState
 // array rippled emits for accounts:true (LedgerToJson.cpp fillJsonState):
 // expanded SLE JSON in JSON mode, {hash, tx_blob} in binary mode, or bare
-// keys otherwise. The walk paginates GetLedgerData to cover every node.
-func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expanded bool) []any {
-	ledgerIndex := strconv.FormatUint(uint64(l.Sequence()), 10)
+// keys otherwise.
+func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expanded bool) ([]any, error) {
 	state := make([]any, 0)
+	appendItem := func(index string, data []byte) error {
+		upperIndex := strings.ToUpper(index)
+		switch {
+		case binary:
+			state = append(state, map[string]any{
+				"hash":    upperIndex,
+				"tx_blob": strings.ToUpper(hex.EncodeToString(data)),
+			})
+		case expanded:
+			decoded, err := binarycodec.Decode(hex.EncodeToString(data))
+			if err != nil {
+				return fmt.Errorf("decode ledger entry %s: %w", upperIndex, err)
+			}
+			decoded["index"] = upperIndex
+			addLedgerEntryJSONFields(decoded, upperIndex)
+			state = append(state, decoded)
+		default:
+			state = append(state, upperIndex)
+		}
+		return nil
+	}
+	if source, ok := l.(types.ContextLedgerStateSource); ok {
+		var itemErr error
+		err := source.ForEachLedgerStateContext(ctx.Context, func(key [32]byte, data []byte) bool {
+			itemErr = appendItem(hex.EncodeToString(key[:]), data)
+			return itemErr == nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		if itemErr != nil {
+			return nil, itemErr
+		}
+		return state, nil
+	}
+
+	ledgerIndex := "current"
+	if l.IsClosed() {
+		hash := l.Hash()
+		ledgerIndex = hex.EncodeToString(hash[:])
+	}
 	marker := ""
 	limit := LimitLedgerData.Default
 	if binary {
@@ -448,26 +503,15 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 	}
 	for {
 		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, marker)
-		if err != nil || result == nil {
-			break
+		if err != nil {
+			return nil, err
+		}
+		if result == nil {
+			return nil, fmt.Errorf("ledger data returned no result")
 		}
 		for _, item := range result.State {
-			upperIndex := strings.ToUpper(item.Index)
-			switch {
-			case binary:
-				state = append(state, map[string]any{
-					"hash":    upperIndex,
-					"tx_blob": strings.ToUpper(hex.EncodeToString(item.Data)),
-				})
-			case expanded:
-				if decoded, derr := decodeBinaryObject(item.Data); derr == nil {
-					decoded["index"] = upperIndex
-					state = append(state, decoded)
-				} else {
-					state = append(state, upperIndex)
-				}
-			default:
-				state = append(state, upperIndex)
+			if err := appendItem(item.Index, item.Data); err != nil {
+				return nil, err
 			}
 		}
 		if result.Marker == "" {
@@ -475,7 +519,7 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 		}
 		marker = result.Marker
 	}
-	return state
+	return state, nil
 }
 
 // buildLedgerQueueData assembles the top-level queue_data array for the

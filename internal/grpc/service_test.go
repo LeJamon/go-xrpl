@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"math"
 	"testing"
@@ -34,6 +35,7 @@ type fakeLookup struct {
 	closed     *ledger.Ledger
 	openLedger *ledger.Ledger
 	entryErr   error
+	entryIndex string
 }
 
 type networkLookup struct {
@@ -52,7 +54,12 @@ func (f *fakeLookup) GetLedgerByHash(h [32]byte) (*ledger.Ledger, error) {
 	if l, ok := f.byHash[h]; ok {
 		return l, nil
 	}
-	return nil, errors.New("not found")
+	for _, l := range f.bySeq {
+		if l.Hash() == h {
+			return l, nil
+		}
+	}
+	return nil, svcerr.ErrLedgerNotFound
 }
 func (f *fakeLookup) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	if l, ok := f.bySeq[seq]; ok {
@@ -63,7 +70,8 @@ func (f *fakeLookup) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 func (f *fakeLookup) GetClosedLedger() *ledger.Ledger    { return f.closed }
 func (f *fakeLookup) GetValidatedLedger() *ledger.Ledger { return f.validated }
 func (f *fakeLookup) GetOpenLedger() *ledger.Ledger      { return f.openLedger }
-func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, _ string) (*service.LedgerEntryResult, error) {
+func (f *fakeLookup) GetLedgerEntry(_ context.Context, key [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error) {
+	f.entryIndex = ledgerIndex
 	if f.entryErr != nil {
 		return nil, f.entryErr
 	}
@@ -134,6 +142,9 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 		CloseTimeResolution: 10,
 		Validated:           true,
 		Accepted:            true,
+	}
+	if seq > 1 {
+		hdr.ParentHash = [32]byte{byte(seq - 1), 0xAB}
 	}
 	hdr.Hash = [32]byte{byte(seq), 0xAB}
 	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
@@ -940,15 +951,13 @@ func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier being
-// resolved through LedgerLookup.GetLedgerByHash and flattened into the sequence
-// path.
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 	l := newTestLedger(t, 9, nil, nil)
-	srv := NewServer(&fakeLookup{
+	lookup := &fakeLookup{
 		validated: l,
 		byHash:    map[[32]byte]*ledger.Ledger{l.Hash(): l},
-	})
+	}
+	srv := NewServer(lookup)
 
 	key := make([]byte, 32)
 	key[0] = 0xCC
@@ -957,10 +966,11 @@ func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 		Key:    key,
 		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
 	})
-	// The fake ledger has no state at this key, so NotFound is the
-	// expected resolution of a successful hash → sequence resolution.
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
+	}
+	if want := hex.EncodeToString(h[:]); lookup.entryIndex != want {
+		t.Errorf("ledger selector = %q, want exact hash %q", lookup.entryIndex, want)
 	}
 }
 

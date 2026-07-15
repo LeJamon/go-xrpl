@@ -2,9 +2,9 @@ package handlers_test
 
 import (
 	"encoding/json"
-	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -152,7 +152,7 @@ func TestCanDelete_HashNotFound(t *testing.T) {
 	store := &fakeAdvisory{enabled: true}
 	svc := &types.ServiceContainer{
 		AdvisoryDeleteState: store,
-		Ledger:              stubCanDeleteLedger{err: errors.New("not found")},
+		Ledger:              stubCanDeleteLedger{err: svcerr.ErrLedgerNotFound},
 	}
 	hash := "ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789"
 	_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, hash))

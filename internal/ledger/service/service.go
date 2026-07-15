@@ -53,6 +53,8 @@ type Config struct {
 	NetworkID uint32
 
 	GenesisConfig genesis.Config
+	// ConfiguredFees seeds fields absent from a persisted FeeSettings entry.
+	ConfiguredFees *drops.Fees
 
 	// NodeStore is the persistent storage for ledger nodes (optional, nil for in-memory only)
 	NodeStore nodestore.Database
@@ -98,8 +100,9 @@ type Service struct {
 	// back into the Service, so this one rule keeps submit/close deadlock-free.
 	mu sync.RWMutex
 
-	config Config
-	logger xrpllog.Logger
+	config         Config
+	logger         xrpllog.Logger
+	configuredFees drops.Fees
 
 	// NodeStore for persistent storage (nil if in-memory only)
 	nodeStore    nodestore.Database
@@ -132,6 +135,11 @@ type Service struct {
 	// By-hash index over ledgerHistory (ledger hash -> sequence). Kept in
 	// sync exclusively by putHistoryLocked/deleteHistoryLocked.
 	ledgerByHash map[[32]byte]uint32
+
+	// Persisted ledgers loaded by hash are cached separately because the node
+	// store may contain non-canonical ledgers at a sequence already in history.
+	persistedLedgers    map[[32]byte]*ledger.Ledger
+	persistedLedgerFIFO [][32]byte
 
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
@@ -278,16 +286,27 @@ func New(cfg Config) (*Service, error) {
 	if cfg.TxQ != nil {
 		txqCfg = *cfg.TxQ
 	}
+	standardFees := genesis.StandardFees()
+	configuredFees := drops.Fees{
+		Base:      standardFees.BaseFee,
+		Reserve:   standardFees.ReserveBase,
+		Increment: standardFees.ReserveIncrement,
+	}
+	if cfg.ConfiguredFees != nil {
+		configuredFees = *cfg.ConfiguredFees
+	}
 
 	s := &Service{
 		config:                   cfg,
 		logger:                   logger.Named(xrpllog.PartitionLedger),
+		configuredFees:           configuredFees,
 		nodeStore:                cfg.NodeStore,
 		shamapFamily:             cfg.SHAMapFamily,
 		relationalDB:             cfg.RelationalDB,
 		amendmentTable:           cfg.Table,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		ledgerByHash:             make(map[[32]byte]uint32),
+		persistedLedgers:         make(map[[32]byte]*ledger.Ledger),
 		txIndex:                  make(map[[32]byte]uint32),
 		txPositionIndex:          make(map[[32]byte]uint32),
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
@@ -975,17 +994,140 @@ func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return nil, ErrLedgerNotFound
 }
 
-// GetLedgerByHash returns a ledger by its hash
 func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	return s.getLedgerByHash(context.Background(), hash)
+}
 
+func (s *Service) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	return s.getLedgerByHash(ctx, hash)
+}
+
+func (s *Service) getLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	s.mu.RLock()
 	if seq, ok := s.ledgerByHash[hash]; ok {
 		if l, ok := s.ledgerHistory[seq]; ok {
+			s.mu.RUnlock()
 			return l, nil
 		}
 	}
-	return nil, ErrLedgerNotFound
+	if l, ok := s.persistedLedgers[hash]; ok {
+		s.mu.RUnlock()
+		return s.validatedPersistedLedger(ctx, l)
+	}
+	canLoad := s.nodeStore != nil && s.shamapFamily != nil &&
+		s.relationalDB != nil && s.relationalDB.Ledger() != nil
+	s.mu.RUnlock()
+	if !canLoad {
+		return nil, ErrLedgerNotFound
+	}
+
+	loaded, err := s.loadPersistedLedgerByHash(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	if seq, ok := s.ledgerByHash[hash]; ok {
+		if l, ok := s.ledgerHistory[seq]; ok {
+			s.mu.Unlock()
+			return l, nil
+		}
+	}
+	if l, ok := s.persistedLedgers[hash]; ok {
+		s.mu.Unlock()
+		return s.validatedPersistedLedger(ctx, l)
+	}
+	s.cachePersistedLedgerLocked(loaded)
+	s.mu.Unlock()
+	return s.validatedPersistedLedger(ctx, loaded)
+}
+
+func (s *Service) loadPersistedLedgerByHash(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
+	info, err := s.relationalDB.Ledger().GetLedgerInfoByHash(ctx, relationaldb.Hash(hash))
+	if errors.Is(err, relationaldb.ErrLedgerNotFound) {
+		return nil, ErrLedgerNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("load ledger %x metadata: %w", hash[:8], err)
+	}
+	if info == nil {
+		return nil, ErrLedgerNotFound
+	}
+	loaded, err := s.loadStoredLedgerByHash(ctx, hash)
+	if err != nil {
+		if errors.Is(err, errStoredLedgerUnavailable) {
+			return nil, fmt.Errorf("%w: load ledger %x from nodestore: %v", ErrLedgerNotFound, hash[:8], err)
+		}
+		return nil, fmt.Errorf("load ledger %x from nodestore: %w", hash[:8], err)
+	}
+	if loaded == nil {
+		return nil, ErrLedgerNotFound
+	}
+	if !storedHeaderMatchesInfo(loaded.Header(), info) {
+		return nil, fmt.Errorf("%w: ledger %x header does not match persisted metadata", ErrLedgerNotFound, hash[:8])
+	}
+	return loaded, nil
+}
+
+func (s *Service) validatedPersistedLedger(ctx context.Context, l *ledger.Ledger) (*ledger.Ledger, error) {
+	validated, err := s.persistedLedgerIsValidated(ctx, l.Hash(), l.Sequence())
+	if err != nil || !validated {
+		return l, err
+	}
+	copy, err := l.Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	if err := copy.SetValidated(); err != nil {
+		return nil, err
+	}
+	return copy, nil
+}
+
+func (s *Service) persistedLedgerIsValidated(ctx context.Context, hash [32]byte, seq uint32) (bool, error) {
+	s.mu.RLock()
+	tip := s.validatedLedger
+	s.mu.RUnlock()
+	if tip == nil || seq > tip.Sequence() {
+		return false, nil
+	}
+	canonical, ok, err := tip.HashOfSeqContext(ctx, seq)
+	if canonicalProofUnavailable(err) {
+		return false, nil
+	}
+	if err != nil || ok {
+		return ok && canonical == hash, err
+	}
+	if seq%256 == 0 {
+		return false, nil
+	}
+	anchor64 := uint64(seq) + uint64(256-seq%256)
+	if anchor64 > uint64(tip.Sequence()) {
+		return false, nil
+	}
+	anchorHash, ok, err := tip.HashOfSeqContext(ctx, uint32(anchor64))
+	if canonicalProofUnavailable(err) {
+		return false, nil
+	}
+	if err != nil || !ok {
+		return false, err
+	}
+	anchor, err := s.loadPersistedLedgerByHash(ctx, anchorHash)
+	if errors.Is(err, ErrLedgerNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	canonical, ok, err = anchor.HashOfSeqContext(ctx, seq)
+	if canonicalProofUnavailable(err) {
+		return false, nil
+	}
+	return ok && canonical == hash, err
+}
+
+func canonicalProofUnavailable(err error) bool {
+	return errors.Is(err, shamap.ErrNodeNotInStore) || errors.Is(err, shamap.ErrInvalidNodeData)
 }
 
 // GetCurrentLedgerIndex returns the current open ledger index

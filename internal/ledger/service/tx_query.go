@@ -212,22 +212,38 @@ func mayPublishProposedTransaction(flags uint32) bool {
 // ReserveBase / ReserveIncrement). Falls back to network defaults if the SLE
 // cannot be found or parsed.
 func readFeesFromLedger(l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64) {
+	baseFee, reserveBase, reserveIncrement, err := readFeesFromLedgerContext(context.Background(), l)
+	if err == nil {
+		return baseFee, reserveBase, reserveIncrement
+	}
+	fees := drops.DefaultFees()
+	if l != nil {
+		fees = l.GetFees()
+	}
+	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
+}
+
+func readFeesFromLedgerContext(ctx context.Context, l *ledger.Ledger) (baseFee, reserveBase, reserveIncrement uint64, err error) {
 	fees := drops.DefaultFees()
 	if l == nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 	}
+	fees = l.GetFees()
 
-	data, err := l.Read(keylet.Fees())
-	if err != nil || data == nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
+	data, err := l.ReadContext(ctx, keylet.Fees())
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if data == nil {
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 	}
 
 	feeSettings, err := state.ParseFeeSettings(data)
 	if err != nil {
-		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
+		return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 	}
-	fees = feeSettings.Fees()
-	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment)
+	fees = mergeFeeSettings(fees, feeSettings)
+	return uint64(fees.Base), uint64(fees.Reserve), uint64(fees.Increment), nil
 }
 
 // FeesFromLedger returns the fee and reserve settings carried by a specific

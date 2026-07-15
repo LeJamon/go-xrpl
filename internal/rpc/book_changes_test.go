@@ -115,16 +115,26 @@ func bookChangesOfferNode(currency, issuer, domain string) map[string]any {
 // mockLedgerServiceBC extends mockLedgerService with book_changes-specific behavior.
 type mockLedgerServiceBC struct {
 	*mockLedgerService
-	ledgers       map[uint32]*mockLedgerReaderBC
-	ledgersByHash map[[32]byte]*mockLedgerReaderBC
+	ledgers       map[uint32]types.LedgerReader
+	ledgersByHash map[[32]byte]types.LedgerReader
 }
 
 func newMockLedgerServiceBC() *mockLedgerServiceBC {
 	return &mockLedgerServiceBC{
 		mockLedgerService: newMockLedgerService(),
-		ledgers:           make(map[uint32]*mockLedgerReaderBC),
-		ledgersByHash:     make(map[[32]byte]*mockLedgerReaderBC),
+		ledgers:           make(map[uint32]types.LedgerReader),
+		ledgersByHash:     make(map[[32]byte]types.LedgerReader),
 	}
+}
+
+type contextErrorLedgerReaderBC struct {
+	*mockLedgerReaderBC
+	called bool
+}
+
+func (m *contextErrorLedgerReaderBC) ForEachTransactionContext(ctx context.Context, _ func([32]byte, []byte) bool) error {
+	m.called = true
+	return ctx.Err()
 }
 
 func (m *mockLedgerServiceBC) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
@@ -297,6 +307,31 @@ func TestBookChangesEmptyChanges(t *testing.T) {
 	changes, ok := resp["changes"].([]any)
 	require.True(t, ok, "changes must be an array")
 	assert.Empty(t, changes, "changes should be empty when no offers modified")
+}
+
+func TestBookChangesContextReadError(t *testing.T) {
+	mock := newMockLedgerServiceBC()
+	ledger := &contextErrorLedgerReaderBC{mockLedgerReaderBC: newMockLedgerReaderBC(2)}
+	mock.ledgers[ledger.Sequence()] = ledger
+	mock.ledgersByHash[ledger.Hash()] = ledger
+
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+	ctx := &types.RPCContext{
+		Context:    requestContext,
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newTestServicesBC(mock),
+	}
+	params, err := json.Marshal(map[string]any{"ledger_index": 2})
+	require.NoError(t, err)
+
+	result, rpcErr := (&handlers.BookChangesMethod{}).Handle(ctx, params)
+
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
+	assert.True(t, ledger.called)
 }
 
 func TestBookChangesDomainAndOrdering(t *testing.T) {

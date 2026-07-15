@@ -2,6 +2,8 @@ package state
 
 import (
 	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -41,6 +43,59 @@ func TestFeeSettingsModernZeroValues(t *testing.T) {
 		if _, ok := decoded[field]; ok {
 			t.Fatalf("serialized modern FeeSettings retained legacy field %s", field)
 		}
+	}
+}
+
+func TestParseFeeSettingsRejectsMixedFieldSets(t *testing.T) {
+	data, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "FeeSettings",
+		"Flags":           uint32(0),
+		"BaseFee":         "a",
+		"BaseFeeDrops":    "10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ParseFeeSettings(data)
+	if err == nil || !strings.Contains(err.Error(), "mixes legacy and XRPFees fields") {
+		t.Fatalf("ParseFeeSettings error = %v, want mixed-field rejection", err)
+	}
+	if !errors.Is(err, ErrInvalidFeeSettings) {
+		t.Fatalf("ParseFeeSettings error = %v, want ErrInvalidFeeSettings", err)
+	}
+}
+
+func TestParseFeeSettingsRejectsNonNativeModernFee(t *testing.T) {
+	data, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "FeeSettings",
+		"Flags":           uint32(0),
+		"BaseFeeDrops": map[string]any{
+			"value":    "10",
+			"currency": "USD",
+			"issuer":   "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ParseFeeSettings(data)
+	if err == nil || !strings.Contains(err.Error(), "non-native XRP fee") {
+		t.Fatalf("ParseFeeSettings error = %v, want non-native fee rejection", err)
+	}
+	if !errors.Is(err, ErrInvalidFeeSettings) {
+		t.Fatalf("ParseFeeSettings error = %v, want ErrInvalidFeeSettings", err)
+	}
+}
+
+func TestParseFeeSettingsKeepsMalformedDataDistinct(t *testing.T) {
+	_, err := ParseFeeSettings([]byte{1, 2, 3})
+	if err == nil {
+		t.Fatal("ParseFeeSettings error = nil, want malformed-data rejection")
+	}
+	if errors.Is(err, ErrInvalidFeeSettings) {
+		t.Fatalf("ParseFeeSettings error = %v, malformed data must remain an internal error", err)
 	}
 }
 

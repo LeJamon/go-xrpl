@@ -27,6 +27,7 @@ debug_logfile = "/tmp/test/debug.log"
 relay_proposals = "trusted"
 relay_validations = "all"
 max_transactions = 250
+fee_default = 13
 peers_max = 21
 compression = false
 
@@ -117,12 +118,30 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, []string{"port_test"}, config.Server.Ports)
 	assert.Equal(t, "pebble", config.NodeDB.Type)
 	assert.Equal(t, "/tmp/test/db", config.NodeDB.Path)
+	require.NotNil(t, config.FeeDefault)
+	assert.Equal(t, 13, *config.FeeDefault)
 
 	portConfig, exists := config.Ports["port_test"]
 	assert.True(t, exists)
 	assert.Equal(t, 8080, portConfig.Port)
 	assert.Equal(t, "127.0.0.1", portConfig.IP)
 	assert.Equal(t, "http", portConfig.Protocol)
+}
+
+func TestLoadConfigTracksExplicitZeroVotingValues(t *testing.T) {
+	configPath := writeConfig(t, t.TempDir(), "xrpld.toml", minimalTestConfig()+`
+
+[voting]
+reference_fee = 0
+account_reserve = 0
+owner_reserve = 0
+`)
+
+	cfg, err := LoadConfig(Paths{Main: configPath})
+	require.NoError(t, err)
+	assert.True(t, cfg.Voting.ReferenceFeeSet)
+	assert.True(t, cfg.Voting.AccountReserveSet)
+	assert.True(t, cfg.Voting.OwnerReserveSet)
 }
 
 func TestLoadConfig_ServerAccessDefaults(t *testing.T) {

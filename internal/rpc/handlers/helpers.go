@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -446,7 +447,7 @@ func resolveLedgerSelection(
 		return reader, reader != nil, err
 	}
 	byHash := func(hash [32]byte) (types.LedgerReader, bool, error) {
-		reader, err := svc.GetLedgerByHash(hash)
+		reader, err := getLedgerByHashContext(ctx.Context, svc, hash)
 		return reader, reader != nil, err
 	}
 	current := func() (types.LedgerReader, bool, error) {
@@ -472,6 +473,12 @@ func resolveLedgerSelection(
 		ByHash:     byHash,
 	})
 	if err != nil {
+		if selection.Kind() == ledgerselector.KindHash {
+			if errors.Is(err, svcerr.ErrLedgerNotFound) || errors.Is(err, ledgerselector.ErrLedgerNotFound) {
+				return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorLgrNotFound("ledgerNotFound")
+			}
+			return ledgerselector.Result[types.LedgerReader]{}, types.RPCErrorInternal(fmt.Sprintf("ledger hash lookup: %v", err))
+		}
 		switch selection.Kind() {
 		case ledgerselector.KindAbsent, ledgerselector.KindCurrent, ledgerselector.KindClosed, ledgerselector.KindValidated:
 			if ctx.ApiVersion <= types.ApiVersion1 {
@@ -500,6 +507,15 @@ func LookupLedger(ctx *types.RPCContext, input any) (types.LedgerReader, bool, *
 		return nil, false, rpcErr
 	}
 	return resolved.Value, resolved.Validated, nil
+}
+
+func getLedgerByHashContext(ctx context.Context, svc types.LedgerService, hash [32]byte) (types.LedgerReader, error) {
+	if contextual, ok := svc.(interface {
+		GetLedgerByHashContext(context.Context, [32]byte) (types.LedgerReader, error)
+	}); ok {
+		return contextual.GetLedgerByHashContext(ctx, hash)
+	}
+	return svc.GetLedgerByHash(hash)
 }
 
 // mapLedgerLookupErr maps the ledger-resolution errors a ledger-backed account
