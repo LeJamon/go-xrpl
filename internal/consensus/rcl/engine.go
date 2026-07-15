@@ -891,7 +891,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 		if e.state != nil && len(e.state.CloseTimes.Peers) > 0 {
 			ctj := make(map[string]any, len(e.state.CloseTimes.Peers))
 			for t, c := range e.state.CloseTimes.Peers {
-				ctj[fmt.Sprintf("%d", t.Unix()-protocol.RippleEpochUnix)] = c
+				ctj[fmt.Sprintf("%d", protocol.RippleSeconds(t))] = c
 			}
 			ret["close_times"] = ctj
 		}
@@ -918,7 +918,7 @@ func proposalJSON(p *consensus.Proposal) map[string]any {
 	j := map[string]any{
 		"previous_ledger": fmt.Sprintf("%X", p.PreviousLedger[:]),
 		// close_time is a string, not a bare integer.
-		"close_time": fmt.Sprintf("%d", p.CloseTime.Unix()-protocol.RippleEpochUnix),
+		"close_time": fmt.Sprintf("%d", protocol.RippleSeconds(p.CloseTime)),
 	}
 	if p.Position != 0xFFFFFFFF { // not a bow-out (seqLeave)
 		j["transaction_hash"] = fmt.Sprintf("%X", p.TxSet[:])

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -40,18 +42,15 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		}
 	}
 
-	ledgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selectorErr := resolveLedgerSelector(ledgerSpec)
-	if selectorErr != nil {
-		return nil, selectorErr
-	}
-
-	ledger, validated, lookupErr := LookupLedger(ctx, ledgerSpec)
-	if lookupErr != nil {
-		return nil, lookupErr
+	// rippled BookOffers.cpp:45-49 runs RPC::lookupLedger BEFORE per-field
+	// validation. A bogus ledger_index combined with missing taker_pays must
+	// surface lgrNotFound, not invalidParams (Book_test.cpp:1329-1336). For
+	// the keyword specifiers (validated/current/closed/"") the service layer
+	// always has the handles, so we only pre-resolve when the caller named
+	// an explicit hash or numeric seq.
+	ledgerIndex, ledgerErr := preResolveLedger(ctx, probe)
+	if ledgerErr != nil {
+		return nil, ledgerErr
 	}
 
 	// Validation order mirrors rippled BookOffers.cpp:51-199 exactly so that
@@ -154,42 +153,13 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, types.RPCErrorBadMarket()
 	}
 
-	// limit (BookOffers.cpp:197-199, readLimitField at RPCHelpers.cpp:703).
-	if rpcErr := preValidateUintField(probe, "limit"); rpcErr != nil {
-		return nil, rpcErr
-	}
-	limit := LimitBookOffers.Default
-	if rawLimit, ok := probe["limit"]; ok && !isJSONNull(rawLimit) {
-		var v uint32
-		if err := json.Unmarshal(rawLimit, &v); err != nil {
-			return nil, types.RPCErrorExpectedField("limit", "unsigned integer")
-		}
-		// rippled readLimitField rejects an explicit limit=0 for every role.
-		if v == 0 {
-			return nil, types.RPCErrorInvalidField("limit")
-		}
-		limit = v
-		if !ctx.Unlimited {
-			if limit < LimitBookOffers.Min {
-				limit = LimitBookOffers.Min
-			}
-			if limit > LimitBookOffers.Max {
-				limit = LimitBookOffers.Max
-			}
-		}
+	limit, limitErr := ReadLimitField(params, LimitBookOffers, ctx.Unlimited)
+	if limitErr != nil {
+		return nil, limitErr
 	}
 
-	// Rippled enables proof handling solely when the member is present,
-	// regardless of its JSON value (BookOffers.cpp:201).
-	_, withProofs := probe["proof"]
-
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", withProofs)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", false)
 	if err != nil {
-		// Mirrors rippled AccountOffers.cpp:107-132 two-tier mapping:
-		// malformed / wrong-scope marker → invalid_field_error("marker");
-		// well-formed marker whose referent was consumed between pages →
-		// rpcINVALID_PARAMS with a distinct message so clients can retry
-		// against a pinned ledger.
 		if errors.Is(err, svcerr.ErrStaleMarker) {
 			return nil, types.RPCErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
 		}
@@ -202,8 +172,10 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	response := ledgerEntryResponseFields(ledger, validated)
-	response["offers"] = result.Offers
+	response := map[string]any{
+		"offers": result.Offers,
+	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
 	return response, nil
 }
 
@@ -350,26 +322,6 @@ func canonIssuerString(issuer, currency string) string {
 	return issuer
 }
 
-// preValidateUintField inspects the probed JSON for a numeric field that
-// rippled requires to be an unsigned integer. A string-typed value yields the
-// rippled-specific `Invalid field '<name>', not unsigned integer.` error
-// (RPCHelpers.cpp:706-707) instead of the generic JSON-parse failure that
-// `json.Unmarshal` into a `*uint32` would otherwise produce.
-func preValidateUintField(probe map[string]json.RawMessage, field string) *types.RPCError {
-	raw, ok := probe[field]
-	if !ok || len(raw) == 0 || isJSONNull(raw) {
-		return nil
-	}
-	first := raw[0]
-	if first == '"' || first == 't' || first == 'f' || first == '[' || first == '{' {
-		return types.RPCErrorExpectedField(field, "unsigned integer")
-	}
-	if first == '-' {
-		return types.RPCErrorExpectedField(field, "unsigned integer")
-	}
-	return nil
-}
-
 func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), jsonNullBytes)
 }
@@ -406,4 +358,17 @@ func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
 		out = map[string]json.RawMessage{}
 	}
 	return out
+}
+
+// preResolveLedger preserves ledger lookup error precedence over book validation.
+func preResolveLedger(ctx *types.RPCContext, probe map[string]json.RawMessage) (string, *types.RPCError) {
+	selection, rpcErr := parseRawLedgerSelector(probe, ledgerselector.Current(), lookupLedgerSelectorErrors)
+	if rpcErr != nil {
+		return "", rpcErr
+	}
+	resolved, rpcErr := resolveLedgerSelection(ctx, selection)
+	if rpcErr != nil {
+		return "", rpcErr
+	}
+	return strconv.FormatUint(uint64(resolved.Sequence), 10), nil
 }

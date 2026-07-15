@@ -240,6 +240,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for invalid tx_hash")
 			require.NotNil(t, rpcErr, "Expected RPC error for invalid tx_hash: %s", tc.txHash)
 			assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+			assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
 		})
 	}
 }
@@ -272,6 +273,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		"tx_json": map[string]any{
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"TransactionType": "Payment",
+			"Amount":          "1000000",
 			"Fee":             "10",
 		},
 		"meta": map[string]any{
@@ -279,6 +281,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		},
 	}
 	txData, _ := json.Marshal(storedTx)
+	ledger2.txs[txHash] = txData
 
 	mock.transactions[txHashStr] = &types.TransactionInfo{
 		TxData:      txData,
@@ -502,6 +505,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 		"tx_json": map[string]any{
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"TransactionType": "Payment",
+			"Amount":          "1000000",
 			"Fee":             "10",
 			"Sequence":        float64(3),
 		},
@@ -510,6 +514,10 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 		},
 	}
 	txData, _ := json.Marshal(storedTx)
+	txHashBytes, _ := hex.DecodeString(txHashStr)
+	var txHash [32]byte
+	copy(txHash[:], txHashBytes)
+	ledger2.txs[txHash] = txData
 
 	mock.transactions[txHashStr] = &types.TransactionInfo{
 		TxData:      txData,
@@ -557,11 +565,39 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	require.True(t, ok, "tx_json must be an object")
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", txJSON["Account"])
 	assert.Equal(t, "Payment", txJSON["TransactionType"])
+	assert.Equal(t, txHashStr, txJSON["hash"])
+	assert.Equal(t, "1000000", txJSON["Amount"])
+	assert.Equal(t, "1000000", txJSON["DeliverMax"])
 
 	// Validate metadata content
 	meta, ok := resp["metadata"].(map[string]any)
 	require.True(t, ok, "metadata must be an object")
 	assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
+	assert.NotContains(t, meta, "delivered_amount")
+
+	ctx.ApiVersion = types.ApiVersion2
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	require.Nil(t, rpcErr)
+	resp = result.(map[string]any)
+	txJSON = resp["tx_json"].(map[string]any)
+	assert.Equal(t, txHashStr, resp["hash"])
+	assert.Equal(t, "1000000", txJSON["DeliverMax"])
+	assert.NotContains(t, txJSON, "Amount")
+	assert.NotContains(t, txJSON, "hash")
+	assert.NotContains(t, resp["meta"].(map[string]any), "delivered_amount")
+}
+
+func TestTransactionEntryLedgerLookupPrecedesTxHashPresence(t *testing.T) {
+	mock := newMockLedgerServiceTE()
+	method := &handlers.TransactionEntryMethod{}
+	ctx := &types.RPCContext{
+		Context: context.Background(), ApiVersion: types.ApiVersion1,
+		Services: newTransactionEntryTestServices(mock),
+	}
+	result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "noNetwork", rpcErr.ErrorString)
 }
 
 // TestTransactionEntryServiceUnavailable tests behavior when ledger service is not available.

@@ -1059,9 +1059,6 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 	}
 }
 
-// TestAccountOffersLedgerHashThreading verifies that a ledger_hash query is
-// threaded verbatim, conflicting selectors are rejected, and an unknown hash
-// surfaces as lgrNotFound rather than internal.
 func TestAccountOffersLedgerHashThreading(t *testing.T) {
 	const validAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	const hashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
@@ -1087,7 +1084,7 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		params, _ := json.Marshal(map[string]any{"account": validAccount, "ledger_hash": hashHex})
 		_, rpcErr := method.Handle(ctx(mock), params)
 		require.Nil(t, rpcErr)
-		assert.Equal(t, hashHex, seenSelector, "service must receive the hash as its selector")
+		assert.Equal(t, "2", seenSelector, "service must receive the resolved ledger sequence")
 	})
 
 	t.Run("conflicting selectors are rejected", func(t *testing.T) {

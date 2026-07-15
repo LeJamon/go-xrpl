@@ -140,14 +140,9 @@ func (o *Overlay) handleSquelch(validator []byte, peerID PeerID, squelch bool, d
 		msg.SquelchDuration = uint32(duration / time.Second)
 	}
 
-	encoded, err := message.Encode(msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		slog.Warn("Squelch encode failed", "t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeSquelch, encoded)
-	if err != nil {
-		slog.Warn("Squelch frame build failed", "t", "Overlay", "peer", peerID, "err", err)
 		return
 	}
 

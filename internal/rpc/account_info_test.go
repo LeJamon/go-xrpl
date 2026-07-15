@@ -149,7 +149,7 @@ func (m *mockLedgerService) GetAccountChannels(_ context.Context, account string
 func (m *mockLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
+func (m *mockLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {

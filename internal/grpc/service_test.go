@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -34,6 +35,18 @@ type fakeLookup struct {
 	openLedger *ledger.Ledger
 	entryErr   error
 }
+
+type networkLookup struct {
+	*fakeLookup
+	standalone   bool
+	validatedAge time.Duration
+}
+
+func (l *networkLookup) IsStandalone() bool                   { return l.standalone }
+func (l *networkLookup) GetValidatedLedgerAge() time.Duration { return l.validatedAge }
+
+func (f *fakeLookup) IsStandalone() bool                   { return true }
+func (f *fakeLookup) GetValidatedLedgerAge() time.Duration { return 0 }
 
 func (f *fakeLookup) GetLedgerByHash(h [32]byte) (*ledger.Ledger, error) {
 	if l, ok := f.byHash[h]; ok {
@@ -126,6 +139,287 @@ func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[
 	return ledger.FromGenesis(hdr, stateMap, txMap, drops.Fees{})
 }
 
+func newClosedTestLedger(t *testing.T, parent *ledger.Ledger) *ledger.Ledger {
+	t.Helper()
+	l, err := ledger.NewOpen(parent, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	if err := l.Close(time.Now(), 0); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	return l
+}
+
+func ledgerShortcutSpec(shortcut rpcv1.LedgerSpecifier_Shortcut) *rpcv1.LedgerSpecifier {
+	return &rpcv1.LedgerSpecifier{
+		Ledger: &rpcv1.LedgerSpecifier_Shortcut_{Shortcut: shortcut},
+	}
+}
+
+func ledgerSequenceSpec(sequence uint32) *rpcv1.LedgerSpecifier {
+	return &rpcv1.LedgerSpecifier{
+		Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: sequence},
+	}
+}
+
+func ledgerHashSpec(hash []byte) *rpcv1.LedgerSpecifier {
+	return &rpcv1.LedgerSpecifier{
+		Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: hash},
+	}
+}
+
+func TestResolveLedgerSelector(t *testing.T) {
+	open := newTestLedger(t, 10, nil, nil)
+	closed := newTestLedger(t, 20, nil, nil)
+	validated := newTestLedger(t, 30, nil, nil)
+	exact := newTestLedger(t, 40, nil, nil)
+	exactHash := exact.Hash()
+	srv := NewServer(&fakeLookup{
+		openLedger: open,
+		closed:     closed,
+		validated:  validated,
+		bySeq:      map[uint32]*ledger.Ledger{exact.Sequence(): exact},
+		byHash:     map[[32]byte]*ledger.Ledger{exactHash: exact},
+	})
+
+	tests := []struct {
+		name string
+		spec *rpcv1.LedgerSpecifier
+		want *ledger.Ledger
+	}{
+		{name: "nil defaults current", want: open},
+		{name: "empty defaults current", spec: &rpcv1.LedgerSpecifier{}, want: open},
+		{name: "unspecified defaults current", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED), want: open},
+		{name: "current", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CURRENT), want: open},
+		{name: "closed", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED), want: closed},
+		{name: "validated", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED), want: validated},
+		{name: "sequence", spec: ledgerSequenceSpec(exact.Sequence()), want: exact},
+		{name: "hash", spec: ledgerHashSpec(exactHash[:]), want: exact},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := srv.resolveLedger(test.spec)
+			if err != nil {
+				t.Fatalf("resolveLedger() returned error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("resolveLedger() = ledger %v, want ledger %d", got, test.want.Sequence())
+			}
+		})
+	}
+}
+
+func TestResolveLedgerSelectorErrors(t *testing.T) {
+	missingHash := [32]byte{0xff}
+	srv := NewServer(&fakeLookup{})
+	tests := []struct {
+		name    string
+		spec    *rpcv1.LedgerSpecifier
+		code    codes.Code
+		message string
+	}{
+		{name: "missing default current", code: codes.NotFound, message: "notSynced"},
+		{
+			name: "missing explicit current",
+			spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CURRENT),
+			code: codes.NotFound, message: "notSynced",
+		},
+		{
+			name: "missing closed",
+			spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED),
+			code: codes.NotFound, message: "notSynced",
+		},
+		{
+			name: "missing validated",
+			spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED),
+			code: codes.NotFound, message: "notSynced",
+		},
+		{
+			name: "missing sequence",
+			spec: ledgerSequenceSpec(999),
+			code: codes.NotFound, message: "ledgerNotFound",
+		},
+		{
+			name: "missing hash",
+			spec: ledgerHashSpec(missingHash[:]),
+			code: codes.NotFound, message: "ledgerNotFound",
+		},
+		{
+			name: "malformed hash",
+			spec: ledgerHashSpec([]byte("short")),
+			code: codes.InvalidArgument, message: "ledgerHashMalformed",
+		},
+		{
+			name: "unknown shortcut",
+			spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_Shortcut(99)),
+			code: codes.InvalidArgument, message: "unknown ledger shortcut 99",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := srv.resolveLedger(test.spec)
+			if got != nil {
+				t.Fatalf("resolveLedger() returned ledger %d with error %v", got.Sequence(), err)
+			}
+			if status.Code(err) != test.code {
+				t.Fatalf("resolveLedger() code = %s, want %s: %v", status.Code(err), test.code, err)
+			}
+			if message := status.Convert(err).Message(); message != test.message {
+				t.Fatalf("resolveLedger() message = %q, want %q", message, test.message)
+			}
+		})
+	}
+}
+
+func TestResolveLedgerSelectorRejectsStaleNetworkState(t *testing.T) {
+	validated := newTestLedger(t, 10, nil, nil)
+	newer := newTestLedger(t, 11, nil, nil)
+	lookup := &networkLookup{fakeLookup: &fakeLookup{
+		validated:  validated,
+		closed:     validated,
+		openLedger: newer,
+		bySeq: map[uint32]*ledger.Ledger{
+			validated.Sequence(): validated,
+			newer.Sequence():     newer,
+		},
+		byHash: map[[32]byte]*ledger.Ledger{validated.Hash(): validated},
+	}, validatedAge: maxValidatedLedgerAge + time.Second}
+	srv := NewServer(lookup)
+
+	for _, spec := range []*rpcv1.LedgerSpecifier{
+		nil,
+		ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED),
+		ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED),
+		ledgerSequenceSpec(newer.Sequence()),
+	} {
+		if got, err := srv.resolveLedger(spec); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+			t.Errorf("resolveLedger(%v) = (%v, %v), want NotFound notSynced", spec, got, err)
+		}
+	}
+	if got, err := srv.resolveLedger(ledgerSequenceSpec(validated.Sequence())); err != nil || got != validated {
+		t.Fatalf("stale exact validated ledger = (%v, %v), want ledger %d", got, err, validated.Sequence())
+	}
+	validatedHash := validated.Hash()
+	if got, err := srv.resolveLedger(ledgerHashSpec(validatedHash[:])); err != nil || got != validated {
+		t.Fatalf("stale hash ledger = (%v, %v), want ledger %d", got, err, validated.Sequence())
+	}
+
+	lookup.validatedAge = maxValidatedLedgerAge
+	if got, err := srv.resolveLedger(nil); err != nil || got != newer {
+		t.Fatalf("current at freshness boundary = (%v, %v), want ledger %d", got, err, newer.Sequence())
+	}
+	lookup.validatedAge += time.Nanosecond
+	if got, err := srv.resolveLedger(nil); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+		t.Fatalf("current beyond freshness boundary = (%v, %v), want NotFound notSynced", got, err)
+	}
+
+	lookup.standalone = true
+	if got, err := srv.resolveLedger(nil); err != nil || got != newer {
+		t.Fatalf("standalone current = (%v, %v), want ledger %d", got, err, newer.Sequence())
+	}
+}
+
+func TestResolveLedgerSelectorRejectsLaggingShortcut(t *testing.T) {
+	lagging := newTestLedger(t, 10, nil, nil)
+	validated := newTestLedger(t, 21, nil, nil)
+	lookup := &networkLookup{fakeLookup: &fakeLookup{
+		validated:  validated,
+		closed:     lagging,
+		openLedger: lagging,
+	}}
+	srv := NewServer(lookup)
+
+	for _, spec := range []*rpcv1.LedgerSpecifier{
+		nil,
+		ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED),
+	} {
+		if got, err := srv.resolveLedger(spec); got != nil || status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+			t.Errorf("resolveLedger(%v) = (%v, %v), want NotFound notSynced", spec, got, err)
+		}
+	}
+	if got, err := srv.resolveLedger(ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED)); err != nil || got != validated {
+		t.Fatalf("validated shortcut = (%v, %v), want ledger %d", got, err, validated.Sequence())
+	}
+}
+
+func TestSpecToIndexSelectorParity(t *testing.T) {
+	exact := newTestLedger(t, 40, nil, nil)
+	exactHash := exact.Hash()
+	srv := NewServer(&fakeLookup{byHash: map[[32]byte]*ledger.Ledger{exactHash: exact}})
+
+	tests := []struct {
+		name string
+		spec *rpcv1.LedgerSpecifier
+		want string
+	}{
+		{name: "nil defaults current", want: "current"},
+		{name: "empty defaults current", spec: &rpcv1.LedgerSpecifier{}, want: "current"},
+		{name: "unspecified defaults current", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED), want: "current"},
+		{name: "current", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CURRENT), want: "current"},
+		{name: "closed", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_CLOSED), want: "closed"},
+		{name: "validated", spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED), want: "validated"},
+		{name: "sequence", spec: ledgerSequenceSpec(math.MaxUint32), want: "4294967295"},
+		{name: "hash resolves exact sequence", spec: ledgerHashSpec(exactHash[:]), want: "40"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := srv.specToIndex(test.spec)
+			if err != nil {
+				t.Fatalf("specToIndex() returned error: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("specToIndex() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSpecToIndexSelectorErrors(t *testing.T) {
+	missingHash := [32]byte{0xff}
+	srv := NewServer(&fakeLookup{})
+	tests := []struct {
+		name    string
+		spec    *rpcv1.LedgerSpecifier
+		code    codes.Code
+		message string
+	}{
+		{
+			name: "malformed hash",
+			spec: ledgerHashSpec([]byte("short")),
+			code: codes.InvalidArgument, message: "ledgerHashMalformed",
+		},
+		{
+			name: "missing hash",
+			spec: ledgerHashSpec(missingHash[:]),
+			code: codes.NotFound, message: "ledgerNotFound",
+		},
+		{
+			name: "unknown shortcut",
+			spec: ledgerShortcutSpec(rpcv1.LedgerSpecifier_Shortcut(99)),
+			code: codes.InvalidArgument, message: "unknown ledger shortcut 99",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := srv.specToIndex(test.spec)
+			if got != "" {
+				t.Fatalf("specToIndex() = %q with error %v, want empty result", got, err)
+			}
+			if status.Code(err) != test.code {
+				t.Fatalf("specToIndex() code = %s, want %s: %v", status.Code(err), test.code, err)
+			}
+			if message := status.Convert(err).Message(); message != test.message {
+				t.Fatalf("specToIndex() message = %q, want %q", message, test.message)
+			}
+		})
+	}
+}
+
 func TestGRPC_GetLedger_HeaderAndValidated(t *testing.T) {
 	l := newTestLedger(t, 100, nil, nil)
 	srv := NewServer(&fakeLookup{validated: l})
@@ -195,6 +489,24 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	}
 }
 
+func TestGRPC_GetLedger_MalformedExpandedTransactionReturnsPartialSuccess(t *testing.T) {
+	badKey := [32]byte{0xAA}
+	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{badKey: pad("bad", 12)})
+	srv := NewServer(&fakeLookup{openLedger: l})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
+	if err != nil {
+		t.Fatalf("GetLedger expand: %v", err)
+	}
+	full, ok := resp.Transactions.(*rpcv1.GetLedgerResponse_TransactionsList)
+	if !ok {
+		t.Fatalf("expected TransactionsList, got %T", resp.Transactions)
+	}
+	if len(full.TransactionsList.Transactions) != 0 {
+		t.Fatalf("expanded transactions = %d, want partial empty response", len(full.TransactionsList.Transactions))
+	}
+}
+
 func TestGRPC_GetLedger_LookupBySequenceAndHash(t *testing.T) {
 	l := newTestLedger(t, 42, nil, nil)
 	lookup := &fakeLookup{
@@ -241,23 +553,31 @@ func TestGRPC_GetLedger_NoLedgerAvailableReturnsNotFound(t *testing.T) {
 
 func TestGRPC_GetLedgerEntry_KeyValidation(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: []byte("short")})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("short key: expected InvalidArgument, got %v", err)
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "index malformed" {
+		t.Errorf("short key: expected InvalidArgument index malformed, got %v", err)
 	}
 }
 
 func TestGRPC_GetLedgerEntry_NotFound(t *testing.T) {
 	l := newTestLedger(t, 7, nil, nil)
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	key := make([]byte, 32)
 	key[0] = 0xCC
 	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: key})
-	if status.Code(err) != codes.NotFound {
-		t.Errorf("expected NotFound, got %v", err)
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "object not found" {
+		t.Errorf("expected NotFound object not found, got %v", err)
+	}
+}
+
+func TestGRPC_GetLedgerEntry_ResolvesLedgerBeforeKeyValidation(t *testing.T) {
+	srv := NewServer(&fakeLookup{})
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{Key: []byte("short")})
+	if status.Code(err) != codes.NotFound || status.Convert(err).Message() != "notSynced" {
+		t.Fatalf("GetLedgerEntry() error = %v, want NotFound notSynced", err)
 	}
 }
 
@@ -477,6 +797,58 @@ func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
 	}
 }
 
+func TestGRPC_GetLedgerDiff_RequiresImmutableLedgers(t *testing.T) {
+	baseParent := newTestLedger(t, 9, nil, nil)
+	base := newTestLedger(t, 10, nil, nil)
+	desired := newTestLedger(t, 11, nil, nil)
+	openBase, err := ledger.NewOpen(baseParent, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen base: %v", err)
+	}
+	openDesired, err := ledger.NewOpen(desired, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen desired: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		base    *ledger.Ledger
+		desired *ledger.Ledger
+		message string
+	}{
+		{name: "base", base: openBase, desired: desired, message: "base ledger not validated"},
+		{name: "desired", base: base, desired: openDesired, message: "desired ledger not validated"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+				test.base.Sequence():    test.base,
+				test.desired.Sequence(): test.desired,
+			}})
+			_, err := srv.GetLedgerDiff(context.Background(), &rpcv1.GetLedgerDiffRequest{
+				BaseLedger:    ledgerSequenceSpec(test.base.Sequence()),
+				DesiredLedger: ledgerSequenceSpec(test.desired.Sequence()),
+			})
+			if status.Code(err) != codes.NotFound || status.Convert(err).Message() != test.message {
+				t.Fatalf("GetLedgerDiff() error = %v, want NotFound %q", err, test.message)
+			}
+		})
+	}
+
+	closedBase := newClosedTestLedger(t, newTestLedger(t, 20, nil, nil))
+	closedDesired := newClosedTestLedger(t, closedBase)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+		closedBase.Sequence():    closedBase,
+		closedDesired.Sequence(): closedDesired,
+	}})
+	if _, err := srv.GetLedgerDiff(context.Background(), &rpcv1.GetLedgerDiffRequest{
+		BaseLedger:    ledgerSequenceSpec(closedBase.Sequence()),
+		DesiredLedger: ledgerSequenceSpec(closedDesired.Sequence()),
+	}); err != nil {
+		t.Fatalf("GetLedgerDiff() rejected immutable unvalidated ledgers: %v", err)
+	}
+}
+
 // TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected mirrors rippled
 // LedgerData.cpp:182-186: an end_marker that sorts before the marker is
 // an explicit InvalidArgument, not a silent empty-page response.
@@ -683,6 +1055,56 @@ func TestGRPC_GetLedger_GetObjectsParentMissing(t *testing.T) {
 	})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("expected NotFound when parent absent, got %v", err)
+	}
+}
+
+func TestGRPC_GetLedger_GetObjectsRequiresImmutableLedgers(t *testing.T) {
+	parent := newTestLedger(t, 9, nil, nil)
+	openParent, err := ledger.NewOpen(newTestLedger(t, 8, nil, nil), time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen parent: %v", err)
+	}
+	openDesired, err := ledger.NewOpen(parent, time.Now())
+	if err != nil {
+		t.Fatalf("NewOpen desired: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		parent  *ledger.Ledger
+		desired *ledger.Ledger
+		message string
+	}{
+		{name: "parent", parent: openParent, desired: newTestLedger(t, 10, nil, nil), message: "parent ledger not validated"},
+		{name: "desired", parent: parent, desired: openDesired, message: "ledger not validated"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+				test.parent.Sequence():  test.parent,
+				test.desired.Sequence(): test.desired,
+			}})
+			_, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+				Ledger:     ledgerSequenceSpec(test.desired.Sequence()),
+				GetObjects: true,
+			})
+			if status.Code(err) != codes.NotFound || status.Convert(err).Message() != test.message {
+				t.Fatalf("GetLedger() error = %v, want NotFound %q", err, test.message)
+			}
+		})
+	}
+
+	closedParent := newClosedTestLedger(t, newTestLedger(t, 20, nil, nil))
+	closedDesired := newClosedTestLedger(t, closedParent)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{
+		closedParent.Sequence():  closedParent,
+		closedDesired.Sequence(): closedDesired,
+	}})
+	if _, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     ledgerSequenceSpec(closedDesired.Sequence()),
+		GetObjects: true,
+	}); err != nil {
+		t.Fatalf("GetLedger() rejected immutable unvalidated ledgers: %v", err)
 	}
 }
 

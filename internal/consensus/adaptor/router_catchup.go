@@ -1350,7 +1350,7 @@ func (r *Router) sendNodesByHash(peers []uint64, ledgerHash [32]byte, seq uint32
 		LedgerHash: ledgerHash[:],
 		Objects:    objs,
 	}
-	frame, err := encodeFrame(message.TypeGetObjects, req)
+	frame, err := message.EncodeFrame(req)
 	if err != nil {
 		r.logger.Debug("inbound ledger: encode by-hash request failed", "error", err)
 		return

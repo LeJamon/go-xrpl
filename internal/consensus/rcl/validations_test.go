@@ -134,6 +134,64 @@ func TestValidationTracker_TrustedValidations(t *testing.T) {
 	}
 }
 
+func TestValidationTracker_RecheckFullyValidatedFiltersAndRearms(t *testing.T) {
+	vt := NewValidationTracker(2, 5*time.Minute)
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	vt.SetNow(func() time.Time { return now })
+
+	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}, {6}}
+	vt.SetTrusted([]consensus.NodeID{nodes[0], nodes[1], nodes[2], nodes[4], nodes[5]})
+	vt.SetNegativeUNL([]consensus.NodeID{nodes[2]})
+
+	ledgerID := consensus.LedgerID{0xAA}
+	const seq uint32 = 7
+	fires := 0
+	vt.SetFullyValidatedCallback(func(gotID consensus.LedgerID, gotSeq uint32) {
+		if gotID != ledgerID || gotSeq != seq {
+			t.Errorf("callback got (%x, %d), want (%x, %d)", gotID, gotSeq, ledgerID, seq)
+		}
+		fires++
+	})
+
+	add := func(node consensus.NodeID, full bool) {
+		t.Helper()
+		if !vt.Add(&consensus.Validation{
+			LedgerID:  ledgerID,
+			LedgerSeq: seq,
+			NodeID:    node,
+			SignTime:  now,
+			Full:      full,
+		}) {
+			t.Fatalf("validation from node %x was rejected", node)
+		}
+	}
+
+	add(nodes[0], true)
+	add(nodes[1], true)
+	add(nodes[2], true)  // negative UNL
+	add(nodes[3], true)  // untrusted
+	add(nodes[4], false) // partial
+	if fires != 1 {
+		t.Fatalf("initial quorum fired %d times, want 1", fires)
+	}
+
+	validations, quorum, accepted := vt.RecheckFullyValidated(ledgerID, seq)
+	if !accepted || quorum != 2 || len(validations) != 2 {
+		t.Fatalf("recheck got accepted=%v quorum=%d validations=%d, want true/2/2", accepted, quorum, len(validations))
+	}
+
+	vt.SetQuorum(3)
+	validations, quorum, accepted = vt.RecheckFullyValidated(ledgerID, seq)
+	if accepted || quorum != 3 || len(validations) != 2 {
+		t.Fatalf("recheck after quorum change got accepted=%v quorum=%d validations=%d, want false/3/2", accepted, quorum, len(validations))
+	}
+
+	add(nodes[5], true)
+	if fires != 2 {
+		t.Fatalf("validation after rejected recheck fired %d times, want 2", fires)
+	}
+}
+
 func TestValidationTracker_FullyValidated(t *testing.T) {
 	quorum := 3
 	vt := NewValidationTracker(quorum, 5*time.Minute)

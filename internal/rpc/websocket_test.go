@@ -17,6 +17,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestWebSocketResponseBuildersGolden(t *testing.T) {
+	ws := &WebSocketServer{}
+	conn := &WebSocketConnection{
+		ctx:         context.Background(),
+		sendChannel: make(chan []byte, 1),
+	}
+	ws.sendSuccess(conn, 7, map[string]any{"ok": true}, types.ApiVersion2, &types.WebSocketResponseOptions{
+		Warning:   "load",
+		Forwarded: true,
+	})
+	if got := string(<-conn.sendChannel); got != `{"status":"success","type":"response","result":{"ok":true},"id":7,"warning":"load","forwarded":true,"api_version":2}` {
+		t.Fatalf("success response = %s", got)
+	}
+
+	rpcErr := types.RPCErrorEntryNotFound("").WithExtra(map[string]any{"index": "ABC"})
+	errorResponse, err := json.Marshal(buildWebSocketErrorResponse(rpcErr, 8, &types.WebSocketResponseOptions{
+		Warning:   "load",
+		Forwarded: true,
+	}))
+	if err != nil {
+		t.Fatalf("marshal error response: %v", err)
+	}
+	if got := string(errorResponse); got != `{"error":"entryNotFound","error_code":98,"error_message":"Entry not found.","forwarded":true,"id":8,"index":"ABC","status":"error","type":"response","warning":"load"}` {
+		t.Fatalf("error response = %s", got)
+	}
+
+	bareResponse, err := json.Marshal(buildWebSocketErrorResponse(types.RPCErrorEntryNotFoundBare("missing"), 9, nil))
+	if err != nil {
+		t.Fatalf("marshal bare response: %v", err)
+	}
+	if got := string(bareResponse); got != `{"error":"entryNotFound","id":9,"status":"error","type":"response"}` {
+		t.Fatalf("bare response = %s", got)
+	}
+}
+
 // TestWebSocketServer_Close_JoinsHandlers verifies that Close blocks until
 // all per-connection goroutines (read loop, send pump, ping loop) have exited.
 // Regression test for issue #186.

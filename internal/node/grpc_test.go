@@ -33,6 +33,8 @@ func (s *stubLookup) GetLedgerBySequence(uint32) (*ledger.Ledger, error) { retur
 func (s *stubLookup) GetClosedLedger() *ledger.Ledger                    { return s.validated }
 func (s *stubLookup) GetValidatedLedger() *ledger.Ledger                 { return s.validated }
 func (s *stubLookup) GetOpenLedger() *ledger.Ledger                      { return s.validated }
+func (s *stubLookup) GetValidatedLedgerAge() time.Duration               { return 0 }
+func (s *stubLookup) IsStandalone() bool                                 { return true }
 func (s *stubLookup) GetLedgerEntry(context.Context, [32]byte, string) (*service.LedgerEntryResult, error) {
 	return nil, svcerr.ErrLedgerEntryNotFound
 }

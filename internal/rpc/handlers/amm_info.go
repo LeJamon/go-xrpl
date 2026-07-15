@@ -13,6 +13,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -25,7 +26,6 @@ type AMMInfoMethod struct{ BaseHandler }
 
 func (m *AMMInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	var request struct {
-		types.LedgerSpecifier
 		Asset      json.RawMessage `json:"asset,omitempty"`
 		Asset2     json.RawMessage `json:"asset2,omitempty"`
 		AMMAccount json.RawMessage `json:"amm_account,omitempty"`
@@ -51,20 +51,15 @@ func (m *AMMInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 		return nil, err
 	}
 
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	request.LedgerSpecifier = parsedLedgerSpec
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	selection, selErr := parseLedgerSelectorParams(params, ledgerselector.Current())
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	ledger, lookupValidated, lookupErr := LookupLedger(ctx, request.LedgerSpecifier)
-	if lookupErr != nil {
-		return nil, lookupErr
+	resolvedLedger, ledgerErr := resolveLedgerSelection(ctx, selection)
+	if ledgerErr != nil {
+		return nil, ledgerErr
 	}
+	ledgerIndex := strconv.FormatUint(uint64(resolvedLedger.Sequence), 10)
 
 	// For api_version < 3 the combination check runs before the per-field
 	// checks; for api_version >= 3 it runs after them, so a malformed
@@ -230,13 +225,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	// Resolve parentCloseTime from the ledger for auction slot time_interval computation.
 	// rippled: ammAuctionTimeSlot(ledger->info().parentCloseTime, auctionSlot)
 	var parentCloseTime uint64
-	if ammEntry.LedgerIndex > 0 {
-		if lr, lrErr := ctx.Services.Ledger.GetLedgerBySequence(ammEntry.LedgerIndex); lrErr == nil && lr != nil {
-			pct := lr.ParentCloseTime()
-			if pct > 0 {
-				parentCloseTime = uint64(pct)
-			}
-		}
+	if closeTime := resolvedLedger.Value.ParentCloseTime(); closeTime > 0 {
+		parentCloseTime = uint64(closeTime)
 	}
 
 	// Handle auction slot
@@ -248,8 +238,10 @@ func (m *AMMInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (a
 	}
 
 	// Build final response
-	response := ledgerEntryResponseFields(ledger, lookupValidated)
-	response["amm"] = ammResult
+	response := map[string]any{
+		"amm": ammResult,
+	}
+	fillResolvedLedgerFields(response, resolvedLedger.Value, resolvedLedger.Validated)
 
 	return response, nil
 }

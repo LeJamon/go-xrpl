@@ -165,6 +165,18 @@ func (s *Service) SetOnPendingValidationStashed(handler func(seq uint32, hash [3
 	s.onPendingValidationStashed = handler
 }
 
+// PendingValidationResolver rechecks whether a stashed validation notification
+// still has quorum when its ledger arrives and returns the current signing-time
+// median. It runs while the service mutex is held and must not call the Service.
+type PendingValidationResolver func(seq uint32, hash [32]byte) (time.Time, bool)
+
+// SetPendingValidationResolver installs the adoption-time quorum recheck.
+func (s *Service) SetPendingValidationResolver(resolver PendingValidationResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pendingValidationResolver = resolver
+}
+
 // SetEventHooks registers structured event hooks (richer than SetEventCallback).
 func (s *Service) SetEventHooks(hooks *EventHooks) {
 	s.mu.Lock()

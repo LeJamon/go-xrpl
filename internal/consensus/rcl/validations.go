@@ -224,7 +224,7 @@ type ValidationTracker struct {
 
 	// acquiring parks trusted validations whose ledger isn't locally
 	// resolvable yet, keyed by (seq, id) → waiting validators — rippled's
-	// acquiring_ map. Entries drain via checkAcquiredLocked once the
+	// acquiring_ map. Entries drain via checkAcquired once the
 	// ledger is acquired, and expire with the validations that reference
 	// them (supersede, ExpireOld, FlushStale, trust rotation). nil when
 	// the trie is disabled.
@@ -270,18 +270,18 @@ func (vt *ValidationTracker) SetNow(fn func() time.Time) {
 // trie if wired so de-trusted validators stop contributing support.
 func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
-
 	vt.setTrustedLocked(nodes)
+	vt.mu.Unlock()
+	vt.checkAcquired()
 }
 
 // SetTrustedAndQuorum updates the trusted set and its quorum atomically.
 func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quorum int) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
-
 	vt.setTrustedLocked(nodes)
 	vt.quorum = quorum
+	vt.mu.Unlock()
+	vt.checkAcquired()
 }
 
 func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
@@ -332,12 +332,13 @@ func (vt *ValidationTracker) SetSeqToKeep(low, high uint32) {
 // empty slice to clear the negUNL.
 func (vt *ValidationTracker) SetNegativeUNL(nodes []consensus.NodeID) {
 	vt.mu.Lock()
-	defer vt.mu.Unlock()
 	vt.negUNL = make(map[consensus.NodeID]bool, len(nodes))
 	for _, n := range nodes {
 		vt.negUNL[n] = true
 	}
 	vt.rebuildTrieLocked()
+	vt.mu.Unlock()
+	vt.checkAcquired()
 }
 
 // SetMinSeq advances the sequence floor below which incoming
@@ -494,14 +495,16 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 		}
 	}()
 
-	// Pre-resolve ancestry outside vt.mu — cold-LRU walks would
-	// otherwise serialise concurrent Add()s behind us.
+	vt.checkAcquired()
+
+	// Pre-resolve ancestry outside vt.mu — cold-LRU walks would otherwise
+	// serialise concurrent Add()s behind us.
 	vt.mu.RLock()
 	ancestrySnap := vt.ancestry
-	trieEnabled := vt.trie != nil
+	trieSnap := vt.trie
 	vt.mu.RUnlock()
 	var preResolvedLedger ledgertrie.Ledger
-	if trieEnabled && ancestrySnap != nil {
+	if trieSnap != nil && ancestrySnap != nil {
 		if l, ok := ancestrySnap.LedgerByID(validation.LedgerID); ok {
 			preResolvedLedger = l
 		}
@@ -593,7 +596,7 @@ func (vt *ValidationTracker) AddStatus(validation *consensus.Validation) ValStat
 		if hasExisting {
 			prior = &acquiringKey{seq: existing.LedgerSeq, id: existing.LedgerID}
 		}
-		vt.updateTrieLocked(resolvedID, validation, preResolvedLedger, prior)
+		vt.updateTrieLocked(resolvedID, validation, preResolvedLedger, trieSnap, prior)
 	}
 
 	// Capture the fire-tuple under the lock; the deferred dispatcher
@@ -700,6 +703,41 @@ func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) 
 	return result
 }
 
+// RecheckFullyValidated returns the validations that currently count toward
+// finality for ledgerID together with the quorum from the same tracker state.
+// When the set no longer reaches quorum it removes the prior firing marker
+// before unlocking, so a concurrent or later validation can notify again.
+func (vt *ValidationTracker) RecheckFullyValidated(
+	ledgerID consensus.LedgerID,
+	seq uint32,
+) ([]*consensus.Validation, int, bool) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+
+	quorum := vt.quorum
+	ledgerVals, exists := vt.validations[ledgerID]
+	if !exists {
+		delete(vt.fired, ledgerID)
+		return nil, quorum, false
+	}
+	ledgerVals.touch(vt.now())
+
+	result := make([]*consensus.Validation, 0, len(ledgerVals.vals))
+	for nodeID, validation := range ledgerVals.vals {
+		if validation == nil || !validation.Full || validation.LedgerSeq != seq ||
+			validation.SignTime.IsZero() || !vt.trusted[nodeID] || vt.negUNL[nodeID] {
+			continue
+		}
+		copy := *validation
+		result = append(result, &copy)
+	}
+	accepted := len(result) > 0 && len(result) >= quorum
+	if !accepted {
+		delete(vt.fired, ledgerID)
+	}
+	return result, quorum, accepted
+}
+
 // TrustedValidationCount returns the count of trusted validations
 // for a ledger, EXCLUDING validators currently on the negative UNL.
 // Matches rippled's LedgerMaster.cpp:886,952,1120 where every trusted
@@ -746,6 +784,8 @@ func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 // rippled's withTrie cadence. Falls back to the flat trusted count when
 // the trie or ancestry is unavailable.
 func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
+	vt.checkAcquired()
+
 	// Snapshot pointers, drop the lock for ancestry resolution, then
 	// re-acquire for the cheap trie query.
 	vt.mu.RLock()
@@ -773,7 +813,6 @@ func (vt *ValidationTracker) TrustedSupport(ledgerID consensus.LedgerID) int {
 		ledgerVals.touch(vt.now())
 		return vt.countTrustedExcludingNegUNLLocked(ledgerVals.vals)
 	}
-	vt.checkAcquiredLocked()
 	return vt.branchSupportExcludingNegUNLLocked(lgr)
 }
 
@@ -812,13 +851,13 @@ func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.L
 // highest sequence this node has validated; it seeds uncommitted support
 // from earlier seqs.
 func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
+	vt.checkAcquired()
+
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 	if vt.trie == nil {
 		return consensus.LedgerID{}, 0, false
 	}
-	vt.checkAcquiredLocked()
-
 	var (
 		tip ledgertrie.SpanTip
 		ok  bool
@@ -899,6 +938,7 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
 	}
+	vt.checkAcquired()
 
 	// Trie fast path — getNodesAfter at Validations.h:973-993:
 	// branchSupport(ledger) - tipSupport(ledger).
@@ -912,7 +952,6 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 			current := vt.trie == trie
 			var branch, tip uint32
 			if current {
-				vt.checkAcquiredLocked()
 				branch = trie.BranchSupport(lgr)
 				tip = trie.TipSupport(lgr)
 			}

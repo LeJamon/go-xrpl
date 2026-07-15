@@ -12,7 +12,7 @@ import (
 // LedgerAcceptMethod handles the ledger_accept RPC method
 // This is a standalone-mode only command that manually closes and validates
 // the current open ledger, allowing progression without consensus.
-type LedgerAcceptMethod struct{}
+type LedgerAcceptMethod struct{ AdminHandler }
 
 func (m *LedgerAcceptMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -54,14 +54,6 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	}
 
 	return response, nil
-}
-
-func (m *LedgerAcceptMethod) RequiredRole() types.Role {
-	return types.RoleAdmin // ledger_accept requires admin privileges
-}
-
-func (m *LedgerAcceptMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *LedgerAcceptMethod) RequiredCondition() types.Condition {

@@ -394,14 +394,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
 	}
 
-	// Mirror rippled :228 — check the header hash before any tx work.
-	// Hash the on-the-wire header bytes directly with the LWR prefix
-	// rather than going through the parsed struct: the parse-then-hash
-	// path passes through xrplEpochToTime which collapses an epoch of 0
-	// (the XRPL ripple epoch) into a Go zero time, defeating the
-	// reverse arithmetic CalculateLedgerHash relies on. The byte-level
-	// hash is what rippled computes on the sender side and is the only
-	// invariant guaranteed to round-trip.
+	// Check the exact on-the-wire header body before doing transaction work.
 	advertised, ok := ToHash32(resp.LedgerHash)
 	if !ok {
 		return fmt.Errorf("bad hash length: %d", len(resp.LedgerHash))
@@ -561,11 +554,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	// Build a mutable child ledger anchored on the parent. Mirror
 	// rippled's Ledger(parent, closeTime) constructor: child inherits
 	// the parent's totalCoins and chains its parent linkage from the
-	// PARENT (not the deserialized response header) — the
-	// xrplEpochToTime round-trip in DeserializeHeader collapses an
-	// XRPL epoch of 0 to a Go zero time, which would then produce a
-	// nonsense uint32 in calculateLedgerHash. The parent's in-memory
-	// time.Time round-trips faithfully through Close().
+	// parent rather than the deserialized response header.
 	stateMap, err := r.parent.StateMapSnapshot()
 	if err != nil {
 		return nil, fmt.Errorf("snapshot parent state: %w", err)
@@ -755,15 +744,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 // the tx.EngineConfig.ParentCloseTime contract used elsewhere in the
 // engine. The Ripple epoch is 2000-01-01 UTC.
 func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
-	t := parent.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	secs := t.Unix() - protocol.RippleEpochUnix
-	if secs < 0 {
-		return 0
-	}
-	return uint32(secs)
+	return protocol.ToRippleTime(parent.CloseTime())
 }
 
 // parentStateSnapshot returns an immutable snapshot of the parent state

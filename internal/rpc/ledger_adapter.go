@@ -147,11 +147,7 @@ func (a *ledgerReaderAdapter) TotalDrops() uint64 {
 }
 
 func (a *ledgerReaderAdapter) CloseTime() int64 {
-	t := a.l.CloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.l.CloseTime())
 }
 
 func (a *ledgerReaderAdapter) CloseTimeResolution() uint32 {
@@ -163,11 +159,7 @@ func (a *ledgerReaderAdapter) CloseFlags() uint8 {
 }
 
 func (a *ledgerReaderAdapter) ParentCloseTime() int64 {
-	t := a.l.ParentCloseTime()
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
+	return protocol.RippleSeconds(a.l.ParentCloseTime())
 }
 
 func (a *ledgerReaderAdapter) TxMapHash() [32]byte {
@@ -386,7 +378,43 @@ func rpcTransactionInfo(result *service.TransactionResult) *types.TransactionInf
 		LedgerHash:  ledgerHash,
 		Validated:   result.Validated,
 		TxIndex:     result.TxIndex,
+		CloseTime:   result.CloseTime,
 	}
+}
+
+func (a *LedgerServiceAdapter) SearchTransaction(ctx context.Context, txHash [32]byte, ledgerRange *types.TransactionSearchRange) (*types.TransactionSearchResult, error) {
+	var serviceRange *relationaldb.LedgerRange
+	if ledgerRange != nil {
+		serviceRange = &relationaldb.LedgerRange{
+			Min: relationaldb.LedgerIndex(ledgerRange.Min),
+			Max: relationaldb.LedgerIndex(ledgerRange.Max),
+		}
+	}
+	result, err := a.svc.SearchTransaction(ctx, txHash, serviceRange)
+	if err != nil {
+		return nil, err
+	}
+	response := &types.TransactionSearchResult{}
+	if result.Transaction != nil {
+		response.Transaction = rpcTransactionInfo(result.Transaction)
+	}
+	switch result.Searched {
+	case relationaldb.TxSearchAll:
+		searchedAll := true
+		response.SearchedAll = &searchedAll
+	case relationaldb.TxSearchSome:
+		searchedAll := false
+		response.SearchedAll = &searchedAll
+	}
+	return response, nil
+}
+
+func (a *LedgerServiceAdapter) GetLedgerContext(ctx context.Context, sequence uint32) (*types.LedgerContext, error) {
+	result, err := a.svc.GetLedgerContext(ctx, sequence)
+	if err != nil {
+		return nil, err
+	}
+	return &types.LedgerContext{Hash: result.Hash, CloseTime: result.CloseTime}, nil
 }
 
 func rpcTxSearchResult(result relationaldb.TxSearchResult) types.TxSearchResult {

@@ -163,7 +163,7 @@ func (e *TestEnv) CloseWithTimeLeap() {
 func (e *TestEnv) CloseToParentCloseTime(target uint32) {
 	e.t.Helper()
 	resolution := time.Duration(e.ledger.CloseTimeResolution()) * time.Second
-	targetTime := time.Unix(int64(target)+protocol.RippleEpochUnix, 0).UTC()
+	targetTime := protocol.FromRippleTime(target)
 	e.SetTime(targetTime.Add(-resolution))
 	e.Close()
 	if got := toRippleTime(e.ledger.ParentCloseTime()); got != target {
@@ -478,7 +478,7 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 // toRippleTime converts a wall-clock time to seconds since the Ripple epoch,
 // the form EngineConfig.ParentCloseTime and on-ledger time fields expect.
 func toRippleTime(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(t)
 }
 
 // engineConfigOpts captures the per-call-site differences in engine setup. The

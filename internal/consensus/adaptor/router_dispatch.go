@@ -469,9 +469,9 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 	out := &message.Transaction{
 		RawTransaction:   blob,
 		Status:           message.TxStatusCurrent,
-		ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
+		ReceiveTimestamp: uint64(protocol.RippleSeconds(time.Now())),
 	}
-	frame, err := encodeFrame(message.TypeTransaction, out)
+	frame, err := message.EncodeFrame(out)
 	if err != nil {
 		r.logger.Warn("relay transaction encode failed", "error", err)
 		return

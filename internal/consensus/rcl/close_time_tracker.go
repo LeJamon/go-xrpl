@@ -82,7 +82,7 @@ func summarizeCloseTimeVotes(votes map[time.Time]int) string {
 	}
 	all := make([]kv, 0, len(votes))
 	for t, c := range votes {
-		all = append(all, kv{ct: t.Unix() - protocol.RippleEpochUnix, count: c})
+		all = append(all, kv{ct: protocol.RippleSeconds(t), count: c})
 	}
 	limit := min(len(all), 8)
 	var b strings.Builder

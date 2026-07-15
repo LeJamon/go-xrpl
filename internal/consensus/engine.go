@@ -72,6 +72,14 @@ type ValidationHistorian interface {
 	GetJSONTrie() map[string]any
 }
 
+// ValidationQuorumRechecker is an optional historian capability used when a
+// ledger arrives after its validation quorum notification. It snapshots the
+// filtered validations and quorum together and atomically rearms a rejected
+// ledger so a later validation can notify again.
+type ValidationQuorumRechecker interface {
+	RecheckFullyValidated(ledgerID LedgerID, seq uint32) ([]*Validation, int, bool)
+}
+
 // WireableAdaptor is an optional extension engine wires after constructing its
 // ValidationTracker. Implementers emit NegativeUNL pseudo-txs; others (e.g.
 // test mocks) simply skip NegativeUNL voting.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -39,20 +40,14 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
-	if selErr != nil {
-		return nil, selErr
-	}
-	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	ledger, validated, lookupErr := LookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	ledgerFields := ledgerEntryResponseFields(ledger, validated)
 	if !types.IsValidClassicAddress(account) {
-		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerFields)
 	}
 
 	// Get account currencies from the ledger service
@@ -65,17 +60,14 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account currencies: %v", err))
 	}
 
 	// Build response
-	response := ledgerEntryResponseFields(ledger, validated)
+	response := ledgerFields
 	response["receive_currencies"] = result.ReceiveCurrencies
 	response["send_currencies"] = result.SendCurrencies
 

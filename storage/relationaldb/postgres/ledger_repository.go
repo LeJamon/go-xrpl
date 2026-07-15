@@ -248,8 +248,8 @@ func (r *ledgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq 
 // SaveValidatedLedger inserts or updates a validated ledger header (upsert on ledger_seq).
 func (r *ledgerRepository) SaveValidatedLedger(ctx context.Context, ledger *relationaldb.LedgerInfo) error {
 	// Convert Go time back to rippled format (seconds since 2000-01-01)
-	closingTime := ledger.CloseTime.Unix() - protocol.RippleEpochUnix
-	prevClosingTime := ledger.ParentCloseTime.Unix() - protocol.RippleEpochUnix
+	closingTime := protocol.RippleSeconds(ledger.CloseTime)
+	prevClosingTime := protocol.RippleSeconds(ledger.ParentCloseTime)
 
 	query := `INSERT INTO ledgers (ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash,
 			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags)

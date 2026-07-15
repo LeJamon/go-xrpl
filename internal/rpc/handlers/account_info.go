@@ -67,18 +67,11 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
-	if selErr != nil {
-		return nil, selErr
-	}
-	ledger, lookupValidated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	ledger, lookupValidated, lookupErr := LookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
 	if decodeErr != nil {
@@ -104,7 +97,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RPCErrorLgrNotFound("Ledger not found.")
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account info: %v", err))
 	}
 
 	queue := false

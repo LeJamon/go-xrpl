@@ -45,6 +45,7 @@ func TestSignFor_NetworkIDEnforcement(t *testing.T) {
 		b, err := json.Marshal(map[string]any{
 			"account":    signer,
 			"passphrase": "masterpassphrase",
+			"key_type":   "secp256k1",
 			"tx_json":    txJSON,
 		})
 		require.NoError(t, err)

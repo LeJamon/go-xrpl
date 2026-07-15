@@ -265,7 +265,7 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 		h.Set(HeaderNetworkID, strconv.FormatUint(uint64(cfg.NetworkID), 10))
 	}
 
-	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
+	networkTime := uint64(protocol.RippleSeconds(time.Now()))
 	h.Set(HeaderNetworkTime, strconv.FormatUint(networkTime, 10))
 	h.Set(HeaderPublicKey, id.EncodedPublicKey())
 

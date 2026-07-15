@@ -278,6 +278,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		// Marker should not be present when there are no more pages
 		_, hasMarker := resp["marker"]
 		assert.False(t, hasMarker, "marker should be absent when no more pages")
+		assert.NotContains(t, resp, "limit")
 	})
 
 	t.Run("Marker present when more pages exist", func(t *testing.T) {
@@ -309,6 +310,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, expectedMarker, resp["marker"])
+		assert.Equal(t, float64(200), resp["limit"])
 	})
 }
 
@@ -852,9 +854,9 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 		ledgerIndex       any
 		expectLedgerIndex string
 	}{
-		{"validated", "validated", "validated"},
-		{"current", "current", "current"},
-		{"closed", "closed", "closed"},
+		{"validated", "validated", "2"},
+		{"current", "current", "3"},
+		{"closed", "closed", "2"},
 		{"integer", 2, "2"},
 	}
 
@@ -905,8 +907,8 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
-		assert.Equal(t, "current", capturedLedgerIndex,
-			"Default ledger_index should be 'current'")
+		assert.Equal(t, "3", capturedLedgerIndex,
+			"Default ledger_index should pin the current ledger sequence")
 	})
 
 	t.Run("ledger not found returns ledger not found error", func(t *testing.T) {

@@ -5,12 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"reflect"
-	"sort"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
+	"github.com/LeJamon/go-xrpl/internal/replaytool"
 	"github.com/spf13/cobra"
 )
 
@@ -204,11 +203,7 @@ func loadStateFile(path string) ([]StateFileEntry, error) {
 	return nil, fmt.Errorf("unrecognized file format")
 }
 
-type stateEntry struct {
-	Index   string
-	DataHex string
-	Decoded map[string]any
-}
+type stateEntry = replaytool.ComparableStateEntry
 
 func buildStateMap(entries []StateFileEntry) map[string]stateEntry {
 	result := make(map[string]stateEntry)
@@ -241,80 +236,15 @@ func decodeStateData(hexData string) map[string]any {
 	return decoded
 }
 
-type modifiedEntry struct {
-	Index       string
-	OldDataHex  string
-	NewDataHex  string
-	OldDecoded  map[string]any
-	NewDecoded  map[string]any
-	ChangedKeys []string
-}
+type modifiedEntry = replaytool.StateModification
 
 func compareStates(map1, map2 map[string]stateEntry) (added, removed []stateEntry, modified []modifiedEntry, unchanged []stateEntry) {
-	// Find added and modified
-	for key, entry2 := range map2 {
-		entry1, exists := map1[key]
-		if !exists {
-			added = append(added, entry2)
-		} else if !strings.EqualFold(entry1.DataHex, entry2.DataHex) {
-			changedKeys := findChangedKeys(entry1.Decoded, entry2.Decoded)
-			modified = append(modified, modifiedEntry{
-				Index:       entry2.Index,
-				OldDataHex:  entry1.DataHex,
-				NewDataHex:  entry2.DataHex,
-				OldDecoded:  entry1.Decoded,
-				NewDecoded:  entry2.Decoded,
-				ChangedKeys: changedKeys,
-			})
-		} else {
-			unchanged = append(unchanged, entry2)
-		}
-	}
-
-	// Find removed
-	for key, entry1 := range map1 {
-		if _, exists := map2[key]; !exists {
-			removed = append(removed, entry1)
-		}
-	}
-
-	// Sort for consistent output
-	sort.Slice(added, func(i, j int) bool { return added[i].Index < added[j].Index })
-	sort.Slice(removed, func(i, j int) bool { return removed[i].Index < removed[j].Index })
-	sort.Slice(modified, func(i, j int) bool { return modified[i].Index < modified[j].Index })
-	sort.Slice(unchanged, func(i, j int) bool { return unchanged[i].Index < unchanged[j].Index })
-
-	return
+	comparison := replaytool.CompareStates(map1, map2)
+	return comparison.Added, comparison.Removed, comparison.Modified, comparison.Unchanged
 }
 
 func findChangedKeys(old, new map[string]any) []string {
-	if old == nil || new == nil {
-		return nil
-	}
-
-	changed := make([]string, 0)
-	allKeys := make(map[string]bool)
-
-	for k := range old {
-		allKeys[k] = true
-	}
-	for k := range new {
-		allKeys[k] = true
-	}
-
-	for k := range allKeys {
-		oldVal, oldExists := old[k]
-		newVal, newExists := new[k]
-
-		if !oldExists || !newExists {
-			changed = append(changed, k)
-		} else if !reflect.DeepEqual(oldVal, newVal) {
-			changed = append(changed, k)
-		}
-	}
-
-	sort.Strings(changed)
-	return changed
+	return replaytool.ChangedStateKeys(old, new)
 }
 
 func filterByType(entries []stateEntry, entryType string) []stateEntry {

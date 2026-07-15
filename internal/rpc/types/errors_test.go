@@ -165,6 +165,10 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RPCErrorHighFee("x"), "highFee", 11},
 		{RPCErrorSigningMalformed(), "signingMalformed", 63},
 		{RPCErrorPublicMalformed(), "publicMalformed", 62},
+		{RPCErrorBadSeed(), "badSeed", 44},
+		{RPCErrorBadKeyType("x"), "badKeyType", 76},
+		{RPCErrorChannelMalformed(), "channelMalformed", 45},
+		{RPCErrorChannelAmountMalformed(), "channelAmtMalformed", 46},
 		{RPCErrorTxSigned(), "transactionSigned", 96},
 		{RPCErrorSrcActMalformed("x"), "srcActMalformed", 65},
 		{RPCErrorNotImpl(), "notImpl", 74},
@@ -194,6 +198,24 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		if c.err.Code != c.code {
 			t.Errorf("token %q code = %d, want %d", c.token, c.err.Code, c.code)
 		}
+	}
+}
+
+func TestRPCErrorResponseFields(t *testing.T) {
+	fields := RPCErrorActNotFound("Account not found.").WithExtra(map[string]any{"index": "ABC"}).ResponseFields()
+	if fields["error"] != "actNotFound" || fields["error_code"] != RpcACT_NOT_FOUND || fields["error_message"] != "Account not found." {
+		t.Fatalf("response fields = %#v", fields)
+	}
+	if fields["index"] != "ABC" {
+		t.Fatalf("extra index = %v, want ABC", fields["index"])
+	}
+
+	bare := RPCErrorEntryNotFoundBare("missing").ResponseFields()
+	if _, ok := bare["error_code"]; ok {
+		t.Fatalf("bare response includes error_code: %#v", bare)
+	}
+	if _, ok := bare["error_message"]; ok {
+		t.Fatalf("bare response includes error_message: %#v", bare)
 	}
 }
 

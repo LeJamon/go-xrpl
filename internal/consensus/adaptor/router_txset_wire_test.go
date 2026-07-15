@@ -341,7 +341,7 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 		QueryDepth: 3,
 		NodeIDs:    [][]byte{rootNodeID},
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	require.NoError(t, err)
 
 	msgType, decoded := decodeFrame(t, frame)
@@ -405,7 +405,7 @@ func TestGetLedger_IndirectQueryType_Wire(t *testing.T) {
 				QueryDepth: 2,
 				QueryType:  indirectQueryType(tc.indirect),
 			}
-			frame, err := encodeFrame(message.TypeGetLedger, msg)
+			frame, err := message.EncodeFrame(msg)
 			require.NoError(t, err)
 
 			_, decoded := decodeFrame(t, frame)

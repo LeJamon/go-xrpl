@@ -107,9 +107,9 @@ func HaveSetFromMessage(msg *message.HaveTransactionSet) (consensus.TxSetID, mes
 }
 
 func xrplEpochToTime(epoch uint32) time.Time {
-	return time.Unix(int64(epoch)+protocol.RippleEpochUnix, 0)
+	return protocol.FromRippleTime(epoch)
 }
 
 func timeToXrplEpoch(t time.Time) uint32 {
-	return uint32(t.Unix() - protocol.RippleEpochUnix)
+	return protocol.ToRippleTime(t)
 }

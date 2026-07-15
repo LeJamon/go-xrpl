@@ -2,12 +2,10 @@ package service
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -121,7 +119,9 @@ type Service struct {
 	closedLedger *ledger.Ledger
 
 	// Validated ledger (highest validated)
-	validatedLedger *ledger.Ledger
+	validatedLedger   *ledger.Ledger
+	validatedSignTime time.Time
+	validatedAgeNow   func() time.Time
 
 	// Genesis ledger
 	genesisLedger *ledger.Ledger
@@ -167,6 +167,10 @@ type Service struct {
 	// Invoked off-thread when SetValidatedLedger stashes a validation for a seq
 	// beyond closed (arms the inbound-ledger acquisition).
 	onPendingValidationStashed func(seq uint32, hash [32]byte)
+
+	// Rechecks the current validation set before a stashed notification promotes
+	// a ledger that arrived later.
+	pendingValidationResolver PendingValidationResolver
 
 	// heldAdoptions stashes out-of-order replay-delta adoptions (child seq
 	// before parent), keyed by the awaited parent seq so an adopt at N pops the
@@ -292,6 +296,7 @@ func New(cfg Config) (*Service, error) {
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
 		feeTrack:                 feetrack.New(),
+		validatedAgeNow:          time.Now,
 		persistWake:              make(chan struct{}, 1),
 	}
 	return s, nil
@@ -361,7 +366,7 @@ func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool
 		name = f.Name
 	}
 	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
-		Amendment: strings.ToUpper(hex.EncodeToString(id[:])),
+		Amendment: protocol.Hash256Hex(id),
 		Name:      name,
 		Vetoed:    vetoed,
 	})
@@ -447,6 +452,7 @@ func (s *Service) Start() error {
 		}
 		s.closedLedger = nextLedger
 		s.validatedLedger = nextLedger
+		s.validatedSignTime = nextLedger.CloseTime()
 		s.putHistoryLocked(nextLedger)
 
 		openLedger, err := ledger.NewOpen(nextLedger, time.Now())
@@ -469,6 +475,7 @@ func (s *Service) Start() error {
 		} else {
 			s.closedLedger = latest
 			s.validatedLedger = latest
+			s.validatedSignTime = latest.CloseTime()
 			if latest.Sequence() != genesisLedger.Sequence() {
 				s.deleteHistoryLocked(genesisLedger.Sequence())
 			}
@@ -893,6 +900,37 @@ func (s *Service) GetValidatedLedger() *ledger.Ledger {
 	return s.validatedLedger
 }
 
+// GetValidatedLedgerAge returns the age of the trusted-validation signing-time
+// median for the current validated ledger.
+func (s *Service) GetValidatedLedgerAge() time.Duration {
+	s.mu.RLock()
+	signTime := s.validatedSignTime
+	now := s.validatedAgeNow
+	s.mu.RUnlock()
+	if signTime.IsZero() {
+		return 14 * 24 * time.Hour
+	}
+	if now == nil {
+		now = time.Now
+	}
+	current := now()
+	current = time.Unix(current.Unix(), 0).UTC()
+	signTime = time.Unix(signTime.Unix(), 0).UTC()
+	age := current.Sub(signTime)
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
+// SetValidatedLedgerAgeClock sets the adjusted close-time clock used for
+// validated-ledger freshness checks.
+func (s *Service) SetValidatedLedgerAgeClock(now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.validatedAgeNow = now
+}
+
 // XRPFeesEnabled reports whether the XRPFees amendment is active on the
 // validated ledger. The subscribe ack uses it to gate the deprecated
 // fee_ref field, mirroring rippled's subLedger.
@@ -1152,14 +1190,14 @@ func (s *Service) GetServerInfo() ServerInfo {
 	if s.closedLedger != nil {
 		info.ClosedLedgerSeq = s.closedLedger.Sequence()
 		info.ClosedLedgerHash = s.closedLedger.Hash()
-		info.ClosedLedgerCloseTime = rippleEpochSeconds(s.closedLedger.CloseTime())
+		info.ClosedLedgerCloseTime = protocol.RippleSeconds(s.closedLedger.CloseTime())
 	}
 
 	if s.validatedLedger != nil {
 		info.HaveValidated = true
 		info.ValidatedLedgerSeq = s.validatedLedger.Sequence()
 		info.ValidatedLedgerHash = s.validatedLedger.Hash()
-		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
+		info.ValidatedLedgerCloseTime = protocol.RippleSeconds(s.validatedLedger.CloseTime())
 	}
 
 	if minSeq, maxSeq, ok := s.advertisableLedgerRangeLocked(); ok {
@@ -1187,20 +1225,6 @@ type ServerInfo struct {
 	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds
 	CompleteLedgers          string
 	NetworkID                uint32
-}
-
-// rippleEpochSeconds converts a wall-clock close time to seconds since
-// the XRPL epoch (2000-01-01 UTC). Returns 0 for the zero time so a
-// genesis-only node reports close_time=0 instead of a negative value.
-func rippleEpochSeconds(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	s := t.Unix() - protocol.RippleEpochUnix
-	if s < 0 {
-		return 0
-	}
-	return s
 }
 
 // LedgerInfo returns information about a specific ledger

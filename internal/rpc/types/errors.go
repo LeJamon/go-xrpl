@@ -145,6 +145,19 @@ func (e RPCError) ErrorObject() map[string]any {
 	}
 }
 
+// ResponseFields returns the error fields used in XRPL response envelopes.
+func (e RPCError) ResponseFields() map[string]any {
+	fields := map[string]any{"error": e.ErrorString}
+	if !e.IsBareToken() {
+		fields["error_code"] = e.Code
+		fields["error_message"] = e.Message
+	}
+	for key, value := range e.Extra {
+		fields[key] = value
+	}
+	return fields
+}
+
 // rippled error_code_i enum, mirrored 1:1 by value (ErrorCodes.h:42-160).
 // Comments mark rippled's reserved/unused slots so the table is not
 // "filled in", matching rippled's own append-only discipline.
@@ -293,6 +306,32 @@ func RPCErrorMethodNotFound(method string) *RPCError {
 
 func RPCErrorLgrNotFound(message string) *RPCError {
 	return NewRPCError(RpcLGR_NOT_FOUND, "lgrNotFound", "lgrNotFound", message)
+}
+
+func RPCErrorLgrNotValidated() *RPCError {
+	return NewRPCError(RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
+}
+
+func RPCErrorNoNetwork(message string) *RPCError {
+	if message == "" {
+		message = "Not synced to the network."
+	}
+	return NewRPCError(RpcNO_NETWORK, "noNetwork", "noNetwork", message)
+}
+
+func RPCErrorNotSynced(message string) *RPCError {
+	if message == "" {
+		message = "Not synced to the network."
+	}
+	return NewRPCError(RpcNOT_SYNCED, "notSynced", "notSynced", message)
+}
+
+func RPCErrorLgrIdxsInvalid() *RPCError {
+	return NewRPCError(RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
+}
+
+func RPCErrorLgrIdxMalformed() *RPCError {
+	return NewRPCError(RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "lgrIdxMalformed", "Ledger index malformed.")
 }
 
 func RPCErrorActNotFound(message string) *RPCError {
@@ -534,6 +573,22 @@ func RPCErrorPublicMalformed() *RPCError {
 	return NewRPCError(RpcPUBLIC_MALFORMED, "publicMalformed", "publicMalformed", "Public key is malformed.")
 }
 
+func RPCErrorBadSeed() *RPCError {
+	return NewRPCError(RpcBAD_SEED, "badSeed", "badSeed", "Disallowed seed.")
+}
+
+func RPCErrorBadKeyType(message string) *RPCError {
+	return NewRPCError(RpcBAD_KEY_TYPE, "badKeyType", "badKeyType", message)
+}
+
+func RPCErrorChannelMalformed() *RPCError {
+	return NewRPCError(RpcCHANNEL_MALFORMED, "channelMalformed", "channelMalformed", "Payment channel is malformed.")
+}
+
+func RPCErrorChannelAmountMalformed() *RPCError {
+	return NewRPCError(RpcCHANNEL_AMT_MALFORMED, "channelAmtMalformed", "channelAmtMalformed", "Payment channel amount is malformed.")
+}
+
 // RPCErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
 func RPCErrorMissingField(field string) *RPCError {
 	return NewRPCError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
@@ -544,6 +599,12 @@ func RPCErrorMissingField(field string) *RPCError {
 // without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
 func RPCErrorFieldNotFoundTransaction() *RPCError {
 	e := NewRPCError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+	e.bareToken = true
+	return e
+}
+
+func RPCErrorMalformedRequestBare() *RPCError {
+	e := NewRPCError(RpcUNKNOWN, "malformedRequest", "malformedRequest", "")
 	e.bareToken = true
 	return e
 }
@@ -633,12 +694,6 @@ func RPCErrorNotYetImplemented() *RPCError {
 // (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RPCErrorUnknownOption(message string) *RPCError {
 	e := NewRPCError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
-	e.bareToken = true
-	return e
-}
-
-func RPCErrorMalformedRequestBare() *RPCError {
-	e := NewRPCError(RpcUNKNOWN, "malformedRequest", "malformedRequest", "")
 	e.bareToken = true
 	return e
 }

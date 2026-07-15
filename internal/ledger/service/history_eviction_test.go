@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -196,7 +197,7 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 	}
 
 	svc.mu.Lock()
-	svc.stashPendingLedgerValidationLocked(adoptedSeq, adopted.Hash())
+	svc.stashPendingLedgerValidationLocked(adoptedSeq, adopted.Hash(), time.Time{})
 	promoted := svc.drainPendingLedgerValidationLocked(adoptedSeq, adopted)
 	size := len(svc.ledgerHistory)
 	svc.mu.Unlock()

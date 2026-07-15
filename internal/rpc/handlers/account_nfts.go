@@ -15,57 +15,35 @@ import (
 type AccountNftsMethod struct{ BaseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	fields, fieldsErr := rawJSONFields(params)
-	if fieldsErr != nil {
-		return nil, fieldsErr
-	}
-	accountRaw, ok := fields["account"]
-	if !ok {
-		return nil, types.RPCErrorMissingField("account")
-	}
-	account, ok := rawJSONString(accountRaw)
-	if !ok {
-		return nil, types.RPCErrorInvalidField("account")
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
 	if !types.IsValidClassicAddress(account) {
 		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
-	if ledgerSpecErr != nil {
-		return nil, ledgerSpecErr
-	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
+	ledgerIndex, ledgerFields, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information", false)
 	if selErr != nil {
 		return nil, selErr
-	}
-	ledger, _, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
-	if lookupErr != nil {
-		return nil, lookupErr
-	}
-	if accountErr := requireAccountExists(ctx, account, ledgerIndex); accountErr != nil {
-		return nil, accountErr
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountNFTokens, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	marker := ""
-	if markerRaw, ok := fields["marker"]; ok {
-		var valid bool
-		marker, valid = rawJSONString(markerRaw)
-		if !valid {
-			return nil, types.RPCErrorExpectedField("marker", "string")
+	marker, markerErr := markerString(fields["marker"])
+	if markerErr != nil {
+		return nil, markerErr
+	}
+	if _, present := fields["marker"]; present {
+		if marker != "0" && len(marker) != 64 {
+			return nil, types.RPCErrorInvalidField("marker")
 		}
 		if marker != "0" {
-			if len(marker) != 64 {
-				return nil, types.RPCErrorInvalidField("marker")
-			}
 			if _, err := hex.DecodeString(marker); err != nil {
 				return nil, types.RPCErrorInvalidField("marker")
 			}
@@ -82,11 +60,11 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
 			return nil, rerr
 		}
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
+		}
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorActNotFound("Account not found.")
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RPCErrorInvalidField("marker")
@@ -118,19 +96,14 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 
 	response := map[string]any{
 		"account_nfts": nfts,
-		"validated":    result.Validated,
 	}
-	if ledger.IsClosed() {
-		response["ledger_hash"] = FormatLedgerHash(result.LedgerHash)
-		response["ledger_index"] = result.LedgerIndex
-	} else {
-		response["ledger_current_index"] = result.LedgerIndex
-	}
-	if result.Marker == "" {
-		response["account"] = result.Account
-	} else {
-		response["limit"] = limit
+	mergeLedgerFields(response, ledgerFields)
+
+	if result.Marker != "" {
 		response["marker"] = result.Marker
+		response["limit"] = limit
+	} else {
+		response["account"] = result.Account
 	}
 
 	return response, nil

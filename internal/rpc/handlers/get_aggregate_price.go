@@ -16,7 +16,7 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-type GetAggregatePriceMethod struct{}
+type GetAggregatePriceMethod struct{ BaseHandler }
 
 type aggregatePriceAmount struct {
 	number state.XRPLNumber
@@ -542,14 +542,6 @@ func aggregatePriceRoot2(value state.XRPLNumber) state.XRPLNumber {
 		}
 	}
 	return state.NewXRPLNumber(result.Mantissa(), result.Exponent()+exponent/2)
-}
-
-func (m *GetAggregatePriceMethod) RequiredRole() types.Role {
-	return types.RoleGuest
-}
-
-func (m *GetAggregatePriceMethod) SupportedApiVersions() []int {
-	return []int{types.ApiVersion1, types.ApiVersion2, types.ApiVersion3}
 }
 
 func (m *GetAggregatePriceMethod) RequiredCondition() types.Condition {

@@ -121,7 +121,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		if errors.Is(err, svcerr.ErrInvalidHotWallet) {
 			return nil, invalidHotWallet()
 		}
-		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
+		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get gateway balances: %v", err))
 	}
 
 	// Build response matching rippled's GatewayBalances.cpp format: rippled only

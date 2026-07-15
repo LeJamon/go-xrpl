@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // NFTOfferInfo represents an individual NFToken offer for nft_buy_offers/nft_sell_offers RPC
@@ -80,7 +81,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	}
 
 	result := &NFTOffersResult{
-		NFTID:       formatHashHex(nftID),
+		NFTID:       protocol.Hash256Hex(nftID),
 		Offers:      make([]NFTOfferInfo, 0),
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
@@ -199,7 +200,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 // buildNFTOfferInfo converts a parsed offer to the RPC response format
 func (s *Service) buildNFTOfferInfo(offerKey [32]byte, offer *state.NFTokenOfferData) (NFTOfferInfo, error) {
 	info := NFTOfferInfo{
-		NFTOfferIndex: formatHashHex(offerKey),
+		NFTOfferIndex: protocol.Hash256Hex(offerKey),
 		Flags:         offer.Flags,
 	}
 

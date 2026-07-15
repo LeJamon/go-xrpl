@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // lsfCredentialAccepted mirrors credential.LsfCredentialAccepted; duplicated
@@ -443,7 +444,7 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		// Expiration one hour ahead in Ripple-epoch seconds. Guards against
 		// comparing a Ripple-epoch expiration with Unix-epoch close time,
 		// which would falsely expire every credential.
-		exp := uint32(toRippleTime(time.Now().Add(time.Hour)))
+		exp := protocol.ToRippleTime(time.Now().Add(time.Hour))
 		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("FUTURE"), true, &exp)
 		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
 			[]string{formatHashHex(key)})

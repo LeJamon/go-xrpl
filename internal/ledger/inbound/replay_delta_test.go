@@ -98,10 +98,6 @@ func buildDeltaResponse(
 	require.NoError(t, err)
 
 	parentHash := parent.Hash()
-	// Use close times well past the XRPL epoch so AddRaw / DeserializeHeader
-	// round-trip cleanly (the xrplEpochToTime helper turns a zero
-	// uint32 into a Go zero time, which then breaks CalculateLedgerHash's
-	// .Unix() arithmetic — the test must avoid that boundary).
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)
 	hdr := header.LedgerHeader{
 		LedgerIndex:         parent.Sequence() + 1,

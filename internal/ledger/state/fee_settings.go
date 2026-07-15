@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
@@ -32,6 +33,8 @@ type FeeSettings struct {
 	// Tracking fields (not always present)
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+
+	feeFieldsPresent bool
 }
 
 // ParseFeeSettings parses fee settings data from binary format
@@ -58,6 +61,13 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 		if err != nil {
 			return nil, err
 		}
+		fee.feeFieldsPresent = true
+	}
+	for _, name := range []string{"ReferenceFeeUnits", "ReserveBase", "ReserveIncrement"} {
+		if _, ok := fields[name]; ok {
+			fee.feeFieldsPresent = true
+			break
+		}
 	}
 	for _, amount := range []struct {
 		name  string
@@ -79,6 +89,7 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 			continue
 		}
 		*amount.dst = nativeMagnitude(decodedAmount)
+		fee.feeFieldsPresent = true
 		fee.XRPFeesMode = true
 	}
 	if _, ok := fields["PreviousTxnID"]; ok {
@@ -152,6 +163,19 @@ func (f *FeeSettings) GetReserveIncrement() uint64 {
 		return f.ReserveIncrementDrops
 	}
 	return uint64(f.ReserveIncrement)
+}
+
+// Fees resolves the active modern or legacy fields. The Go zero value uses the
+// network defaults; parsed entries preserve explicitly serialized zero fees.
+func (f *FeeSettings) Fees() drops.Fees {
+	if !f.feeFieldsPresent && !f.XRPFeesMode && f.BaseFee == 0 && f.ReferenceFeeUnits == 0 && f.ReserveBase == 0 && f.ReserveIncrement == 0 {
+		return drops.DefaultFees()
+	}
+	return drops.Fees{
+		Base:      drops.XRPAmount(f.GetBaseFee()),
+		Reserve:   drops.XRPAmount(f.GetReserveBase()),
+		Increment: drops.XRPAmount(f.GetReserveIncrement()),
+	}
 }
 
 // IsUsingModernFees returns true if the entry encodes the post-XRPFees field

@@ -5,19 +5,11 @@ import (
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// formatHashHex renders a 32-byte hash as a 64-char uppercase hex string,
-// matching rippled's uint256 JSON emit (uint256::to_string). Use this for any
-// [32]byte value that crosses a JSON boundary (RPC response, marker, key).
 func formatHashHex(hash [32]byte) string {
-	const hexChars = "0123456789ABCDEF"
-	result := make([]byte, 64)
-	for i, b := range hash {
-		result[i*2] = hexChars[b>>4]
-		result[i*2+1] = hexChars[b&0x0F]
-	}
-	return string(result)
+	return protocol.Hash256Hex(hash)
 }
 
 // decodeAccountIDLocal decodes an account address to its 20-byte ID

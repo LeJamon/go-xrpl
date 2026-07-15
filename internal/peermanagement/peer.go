@@ -1033,11 +1033,7 @@ func (p *Peer) runPingTick(now time.Time) error {
 		PType: message.PingTypePing,
 		Seq:   seq,
 	}
-	encoded, err := message.Encode(ping)
-	if err != nil {
-		return nil
-	}
-	wireMsg, err := message.BuildWireMessage(message.TypePing, encoded)
+	wireMsg, err := message.EncodeFrame(ping)
 	if err != nil {
 		return nil
 	}

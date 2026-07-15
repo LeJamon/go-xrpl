@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -62,14 +63,11 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	if ledgerSpecErr != nil {
 		return nil, ledgerSpecErr
 	}
-	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
-	if selErr != nil {
-		return nil, selErr
-	}
 	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	response := ledgerEntryResponseFields(ledger, validated)
 	if transactions {
 		response["transactions"] = []map[string]any{}
@@ -87,16 +85,13 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 		transactions,
 	)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, types.RPCErrorActNotFound("Account not found.")
-		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		}
-		return nil, types.RPCErrorInternal(err.Error())
+		return nil, mapAccountQueryErr(err, err.Error())
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format

@@ -203,9 +203,5 @@ func buildEndpointsFrame(eps []message.Endpointv2) ([]byte, error) {
 		Version:     2,
 		EndpointsV2: eps,
 	}
-	encoded, err := message.Encode(msg)
-	if err != nil {
-		return nil, err
-	}
-	return message.BuildWireMessage(message.TypeEndpoints, encoded)
+	return message.EncodeFrame(msg)
 }

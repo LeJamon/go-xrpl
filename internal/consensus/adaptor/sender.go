@@ -1,7 +1,6 @@
 package adaptor
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -29,7 +28,7 @@ func (s *OverlaySender) CheckTracking(validSeq uint32) {
 // network.
 func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 	msg := ProposalToMessage(proposal)
-	frame, err := encodeFrame(message.TypeProposeLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
 	}
@@ -41,7 +40,7 @@ func (s *OverlaySender) BroadcastProposal(proposal *consensus.Proposal) error {
 // BroadcastProposal.
 func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) error {
 	msg := ValidationToMessage(validation)
-	frame, err := encodeFrame(message.TypeValidation, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
 	}
@@ -62,7 +61,7 @@ func (s *OverlaySender) BroadcastValidation(validation *consensus.Validation) er
 // of known-havers.
 func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	msg := ProposalToMessage(proposal)
-	frame, err := encodeFrame(message.TypeProposeLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode proposal: %w", err)
 	}
@@ -74,7 +73,7 @@ func (s *OverlaySender) RelayProposal(proposal *consensus.Proposal, exceptPeer u
 // validation.SuppressionHash for the reverse-index record.
 func (s *OverlaySender) RelayValidation(validation *consensus.Validation, exceptPeer uint64) error {
 	msg := ValidationToMessage(validation)
-	frame, err := encodeFrame(message.TypeValidation, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode validation: %w", err)
 	}
@@ -111,7 +110,7 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 		QueryDepth: 3,
 		NodeIDs:    [][]byte{rootNodeID},
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode txset request: %w", err)
 	}
@@ -136,7 +135,7 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 		NodeIDs:    nodeIDs,
 		QueryType:  indirectQueryType(indirect),
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode txset missing-nodes request: %w", err)
 	}
@@ -164,7 +163,7 @@ func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, n
 		NodeIDs:    nodeIDs,
 		QueryType:  indirectQueryType(indirect),
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode txset missing-nodes (unicast) request: %w", err)
 	}
@@ -172,7 +171,7 @@ func (s *OverlaySender) RequestTxSetMissingNodesFromPeer(id consensus.TxSetID, n
 }
 
 func (s *OverlaySender) BroadcastStatusChange(sc *message.StatusChange) error {
-	frame, err := encodeFrame(message.TypeStatusChange, sc)
+	frame, err := message.EncodeFrame(sc)
 	if err != nil {
 		return fmt.Errorf("encode status change: %w", err)
 	}
@@ -184,7 +183,7 @@ func (s *OverlaySender) RequestLedger(id consensus.LedgerID) error {
 		InfoType:   message.LedgerInfoBase,
 		LedgerHash: id[:],
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger: %w", err)
 	}
@@ -198,7 +197,7 @@ func (s *OverlaySender) RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) err
 		LedgerHash: hash[:],
 		LedgerSeq:  seq,
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger: %w", err)
 	}
@@ -223,7 +222,7 @@ func (s *OverlaySender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, 
 		LedgerHash: hash[:],
 		LedgerSeq:  seq,
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (base): %w", err)
 	}
@@ -337,7 +336,7 @@ func (s *OverlaySender) PeersThatHave(suppressionHash [32]byte) []uint64 {
 // a TMReplayDeltaRequest.
 func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	msg := &message.ReplayDeltaRequest{LedgerHash: hash[:]}
-	frame, err := encodeFrame(message.TypeReplayDeltaReq, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode replay delta request: %w", err)
 	}
@@ -354,7 +353,7 @@ func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, no
 		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
 		QueryType:  indirectQueryType(indirect),
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (state nodes): %w", err)
 	}
@@ -371,7 +370,7 @@ func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]by
 		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
 		QueryType:  indirectQueryType(indirect),
 	}
-	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	frame, err := message.EncodeFrame(msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (tx nodes): %w", err)
 	}
@@ -391,19 +390,4 @@ func indirectQueryType(indirect bool) *message.LedgerQueryType {
 	}
 	qt := message.QueryTypeIndirect
 	return &qt
-}
-
-// encodeFrame serializes a message and wraps it with the wire protocol header.
-// The result can be passed directly to Overlay.Broadcast() or Overlay.Send().
-func encodeFrame(msgType message.MessageType, msg message.Message) ([]byte, error) {
-	payload, err := message.Encode(msg)
-	if err != nil {
-		return nil, err
-	}
-
-	var buf bytes.Buffer
-	if err := message.WriteMessage(&buf, msgType, payload); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }

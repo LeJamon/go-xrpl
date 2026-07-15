@@ -3,9 +3,40 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 )
+
+func TestGetValidatedLedgerAge(t *testing.T) {
+	svc, err := New(DefaultConfig())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := svc.GetValidatedLedgerAge(); got != 14*24*time.Hour {
+		t.Fatalf("missing validation age = %v, want two weeks", got)
+	}
+
+	base := time.Unix(1_700_000_000, 0).UTC()
+	svc.validatedSignTime = base
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(2 * time.Minute) })
+	if got := svc.GetValidatedLedgerAge(); got != 2*time.Minute {
+		t.Fatalf("validated age = %v, want two minutes", got)
+	}
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(2*time.Minute + 500*time.Millisecond) })
+	if got := svc.GetValidatedLedgerAge(); got != 2*time.Minute {
+		t.Fatalf("fractional validated age = %v, want whole-second two minutes", got)
+	}
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(2*time.Minute + time.Second) })
+	if got := svc.GetValidatedLedgerAge(); got != 2*time.Minute+time.Second {
+		t.Fatalf("validated age after boundary = %v, want two minutes and one second", got)
+	}
+
+	svc.SetValidatedLedgerAgeClock(func() time.Time { return base.Add(-time.Minute) })
+	if got := svc.GetValidatedLedgerAge(); got != 0 {
+		t.Fatalf("future validation age = %v, want zero", got)
+	}
+}
 
 func TestNewService(t *testing.T) {
 	cfg := DefaultConfig()

@@ -1002,21 +1002,8 @@ func buildXrplResponseBody(request any, result any, rpcErr *types.RPCError, opts
 
 	var resultObj map[string]any
 	if rpcErr != nil {
-		resultObj = map[string]any{
-			"status": "error",
-			"error":  rpcErr.ErrorString,
-		}
-		// rippled bare-token handlers emit only `error`; inject_error paths add
-		// error_code + error_message. Mirror both.
-		if !rpcErr.IsBareToken() {
-			resultObj["error_code"] = rpcErr.Code
-			resultObj["error_message"] = rpcErr.Message
-		}
-		// Merge any extra result fields the handler attached (rippled
-		// injectError semantics, e.g. ledger_entry's computed index).
-		for k, v := range rpcErr.Extra {
-			resultObj[k] = v
-		}
+		resultObj = rpcErr.ResponseFields()
+		resultObj["status"] = "error"
 		if request != nil {
 			resultObj["request"] = request
 		}
