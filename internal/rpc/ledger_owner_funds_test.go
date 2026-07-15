@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -70,12 +71,14 @@ func TestLedgerOwnerFunds(t *testing.T) {
 
 	// Build an AccountRoot SLE (balance 1,000,000,000 drops, OwnerCount 0).
 	accountRoot := map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Account":         account,
-		"Balance":         "1000000000",
-		"Flags":           0,
-		"OwnerCount":      0,
-		"Sequence":        1,
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           account,
+		"Balance":           "1000000000",
+		"Flags":             0,
+		"OwnerCount":        0,
+		"Sequence":          1,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	}
 	accountHex, err := binarycodec.Encode(accountRoot)
 	require.NoError(t, err)
@@ -161,12 +164,14 @@ func TestLedgerOwnerFunds(t *testing.T) {
 	}
 
 	hashAccountHex, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Account":         account,
-		"Balance":         "2000000000",
-		"Flags":           0,
-		"OwnerCount":      0,
-		"Sequence":        1,
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           account,
+		"Balance":           "2000000000",
+		"Flags":             0,
+		"OwnerCount":        0,
+		"Sequence":          1,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	require.NoError(t, err)
 	hashAccountData, err := hex.DecodeString(hashAccountHex)
@@ -243,12 +248,14 @@ func TestLedgerOwnerFundsUsesTargetLedgerReservesIncludingZero(t *testing.T) {
 	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	accountHex, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Account":         account,
-		"Balance":         "1000000000",
-		"Flags":           0,
-		"OwnerCount":      0,
-		"Sequence":        1,
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           account,
+		"Balance":           "1000000000",
+		"Flags":             0,
+		"OwnerCount":        0,
+		"Sequence":          1,
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	require.NoError(t, err)
 	accountData, err := hex.DecodeString(accountHex)
