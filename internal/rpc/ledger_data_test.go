@@ -69,7 +69,7 @@ func newDefaultLedgerDataResult(numItems int, withMarker bool) *types.LedgerData
 func TestLedgerDataCurrentResponseFields(t *testing.T) {
 	mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
 	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
-		assert.Equal(t, "current", ledgerIndex)
+		assert.Equal(t, "3", ledgerIndex)
 		result := newDefaultLedgerDataResult(0, false)
 		result.LedgerIndex = mock.currentLedgerIndex
 		result.Validated = false

@@ -237,7 +237,7 @@ func RequireAccount(account string) *types.RPCError {
 // Returns rpcACT_MALFORMED (code 35) if malformed, matching rippled behavior.
 func ValidateAccount(account string) *types.RPCError {
 	if account == "" {
-		return types.RPCErrorInvalidParams("Missing required parameter: account")
+		return types.RPCErrorActMalformed("Account malformed.")
 	}
 	if !types.IsValidXRPLAddress(account) {
 		return types.RPCErrorActMalformed("Account malformed.")
@@ -264,13 +264,12 @@ func preflightAccountPage(
 	if rpcErr != nil {
 		return "", nil, rpcErr
 	}
-	ledgerIndex := selection.String()
 	resolved, rpcErr := resolveLedgerSelection(ctx, selection)
 	if rpcErr != nil {
 		return "", nil, rpcErr
 	}
 	reader := resolved.Value
-	ledgerIndex = strconv.FormatUint(uint64(reader.Sequence()), 10)
+	ledgerIndex := strconv.FormatUint(uint64(reader.Sequence()), 10)
 	ledgerFields := make(map[string]any, 3)
 	fillResolvedLedgerFields(ledgerFields, reader, resolved.Validated)
 	if rpcErr := ValidateAccount(account); rpcErr != nil {

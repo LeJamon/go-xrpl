@@ -607,10 +607,18 @@ func TestAccountTxBinaryMode(t *testing.T) {
 		txHash[i] = byte(i + 1)
 	}
 
-	// A minimal valid serialized tx blob and meta for testing binary mode.
-	// These are hex-encoded placeholders that represent raw binary data.
-	txBlobBytes, _ := hex.DecodeString("1200002200000000240000000361D4838D7EA4C680000000000000000000000000005553440000000000E6C92BF47A692162751F6017CF3E40B4AE15285568400000000000000A7321ED5F5AC43F527AE97194A1B29F2E8831A2AEE056431FC596590B5F3F5769AF70774473045022100")
-	metaBytes, _ := hex.DecodeString("201C00000001")
+	txBlobBytes := encodeSyntheticRPCObject(t, map[string]any{
+		"Account":         validAccount,
+		"Fee":             "10",
+		"Sequence":        uint32(3),
+		"SigningPubKey":   "",
+		"TransactionType": "AccountSet",
+	})
+	metaBytes := encodeSyntheticRPCObject(t, map[string]any{
+		"AffectedNodes":     []any{},
+		"TransactionIndex":  uint32(1),
+		"TransactionResult": "tesSUCCESS",
+	})
 
 	t.Run("Binary mode returns tx_blob and meta_blob as hex (API v2)", func(t *testing.T) {
 		ctx := &types.RPCContext{
@@ -723,11 +731,10 @@ func TestAccountTxBinaryMode(t *testing.T) {
 		require.Len(t, txs, 1)
 
 		tx0 := txs[0].(map[string]any)
-		if txJSON, ok := tx0["tx"].(map[string]any); ok {
-			assert.Equal(t, strings.ToUpper(hex.EncodeToString(txHash[:])), txJSON["hash"])
-		} else {
-			assert.Contains(t, tx0, "tx_blob")
-		}
+		txJSON, ok := tx0["tx"].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, strings.ToUpper(hex.EncodeToString(txHash[:])), txJSON["hash"])
+		assert.Contains(t, tx0, "meta")
 		assert.NotContains(t, tx0, "hash")
 		assert.Equal(t, true, tx0["validated"])
 	})

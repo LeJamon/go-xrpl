@@ -40,15 +40,11 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-	ledgerIndex, selErr := resolveLedgerSelector(params)
-	if selErr != nil {
-		return nil, selErr
-	}
 	ledger, validated, lookupErr := LookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
-	ledgerIndex = strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	ledgerFields := ledgerEntryResponseFields(ledger, validated)
 	if !types.IsValidClassicAddress(account) {
 		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerFields)

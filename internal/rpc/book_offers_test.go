@@ -878,10 +878,10 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 
 	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
-			LedgerIndex: 2,
+			LedgerIndex: mock.currentLedgerIndex,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Offers:      []types.BookOffer{},
-			Validated:   true,
+			Validated:   false,
 		}, nil
 	}
 
@@ -911,7 +911,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 	offers, ok := resp["offers"].([]any)
 	require.True(t, ok, "offers should be an array")
 	assert.Equal(t, 0, len(offers), "Expected empty offers array")
-	assert.Contains(t, resp, "validated")
+	assert.Equal(t, false, resp["validated"])
 	// A bare query targets the open ledger, so lookupLedger emits only
 	// ledger_current_index.
 	assert.Contains(t, resp, "ledger_current_index")
@@ -1518,17 +1518,17 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 		{
 			name:          "validated",
 			ledgerIndex:   "validated",
-			expectedIndex: "validated",
+			expectedIndex: "2",
 		},
 		{
 			name:          "current (default)",
 			ledgerIndex:   nil,
-			expectedIndex: "current",
+			expectedIndex: "3",
 		},
 		{
 			name:          "closed",
 			ledgerIndex:   "closed",
-			expectedIndex: "closed",
+			expectedIndex: "2",
 		},
 		{
 			name:          "numeric sequence",

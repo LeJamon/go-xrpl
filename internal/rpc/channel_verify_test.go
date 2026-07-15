@@ -81,7 +81,7 @@ func TestChannelVerify_MissingSignature(t *testing.T) {
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
-	assert.Contains(t, err.Message, "signature")
+	assert.Equal(t, "Invalid parameters.", err.Message)
 }
 
 func TestChannelVerify_PresentEmptyRequiredFields(t *testing.T) {

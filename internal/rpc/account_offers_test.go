@@ -1084,7 +1084,7 @@ func TestAccountOffersLedgerHashThreading(t *testing.T) {
 		params, _ := json.Marshal(map[string]any{"account": validAccount, "ledger_hash": hashHex})
 		_, rpcErr := method.Handle(ctx(mock), params)
 		require.Nil(t, rpcErr)
-		assert.Equal(t, hashHex, seenSelector, "service must receive the hash as its selector")
+		assert.Equal(t, "2", seenSelector, "service must receive the resolved ledger sequence")
 	})
 
 	t.Run("conflicting selectors are rejected", func(t *testing.T) {

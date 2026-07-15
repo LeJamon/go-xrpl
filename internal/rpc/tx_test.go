@@ -1654,7 +1654,7 @@ func TestTxMethodApiVersions(t *testing.T) {
 				shaped := resp["tx_json"].(map[string]any)
 				assert.Equal(t, "1000000", shaped["DeliverMax"])
 				assert.NotContains(t, shaped, "Amount")
-				assert.NotContains(t, shaped, "ctid")
+				assert.Equal(t, "C000006400000000", shaped["ctid"])
 				assert.Contains(t, resp, "ledger_hash")
 			} else {
 				assert.Equal(t, "1000000", resp["Amount"])
@@ -1775,6 +1775,7 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 		serverNetworkID      uint32
 		transactionNetworkID *uint32
 		rootCTID             string
+		embeddedCTID         string
 	}{
 		{
 			name:                 "transaction NetworkID does not override response CTID",
@@ -1783,18 +1784,21 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			serverNetworkID:      11111,
 			transactionNetworkID: &overrideNetworkID,
 			rootCTID:             "C000006400022B67",
+			embeddedCTID:         "C000006400025359",
 		},
 		{
 			name:             "maximum network ID excludes root CTID",
 			ledgerIndex:      100,
 			transactionIndex: 2,
 			serverNetworkID:  0xFFFF,
+			embeddedCTID:     "C00000640002FFFF",
 		},
 		{
 			name:             "maximum ledger index excludes root CTID",
 			ledgerIndex:      0x0FFFFFFF,
 			transactionIndex: 2,
 			serverNetworkID:  11111,
+			embeddedCTID:     "CFFFFFFF00022B67",
 		},
 		{
 			name:             "maximum transaction index remains valid at root",
@@ -1802,6 +1806,7 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			transactionIndex: 0xFFFF,
 			serverNetworkID:  11111,
 			rootCTID:         "C0000064FFFF2B67",
+			embeddedCTID:     "C0000064FFFF2B67",
 		},
 	}
 
@@ -1847,11 +1852,11 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 				assert.Equal(t, tc.rootCTID, response["ctid"])
 			}
 			responseTx := response["tx_json"].(map[string]any)
-			assert.NotContains(t, responseTx, "ctid")
+			assert.Equal(t, tc.embeddedCTID, responseTx["ctid"])
 		})
 	}
 
-	t.Run("API v1 omits CTID when the network ID is at the excluded maximum", func(t *testing.T) {
+	t.Run("API v1 retains the inclusive transaction CTID at the root", func(t *testing.T) {
 		stored, err := json.Marshal(handlers.StoredTransaction{
 			TxJSON: map[string]any{
 				"TransactionType": "Payment",
@@ -1884,14 +1889,14 @@ func TestTxMethodCTIDRootAndTransactionProjection(t *testing.T) {
 			json.RawMessage(`{"transaction":"`+txHash+`"}`),
 		)
 		require.Nil(t, rpcErr)
-		assert.NotContains(t, result.(map[string]any), "ctid")
+		assert.Equal(t, "C000006400025359", result.(map[string]any)["ctid"])
 
 		result, rpcErr = (&handlers.TxMethod{}).Handle(
 			ctx,
 			json.RawMessage(`{"transaction":"`+txHash+`","binary":true}`),
 		)
 		require.Nil(t, rpcErr)
-		assert.NotContains(t, result.(map[string]any), "ctid")
+		assert.Equal(t, "C000006400025359", result.(map[string]any)["ctid"])
 	})
 }
 

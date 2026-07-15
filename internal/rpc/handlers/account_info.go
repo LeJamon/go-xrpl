@@ -67,15 +67,11 @@ func (m *AccountInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		return nil, err
 	}
 
-	ledgerIndex, selErr := resolveLedgerSelector(params)
-	if selErr != nil {
-		return nil, selErr
-	}
 	ledger, lookupValidated, lookupErr := LookupLedger(ctx, params)
 	if lookupErr != nil {
 		return nil, lookupErr
 	}
-	ledgerIndex = strconv.FormatUint(uint64(ledger.Sequence()), 10)
+	ledgerIndex := strconv.FormatUint(uint64(ledger.Sequence()), 10)
 	lookupFields := ledgerEntryResponseFields(ledger, lookupValidated)
 	_, accountID, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
 	if decodeErr != nil {

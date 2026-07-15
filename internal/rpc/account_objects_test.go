@@ -854,9 +854,9 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 		ledgerIndex       any
 		expectLedgerIndex string
 	}{
-		{"validated", "validated", "validated"},
-		{"current", "current", "current"},
-		{"closed", "closed", "closed"},
+		{"validated", "validated", "2"},
+		{"current", "current", "3"},
+		{"closed", "closed", "2"},
 		{"integer", 2, "2"},
 	}
 
@@ -907,8 +907,8 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
-		assert.Equal(t, "current", capturedLedgerIndex,
-			"Default ledger_index should be 'current'")
+		assert.Equal(t, "3", capturedLedgerIndex,
+			"Default ledger_index should pin the current ledger sequence")
 	})
 
 	t.Run("ledger not found returns ledger not found error", func(t *testing.T) {
