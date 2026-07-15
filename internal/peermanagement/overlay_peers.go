@@ -624,20 +624,6 @@ func (o *Overlay) hasInboundSlot(peer *Peer) bool {
 	return o.isClusterPeer(peer) || o.isReservedPeer(peer)
 }
 
-// outboundCount returns the number of outbound connections.
-func (o *Overlay) outboundCount() int {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	count := 0
-	for _, peer := range o.peers {
-		if !peer.Inbound() {
-			count++
-		}
-	}
-	return count
-}
-
 func (o *Overlay) ordinaryOutboundCount() int {
 	o.peersMu.RLock()
 	peers := make([]*Peer, 0, len(o.peers))
