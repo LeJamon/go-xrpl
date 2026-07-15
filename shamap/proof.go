@@ -22,6 +22,8 @@ func (sm *SHAMap) GetProofPath(key [32]byte) (*ProofPath, error) {
 	return sm.GetProofPathContext(context.Background(), key)
 }
 
+// GetProofPathContext returns a proof while forwarding ctx to lazy storage
+// fetches.
 func (sm *SHAMap) GetProofPathContext(ctx context.Context, key [32]byte) (*ProofPath, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
