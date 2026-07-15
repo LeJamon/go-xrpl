@@ -96,7 +96,6 @@ func (a *Adaptor) DropUntrustedValidations() bool {
 	return a.relayValidations == RelayValidationsDropUntrusted
 }
 
-// OnTrustChanged implements consensus.TrustChangeNotifier.
 func (a *Adaptor) OnTrustChanged(fn func([]consensus.NodeID, int)) {
 	a.trustUpdateMu.Lock()
 	defer a.trustUpdateMu.Unlock()

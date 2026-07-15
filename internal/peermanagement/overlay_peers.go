@@ -574,7 +574,6 @@ func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	return ok
 }
 
-// isConnectedTo checks whether an exact remote endpoint is active.
 func (o *Overlay) isConnectedTo(endpoint Endpoint) bool {
 	o.peersMu.RLock()
 	peers := make([]*Peer, 0, len(o.peers))

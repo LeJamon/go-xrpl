@@ -79,7 +79,6 @@ type Paths struct {
 	SkipValidators bool   // Ignore trusted-validator configuration in standalone mode
 }
 
-// LocalStateDir returns a filesystem directory for node-local state.
 func (c *Config) LocalStateDir() string {
 	if c.DatabasePath != "" &&
 		!strings.HasPrefix(c.DatabasePath, "postgres://") &&

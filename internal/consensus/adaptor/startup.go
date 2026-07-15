@@ -503,7 +503,6 @@ func NewFromConfig(
 		Archive:                      validationArchive,
 	}
 
-	// Wire the publisher OnChange to merge against the live static set.
 	// Capturing the boot values directly here would let a SIGHUP removal
 	// be silently undone by the next publisher event.
 	wireValidatorListTrust(c)
