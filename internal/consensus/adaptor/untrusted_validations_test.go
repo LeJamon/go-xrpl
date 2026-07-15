@@ -65,22 +65,32 @@ func TestAdaptor_IsListed(t *testing.T) {
 }
 
 // TestAdaptor_SetTrustedValidatorsFiresTrustChange: every UNL swap invokes
-// the registered trust-change callback (the engine's tracker refresh) after
-// the new set is visible through GetTrustedValidators.
+// the registered trust-change callback with the new trusted/quorum pair while
+// the transition gate remains closed.
 func TestAdaptor_SetTrustedValidatorsFiresTrustChange(t *testing.T) {
 	a := New(Config{})
 	n := consensus.NodeID{0x33}
 
-	var sawTrusted bool
+	var sawTransitionGate bool
+	var callbackTrusted []consensus.NodeID
+	var callbackQuorum int
 	fired := 0
-	a.OnTrustChanged(func() {
+	a.OnTrustChanged(func(trusted []consensus.NodeID, quorum int) {
 		fired++
-		sawTrusted = a.IsTrusted(n)
+		sawTransitionGate = a.IsQuorumUnavailable()
+		callbackTrusted = trusted
+		callbackQuorum = quorum
 	})
+	fired = 0
+	sawTransitionGate = false
 
 	a.SetTrustedValidators([]consensus.NodeID{n}, [][33]byte{{1}})
 	require.Equal(t, 1, fired, "callback must fire once per swap")
-	assert.True(t, sawTrusted, "callback must observe the post-swap trusted set")
+	assert.True(t, sawTransitionGate, "finality gate must remain closed through callback installation")
+	assert.Equal(t, []consensus.NodeID{n}, callbackTrusted)
+	assert.Equal(t, 1, callbackQuorum)
+	assert.False(t, a.IsQuorumUnavailable(), "transition gate must reopen after snapshot installation")
+	assert.True(t, a.IsTrusted(n), "trusted readers must observe the installed snapshot")
 
 	a.SetTrustedValidators(nil, nil)
 	assert.Equal(t, 2, fired)

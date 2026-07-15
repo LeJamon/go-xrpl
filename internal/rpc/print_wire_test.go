@@ -48,7 +48,8 @@ func printTestServer(t *testing.T) *Server {
 func printOverWire(t *testing.T, srv *Server, body string) map[string]any {
 	t.Helper()
 	req := httptest.NewRequest("POST", "/", strings.NewReader(body))
-	req.RemoteAddr = "127.0.0.1:1234" // loopback ⇒ admin
+	req.RemoteAddr = "127.0.0.1:1234"
+	req = withLoopbackAdmin(req)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 	require.Equal(t, http.StatusOK, rr.Code, "body: %s", rr.Body.String())

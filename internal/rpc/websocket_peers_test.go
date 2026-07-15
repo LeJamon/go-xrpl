@@ -28,8 +28,8 @@ func TestWebSocket_PeersRPC_UsesPeerSource(t *testing.T) {
 	ws.RegisterAllMethods()
 	ws.SetPeerSource(src)
 
-	// Admin port context so peers (admin-only) is reachable.
-	pc := &PortContext{PortName: "test_admin", AdminNets: nil}
+	pc := loopbackAdminPortContext()
+	pc.PortName = "test_admin"
 	httpSrv := httptest.NewServer(PortMiddleware(pc, nil, ws))
 	defer httpSrv.Close()
 

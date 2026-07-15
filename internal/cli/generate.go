@@ -1,11 +1,21 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/spf13/cobra"
 )
+
+const generatedValidatorsFilename = "validators.toml"
+
+type generatedFile struct {
+	path string
+	data []byte
+}
 
 var (
 	generateNetwork string
@@ -38,18 +48,117 @@ func runGenerateConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	content := generateConfigContent(networkID)
-
-	if err := os.WriteFile(generateOutput, []byte(content), 0644); err != nil { //nolint:gosec // G306: generated output, world-readable by intent
-		return fmt.Errorf("writing config file: %w", err)
+	validatorsContent, hasValidators := generateValidatorsContent(networkID)
+	files := make([]generatedFile, 0, 2)
+	if hasValidators {
+		validatorsOutput := filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename)
+		if filepath.Clean(validatorsOutput) == filepath.Clean(generateOutput) {
+			return fmt.Errorf("output path must not be named %s", generatedValidatorsFilename)
+		}
+		files = append(files, generatedFile{path: validatorsOutput, data: []byte(validatorsContent)})
+	}
+	files = append(files, generatedFile{path: generateOutput, data: []byte(content)})
+	if err := publishGeneratedFiles(files, os.Link); err != nil {
+		return err
 	}
 
 	w := cmd.OutOrStdout()
 	fmt.Fprintf(w, "Configuration file generated: %s\n", generateOutput)
 	fmt.Fprintf(w, "  Network: %s\n", networkID)
+	if hasValidators {
+		fmt.Fprintf(w, "  Validators: %s\n", filepath.Join(filepath.Dir(generateOutput), generatedValidatorsFilename))
+	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Next steps:")
 	fmt.Fprintln(w, "  1. Review and adjust the configuration values")
-	fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+	if networkID == "devnet" {
+		fmt.Fprintln(w, "  2. Configure trusted validators, or start in standalone mode:")
+		fmt.Fprintln(w, "     xrpld server --standalone --conf", generateOutput)
+	} else {
+		fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+	}
+	return nil
+}
+
+func publishGeneratedFiles(files []generatedFile, link func(string, string) error) error {
+	seen := make(map[string]struct{}, len(files))
+	pending := make([]generatedFile, 0, len(files))
+	for _, file := range files {
+		path, err := filepath.Abs(file.path)
+		if err != nil {
+			return fmt.Errorf("resolve output path %s: %w", file.path, err)
+		}
+		path = filepath.Clean(path)
+		if _, ok := seen[path]; ok {
+			return fmt.Errorf("generated outputs resolve to the same path: %s", file.path)
+		}
+		seen[path] = struct{}{}
+		if info, err := os.Lstat(path); err == nil {
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("output already exists and is not a regular file: %s", file.path)
+			}
+			existing, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return fmt.Errorf("read existing output %s: %w", file.path, readErr)
+			}
+			if !bytes.Equal(existing, file.data) {
+				return fmt.Errorf("output already exists with different content: %s", file.path)
+			}
+			continue
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect output path %s: %w", file.path, err)
+		}
+		pending = append(pending, file)
+	}
+	files = pending
+
+	temps := make([]string, len(files))
+	defer func() {
+		for _, path := range temps {
+			if path != "" {
+				_ = os.Remove(path)
+			}
+		}
+	}()
+	for i, file := range files {
+		tmp, err := os.CreateTemp(filepath.Dir(file.path), "."+filepath.Base(file.path)+"-*")
+		if err != nil {
+			return fmt.Errorf("stage output %s: %w", file.path, err)
+		}
+		temps[i] = tmp.Name()
+		if err := tmp.Chmod(0o644); err != nil { //nolint:gosec // generated configuration is intentionally world-readable
+			_ = tmp.Close()
+			return fmt.Errorf("set output permissions %s: %w", file.path, err)
+		}
+		if _, err := tmp.Write(file.data); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("write staged output %s: %w", file.path, err)
+		}
+		if err := tmp.Sync(); err != nil {
+			_ = tmp.Close()
+			return fmt.Errorf("sync staged output %s: %w", file.path, err)
+		}
+		if err := tmp.Close(); err != nil {
+			return fmt.Errorf("close staged output %s: %w", file.path, err)
+		}
+	}
+
+	published := make([]string, 0, len(files))
+	for i, file := range files {
+		if err := link(temps[i], file.path); err != nil {
+			var rollbackErr error
+			for _, path := range published {
+				if removeErr := os.Remove(path); removeErr != nil {
+					rollbackErr = errors.Join(rollbackErr, removeErr)
+				}
+			}
+			if rollbackErr != nil {
+				return fmt.Errorf("publish output %s: %w (rollback failed: %v)", file.path, err, rollbackErr)
+			}
+			return fmt.Errorf("publish output %s: %w", file.path, err)
+		}
+		published = append(published, file.path)
+	}
 	return nil
 }
 
@@ -70,6 +179,13 @@ func generateConfigContent(network string) string {
 ]`
 	case "devnet":
 		ips = `ips = []`
+	}
+
+	validatorsFile := `validators_file = "validators.toml"`
+	if network == "devnet" {
+		validatorsFile = `# Devnet has no public validator list. Configure trusted validators here,
+# or start the server with --standalone.
+# validators_file = "validators.toml"`
 	}
 
 	return fmt.Sprintf(`# go-xrpl configuration file
@@ -113,8 +229,8 @@ beta_rpc_api = 0
 # WebSocket keepalive ping cadence in seconds (optional — default 30)
 # websocket_ping_frequency = 30
 
-# Validators file (optional)
-# validators_file = "validators.toml"
+# Validators file
+%s
 
 # Genesis file (optional — omit to use built-in defaults)
 # genesis_file = "genesis.json"
@@ -209,5 +325,36 @@ normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
 minimum_last_ledger_buffer = 2
-`, network, ips, network)
+`, network, ips, network, validatorsFile)
+}
+
+func generateValidatorsContent(network string) (string, bool) {
+	switch network {
+	case "main":
+		return `validator_list_sites = [
+    "https://vl.ripple.com",
+    "https://unl.xrplf.org"
+]
+
+validator_list_keys = [
+    "ED2677ABFFD1B33AC6FBC3062B71F1E8397C1505E1C42C64D11AD1B28FF73F4734",
+    "ED42AEC58B701EEBB77356FFFEC26F83C1F0407263530F068C7C73D392C7E06FD1"
+]
+
+validator_list_threshold = 0
+`, true
+	case "testnet":
+		return `validator_list_sites = [
+    "https://vl.altnet.rippletest.net"
+]
+
+validator_list_keys = [
+    "ED264807102805220DA0F312E71FC2C69E1552C9C5790F6C25E3729DEB573D5860"
+]
+
+validator_list_threshold = 0
+`, true
+	default:
+		return "", false
+	}
 }

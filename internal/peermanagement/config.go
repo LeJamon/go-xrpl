@@ -33,6 +33,7 @@ const (
 	// consulted at TMTransaction ingress before dispatching to the
 	// router. Matches rippled's [max_transactions] default.
 	DefaultMaxTransactions = 250
+	peerIPLimitStep        = 21
 
 	// DefaultTxReduceRelayMinPeers / DefaultTxRelayPercentage govern
 	// the reduce-relay tx peer-selection in Overlay.RelayTransaction.
@@ -54,6 +55,7 @@ type Config struct {
 	MaxPeers    int
 	MaxInbound  int
 	MaxOutbound int
+	IPLimit     int
 
 	// Bootstrap peers
 	BootstrapPeers []string
@@ -167,6 +169,7 @@ func DefaultConfig() Config {
 		MaxPeers:    DefaultMaxPeers,
 		MaxInbound:  DefaultMaxInbound,
 		MaxOutbound: DefaultMaxOutbound,
+		IPLimit:     0,
 
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,
@@ -230,6 +233,12 @@ func WithMaxInbound(n int) Option {
 func WithMaxOutbound(n int) Option {
 	return func(c *Config) {
 		c.MaxOutbound = n
+	}
+}
+
+func WithIPLimit(n int) Option {
+	return func(c *Config) {
+		c.IPLimit = n
 	}
 }
 
@@ -398,9 +407,20 @@ func (c *Config) Validate() error {
 	if c.MaxOutbound < 0 {
 		return errors.New("MaxOutbound cannot be negative")
 	}
+	if c.IPLimit < 0 {
+		return errors.New("IPLimit cannot be negative")
+	}
 	if c.MaxInbound+c.MaxOutbound > c.MaxPeers {
 		return errors.New("MaxInbound + MaxOutbound cannot exceed MaxPeers")
 	}
+	limit := c.IPLimit
+	if limit == 0 {
+		limit = 2
+		if c.MaxInbound > peerIPLimitStep {
+			limit += min(5, c.MaxInbound/peerIPLimitStep)
+		}
+	}
+	c.IPLimit = max(1, min(limit, c.MaxInbound/2))
 	if c.ConnectTimeout <= 0 {
 		return errors.New("ConnectTimeout must be positive")
 	}

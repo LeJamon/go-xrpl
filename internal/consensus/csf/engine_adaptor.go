@@ -523,7 +523,12 @@ func (p *EnginePeer) GetTrustedValidators() []consensus.NodeID {
 	return out
 }
 
+func (p *EnginePeer) GetTrustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
+	return p.GetTrustedValidators(), p.quorum
+}
+
 func (p *EnginePeer) GetQuorum() int                     { return p.quorum }
+func (p *EnginePeer) IsQuorumUnavailable() bool          { return false }
 func (p *EnginePeer) GetNegativeUNL() []consensus.NodeID { return nil }
 
 func (p *EnginePeer) IsFeatureEnabled(string) bool                           { return true }

@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -37,26 +38,34 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 	// because Autoconnect reported `candidates=0 needed=N` indefinitely.
 	o.reconcileDiscoveryConnected()
 
-	if !o.discovery.NeedsMorePeers() {
-		return
-	}
-
-	count := o.cfg.MaxOutbound - o.outboundCount()
-	if count <= 0 {
-		return
-	}
+	count := o.cfg.MaxOutbound - o.ordinaryOutboundCount()
+	count = max(count, 0)
 
 	addrs := o.discovery.SelectPeersToConnect(count)
 	slog.Info("Autoconnect", "t", "Overlay", "candidates", len(addrs), "needed", count)
-	for _, addr := range addrs {
+	for i, addr := range addrs {
 		select {
 		case <-ctx.Done():
+			for _, pending := range addrs[i:] {
+				o.discovery.finishConnectAttempt(pending, connectAttemptReleased)
+			}
 			return
 		case o.outboundSem <- struct{}{}:
 		}
 		go func(a string) {
 			defer func() { <-o.outboundSem }()
-			if err := o.Connect(a); err != nil {
+			err := o.Connect(a)
+			result := connectAttemptSucceeded
+			if err != nil {
+				result = connectAttemptReleased
+				if ctx.Err() == nil &&
+					!errors.Is(err, ErrAlreadyConnected) &&
+					!errors.Is(err, ErrMaxPeersReached) {
+					result = connectAttemptFailed
+				}
+			}
+			o.discovery.finishConnectAttempt(a, result)
+			if err != nil {
 				slog.Info("Peer connection failed", "t", "Overlay", "addr", a, "err", err)
 			} else {
 				slog.Info("Peer connected", "t", "Overlay", "addr", a)

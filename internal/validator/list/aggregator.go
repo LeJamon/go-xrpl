@@ -275,6 +275,9 @@ type Aggregator struct {
 	// reason IsListed is lock-free). recomputeAndEmitLocked commits the flag in
 	// a single Store so readers never see a transient intermediate.
 	unlBlocked atomic.Bool
+	// quorumUnavailable tracks rippled's stricter calculateQuorum cutoff,
+	// which can differ from unlBlocked with multiple publishers.
+	quorumUnavailable atomic.Bool
 
 	// clock returns the wall-clock time the aggregator uses to gate
 	// effective / expiration comparisons. Overridable for tests.
@@ -483,6 +486,12 @@ func (a *Aggregator) HasConfiguredPublishers() bool {
 // publisher stays healthy — a state a stateless snapshot cannot reproduce.
 func (a *Aggregator) IsUNLBlocked() bool {
 	return a.unlBlocked.Load()
+}
+
+// IsQuorumUnavailable reports whether too many configured publisher lists are
+// unavailable to calculate a safe validation quorum.
+func (a *Aggregator) IsQuorumUnavailable() bool {
+	return a.quorumUnavailable.Load()
 }
 
 // PublisherSnapshot returns a deep copy of the per-publisher state for
@@ -1204,6 +1213,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	// Accumulate in the local and commit once below.
 	blocked := a.unlBlocked.Load()
 	good := true
+	unavailable := 0
 	for _, s := range a.state {
 		if s.Status == StatusAvailable && !s.Expiration.IsZero() && !s.Expiration.After(now) {
 			s.Status = StatusExpired
@@ -1212,6 +1222,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 		}
 		if s.Status != StatusAvailable {
 			good = false
+			unavailable++
 		}
 	}
 	if good {
@@ -1241,7 +1252,12 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	}
 	blockedChanged := a.unlBlocked.Swap(blocked) != blocked
 
-	if slices.Equal(trusted, a.lastEmitted) && !blockedChanged {
+	previousQuorumUnavailable := a.quorumUnavailable.Load()
+	errorThreshold := min(a.threshold, len(a.publishers)-a.threshold+1)
+	quorumUnavailable := unavailable >= errorThreshold
+	a.quorumUnavailable.Store(quorumUnavailable)
+
+	if slices.Equal(trusted, a.lastEmitted) && !blockedChanged && quorumUnavailable == previousQuorumUnavailable {
 		return
 	}
 	a.lastEmitted = trusted

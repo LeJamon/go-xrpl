@@ -93,7 +93,8 @@ func TestHTTPOverloadAdminUnlimitedBypass(t *testing.T) {
 	pushOverDropThreshold(t, srv.loadTracker, "127.0.0.1")
 
 	req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"stop","params":[{}]}`))
-	req.RemoteAddr = "127.0.0.1:1234" // localhost fallback → RoleAdmin → Unlimited
+	req.RemoteAddr = "127.0.0.1:1234"
+	req = withLoopbackAdmin(req)
 	rr := httptest.NewRecorder()
 	srv.ServeHTTP(rr, req)
 
@@ -190,7 +191,7 @@ func TestHTTPBatchOverloadElement(t *testing.T) {
 // invoking a forbidden admin command is rejected by the overload gate ahead of
 // FORBID, surfacing rippled's WS overload code rpcSLOW_DOWN (slowDown, 10) rather
 // than the forbidden token. A non-admin role is forced by AdminNets that exclude
-// the loopback peer, disabling the localhost-admin fallback.
+// the loopback peer.
 func TestWSOverloadBeforeForbid(t *testing.T) {
 	ws := NewWebSocketServer(2*time.Second, nil)
 	ws.methodRegistry.Register("stop", &stubHandler{role: types.RoleAdmin})

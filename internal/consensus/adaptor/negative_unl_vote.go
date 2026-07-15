@@ -35,11 +35,13 @@ import (
 // surfaces as ErrLocalCountExceedsWindow and is logged at Error here as
 // a likely duplicate-validation bug.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
+	a.trustUpdateMu.Lock()
 	a.mu.Lock()
 	voter := a.negUNLVoter
 	historian := a.validationHistorian
 	masterKeys := a.trustedMasterKeys
 	a.mu.Unlock()
+	a.trustUpdateMu.Unlock()
 
 	if voter == nil || historian == nil || len(masterKeys) == 0 {
 		return nil

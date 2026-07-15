@@ -3,6 +3,7 @@ package adaptor
 import (
 	"context"
 	"log/slog"
+	"math"
 	"testing"
 	"time"
 
@@ -256,9 +257,9 @@ func TestStup_SnapshotStatic_ReturnsCopy(t *testing.T) {
 
 	// Mutating the returned slice must not affect the stored slice.
 	ids[0] = consensus.NodeID{0xFF}
-	c.staticMu.RLock()
+	c.trustMergeMu.Lock()
 	stored := c.staticValidators[0]
-	c.staticMu.RUnlock()
+	c.trustMergeMu.Unlock()
 	assert.NotEqual(t, consensus.NodeID{0xFF}, stored)
 }
 
@@ -447,6 +448,25 @@ func TestStup_ReloadStaticValidators_WithNonNilValidatorList(t *testing.T) {
 	assert.ElementsMatch(t, newIDs, trusted)
 }
 
+func TestStup_WireValidatorListTrustInitializesUnavailableQuorum(t *testing.T) {
+	static := consensus.NodeID{0xBB}
+	master := [33]byte{0x02, 0xBB}
+	a := New(Config{Validators: []consensus.NodeID{static}})
+	agg := stup_newAggregator(t)
+	a.SetQuorumUnavailableFunc(agg.IsQuorumUnavailable)
+	c := &Components{
+		Adaptor:          a,
+		ValidatorList:    agg,
+		staticValidators: []consensus.NodeID{static},
+		staticMasterKeys: [][33]byte{master},
+	}
+
+	wireValidatorListTrust(c)
+
+	assert.Equal(t, math.MaxInt, a.GetQuorum())
+	assert.Equal(t, []consensus.NodeID{static}, a.GetTrustedValidators())
+}
+
 func TestStup_ComponentsStop_NilSafe(t *testing.T) {
 	c := &Components{}
 	assert.NotPanics(t, func() { c.Stop() })
@@ -611,17 +631,54 @@ func TestStup_OverlayOptionsFromConfig_BootstrapAndFixed(t *testing.T) {
 	assert.Contains(t, pcfg.FixedPeers, "alt.ripple.com:51235")
 }
 
-func TestStup_OverlayOptionsFromConfig_PeersMaxAndPrivate(t *testing.T) {
-	cfg := &config.Config{
-		PeersMax:    50,
-		PeerPrivate: 1,
+func TestStup_OverlayOptionsFromConfig_PeerLimits(t *testing.T) {
+	peerPort := map[string]config.PortConfig{
+		"port_peer": {IP: "0.0.0.0", Port: 51235, Protocol: "peer"},
 	}
-	pcfg := peermanagement.DefaultConfig()
-	for _, opt := range OverlayOptionsFromConfig(cfg) {
-		opt(&pcfg)
+	tests := []struct {
+		name         string
+		peersMax     int
+		peerPrivate  int
+		ports        map[string]config.PortConfig
+		wantMax      int
+		wantInbound  int
+		wantOutbound int
+		wantIPLimit  int
+	}{
+		{name: "omitted limit uses default", ports: peerPort, wantMax: 21, wantInbound: 11, wantOutbound: 10, wantIPLimit: 2},
+		{name: "small limit is clamped", peersMax: 5, ports: peerPort, wantMax: 10, wantInbound: 0, wantOutbound: 10, wantIPLimit: 1},
+		{name: "twenty peers", peersMax: 20, ports: peerPort, wantMax: 20, wantInbound: 10, wantOutbound: 10, wantIPLimit: 2},
+		{name: "rippled default", peersMax: 21, ports: peerPort, wantMax: 21, wantInbound: 11, wantOutbound: 10, wantIPLimit: 2},
+		{name: "large limit", peersMax: 100, ports: peerPort, wantMax: 100, wantInbound: 85, wantOutbound: 15, wantIPLimit: 6},
+		{name: "private", peersMax: 20, peerPrivate: 1, ports: peerPort, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
+		{name: "no peer listener", peersMax: 20, wantMax: 20, wantInbound: 0, wantOutbound: 20, wantIPLimit: 1},
 	}
-	assert.Equal(t, 50, pcfg.MaxPeers)
-	assert.True(t, pcfg.PrivateMode)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{
+				PeersMax:    tt.peersMax,
+				PeerPrivate: tt.peerPrivate,
+				Ports:       tt.ports,
+			}
+			pcfg := peermanagement.DefaultConfig()
+			for _, opt := range OverlayOptionsFromConfig(cfg) {
+				opt(&pcfg)
+			}
+
+			assert.Equal(t, tt.wantMax, pcfg.MaxPeers)
+			assert.Equal(t, tt.wantInbound, pcfg.MaxInbound)
+			assert.Equal(t, tt.wantOutbound, pcfg.MaxOutbound)
+			assert.Equal(t, tt.peerPrivate != 0, pcfg.PrivateMode)
+			if tt.ports == nil {
+				assert.Empty(t, pcfg.ListenAddr)
+			} else {
+				assert.Equal(t, "0.0.0.0:51235", pcfg.ListenAddr)
+			}
+			require.NoError(t, pcfg.Validate())
+			assert.Equal(t, tt.wantIPLimit, pcfg.IPLimit)
+		})
+	}
 }
 
 func TestStup_OverlayOptionsFromConfig_LedgerReplayAndMaxTx(t *testing.T) {
