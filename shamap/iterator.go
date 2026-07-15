@@ -229,8 +229,6 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 	return sm.UpperBoundContext(context.Background(), id)
 }
 
-// UpperBoundContext returns the first item above id while forwarding ctx to
-// lazy storage fetches performed by this iterator.
 func (sm *SHAMap) UpperBoundContext(ctx context.Context, id [32]byte) *Iterator {
 	it := &Iterator{sm: sm, started: true, bound: true, ctx: ctx}
 
@@ -304,8 +302,6 @@ func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 	return sm.LowerBoundContext(context.Background(), id)
 }
 
-// LowerBoundContext returns the first item below id while forwarding ctx to
-// lazy storage fetches performed by this iterator.
 func (sm *SHAMap) LowerBoundContext(ctx context.Context, id [32]byte) *Iterator {
 	it := &Iterator{sm: sm, started: true, bound: true, ctx: ctx}
 

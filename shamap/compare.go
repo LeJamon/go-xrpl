@@ -19,8 +19,6 @@ func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
 	return sm.CompareContext(context.Background(), other, maxCount)
 }
 
-// CompareContext compares this SHAMap with another while forwarding ctx to
-// lazy storage fetches.
 func (sm *SHAMap) CompareContext(ctx context.Context, other *SHAMap, maxCount int) (*DifferenceSet, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()

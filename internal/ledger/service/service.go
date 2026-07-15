@@ -994,13 +994,10 @@ func (s *Service) AdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return nil, ErrLedgerNotFound
 }
 
-// GetLedgerByHash returns a ledger by its hash.
 func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
 	return s.getLedgerByHash(context.Background(), hash)
 }
 
-// GetLedgerByHashContext returns a ledger by hash while forwarding ctx to
-// persistent storage on an in-memory cache miss.
 func (s *Service) GetLedgerByHashContext(ctx context.Context, hash [32]byte) (*ledger.Ledger, error) {
 	return s.getLedgerByHash(ctx, hash)
 }

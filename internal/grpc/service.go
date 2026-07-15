@@ -623,8 +623,6 @@ func stateDiff(ctx context.Context, base, desired *ledger.Ledger) (*shamap.Diffe
 	return diff, baseMap, desiredMap, nil
 }
 
-// specToIndex flattens a LedgerSpecifier into the string form expected by
-// LedgerLookup.GetLedgerEntry.
 func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	selection, err := selectorFromSpecifier(spec)
 	if err != nil {

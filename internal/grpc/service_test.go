@@ -951,7 +951,6 @@ func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerEntry_ByHash preserves the exact hash selector.
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 	l := newTestLedger(t, 9, nil, nil)
 	lookup := &fakeLookup{

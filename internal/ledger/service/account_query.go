@@ -71,7 +71,6 @@ func formatDirMarker(key [32]byte, page uint64) string {
 	return protocol.Hash256Hex(key) + "," + strconv.FormatUint(page, 10)
 }
 
-// withAccountQuery resolves the ledger and account shared by account_* queries.
 func withAccountQuery[T any](
 	s *Service,
 	ctx context.Context,

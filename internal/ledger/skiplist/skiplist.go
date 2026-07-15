@@ -113,8 +113,6 @@ func ReadLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (*ledgerfields.L
 	return ReadLedgerHashesSLEContext(context.Background(), stateMap, key)
 }
 
-// ReadLedgerHashesSLEContext reads a LedgerHashes SLE while forwarding ctx to
-// lazy storage fetches.
 func ReadLedgerHashesSLEContext(ctx context.Context, stateMap *shamap.SHAMap, key [32]byte) (*ledgerfields.LedgerHashes, [][32]byte, uint32, error) {
 	item, found, err := stateMap.GetContext(ctx, key)
 	if err != nil {

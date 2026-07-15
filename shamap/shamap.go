@@ -309,7 +309,6 @@ func (sm *SHAMap) Has(key [32]byte) (bool, error) {
 	return sm.HasContext(context.Background(), key)
 }
 
-// HasContext checks whether key exists while forwarding ctx to lazy fetches.
 func (sm *SHAMap) HasContext(ctx context.Context, key [32]byte) (bool, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -326,7 +325,6 @@ func (sm *SHAMap) Get(key [32]byte) (*Item, bool, error) {
 	return sm.GetContext(context.Background(), key)
 }
 
-// GetContext returns key's item while forwarding ctx to lazy fetches.
 func (sm *SHAMap) GetContext(ctx context.Context, key [32]byte) (*Item, bool, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()

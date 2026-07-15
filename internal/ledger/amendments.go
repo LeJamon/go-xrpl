@@ -41,8 +41,6 @@ func loadAmendmentsFromSHAMap(stateMap *shamap.SHAMap) (*amendment.Rules, error)
 	return LoadAmendmentsFromSHAMapContext(context.Background(), stateMap)
 }
 
-// LoadAmendmentsFromSHAMapContext reads amendment rules from a state map while
-// forwarding ctx to lazy storage fetches.
 func LoadAmendmentsFromSHAMapContext(ctx context.Context, stateMap *shamap.SHAMap) (*amendment.Rules, error) {
 	item, found, err := stateMap.GetContext(ctx, keylet.Amendments().Key)
 	if err != nil {

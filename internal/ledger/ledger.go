@@ -384,7 +384,6 @@ func (l *Ledger) Read(k keylet.Keylet) ([]byte, error) {
 	return l.ReadContext(context.Background(), k)
 }
 
-// ReadContext reads a ledger entry while forwarding ctx to lazy state fetches.
 func (l *Ledger) ReadContext(ctx context.Context, k keylet.Keylet) ([]byte, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -416,8 +415,6 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	return l.HashOfSeqContext(context.Background(), seq)
 }
 
-// HashOfSeqContext resolves an ancestor hash while forwarding ctx to lazy
-// skip-list reads.
 func (l *Ledger) HashOfSeqContext(ctx context.Context, seq uint32) ([32]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -465,7 +462,6 @@ func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
 	return l.ExistsContext(context.Background(), k)
 }
 
-// ExistsContext checks a ledger entry while forwarding ctx to lazy state fetches.
 func (l *Ledger) ExistsContext(ctx context.Context, k keylet.Keylet) (bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -590,8 +586,6 @@ func (l *Ledger) GetTransaction(txHash [32]byte) ([]byte, bool, error) {
 	return l.GetTransactionContext(context.Background(), txHash)
 }
 
-// GetTransactionContext reads a transaction while forwarding ctx to lazy
-// transaction-tree storage fetches.
 func (l *Ledger) GetTransactionContext(ctx context.Context, txHash [32]byte) ([]byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -830,8 +824,6 @@ func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return l.SuccContext(context.Background(), key)
 }
 
-// SuccContext returns the first state entry above key while forwarding ctx to
-// lazy storage fetches.
 func (l *Ledger) SuccContext(ctx context.Context, key [32]byte) ([32]byte, []byte, bool, error) {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -894,8 +886,6 @@ func (l *Ledger) ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool
 	return l.ForEachTransactionContext(context.Background(), fn)
 }
 
-// ForEachTransactionContext walks transactions while forwarding ctx to lazy
-// storage fetches.
 func (l *Ledger) ForEachTransactionContext(ctx context.Context, fn func(txHash [32]byte, txData []byte) bool) error {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
