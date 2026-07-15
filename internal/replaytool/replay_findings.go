@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	rtdebug "runtime/debug"
+	"sync"
 )
 
 // findingSchema versions the findings record so the lab can evolve the format.
@@ -59,7 +60,11 @@ type findingTx struct {
 
 // findingsWriter appends Findings to a file as JSON Lines (one record per
 // line), so a long-running survey streams findings without buffering them all.
+// Write is mutex-guarded so a sharded run can share one writer across worker
+// goroutines: a finding can exceed the OS atomic-append size, so concurrent
+// O_APPEND writes are serialized to keep records from interleaving.
 type findingsWriter struct {
+	mu  sync.Mutex
 	f   *os.File
 	enc *json.Encoder
 }
@@ -73,6 +78,8 @@ func newFindingsWriter(path string) (*findingsWriter, error) {
 }
 
 func (w *findingsWriter) Write(finding *Finding) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.enc.Encode(finding)
 }
 
