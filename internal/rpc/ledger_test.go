@@ -584,6 +584,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 	currentParams, err := json.Marshal(map[string]any{
 		"ledger_index": "current",
 		"accounts":     true,
+		"expand":       true,
 	})
 	require.NoError(t, err)
 	result, rpcErr = method.Handle(adminCtx, currentParams)
@@ -648,7 +649,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 		if hash == expectedHash {
 			return reader, nil
 		}
-		return nil, errors.New("ledger not found")
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	services := &types.ServiceContainer{Ledger: mock}
 

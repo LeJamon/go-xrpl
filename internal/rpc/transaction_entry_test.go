@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -119,7 +120,7 @@ func (m *mockLedgerServiceTE) GetLedgerByHash(hash [32]byte) (types.LedgerReader
 	if l, ok := m.ledgersByHash[hash]; ok {
 		return l, nil
 	}
-	return nil, errors.New("ledger not found")
+	return nil, svcerr.ErrLedgerNotFound
 }
 
 func (m *mockLedgerServiceTE) addLedger(lr *mockLedgerReaderTE) {

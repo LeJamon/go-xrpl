@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/crypto/sha512half"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -41,9 +42,11 @@ func TestService_GetLedgerByHashLoadsEvictedLedgerFromNodeStore(t *testing.T) {
 	require.NoError(t, rm.Open(ctx))
 	t.Cleanup(func() { require.NoError(t, rm.Close(ctx)) })
 
+	genesisConfig := genesis.DefaultConfig()
+	genesisConfig.Amendments = append(genesisConfig.Amendments, amendment.FeatureXRPFees)
 	svc, err := New(Config{
 		Standalone:    true,
-		GenesisConfig: genesis.DefaultConfig(),
+		GenesisConfig: genesisConfig,
 		NodeStore:     db,
 		SHAMapFamily:  shamap.NewNodeStoreFamily(db),
 		RelationalDB:  rm,
@@ -192,6 +195,9 @@ func TestService_GetLedgerByHashRejectsNodeStoreOnlyLedger(t *testing.T) {
 	require.ErrorIs(t, err, ErrLedgerNotFound)
 
 	require.NoError(t, closed.SetValidated())
+	svc.mu.Lock()
+	svc.validatedLedger = closed
+	svc.mu.Unlock()
 	require.NoError(t, svc.persistValidatedLedger(ctx, closed, false))
 	persisted, err := svc.GetLedgerByHash(closedHash)
 	require.NoError(t, err)
@@ -262,7 +268,7 @@ func TestService_GetLedgerByHashValidatesHistoricalCanonicalChain(t *testing.T) 
 	parent := svc.genesisLedger
 	var ledger256, ledger257, ledger512 *ledger.Ledger
 	for seq := uint32(2); seq <= 513; seq++ {
-		closeTime := time.Unix(int64(seq), 0).UTC()
+		closeTime := protocol.FromRippleTime(seq)
 		next, err := ledger.NewOpen(parent, closeTime)
 		require.NoError(t, err)
 		require.NoError(t, next.Close(closeTime, 0))

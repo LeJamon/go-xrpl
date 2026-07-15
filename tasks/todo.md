@@ -48,6 +48,14 @@ The finalization review uses only the clean local rippled `3.2.0` checkout at
 deferred to GitHub Actions by the finalization workflow; build, vet, strict lint,
 formatting, and whitespace gates pass on the reviewed behavior tree.
 
+The first exact-head CI run exposed an unused private SHAMap wrapper and stale
+core fixtures after the base merge. The wrapper is removed; missing-ledger mocks
+now use the typed service sentinel, open-ledger selector tests assert immutable
+snapshots, persisted-ledger fixtures establish canonical validation, and the fee
+and timestamp fixtures match rippled v3.2.0 amendment and Ripple-epoch rules.
+`just build`, `just vet`, `just lint`, and `git diff --check` pass on the focused
+CI-remediation tree; local tests remain intentionally delegated to CI.
+
 # Issue #1161 — full-rippled realignment of the keep-up/self-heal bundle
 
 User decisions (2026-07-01): full rippled on the peer-LCL gate, the watchdog,

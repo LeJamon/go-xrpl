@@ -214,10 +214,6 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 // largest-key leaf otherwise (branch 15 first). A non-empty branch whose
 // child cannot be loaded is an error, matching rippled's descendThrow in
 // belowHelper (SHAMap.cpp:481).
-func (sm *SHAMap) boundBelow(node Node, ascending bool) (LeafNode, error) {
-	return sm.boundBelowCtx(context.Background(), node, ascending)
-}
-
 func (sm *SHAMap) boundBelowCtx(ctx context.Context, node Node, ascending bool) (LeafNode, error) {
 	inner, ok := node.(*innerNode)
 	if !ok {

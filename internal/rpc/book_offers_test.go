@@ -1819,7 +1819,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		if hash == foundHash {
 			return &mockLedgerReader{seq: 2, hash: foundHash, closed: true, validated: true}, nil
 		}
-		return nil, errors.New("ledger not found")
+		return nil, svcerr.ErrLedgerNotFound
 	}
 	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
