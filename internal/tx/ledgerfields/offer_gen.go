@@ -180,18 +180,65 @@ func (o *Offer) validateRequired() error {
 	return nil
 }
 
+func (o *Offer) validateDecoded() error {
+	if o.present&offerBitAccount == 0 {
+		return errors.New("ledgerfields: Offer: required field Account is missing")
+	}
+	if o.present&offerBitSequence == 0 {
+		return errors.New("ledgerfields: Offer: required field Sequence is missing")
+	}
+	if o.present&offerBitTakerPays == 0 {
+		return errors.New("ledgerfields: Offer: required field TakerPays is missing")
+	}
+	if o.present&offerBitTakerGets == 0 {
+		return errors.New("ledgerfields: Offer: required field TakerGets is missing")
+	}
+	if o.present&offerBitBookDirectory == 0 {
+		return errors.New("ledgerfields: Offer: required field BookDirectory is missing")
+	}
+	if o.present&offerBitBookNode == 0 {
+		return errors.New("ledgerfields: Offer: required field BookNode is missing")
+	}
+	if o.present&offerBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Offer: required field OwnerNode is missing")
+	}
+	if o.present&offerBitFlags == 0 {
+		return errors.New("ledgerfields: Offer: required field Flags is missing")
+	}
+	if o.present&offerBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Offer: required field PreviousTxnID is missing")
+	}
+	if o.present&offerBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Offer: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (o *Offer) Decode(data []byte) error {
+	return o.decode(data, false)
+}
+
+func (o *Offer) decodeLegacy(data []byte) error {
+	return o.decode(data, true)
+}
+
+func (o *Offer) decode(data []byte, legacy bool) error {
 	*o = Offer{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Offer: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -313,6 +360,9 @@ func (o *Offer) Decode(data []byte) error {
 		return errors.New("ledgerfields: Offer: missing LedgerEntryType")
 	}
 	o.decoded = true
+	if !legacy {
+		return o.validateDecoded()
+	}
 	return nil
 }
 

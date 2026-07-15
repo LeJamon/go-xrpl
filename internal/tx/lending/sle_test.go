@@ -2,19 +2,83 @@ package lending
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
+	"math"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
+func TestLendingNumberRulesPreserveCuspArithmeticAndWireBytes(t *testing.T) {
+	legacyRules := amendment.NewRules([][32]byte{amendment.FeatureLendingProtocol})
+	fixedRules := amendment.NewRules([][32]byte{
+		amendment.FeatureLendingProtocol,
+		amendment.FeatureFixCleanup3_2_0,
+	})
+	if got := lendingNumberScale(legacyRules); got != state.MantissaScaleLargeLegacy {
+		t.Fatalf("legacy scale = %v, want LargeLegacy", got)
+	}
+	if got := lendingNumberScale(fixedRules); got != state.MantissaScaleLarge {
+		t.Fatalf("fixed scale = %v, want Large", got)
+	}
+
+	const (
+		left  = "1000000000000049863"
+		right = "9223372036854315903"
+	)
+	legacy := lendNumForRules(left, legacyRules).
+		MulRounded(lendNumForRules(right, legacyRules), state.RoundUpward)
+	fixed := lendNumForRules(left, fixedRules).
+		MulRounded(lendNumForRules(right, fixedRules), state.RoundUpward)
+	if legacy.Mantissa() != (int64(math.MaxInt64)/100)*100 || legacy.Exponent() != 18 {
+		t.Fatalf("legacy result = %de%d", legacy.Mantissa(), legacy.Exponent())
+	}
+	if fixed.Mantissa() != int64(math.MaxInt64)/10+1 || fixed.Exponent() != 19 {
+		t.Fatalf("fixed result = %de%d", fixed.Mantissa(), fixed.Exponent())
+	}
+
+	var account, owner [20]byte
+	account[0] = 1
+	owner[0] = 2
+	legacyData, err := serializeLoanBrokerForRules(&loanBrokerData{
+		Account: account, Owner: owner, DebtTotal: numStr(legacy),
+	}, legacyRules)
+	if err != nil {
+		t.Fatalf("serialize legacy LoanBroker: %v", err)
+	}
+	fixedData, err := serializeLoanBrokerForRules(&loanBrokerData{
+		Account: account, Owner: owner, DebtTotal: numStr(fixed),
+	}, fixedRules)
+	if err != nil {
+		t.Fatalf("serialize fixed LoanBroker: %v", err)
+	}
+	assertNumberWireBytes(t, legacyData, legacy.Mantissa(), legacy.Exponent())
+	assertNumberWireBytes(t, fixedData, fixed.Mantissa(), fixed.Exponent())
+	if bytes.Equal(legacyData, fixedData) {
+		t.Fatal("legacy and fixed cusp encodings unexpectedly match")
+	}
+}
+
+func assertNumberWireBytes(t *testing.T, data []byte, mantissa int64, exponent int) {
+	t.Helper()
+	want := make([]byte, 12)
+	binary.BigEndian.PutUint64(want[:8], uint64(mantissa))
+	binary.BigEndian.PutUint32(want[8:], uint32(int32(exponent)))
+	if !bytes.Contains(data, want) {
+		t.Fatalf("serialized Number %de%d is absent from %s", mantissa, exponent, hex.EncodeToString(data))
+	}
+}
+
 func TestSerializeLoanBrokerRoundTrip(t *testing.T) {
-	var vid [32]byte
+	var vid, previousTxnID [32]byte
 	var acct, owner [20]byte
 	for i := range vid {
 		vid[i] = byte(i + 1)
+		previousTxnID[i] = byte(i + 2)
 	}
 	for i := range acct {
 		acct[i] = byte(i + 1)
@@ -25,6 +89,7 @@ func TestSerializeLoanBrokerRoundTrip(t *testing.T) {
 		Account: acct, Owner: owner, LoanSequence: 1,
 		ManagementFeeRate: 1000, CoverAvailable: "500", DebtTotal: "1000",
 		CoverRateMinimum: 1000, CoverRateLiquidation: 1100,
+		PreviousTxnID: previousTxnID, PreviousTxnLgrSeq: 1,
 	}
 	data, err := serializeLoanBroker(b)
 	if err != nil {

@@ -158,15 +158,15 @@ func (v *Vault) SetShareMPTID(value string) {
 }
 
 // SetWithdrawalPolicy assigns WithdrawalPolicy and updates its serialized presence.
-func (v *Vault) SetWithdrawalPolicy(value int) {
-	v.WithdrawalPolicy = value
+func (v *Vault) SetWithdrawalPolicy(value uint8) {
+	v.WithdrawalPolicy = int(value)
 	v.dirty = true
 	v.present |= vaultBitWithdrawalPolicy
 }
 
 // SetScale assigns Scale and updates its serialized presence.
-func (v *Vault) SetScale(value int) {
-	v.Scale = value
+func (v *Vault) SetScale(value uint8) {
+	v.Scale = int(value)
 	v.dirty = true
 	if value == 0 {
 		v.present &^= vaultBitScale
@@ -227,18 +227,80 @@ func (v *Vault) validateRequired() error {
 	return nil
 }
 
+func (v *Vault) validateDecoded() error {
+	if v.present&vaultBitSequence == 0 {
+		return errors.New("ledgerfields: Vault: required field Sequence is missing")
+	}
+	if v.present&vaultBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Vault: required field OwnerNode is missing")
+	}
+	if v.present&vaultBitOwner == 0 {
+		return errors.New("ledgerfields: Vault: required field Owner is missing")
+	}
+	if v.present&vaultBitAccount == 0 {
+		return errors.New("ledgerfields: Vault: required field Account is missing")
+	}
+	if v.present&vaultBitAsset == 0 {
+		return errors.New("ledgerfields: Vault: required field Asset is missing")
+	}
+	if v.present&vaultBitAssetsTotal != 0 && numberIsDefault(v.AssetsTotal) {
+		return errors.New("ledgerfields: Vault: default field AssetsTotal is explicitly set")
+	}
+	if v.present&vaultBitAssetsAvailable != 0 && numberIsDefault(v.AssetsAvailable) {
+		return errors.New("ledgerfields: Vault: default field AssetsAvailable is explicitly set")
+	}
+	if v.present&vaultBitAssetsMaximum != 0 && numberIsDefault(v.AssetsMaximum) {
+		return errors.New("ledgerfields: Vault: default field AssetsMaximum is explicitly set")
+	}
+	if v.present&vaultBitLossUnrealized != 0 && numberIsDefault(v.LossUnrealized) {
+		return errors.New("ledgerfields: Vault: default field LossUnrealized is explicitly set")
+	}
+	if v.present&vaultBitShareMPTID == 0 {
+		return errors.New("ledgerfields: Vault: required field ShareMPTID is missing")
+	}
+	if v.present&vaultBitWithdrawalPolicy == 0 {
+		return errors.New("ledgerfields: Vault: required field WithdrawalPolicy is missing")
+	}
+	if v.present&vaultBitScale != 0 && v.Scale == 0 {
+		return errors.New("ledgerfields: Vault: default field Scale is explicitly set")
+	}
+	if v.present&vaultBitFlags == 0 {
+		return errors.New("ledgerfields: Vault: required field Flags is missing")
+	}
+	if v.present&vaultBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Vault: required field PreviousTxnID is missing")
+	}
+	if v.present&vaultBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Vault: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (v *Vault) Decode(data []byte) error {
+	return v.decode(data, false)
+}
+
+func (v *Vault) decodeLegacy(data []byte) error {
+	return v.decode(data, true)
+}
+
+func (v *Vault) decode(data []byte, legacy bool) error {
 	*v = Vault{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Vault: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -393,6 +455,9 @@ func (v *Vault) Decode(data []byte) error {
 		return errors.New("ledgerfields: Vault: missing LedgerEntryType")
 	}
 	v.decoded = true
+	if !legacy {
+		return v.validateDecoded()
+	}
 	return nil
 }
 

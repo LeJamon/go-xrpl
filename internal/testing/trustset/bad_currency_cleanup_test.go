@@ -85,6 +85,8 @@ func TestTrustSetDeletesLegacyBadCurrencyLine(t *testing.T) {
 
 	jtx.RequireTxSuccess(t, env.Submit(TrustLine(holder, "USD", issuer, "100").QualityIn(123).Build()))
 	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(TrustLine(issuer, "USD", holder, "100").QualityIn(456).Build()))
+	env.Close()
 
 	usdKey := keylet.Line(holder.ID, issuer.ID, "USD")
 	data, err := env.Ledger().Read(usdKey)
@@ -95,8 +97,8 @@ func TestTrustSetDeletesLegacyBadCurrencyLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse USD trust line: %v", err)
 	}
-	if line.LowQualityIn == 0 && line.HighQualityIn == 0 {
-		t.Fatal("test trust line is default; badCurrency predicate would not be exercised")
+	if line.LowQualityIn == 0 || line.HighQualityIn == 0 {
+		t.Fatal("test trust line does not reserve both accounts")
 	}
 
 	badKey := keylet.Line(holder.ID, issuer.ID, legacyBadCurrency)
@@ -122,6 +124,20 @@ func TestTrustSetDeletesLegacyBadCurrencyLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse holder account: %v", err)
 	}
+	holderOwnerCount := account.OwnerCount
+
+	issuerData, err := env.Ledger().Read(keylet.Account(issuer.ID))
+	if err != nil {
+		t.Fatalf("read issuer account: %v", err)
+	}
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
+	if err != nil {
+		t.Fatalf("parse issuer account: %v", err)
+	}
+	issuerOwnerCount := issuerAccount.OwnerCount
+	if holderOwnerCount == 0 || issuerOwnerCount == 0 {
+		t.Fatalf("test accounts are not reserved: holder=%d issuer=%d", holderOwnerCount, issuerOwnerCount)
+	}
 
 	transaction := trustsettx.NewTrustSet(
 		holder.Address,
@@ -146,5 +162,20 @@ func TestTrustSetDeletesLegacyBadCurrencyLine(t *testing.T) {
 	}
 	if exists {
 		t.Fatal("legacy badCurrency trust line was not deleted")
+	}
+	if account.OwnerCount != holderOwnerCount {
+		t.Fatalf("holder OwnerCount = %d, want %d", account.OwnerCount, holderOwnerCount)
+	}
+
+	issuerData, err = env.Ledger().Read(keylet.Account(issuer.ID))
+	if err != nil {
+		t.Fatalf("read updated issuer account: %v", err)
+	}
+	issuerAccount, err = state.ParseAccountRoot(issuerData)
+	if err != nil {
+		t.Fatalf("parse updated issuer account: %v", err)
+	}
+	if issuerAccount.OwnerCount != issuerOwnerCount {
+		t.Fatalf("issuer OwnerCount = %d, want %d", issuerAccount.OwnerCount, issuerOwnerCount)
 	}
 }

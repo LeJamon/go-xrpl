@@ -144,18 +144,56 @@ func (c *Credential) validateRequired() error {
 	return nil
 }
 
+func (c *Credential) validateDecoded() error {
+	if c.present&credentialBitSubject == 0 {
+		return errors.New("ledgerfields: Credential: required field Subject is missing")
+	}
+	if c.present&credentialBitIssuer == 0 {
+		return errors.New("ledgerfields: Credential: required field Issuer is missing")
+	}
+	if c.present&credentialBitCredentialType == 0 {
+		return errors.New("ledgerfields: Credential: required field CredentialType is missing")
+	}
+	if c.present&credentialBitIssuerNode == 0 {
+		return errors.New("ledgerfields: Credential: required field IssuerNode is missing")
+	}
+	if c.present&credentialBitFlags == 0 {
+		return errors.New("ledgerfields: Credential: required field Flags is missing")
+	}
+	if c.present&credentialBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Credential: required field PreviousTxnID is missing")
+	}
+	if c.present&credentialBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Credential: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (c *Credential) Decode(data []byte) error {
+	return c.decode(data, false)
+}
+
+func (c *Credential) decodeLegacy(data []byte) error {
+	return c.decode(data, true)
+}
+
+func (c *Credential) decode(data []byte, legacy bool) error {
 	*c = Credential{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Credential: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -259,6 +297,9 @@ func (c *Credential) Decode(data []byte) error {
 		return errors.New("ledgerfields: Credential: missing LedgerEntryType")
 	}
 	c.decoded = true
+	if !legacy {
+		return c.validateDecoded()
+	}
 	return nil
 }
 

@@ -207,18 +207,65 @@ func (p *PayChannel) validateRequired() error {
 	return nil
 }
 
+func (p *PayChannel) validateDecoded() error {
+	if p.present&paychannelBitAccount == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Account is missing")
+	}
+	if p.present&paychannelBitDestination == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Destination is missing")
+	}
+	if p.present&paychannelBitAmount == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Amount is missing")
+	}
+	if p.present&paychannelBitBalance == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Balance is missing")
+	}
+	if p.present&paychannelBitPublicKey == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PublicKey is missing")
+	}
+	if p.present&paychannelBitSettleDelay == 0 {
+		return errors.New("ledgerfields: PayChannel: required field SettleDelay is missing")
+	}
+	if p.present&paychannelBitOwnerNode == 0 {
+		return errors.New("ledgerfields: PayChannel: required field OwnerNode is missing")
+	}
+	if p.present&paychannelBitFlags == 0 {
+		return errors.New("ledgerfields: PayChannel: required field Flags is missing")
+	}
+	if p.present&paychannelBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PreviousTxnID is missing")
+	}
+	if p.present&paychannelBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: PayChannel: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (p *PayChannel) Decode(data []byte) error {
+	return p.decode(data, false)
+}
+
+func (p *PayChannel) decodeLegacy(data []byte) error {
+	return p.decode(data, true)
+}
+
+func (p *PayChannel) decode(data []byte, legacy bool) error {
 	*p = PayChannel{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: PayChannel: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -349,6 +396,9 @@ func (p *PayChannel) Decode(data []byte) error {
 		return errors.New("ledgerfields: PayChannel: missing LedgerEntryType")
 	}
 	p.decoded = true
+	if !legacy {
+		return p.validateDecoded()
+	}
 	return nil
 }
 

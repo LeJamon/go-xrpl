@@ -147,17 +147,64 @@ func (n *NFTokenOffer) validateRequired() error {
 	return nil
 }
 
+func (n *NFTokenOffer) validateDecoded() error {
+	if n.present&nftokenofferBitOwner == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Owner is missing")
+	}
+	if n.present&nftokenofferBitNFTokenID == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field NFTokenID is missing")
+	}
+	if n.present&nftokenofferBitAmount == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Amount is missing")
+	}
+	if n.present&nftokenofferBitOwnerNode == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field OwnerNode is missing")
+	}
+	if n.present&nftokenofferBitNFTokenOfferNode == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field NFTokenOfferNode is missing")
+	}
+	if n.present&nftokenofferBitFlags == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field Flags is missing")
+	}
+	if n.present&nftokenofferBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field PreviousTxnID is missing")
+	}
+	if n.present&nftokenofferBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: NFTokenOffer: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (n *NFTokenOffer) Decode(data []byte) error {
+	return n.decode(data, false)
+}
+
+func (n *NFTokenOffer) decodeLegacy(data []byte) error {
+	return n.decode(data, true)
+}
+
+func (n *NFTokenOffer) decode(data []byte, legacy bool) error {
 	*n = NFTokenOffer{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
+		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: NFTokenOffer: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
+		if !legacy {
+			switch {
+			case typeCode == 8 && fieldCode == 1:
+				return fmt.Errorf("ledgerfields: NFTokenOffer: field type=%d field=%d is not allowed", typeCode, fieldCode)
+			}
 		}
 		switch typeCode {
 		case 1: // UInt16
@@ -265,6 +312,9 @@ func (n *NFTokenOffer) Decode(data []byte) error {
 		return errors.New("ledgerfields: NFTokenOffer: missing LedgerEntryType")
 	}
 	n.decoded = true
+	if !legacy {
+		return n.validateDecoded()
+	}
 	return nil
 }
 

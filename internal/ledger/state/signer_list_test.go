@@ -100,10 +100,13 @@ func TestParseSignerList_LegacyAccountBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hex decode: %v", err)
 	}
+	if _, err := ParseSignerList(legacyBytes); err == nil {
+		t.Fatal("ParseSignerList accepted a legacy Account blob")
+	}
 
-	info, err := ParseSignerList(legacyBytes)
+	info, err := ParseSignerListLegacy(legacyBytes)
 	if err != nil {
-		t.Fatalf("ParseSignerList must tolerate a legacy Account blob: %v", err)
+		t.Fatalf("ParseSignerListLegacy must tolerate a legacy Account blob: %v", err)
 	}
 	if info.SignerQuorum != 3 {
 		t.Errorf("SignerQuorum = %d, want 3", info.SignerQuorum)

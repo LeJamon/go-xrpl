@@ -117,18 +117,56 @@ func (p *PermissionedDomain) validateRequired() error {
 	return nil
 }
 
+func (p *PermissionedDomain) validateDecoded() error {
+	if p.present&permissioneddomainBitOwner == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field Owner is missing")
+	}
+	if p.present&permissioneddomainBitSequence == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field Sequence is missing")
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field AcceptedCredentials is missing")
+	}
+	if p.present&permissioneddomainBitOwnerNode == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field OwnerNode is missing")
+	}
+	if p.present&permissioneddomainBitFlags == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field Flags is missing")
+	}
+	if p.present&permissioneddomainBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field PreviousTxnID is missing")
+	}
+	if p.present&permissioneddomainBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: PermissionedDomain: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (p *PermissionedDomain) Decode(data []byte) error {
+	return p.decode(data, false)
+}
+
+func (p *PermissionedDomain) decodeLegacy(data []byte) error {
+	return p.decode(data, true)
+}
+
+func (p *PermissionedDomain) decode(data []byte, legacy bool) error {
 	*p = PermissionedDomain{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: PermissionedDomain: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -219,6 +257,9 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 		return errors.New("ledgerfields: PermissionedDomain: missing LedgerEntryType")
 	}
 	p.decoded = true
+	if !legacy {
+		return p.validateDecoded()
+	}
 	return nil
 }
 

@@ -43,6 +43,7 @@ package state
 
 import (
 	"fmt"
+	"math"
 	"math/big"
 	"math/bits"
 	"regexp"
@@ -253,6 +254,9 @@ func ParseXRPLNumber(value string, scale MantissaScale, mode RoundingMode) (numb
 		if parseErr != nil {
 			return XRPLNumber{}, fmt.Errorf("invalid Number %q: %w", value, parseErr)
 		}
+		if parsed == math.MinInt32 {
+			return XRPLNumber{}, fmt.Errorf("invalid Number %q: exponent out of range", value)
+		}
 		exponent += parsed
 	}
 	if int64(int(exponent)) != exponent {
@@ -378,6 +382,9 @@ func (n XRPLNumber) Exponent() int {
 	}
 	return n.exponent
 }
+
+// MantissaScale returns the precision range carried by the Number.
+func (n XRPLNumber) MantissaScale() MantissaScale { return n.scale }
 
 // bringIntoRange restores a rounded mantissa to the normalized range or clamps
 // to zero on exponent underflow (rippled Guard::bringIntoRange).

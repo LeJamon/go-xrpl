@@ -99,18 +99,47 @@ func (n *NFTokenPage) validateRequired() error {
 	return nil
 }
 
+func (n *NFTokenPage) validateDecoded() error {
+	if n.present&nftokenpageBitNFTokens == 0 {
+		return errors.New("ledgerfields: NFTokenPage: required field NFTokens is missing")
+	}
+	if n.present&nftokenpageBitFlags == 0 {
+		return errors.New("ledgerfields: NFTokenPage: required field Flags is missing")
+	}
+	if n.present&nftokenpageBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: NFTokenPage: required field PreviousTxnID is missing")
+	}
+	if n.present&nftokenpageBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: NFTokenPage: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (n *NFTokenPage) Decode(data []byte) error {
+	return n.decode(data, false)
+}
+
+func (n *NFTokenPage) decodeLegacy(data []byte) error {
+	return n.decode(data, true)
+}
+
+func (n *NFTokenPage) decode(data []byte, legacy bool) error {
 	*n = NFTokenPage{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: NFTokenPage: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -180,6 +209,9 @@ func (n *NFTokenPage) Decode(data []byte) error {
 		return errors.New("ledgerfields: NFTokenPage: missing LedgerEntryType")
 	}
 	n.decoded = true
+	if !legacy {
+		return n.validateDecoded()
+	}
 	return nil
 }
 

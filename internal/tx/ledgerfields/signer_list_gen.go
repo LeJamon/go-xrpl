@@ -126,17 +126,61 @@ func (s *SignerList) validateRequired() error {
 	return nil
 }
 
+func (s *SignerList) validateDecoded() error {
+	if s.present&signerlistBitOwnerNode == 0 {
+		return errors.New("ledgerfields: SignerList: required field OwnerNode is missing")
+	}
+	if s.present&signerlistBitSignerQuorum == 0 {
+		return errors.New("ledgerfields: SignerList: required field SignerQuorum is missing")
+	}
+	if s.present&signerlistBitSignerEntries == 0 {
+		return errors.New("ledgerfields: SignerList: required field SignerEntries is missing")
+	}
+	if s.present&signerlistBitSignerListID == 0 {
+		return errors.New("ledgerfields: SignerList: required field SignerListID is missing")
+	}
+	if s.present&signerlistBitFlags == 0 {
+		return errors.New("ledgerfields: SignerList: required field Flags is missing")
+	}
+	if s.present&signerlistBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: SignerList: required field PreviousTxnID is missing")
+	}
+	if s.present&signerlistBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: SignerList: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (s *SignerList) Decode(data []byte) error {
+	return s.decode(data, false)
+}
+
+func (s *SignerList) decodeLegacy(data []byte) error {
+	return s.decode(data, true)
+}
+
+func (s *SignerList) decode(data []byte, legacy bool) error {
 	*s = SignerList{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
+		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: SignerList: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
+		if !legacy {
+			switch {
+			case typeCode == 8 && fieldCode == 1:
+				return fmt.Errorf("ledgerfields: SignerList: field type=%d field=%d is not allowed", typeCode, fieldCode)
+			}
 		}
 		switch typeCode {
 		case 1: // UInt16
@@ -233,6 +277,9 @@ func (s *SignerList) Decode(data []byte) error {
 		return errors.New("ledgerfields: SignerList: missing LedgerEntryType")
 	}
 	s.decoded = true
+	if !legacy {
+		return s.validateDecoded()
+	}
 	return nil
 }
 

@@ -127,18 +127,56 @@ func (m *MPToken) validateRequired() error {
 	return nil
 }
 
+func (m *MPToken) validateDecoded() error {
+	if m.present&mptokenBitAccount == 0 {
+		return errors.New("ledgerfields: MPToken: required field Account is missing")
+	}
+	if m.present&mptokenBitMPTokenIssuanceID == 0 {
+		return errors.New("ledgerfields: MPToken: required field MPTokenIssuanceID is missing")
+	}
+	if m.present&mptokenBitMPTAmount != 0 && isZeroHexString(m.MPTAmount) {
+		return errors.New("ledgerfields: MPToken: default field MPTAmount is explicitly set")
+	}
+	if m.present&mptokenBitOwnerNode == 0 {
+		return errors.New("ledgerfields: MPToken: required field OwnerNode is missing")
+	}
+	if m.present&mptokenBitFlags == 0 {
+		return errors.New("ledgerfields: MPToken: required field Flags is missing")
+	}
+	if m.present&mptokenBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: MPToken: required field PreviousTxnID is missing")
+	}
+	if m.present&mptokenBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: MPToken: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (m *MPToken) Decode(data []byte) error {
+	return m.decode(data, false)
+}
+
+func (m *MPToken) decodeLegacy(data []byte) error {
+	return m.decode(data, true)
+}
+
+func (m *MPToken) decode(data []byte, legacy bool) error {
 	*m = MPToken{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: MPToken: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -240,6 +278,9 @@ func (m *MPToken) Decode(data []byte) error {
 		return errors.New("ledgerfields: MPToken: missing LedgerEntryType")
 	}
 	m.decoded = true
+	if !legacy {
+		return m.validateDecoded()
+	}
 	return nil
 }
 

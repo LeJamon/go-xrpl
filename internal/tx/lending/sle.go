@@ -1,13 +1,12 @@
 package lending
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/internal/tx/lending/lmath"
@@ -21,17 +20,31 @@ import (
 // lendNum parses a NUMBER field string into a large-scale XRPLNumber (the scale a
 // lending transaction context installs). "" / "0" decode to zero.
 func lendNum(s string) lmath.N {
+	return lendNumForRules(s, nil)
+}
+
+func lendNumForRules(s string, rules *amendment.Rules) lmath.N {
+	scale := lendingNumberScale(rules)
 	if s == "" || s == "0" {
-		return lmath.Zero()
+		return lmath.NumScaled(0, 0, scale)
 	}
-	num := &types.Number{}
-	b, err := num.FromJSON(s)
+	number, err := state.ParseXRPLNumber(s, scale, state.RoundToNearest)
 	if err != nil {
-		return lmath.Zero()
+		return lmath.NumScaled(0, 0, scale)
 	}
-	mantissa := int64(binary.BigEndian.Uint64(b[:8]))
-	exp := int32(binary.BigEndian.Uint32(b[8:12]))
-	return lmath.Num(mantissa, int(exp))
+	return number
+}
+
+func lendingNumberScale(rules *amendment.Rules) state.MantissaScale {
+	if rules == nil {
+		return state.MantissaScaleForRulesWithFix(false, false, false, false)
+	}
+	return state.MantissaScaleForRulesWithFix(
+		true,
+		rules.Enabled(amendment.FeatureSingleAssetVault),
+		rules.Enabled(amendment.FeatureLendingProtocol),
+		rules.FixCleanup3_2_0Enabled(),
+	)
 }
 
 // numStr renders a large-scale XRPLNumber into the NUMBER-field convention: "" for
@@ -67,6 +80,10 @@ type loanBrokerData struct {
 
 // serializeLoanBroker encodes a LoanBroker entry to canonical binary.
 func serializeLoanBroker(b *loanBrokerData) ([]byte, error) {
+	return serializeLoanBrokerForRules(b, nil)
+}
+
+func serializeLoanBrokerForRules(b *loanBrokerData, rules *amendment.Rules) ([]byte, error) {
 	ownerAddr, err := state.EncodeAccountID(b.Owner)
 	if err != nil {
 		return nil, fmt.Errorf("encode owner: %w", err)
@@ -85,11 +102,15 @@ func serializeLoanBroker(b *loanBrokerData) ([]byte, error) {
 	entry.SetOwner(ownerAddr)
 	entry.SetLoanSequence(b.LoanSequence)
 	entry.SetData(strings.ToUpper(b.Data))
-	entry.SetManagementFeeRate(int(b.ManagementFeeRate))
+	entry.SetManagementFeeRate(b.ManagementFeeRate)
 	entry.SetOwnerCount(b.OwnerCount)
-	entry.SetDebtTotal(wireNum(b.DebtTotal))
-	entry.SetDebtMaximum(wireNum(b.DebtMaximum))
-	entry.SetCoverAvailable(wireNum(b.CoverAvailable))
+	numbers, err := lendingWireNumbers(lendingNumberScale(rules), b.DebtTotal, b.DebtMaximum, b.CoverAvailable)
+	if err != nil {
+		return nil, fmt.Errorf("encode loan broker Number: %w", err)
+	}
+	entry.SetDebtTotal(numbers[0])
+	entry.SetDebtMaximum(numbers[1])
+	entry.SetCoverAvailable(numbers[2])
 	entry.SetCoverRateMinimum(b.CoverRateMinimum)
 	entry.SetCoverRateLiquidation(b.CoverRateLiquidation)
 	var zeroHash [32]byte
@@ -171,6 +192,10 @@ type loanData struct {
 
 // serializeLoan encodes a Loan entry to canonical binary.
 func serializeLoan(l *loanData) ([]byte, error) {
+	return serializeLoanForRules(l, nil)
+}
+
+func serializeLoanForRules(l *loanData, rules *amendment.Rules) ([]byte, error) {
 	borrowerAddr, err := state.EncodeAccountID(l.Borrower)
 	if err != nil {
 		return nil, fmt.Errorf("encode borrower: %w", err)
@@ -182,10 +207,24 @@ func serializeLoan(l *loanData) ([]byte, error) {
 	entry.SetLoanBrokerID(strings.ToUpper(hex.EncodeToString(l.LoanBrokerID[:])))
 	entry.SetLoanSequence(l.LoanSequence)
 	entry.SetBorrower(borrowerAddr)
-	entry.SetLoanOriginationFee(wireNum(l.LoanOriginationFee))
-	entry.SetLoanServiceFee(wireNum(l.LoanServiceFee))
-	entry.SetLatePaymentFee(wireNum(l.LatePaymentFee))
-	entry.SetClosePaymentFee(wireNum(l.ClosePaymentFee))
+	numbers, err := lendingWireNumbers(
+		lendingNumberScale(rules),
+		l.LoanOriginationFee,
+		l.LoanServiceFee,
+		l.LatePaymentFee,
+		l.ClosePaymentFee,
+		l.PeriodicPayment,
+		l.PrincipalOutstanding,
+		l.TotalValueOutstanding,
+		l.ManagementFeeOutstanding,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("encode loan Number: %w", err)
+	}
+	entry.SetLoanOriginationFee(numbers[0])
+	entry.SetLoanServiceFee(numbers[1])
+	entry.SetLatePaymentFee(numbers[2])
+	entry.SetClosePaymentFee(numbers[3])
 	entry.SetOverpaymentFee(l.OverpaymentFee)
 	entry.SetInterestRate(l.InterestRate)
 	entry.SetLateInterestRate(l.LateInterestRate)
@@ -197,11 +236,11 @@ func serializeLoan(l *loanData) ([]byte, error) {
 	entry.SetPreviousPaymentDueDate(l.PreviousPaymentDueDate)
 	entry.SetNextPaymentDueDate(l.NextPaymentDueDate)
 	entry.SetPaymentRemaining(l.PaymentRemaining)
-	entry.SetPeriodicPayment(wireNum(l.PeriodicPayment))
-	entry.SetPrincipalOutstanding(wireNum(l.PrincipalOutstanding))
-	entry.SetTotalValueOutstanding(wireNum(l.TotalValueOutstanding))
-	entry.SetManagementFeeOutstanding(wireNum(l.ManagementFeeOutstanding))
-	entry.SetLoanScale(int(l.LoanScale))
+	entry.SetPeriodicPayment(numbers[4])
+	entry.SetPrincipalOutstanding(numbers[5])
+	entry.SetTotalValueOutstanding(numbers[6])
+	entry.SetManagementFeeOutstanding(numbers[7])
+	entry.SetLoanScale(l.LoanScale)
 	var zeroHash [32]byte
 	if l.PreviousTxnID != zeroHash {
 		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(l.PreviousTxnID[:])))
@@ -265,11 +304,20 @@ func normNum(v any) string {
 	return s
 }
 
-func wireNum(s string) string {
-	if s == "" {
-		return "0"
+func lendingWireNumbers(scale state.MantissaScale, values ...string) ([]string, error) {
+	numbers := make([]string, len(values))
+	for i, value := range values {
+		if value == "" || value == "0" {
+			numbers[i] = "0"
+			continue
+		}
+		number, err := state.ParseXRPLNumber(value, scale, state.RoundToNearest)
+		if err != nil {
+			return nil, err
+		}
+		numbers[i] = fmt.Sprintf("%de%d", number.Mantissa(), number.Exponent())
 	}
-	return s
+	return numbers, nil
 }
 
 func hash256(s string) [32]byte {

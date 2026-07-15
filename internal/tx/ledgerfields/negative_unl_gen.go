@@ -96,18 +96,38 @@ func (n *NegativeUNL) validateRequired() error {
 	return nil
 }
 
+func (n *NegativeUNL) validateDecoded() error {
+	if n.present&negativeunlBitFlags == 0 {
+		return errors.New("ledgerfields: NegativeUNL: required field Flags is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (n *NegativeUNL) Decode(data []byte) error {
+	return n.decode(data, false)
+}
+
+func (n *NegativeUNL) decodeLegacy(data []byte) error {
+	return n.decode(data, true)
+}
+
+func (n *NegativeUNL) decode(data []byte, legacy bool) error {
 	*n = NegativeUNL{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: NegativeUNL: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -186,6 +206,9 @@ func (n *NegativeUNL) Decode(data []byte) error {
 		return errors.New("ledgerfields: NegativeUNL: missing LedgerEntryType")
 	}
 	n.decoded = true
+	if !legacy {
+		return n.validateDecoded()
+	}
 	return nil
 }
 

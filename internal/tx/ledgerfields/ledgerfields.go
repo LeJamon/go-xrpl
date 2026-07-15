@@ -30,6 +30,7 @@ type Entry interface {
 	// Decode parses binary ledger-entry data into the typed struct. It must
 	// reset prior state before decoding.
 	Decode(data []byte) error
+	decodeLegacy(data []byte) error
 
 	// EmitNewFields writes the fields that should appear in
 	// AffectedNode.NewFields for a CreatedNode (sMD_Create | sMD_Always,
@@ -66,6 +67,14 @@ type Entry interface {
 	// threaded onto the AffectedNode itself, drawn from the receiver. Empty
 	// id / zero seq means the field is absent.
 	PreviousTxn() (id string, seq uint32)
+}
+
+// DecodeLegacy decodes a historical go-xrpl ledger entry using the explicit
+// compatibility rules declared by the generated schema. Consensus and live
+// ledger paths must use Entry.Decode, which enforces rippled's current ledger
+// template.
+func DecodeLegacy(entry Entry, data []byte) error {
+	return entry.decodeLegacy(data)
 }
 
 type constructor func() Entry

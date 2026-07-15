@@ -335,7 +335,7 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	sle.SetPreviousTxnLgrSeq(account.PreviousTxnLgrSeq)
 
 	if account.TickSize > 0 || decodedFieldUnchanged(account.decodedOptionals, "TickSize", account.TickSize) {
-		sle.SetTickSize(int(account.TickSize))
+		sle.SetTickSize(account.TickSize)
 	}
 
 	data, err := sle.Encode()

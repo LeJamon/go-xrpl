@@ -62,8 +62,8 @@ func (a *AMM) SetAccount(value string) {
 }
 
 // SetTradingFee assigns TradingFee and updates its serialized presence.
-func (a *AMM) SetTradingFee(value int) {
-	a.TradingFee = value
+func (a *AMM) SetTradingFee(value uint16) {
+	a.TradingFee = int(value)
 	a.dirty = true
 	if value == 0 {
 		a.present &^= ammBitTradingFee
@@ -160,18 +160,56 @@ func (a *AMM) validateRequired() error {
 	return nil
 }
 
+func (a *AMM) validateDecoded() error {
+	if a.present&ammBitAccount == 0 {
+		return errors.New("ledgerfields: AMM: required field Account is missing")
+	}
+	if a.present&ammBitTradingFee != 0 && a.TradingFee == 0 {
+		return errors.New("ledgerfields: AMM: default field TradingFee is explicitly set")
+	}
+	if a.present&ammBitLPTokenBalance == 0 {
+		return errors.New("ledgerfields: AMM: required field LPTokenBalance is missing")
+	}
+	if a.present&ammBitAsset == 0 {
+		return errors.New("ledgerfields: AMM: required field Asset is missing")
+	}
+	if a.present&ammBitAsset2 == 0 {
+		return errors.New("ledgerfields: AMM: required field Asset2 is missing")
+	}
+	if a.present&ammBitOwnerNode == 0 {
+		return errors.New("ledgerfields: AMM: required field OwnerNode is missing")
+	}
+	if a.present&ammBitFlags == 0 {
+		return errors.New("ledgerfields: AMM: required field Flags is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (a *AMM) Decode(data []byte) error {
+	return a.decode(data, false)
+}
+
+func (a *AMM) decodeLegacy(data []byte) error {
+	return a.decode(data, true)
+}
+
+func (a *AMM) decode(data []byte, legacy bool) error {
 	*a = AMM{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: AMM: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -301,6 +339,9 @@ func (a *AMM) Decode(data []byte) error {
 		return errors.New("ledgerfields: AMM: missing LedgerEntryType")
 	}
 	a.decoded = true
+	if !legacy {
+		return a.validateDecoded()
+	}
 	return nil
 }
 

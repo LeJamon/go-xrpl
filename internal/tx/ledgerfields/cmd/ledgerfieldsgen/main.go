@@ -76,6 +76,8 @@ type fieldRender struct {
 	// has no default to filter.
 	DefaultExpr       string // default predicate using the entry receiver
 	SetterDefaultExpr string // default predicate using a setter's value argument
+	SetterGoType      string
+	SetterAssignment  string
 }
 
 type entryRender struct {
@@ -85,7 +87,8 @@ type entryRender struct {
 	BitPrefix              string              // prefix for presence-bit constants
 	Fields                 []fieldRender       // emit-ordered (creator order)
 	DecodeArms             map[int][]decodeArm // typeCode -> list of dispatch arms
-	HasUnsupported         bool                // any Amount field that may be IOU
+	DecodeOnlyArms         []decodeArm
+	HasUnsupported         bool // any Amount field that may be IOU
 	AllowBadCurrencyDecode bool
 	EntryTypeCode          int
 }
@@ -201,6 +204,7 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 					er.HasUnsupported = true
 				}
 			}
+			er.DecodeOnlyArms = append(er.DecodeOnlyArms, arm)
 			er.DecodeArms[int(fi.FieldHeader.TypeCode)] = append(
 				er.DecodeArms[int(fi.FieldHeader.TypeCode)],
 				arm)
@@ -361,6 +365,19 @@ func makeFieldRender(f spec.Field, fi *definitions.FieldInstance, entryName, bit
 
 	fr.DefaultExpr = defaultExprFor(fr, receiver+"."+fr.GoField)
 	fr.SetterDefaultExpr = setterDefaultExprFor(fr)
+	fr.SetterGoType = fr.GoType
+	fr.SetterAssignment = "value"
+	switch fr.XRPLType {
+	case "UInt8":
+		fr.SetterGoType = "uint8"
+		fr.SetterAssignment = "int(value)"
+	case "UInt16":
+		fr.SetterGoType = "uint16"
+		fr.SetterAssignment = "int(value)"
+	case "Int32":
+		fr.SetterGoType = "int32"
+		fr.SetterAssignment = "int(value)"
+	}
 	return fr, nil
 }
 
@@ -499,8 +516,8 @@ const (
 {{ end }}{{ end }})
 
 {{ range .Fields }}// Set{{ .GoField }} assigns {{ .Name }} and updates its serialized presence.
-func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .GoType }}) {
-	{{ $.Receiver }}.{{ .GoField }} = value
+func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .SetterGoType }}) {
+	{{ $.Receiver }}.{{ .GoField }} = {{ .SetterAssignment }}
 	{{ $.Receiver }}.dirty = true
 {{- if eq .Style 3 }}
 	if {{ .SetterDefaultExpr }} {
@@ -523,12 +540,33 @@ func ({{ $.Receiver }} *{{ $.StructName }}) Set{{ .GoField }}(value {{ .GoType }
 	return nil
 }
 
+func ({{ .Receiver }} *{{ .StructName }}) validateDecoded() error {
+{{- range .Fields }}{{ if eq .Style 1 }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} == 0 {
+		return errors.New({{ printf "%q" (printf "ledgerfields: %s: required field %s is missing" $.Name .Name) }})
+	}
+{{- else if eq .Style 3 }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 && {{ .DefaultExpr }} {
+		return errors.New({{ printf "%q" (printf "ledgerfields: %s: default field %s is explicitly set" $.Name .Name) }})
+	}
+{{- end }}{{ end }}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
+	return {{ .Receiver }}.decode(data, false)
+}
+
+func ({{ .Receiver }} *{{ .StructName }}) decodeLegacy(data []byte) error {
+	return {{ .Receiver }}.decode(data, true)
+}
+
+func ({{ .Receiver }} *{{ .StructName }}) decode(data []byte, legacy bool) error {
 	*{{ .Receiver }} = {{ .StructName }}{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 {{- if .AllowBadCurrencyDecode }}
 	preserveDecodedBinary := false
@@ -538,6 +576,21 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: {{ .Name }}: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
+{{- if .DecodeOnlyArms }}
+		if !legacy {
+			switch {
+{{- range .DecodeOnlyArms }}
+			case typeCode == {{ .TypeCode }} && fieldCode == {{ .FieldCode }}:
+				return fmt.Errorf("ledgerfields: {{ $.Name }}: field type=%d field=%d is not allowed", typeCode, fieldCode)
+{{- end }}
+			}
+		}
+{{- end }}
 		switch typeCode {
 {{- range $tc, $arms := .DecodeArms }}
 		case {{ $tc }}: // {{ (index $arms 0).XRPLType }}
@@ -716,6 +769,9 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 	}
 {{- end }}
 	{{ .Receiver }}.decoded = true
+	if !legacy {
+		return {{ .Receiver }}.validateDecoded()
+	}
 	return nil
 }
 

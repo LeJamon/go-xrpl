@@ -191,7 +191,7 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 				"AssetsTotal":       "1000",
 				"AssetsAvailable":   "500",
 				"AssetsMaximum":     "10000",
-				"LossUnrealized":    "0",
+				"LossUnrealized":    "1",
 				"ShareMPTID":        "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
 				"WithdrawalPolicy":  uint32(1),
 				"Flags":             uint32(0),
@@ -263,7 +263,7 @@ func TestSignerList_LegacyAccountDecodeTolerance(t *testing.T) {
 	}
 
 	entry := New("SignerList")
-	if err := entry.Decode(legacyBytes); err != nil {
+	if err := DecodeLegacy(entry, legacyBytes); err != nil {
 		t.Fatalf("typed decoder must tolerate a legacy Account blob: %v", err)
 	}
 

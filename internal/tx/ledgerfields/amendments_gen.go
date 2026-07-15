@@ -87,18 +87,38 @@ func (a *Amendments) validateRequired() error {
 	return nil
 }
 
+func (a *Amendments) validateDecoded() error {
+	if a.present&amendmentsBitFlags == 0 {
+		return errors.New("ledgerfields: Amendments: required field Flags is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (a *Amendments) Decode(data []byte) error {
+	return a.decode(data, false)
+}
+
+func (a *Amendments) decodeLegacy(data []byte) error {
+	return a.decode(data, true)
+}
+
+func (a *Amendments) decode(data []byte, legacy bool) error {
 	*a = Amendments{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Amendments: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -174,6 +194,9 @@ func (a *Amendments) Decode(data []byte) error {
 		return errors.New("ledgerfields: Amendments: missing LedgerEntryType")
 	}
 	a.decoded = true
+	if !legacy {
+		return a.validateDecoded()
+	}
 	return nil
 }
 

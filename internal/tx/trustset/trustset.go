@@ -615,6 +615,50 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 
 		bDefault := !bLowReserveSet && !bHighReserveSet
 		badCurrency := keylet.CurrencyBytes(t.LimitAmount.Currency) == keylet.BadCurrency()
+		bReserveIncrease := false
+
+		if bLowReserveSet && !bLowReserved {
+			rs.Flags |= state.LsfLowReserve
+			if !bHigh {
+				ctx.Account.OwnerCount++
+				bReserveIncrease = true
+			} else {
+				issuerAccount.OwnerCount++
+			}
+		} else if !bLowReserveSet && bLowReserved {
+			rs.Flags &^= state.LsfLowReserve
+			if !bHigh {
+				if ctx.Account.OwnerCount > 0 {
+					ctx.Account.OwnerCount--
+				}
+			} else if issuerAccount.OwnerCount > 0 {
+				issuerAccount.OwnerCount--
+			}
+		}
+
+		if bHighReserveSet && !bHighReserved {
+			rs.Flags |= state.LsfHighReserve
+			if bHigh {
+				ctx.Account.OwnerCount++
+				bReserveIncrease = true
+			} else {
+				issuerAccount.OwnerCount++
+			}
+		} else if !bHighReserveSet && bHighReserved {
+			rs.Flags &^= state.LsfHighReserve
+			if bHigh {
+				if ctx.Account.OwnerCount > 0 {
+					ctx.Account.OwnerCount--
+				}
+			} else if issuerAccount.OwnerCount > 0 {
+				issuerAccount.OwnerCount--
+			}
+		}
+
+		issuerChanged := (bLowReserveSet && !bLowReserved && bHigh) ||
+			(!bLowReserveSet && bLowReserved && bHigh) ||
+			(bHighReserveSet && !bHighReserved && !bHigh) ||
+			(!bHighReserveSet && bHighReserved && !bHigh)
 
 		if bDefault || badCurrency {
 			// Remove from both owner directories before erasing
@@ -636,16 +680,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefBAD_LEDGER
 			}
 
-			// Clear the reserve flag(s) for the side(s) returning to default, matching
-			// rippled SetTrust (uFlagsOut &= ~lsfLowReserve / ~lsfHighReserve) — the
-			// owner-count decrement below already mirrors adjustOwnerCount(-1).
-			if bLowReserved {
-				rs.Flags &^= state.LsfLowReserve
-			}
-			if bHighReserved {
-				rs.Flags &^= state.LsfHighReserve
-			}
-
 			// Persist the trust line's field changes (limit/flags/quality) before
 			// erasing it, so the DeletedNode metadata carries them (FinalFields and
 			// PreviousFields). Matches rippled SetTrust, which sets the fields on the
@@ -662,37 +696,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefINTERNAL
 			}
 
-			// Decrement owner count for both sides that had reserve set
-			// Reference: rippled trustDelete() decrements both sides
-			if bLowReserved {
-				if !bHigh {
-					// Low is ctx.Account (transaction sender)
-					if ctx.Account.OwnerCount > 0 {
-						ctx.Account.OwnerCount--
-					}
-				} else {
-					// Low is the issuer (peer account)
-					if issuerAccount.OwnerCount > 0 {
-						issuerAccount.OwnerCount--
-					}
-				}
-			}
-			if bHighReserved {
-				if bHigh {
-					// High is ctx.Account (transaction sender)
-					if ctx.Account.OwnerCount > 0 {
-						ctx.Account.OwnerCount--
-					}
-				} else {
-					// High is the issuer (peer account)
-					if issuerAccount.OwnerCount > 0 {
-						issuerAccount.OwnerCount--
-					}
-				}
-			}
-
-			// Write issuer account back if its OwnerCount changed
-			if (bLowReserved && bHigh) || (bHighReserved && !bHigh) {
+			if issuerChanged {
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
 					return ter.TefINTERNAL
@@ -702,58 +706,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				}
 			}
 		} else {
-			// Adjust OwnerCount when reserve flags change
-			// Reference: rippled SetTrust.cpp lines 636-668
-			bReserveIncrease := false
-
-			// Low account reserve changes
-			if bLowReserveSet && !bLowReserved {
-				rs.Flags |= state.LsfLowReserve
-				if !bHigh {
-					// Low is ctx.Account
-					ctx.Account.OwnerCount++
-					bReserveIncrease = true
-				} else {
-					// Low is the issuer (peer account)
-					issuerAccount.OwnerCount++
-				}
-			} else if !bLowReserveSet && bLowReserved {
-				rs.Flags &^= state.LsfLowReserve
-				if !bHigh {
-					if ctx.Account.OwnerCount > 0 {
-						ctx.Account.OwnerCount--
-					}
-				} else {
-					if issuerAccount.OwnerCount > 0 {
-						issuerAccount.OwnerCount--
-					}
-				}
-			}
-
-			// High account reserve changes
-			if bHighReserveSet && !bHighReserved {
-				rs.Flags |= state.LsfHighReserve
-				if bHigh {
-					// High is ctx.Account
-					ctx.Account.OwnerCount++
-					bReserveIncrease = true
-				} else {
-					// High is the issuer (peer account)
-					issuerAccount.OwnerCount++
-				}
-			} else if !bHighReserveSet && bHighReserved {
-				rs.Flags &^= state.LsfHighReserve
-				if bHigh {
-					if ctx.Account.OwnerCount > 0 {
-						ctx.Account.OwnerCount--
-					}
-				} else {
-					if issuerAccount.OwnerCount > 0 {
-						issuerAccount.OwnerCount--
-					}
-				}
-			}
-
 			// Check reserve increase affordability
 			// Reference: rippled SetTrust.cpp line 681: mPriorBalance < reserveCreate
 			if bReserveIncrease && mPriorBalance < reserveCreate {
@@ -761,10 +713,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 
 			// Write issuer account back if its OwnerCount changed
-			issuerChanged := (bLowReserveSet && !bLowReserved && bHigh) ||
-				(!bLowReserveSet && bLowReserved && bHigh) ||
-				(bHighReserveSet && !bHighReserved && !bHigh) ||
-				(!bHighReserveSet && bHighReserved && !bHigh)
 			if issuerChanged {
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {

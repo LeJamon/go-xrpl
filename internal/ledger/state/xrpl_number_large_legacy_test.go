@@ -54,6 +54,13 @@ func TestParseXRPLNumberRejectsOutOfRangeMantissa(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseXRPLNumberRejectsInt32ExponentMagnitudeOverflow(t *testing.T) {
+	for _, value := range []string{"1e2147483648", "1e-2147483648"} {
+		_, err := ParseXRPLNumber(value, MantissaScaleLarge, RoundToNearest)
+		require.Error(t, err, value)
+	}
+}
+
 func numberRat(number XRPLNumber) *big.Rat {
 	value := new(big.Rat).SetInt64(number.Mantissa())
 	exponent := number.Exponent()

@@ -174,7 +174,7 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 	entry.SetOwnerNode(fmt.Sprintf("%x", amm.OwnerNode))
 	entry.SetLPTokenBalance(amountToAmountMap(lptBal))
 	entry.SetFlags(0)
-	entry.SetTradingFee(int(amm.TradingFee))
+	entry.SetTradingFee(amm.TradingFee)
 
 	if amm.PreviousTxnID != "" {
 		entry.SetPreviousTxnID(amm.PreviousTxnID)

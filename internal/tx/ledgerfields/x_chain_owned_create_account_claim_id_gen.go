@@ -129,18 +129,59 @@ func (x *XChainOwnedCreateAccountClaimID) validateRequired() error {
 	return nil
 }
 
+func (x *XChainOwnedCreateAccountClaimID) validateDecoded() error {
+	if x.present&xchainownedcreateaccountclaimidBitAccount == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field Account is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field XChainBridge is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field XChainAccountCreateCount is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field XChainCreateAccountAttestations is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitOwnerNode == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field OwnerNode is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitFlags == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field Flags is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field PreviousTxnID is missing")
+	}
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
+	return x.decode(data, false)
+}
+
+func (x *XChainOwnedCreateAccountClaimID) decodeLegacy(data []byte) error {
+	return x.decode(data, true)
+}
+
+func (x *XChainOwnedCreateAccountClaimID) decode(data []byte, legacy bool) error {
 	*x = XChainOwnedCreateAccountClaimID{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: XChainOwnedCreateAccountClaimID: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -247,6 +288,9 @@ func (x *XChainOwnedCreateAccountClaimID) Decode(data []byte) error {
 		return errors.New("ledgerfields: XChainOwnedCreateAccountClaimID: missing LedgerEntryType")
 	}
 	x.decoded = true
+	if !legacy {
+		return x.validateDecoded()
+	}
 	return nil
 }
 

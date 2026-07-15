@@ -38,11 +38,27 @@ type SignerEntry struct {
 
 // ParseSignerList parses a SignerList ledger entry from binary data.
 func ParseSignerList(data []byte) (*SignerListInfo, error) {
+	return parseSignerList(data, false)
+}
+
+// ParseSignerListLegacy parses a historical go-xrpl SignerList blob using the
+// explicitly declared compatibility fields.
+func ParseSignerListLegacy(data []byte) (*SignerListInfo, error) {
+	return parseSignerList(data, true)
+}
+
+func parseSignerList(data []byte, legacy bool) (*SignerListInfo, error) {
 	decoded := ledgerfields.New("SignerList")
 	if decoded == nil {
 		return nil, fmt.Errorf("failed to decode SignerList: decoder is not registered")
 	}
-	if err := decoded.Decode(data); err != nil {
+	var err error
+	if legacy {
+		err = ledgerfields.DecodeLegacy(decoded, data)
+	} else {
+		err = decoded.Decode(data)
+	}
+	if err != nil {
 		return nil, fmt.Errorf("failed to decode SignerList: %w", err)
 	}
 	wire, ok := decoded.(*ledgerfields.SignerList)

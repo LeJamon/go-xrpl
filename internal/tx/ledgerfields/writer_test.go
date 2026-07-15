@@ -81,7 +81,7 @@ func TestDecodedEncodeTolerance(t *testing.T) {
 		}
 
 		var check Check
-		if err := check.Decode(encoded); err != nil {
+		if err := DecodeLegacy(&check, encoded); err != nil {
 			t.Fatalf("Decode: %v", err)
 		}
 		roundTrip, err := check.Encode()
@@ -109,7 +109,7 @@ func TestDecodedEncodeTolerance(t *testing.T) {
 		}
 
 		var amm AMM
-		if err := amm.Decode(encoded); err != nil {
+		if err := DecodeLegacy(&amm, encoded); err != nil {
 			t.Fatalf("Decode: %v", err)
 		}
 		roundTrip, err := amm.Encode()
@@ -144,6 +144,59 @@ func TestDecodeValidatesLedgerEntryType(t *testing.T) {
 	}
 }
 
+func TestDecodeEnforcesLedgerTemplate(t *testing.T) {
+	missingRequired, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "Check",
+		"Flags":           uint32(0),
+	})
+	if err != nil {
+		t.Fatalf("encode missing-required fixture: %v", err)
+	}
+	var check Check
+	if err := check.Decode(missingRequired); err == nil || !strings.Contains(err.Error(), "required field Account is missing") {
+		t.Fatalf("Decode missing required error = %v", err)
+	}
+
+	explicitDefault, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType":   "AccountRoot",
+		"Account":           writerTestAccount,
+		"Balance":           "0",
+		"Sequence":          uint32(0),
+		"OwnerCount":        uint32(0),
+		"MintedNFTokens":    uint32(0),
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
+	})
+	if err != nil {
+		t.Fatalf("encode explicit-default fixture: %v", err)
+	}
+	var account AccountRoot
+	if err := account.Decode(explicitDefault); err == nil || !strings.Contains(err.Error(), "default field MintedNFTokens is explicitly set") {
+		t.Fatalf("Decode explicit default error = %v", err)
+	}
+}
+
+func TestDecodeRejectsDuplicateFields(t *testing.T) {
+	typeField, err := binarycodec.EncodeBytes(map[string]any{"LedgerEntryType": "Check"})
+	if err != nil {
+		t.Fatalf("encode type field: %v", err)
+	}
+	valid, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "Check",
+		"Flags":           uint32(0),
+	})
+	if err != nil {
+		t.Fatalf("encode fixture: %v", err)
+	}
+	duplicate := append(append([]byte(nil), typeField...), valid...)
+
+	var check Check
+	if err := check.Decode(duplicate); err == nil || !strings.Contains(err.Error(), "duplicate field") {
+		t.Fatalf("Decode duplicate error = %v, want duplicate field", err)
+	}
+}
+
 func TestNFTokenOfferLegacyAccountDecodesAsOwner(t *testing.T) {
 	legacy, err := binarycodec.EncodeBytes(map[string]any{
 		"LedgerEntryType": "NFTokenOffer",
@@ -154,7 +207,10 @@ func TestNFTokenOfferLegacyAccountDecodesAsOwner(t *testing.T) {
 	}
 
 	var offer NFTokenOffer
-	if err := offer.Decode(legacy); err != nil {
+	if err := offer.Decode(legacy); err == nil || !strings.Contains(err.Error(), "is not allowed") {
+		t.Fatalf("strict Decode legacy sfAccount error = %v", err)
+	}
+	if err := DecodeLegacy(&offer, legacy); err != nil {
 		t.Fatalf("Decode legacy sfAccount: %v", err)
 	}
 	fields := offer.ToMap()

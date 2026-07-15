@@ -160,12 +160,42 @@ func (r *RippleState) validateRequired() error {
 	return nil
 }
 
+func (r *RippleState) validateDecoded() error {
+	if r.present&ripplestateBitFlags == 0 {
+		return errors.New("ledgerfields: RippleState: required field Flags is missing")
+	}
+	if r.present&ripplestateBitBalance == 0 {
+		return errors.New("ledgerfields: RippleState: required field Balance is missing")
+	}
+	if r.present&ripplestateBitLowLimit == 0 {
+		return errors.New("ledgerfields: RippleState: required field LowLimit is missing")
+	}
+	if r.present&ripplestateBitHighLimit == 0 {
+		return errors.New("ledgerfields: RippleState: required field HighLimit is missing")
+	}
+	if r.present&ripplestateBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: RippleState: required field PreviousTxnID is missing")
+	}
+	if r.present&ripplestateBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: RippleState: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (r *RippleState) Decode(data []byte) error {
+	return r.decode(data, false)
+}
+
+func (r *RippleState) decodeLegacy(data []byte) error {
+	return r.decode(data, true)
+}
+
+func (r *RippleState) decode(data []byte, legacy bool) error {
 	*r = RippleState{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	preserveDecodedBinary := false
 	for sr.hasMore() {
@@ -173,6 +203,11 @@ func (r *RippleState) Decode(data []byte) error {
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: RippleState: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -277,6 +312,9 @@ func (r *RippleState) Decode(data []byte) error {
 		r.decodedBinary = append([]byte(nil), data...)
 	}
 	r.decoded = true
+	if !legacy {
+		return r.validateDecoded()
+	}
 	return nil
 }
 

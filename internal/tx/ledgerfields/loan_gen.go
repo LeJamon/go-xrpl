@@ -321,8 +321,8 @@ func (l *Loan) SetManagementFeeOutstanding(value any) {
 }
 
 // SetLoanScale assigns LoanScale and updates its serialized presence.
-func (l *Loan) SetLoanScale(value int) {
-	l.LoanScale = value
+func (l *Loan) SetLoanScale(value int32) {
+	l.LoanScale = int(value)
 	l.dirty = true
 	if value == 0 {
 		l.present &^= loanBitLoanScale
@@ -386,18 +386,119 @@ func (l *Loan) validateRequired() error {
 	return nil
 }
 
+func (l *Loan) validateDecoded() error {
+	if l.present&loanBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Loan: required field OwnerNode is missing")
+	}
+	if l.present&loanBitLoanBrokerNode == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanBrokerNode is missing")
+	}
+	if l.present&loanBitLoanBrokerID == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanBrokerID is missing")
+	}
+	if l.present&loanBitLoanSequence == 0 {
+		return errors.New("ledgerfields: Loan: required field LoanSequence is missing")
+	}
+	if l.present&loanBitBorrower == 0 {
+		return errors.New("ledgerfields: Loan: required field Borrower is missing")
+	}
+	if l.present&loanBitLoanOriginationFee != 0 && numberIsDefault(l.LoanOriginationFee) {
+		return errors.New("ledgerfields: Loan: default field LoanOriginationFee is explicitly set")
+	}
+	if l.present&loanBitLoanServiceFee != 0 && numberIsDefault(l.LoanServiceFee) {
+		return errors.New("ledgerfields: Loan: default field LoanServiceFee is explicitly set")
+	}
+	if l.present&loanBitLatePaymentFee != 0 && numberIsDefault(l.LatePaymentFee) {
+		return errors.New("ledgerfields: Loan: default field LatePaymentFee is explicitly set")
+	}
+	if l.present&loanBitClosePaymentFee != 0 && numberIsDefault(l.ClosePaymentFee) {
+		return errors.New("ledgerfields: Loan: default field ClosePaymentFee is explicitly set")
+	}
+	if l.present&loanBitOverpaymentFee != 0 && l.OverpaymentFee == 0 {
+		return errors.New("ledgerfields: Loan: default field OverpaymentFee is explicitly set")
+	}
+	if l.present&loanBitInterestRate != 0 && l.InterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field InterestRate is explicitly set")
+	}
+	if l.present&loanBitLateInterestRate != 0 && l.LateInterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field LateInterestRate is explicitly set")
+	}
+	if l.present&loanBitCloseInterestRate != 0 && l.CloseInterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field CloseInterestRate is explicitly set")
+	}
+	if l.present&loanBitOverpaymentInterestRate != 0 && l.OverpaymentInterestRate == 0 {
+		return errors.New("ledgerfields: Loan: default field OverpaymentInterestRate is explicitly set")
+	}
+	if l.present&loanBitStartDate == 0 {
+		return errors.New("ledgerfields: Loan: required field StartDate is missing")
+	}
+	if l.present&loanBitPaymentInterval == 0 {
+		return errors.New("ledgerfields: Loan: required field PaymentInterval is missing")
+	}
+	if l.present&loanBitGracePeriod != 0 && l.GracePeriod == 0 {
+		return errors.New("ledgerfields: Loan: default field GracePeriod is explicitly set")
+	}
+	if l.present&loanBitPreviousPaymentDueDate != 0 && l.PreviousPaymentDueDate == 0 {
+		return errors.New("ledgerfields: Loan: default field PreviousPaymentDueDate is explicitly set")
+	}
+	if l.present&loanBitNextPaymentDueDate != 0 && l.NextPaymentDueDate == 0 {
+		return errors.New("ledgerfields: Loan: default field NextPaymentDueDate is explicitly set")
+	}
+	if l.present&loanBitPaymentRemaining != 0 && l.PaymentRemaining == 0 {
+		return errors.New("ledgerfields: Loan: default field PaymentRemaining is explicitly set")
+	}
+	if l.present&loanBitPeriodicPayment == 0 {
+		return errors.New("ledgerfields: Loan: required field PeriodicPayment is missing")
+	}
+	if l.present&loanBitPrincipalOutstanding != 0 && numberIsDefault(l.PrincipalOutstanding) {
+		return errors.New("ledgerfields: Loan: default field PrincipalOutstanding is explicitly set")
+	}
+	if l.present&loanBitTotalValueOutstanding != 0 && numberIsDefault(l.TotalValueOutstanding) {
+		return errors.New("ledgerfields: Loan: default field TotalValueOutstanding is explicitly set")
+	}
+	if l.present&loanBitManagementFeeOutstanding != 0 && numberIsDefault(l.ManagementFeeOutstanding) {
+		return errors.New("ledgerfields: Loan: default field ManagementFeeOutstanding is explicitly set")
+	}
+	if l.present&loanBitLoanScale != 0 && l.LoanScale == 0 {
+		return errors.New("ledgerfields: Loan: default field LoanScale is explicitly set")
+	}
+	if l.present&loanBitFlags == 0 {
+		return errors.New("ledgerfields: Loan: required field Flags is missing")
+	}
+	if l.present&loanBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Loan: required field PreviousTxnID is missing")
+	}
+	if l.present&loanBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Loan: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (l *Loan) Decode(data []byte) error {
+	return l.decode(data, false)
+}
+
+func (l *Loan) decodeLegacy(data []byte) error {
+	return l.decode(data, true)
+}
+
+func (l *Loan) decode(data []byte, legacy bool) error {
 	*l = Loan{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Loan: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -565,6 +666,9 @@ func (l *Loan) Decode(data []byte) error {
 		return errors.New("ledgerfields: Loan: missing LedgerEntryType")
 	}
 	l.decoded = true
+	if !legacy {
+		return l.validateDecoded()
+	}
 	return nil
 }
 

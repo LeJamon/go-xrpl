@@ -2,6 +2,8 @@ package types
 
 import (
 	"encoding/binary"
+	"encoding/json"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -36,7 +38,9 @@ func TestNumberNormalizeRoundHalfEven(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m, exp, err := parseAndNormalize(tc.input)
+			m, ok := new(big.Int).SetString(tc.input, 10)
+			require.True(t, ok)
+			m, exp, err := normalize(m, 0)
 			require.NoError(t, err)
 			require.Equal(t, tc.mantissa, m.String())
 			require.Equal(t, tc.exponent, exp)
@@ -71,8 +75,44 @@ func TestNumberNormalizeUnderflowClamp(t *testing.T) {
 // TestNumberNormalizeOverflow verifies that exceeding maxExponent while scaling
 // down an oversized mantissa returns an overflow error.
 func TestNumberNormalizeOverflow(t *testing.T) {
-	_, _, err := parseAndNormalize("99999999999999999990e32768")
+	m, ok := new(big.Int).SetString("99999999999999999990", 10)
+	require.True(t, ok)
+	_, _, err := normalize(m, 32768)
 	require.ErrorIs(t, err, ErrNumberOverflow)
+}
+
+func TestNumberJSONInputBoundary(t *testing.T) {
+	n := &Number{}
+
+	for _, value := range []any{
+		int32(-42),
+		int64(4294967295),
+		uint32(42),
+		float64(42),
+		json.Number("-2147483648"),
+		json.Number("4294967295"),
+	} {
+		if _, err := n.FromJSON(value); err != nil {
+			t.Fatalf("FromJSON(%v [%T]): %v", value, value, err)
+		}
+	}
+
+	for _, value := range []any{
+		"001",
+		"000.0",
+		"18446744073709551616",
+		"1e2147483648",
+		"1e-2147483648",
+		int64(-2147483649),
+		uint64(4294967296),
+		json.Number("1.0"),
+		json.Number("1e2"),
+		1.5,
+	} {
+		if _, err := n.FromJSON(value); !errors.Is(err, ErrInvalidNumber) {
+			t.Fatalf("FromJSON(%v [%T]) error = %v, want ErrInvalidNumber", value, value, err)
+		}
+	}
 }
 
 // TestNumberRoundTrip checks that FromJSON/ToJSON round-trip ordinary values.

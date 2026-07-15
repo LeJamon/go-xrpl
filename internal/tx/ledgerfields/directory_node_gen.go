@@ -201,18 +201,44 @@ func (d *DirectoryNode) validateRequired() error {
 	return nil
 }
 
+func (d *DirectoryNode) validateDecoded() error {
+	if d.present&directorynodeBitFlags == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Flags is missing")
+	}
+	if d.present&directorynodeBitRootIndex == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field RootIndex is missing")
+	}
+	if d.present&directorynodeBitIndexes == 0 {
+		return errors.New("ledgerfields: DirectoryNode: required field Indexes is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (d *DirectoryNode) Decode(data []byte) error {
+	return d.decode(data, false)
+}
+
+func (d *DirectoryNode) decodeLegacy(data []byte) error {
+	return d.decode(data, true)
+}
+
+func (d *DirectoryNode) decode(data []byte, legacy bool) error {
 	*d = DirectoryNode{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: DirectoryNode: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -359,6 +385,9 @@ func (d *DirectoryNode) Decode(data []byte) error {
 		return errors.New("ledgerfields: DirectoryNode: missing LedgerEntryType")
 	}
 	d.decoded = true
+	if !legacy {
+		return d.validateDecoded()
+	}
 	return nil
 }
 

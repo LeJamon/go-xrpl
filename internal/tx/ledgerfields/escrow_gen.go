@@ -198,18 +198,56 @@ func (e *Escrow) validateRequired() error {
 	return nil
 }
 
+func (e *Escrow) validateDecoded() error {
+	if e.present&escrowBitAccount == 0 {
+		return errors.New("ledgerfields: Escrow: required field Account is missing")
+	}
+	if e.present&escrowBitDestination == 0 {
+		return errors.New("ledgerfields: Escrow: required field Destination is missing")
+	}
+	if e.present&escrowBitAmount == 0 {
+		return errors.New("ledgerfields: Escrow: required field Amount is missing")
+	}
+	if e.present&escrowBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Escrow: required field OwnerNode is missing")
+	}
+	if e.present&escrowBitFlags == 0 {
+		return errors.New("ledgerfields: Escrow: required field Flags is missing")
+	}
+	if e.present&escrowBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Escrow: required field PreviousTxnID is missing")
+	}
+	if e.present&escrowBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Escrow: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (e *Escrow) Decode(data []byte) error {
+	return e.decode(data, false)
+}
+
+func (e *Escrow) decodeLegacy(data []byte) error {
+	return e.decode(data, true)
+}
+
+func (e *Escrow) decode(data []byte, legacy bool) error {
 	*e = Escrow{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Escrow: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -344,6 +382,9 @@ func (e *Escrow) Decode(data []byte) error {
 		return errors.New("ledgerfields: Escrow: missing LedgerEntryType")
 	}
 	e.decoded = true
+	if !legacy {
+		return e.validateDecoded()
+	}
 	return nil
 }
 

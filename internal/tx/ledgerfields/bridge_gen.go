@@ -162,18 +162,65 @@ func (b *Bridge) validateRequired() error {
 	return nil
 }
 
+func (b *Bridge) validateDecoded() error {
+	if b.present&bridgeBitAccount == 0 {
+		return errors.New("ledgerfields: Bridge: required field Account is missing")
+	}
+	if b.present&bridgeBitSignatureReward == 0 {
+		return errors.New("ledgerfields: Bridge: required field SignatureReward is missing")
+	}
+	if b.present&bridgeBitXChainBridge == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainBridge is missing")
+	}
+	if b.present&bridgeBitXChainClaimID == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainClaimID is missing")
+	}
+	if b.present&bridgeBitXChainAccountCreateCount == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainAccountCreateCount is missing")
+	}
+	if b.present&bridgeBitXChainAccountClaimCount == 0 {
+		return errors.New("ledgerfields: Bridge: required field XChainAccountClaimCount is missing")
+	}
+	if b.present&bridgeBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Bridge: required field OwnerNode is missing")
+	}
+	if b.present&bridgeBitFlags == 0 {
+		return errors.New("ledgerfields: Bridge: required field Flags is missing")
+	}
+	if b.present&bridgeBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Bridge: required field PreviousTxnID is missing")
+	}
+	if b.present&bridgeBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Bridge: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (b *Bridge) Decode(data []byte) error {
+	return b.decode(data, false)
+}
+
+func (b *Bridge) decodeLegacy(data []byte) error {
+	return b.decode(data, true)
+}
+
+func (b *Bridge) decode(data []byte, legacy bool) error {
 	*b = Bridge{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Bridge: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -297,6 +344,9 @@ func (b *Bridge) Decode(data []byte) error {
 		return errors.New("ledgerfields: Bridge: missing LedgerEntryType")
 	}
 	b.decoded = true
+	if !legacy {
+		return b.validateDecoded()
+	}
 	return nil
 }
 

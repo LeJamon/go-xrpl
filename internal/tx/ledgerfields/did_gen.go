@@ -120,18 +120,50 @@ func (d *DID) validateRequired() error {
 	return nil
 }
 
+func (d *DID) validateDecoded() error {
+	if d.present&didBitAccount == 0 {
+		return errors.New("ledgerfields: DID: required field Account is missing")
+	}
+	if d.present&didBitOwnerNode == 0 {
+		return errors.New("ledgerfields: DID: required field OwnerNode is missing")
+	}
+	if d.present&didBitFlags == 0 {
+		return errors.New("ledgerfields: DID: required field Flags is missing")
+	}
+	if d.present&didBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: DID: required field PreviousTxnID is missing")
+	}
+	if d.present&didBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: DID: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (d *DID) Decode(data []byte) error {
+	return d.decode(data, false)
+}
+
+func (d *DID) decodeLegacy(data []byte) error {
+	return d.decode(data, true)
+}
+
+func (d *DID) decode(data []byte, legacy bool) error {
 	*d = DID{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: DID: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -225,6 +257,9 @@ func (d *DID) Decode(data []byte) error {
 		return errors.New("ledgerfields: DID: missing LedgerEntryType")
 	}
 	d.decoded = true
+	if !legacy {
+		return d.validateDecoded()
+	}
 	return nil
 }
 

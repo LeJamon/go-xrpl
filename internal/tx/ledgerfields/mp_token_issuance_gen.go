@@ -77,8 +77,8 @@ func (m *MPTokenIssuance) SetSequence(value uint32) {
 }
 
 // SetTransferFee assigns TransferFee and updates its serialized presence.
-func (m *MPTokenIssuance) SetTransferFee(value int) {
-	m.TransferFee = value
+func (m *MPTokenIssuance) SetTransferFee(value uint16) {
+	m.TransferFee = int(value)
 	m.dirty = true
 	if value == 0 {
 		m.present &^= mptokenissuanceBitTransferFee
@@ -95,8 +95,8 @@ func (m *MPTokenIssuance) SetOwnerNode(value string) {
 }
 
 // SetAssetScale assigns AssetScale and updates its serialized presence.
-func (m *MPTokenIssuance) SetAssetScale(value int) {
-	m.AssetScale = value
+func (m *MPTokenIssuance) SetAssetScale(value uint8) {
+	m.AssetScale = int(value)
 	m.dirty = true
 	if value == 0 {
 		m.present &^= mptokenissuanceBitAssetScale
@@ -201,18 +201,65 @@ func (m *MPTokenIssuance) validateRequired() error {
 	return nil
 }
 
+func (m *MPTokenIssuance) validateDecoded() error {
+	if m.present&mptokenissuanceBitIssuer == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Issuer is missing")
+	}
+	if m.present&mptokenissuanceBitSequence == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Sequence is missing")
+	}
+	if m.present&mptokenissuanceBitTransferFee != 0 && m.TransferFee == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field TransferFee is explicitly set")
+	}
+	if m.present&mptokenissuanceBitOwnerNode == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field OwnerNode is missing")
+	}
+	if m.present&mptokenissuanceBitAssetScale != 0 && m.AssetScale == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field AssetScale is explicitly set")
+	}
+	if m.present&mptokenissuanceBitOutstandingAmount == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field OutstandingAmount is missing")
+	}
+	if m.present&mptokenissuanceBitMutableFlags != 0 && m.MutableFlags == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: default field MutableFlags is explicitly set")
+	}
+	if m.present&mptokenissuanceBitFlags == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field Flags is missing")
+	}
+	if m.present&mptokenissuanceBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field PreviousTxnID is missing")
+	}
+	if m.present&mptokenissuanceBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: MPTokenIssuance: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (m *MPTokenIssuance) Decode(data []byte) error {
+	return m.decode(data, false)
+}
+
+func (m *MPTokenIssuance) decodeLegacy(data []byte) error {
+	return m.decode(data, true)
+}
+
+func (m *MPTokenIssuance) decode(data []byte, legacy bool) error {
 	*m = MPTokenIssuance{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: MPTokenIssuance: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -349,6 +396,9 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 		return errors.New("ledgerfields: MPTokenIssuance: missing LedgerEntryType")
 	}
 	m.decoded = true
+	if !legacy {
+		return m.validateDecoded()
+	}
 	return nil
 }
 

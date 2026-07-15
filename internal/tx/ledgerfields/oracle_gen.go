@@ -159,18 +159,62 @@ func (o *Oracle) validateRequired() error {
 	return nil
 }
 
+func (o *Oracle) validateDecoded() error {
+	if o.present&oracleBitOwner == 0 {
+		return errors.New("ledgerfields: Oracle: required field Owner is missing")
+	}
+	if o.present&oracleBitProvider == 0 {
+		return errors.New("ledgerfields: Oracle: required field Provider is missing")
+	}
+	if o.present&oracleBitPriceDataSeries == 0 {
+		return errors.New("ledgerfields: Oracle: required field PriceDataSeries is missing")
+	}
+	if o.present&oracleBitAssetClass == 0 {
+		return errors.New("ledgerfields: Oracle: required field AssetClass is missing")
+	}
+	if o.present&oracleBitLastUpdateTime == 0 {
+		return errors.New("ledgerfields: Oracle: required field LastUpdateTime is missing")
+	}
+	if o.present&oracleBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Oracle: required field OwnerNode is missing")
+	}
+	if o.present&oracleBitFlags == 0 {
+		return errors.New("ledgerfields: Oracle: required field Flags is missing")
+	}
+	if o.present&oracleBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Oracle: required field PreviousTxnID is missing")
+	}
+	if o.present&oracleBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Oracle: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (o *Oracle) Decode(data []byte) error {
+	return o.decode(data, false)
+}
+
+func (o *Oracle) decodeLegacy(data []byte) error {
+	return o.decode(data, true)
+}
+
+func (o *Oracle) decode(data []byte, legacy bool) error {
 	*o = Oracle{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Oracle: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -282,6 +326,9 @@ func (o *Oracle) Decode(data []byte) error {
 		return errors.New("ledgerfields: Oracle: missing LedgerEntryType")
 	}
 	o.decoded = true
+	if !legacy {
+		return o.validateDecoded()
+	}
 	return nil
 }
 

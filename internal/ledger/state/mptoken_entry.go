@@ -139,8 +139,8 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 	entry.SetOwnerNode(fmt.Sprintf("%x", issuance.OwnerNode))
 	entry.SetOutstandingAmount(fmt.Sprintf("%d", issuance.OutstandingAmount))
 
-	entry.SetTransferFee(int(issuance.TransferFee))
-	entry.SetAssetScale(int(issuance.AssetScale))
+	entry.SetTransferFee(issuance.TransferFee)
+	entry.SetAssetScale(issuance.AssetScale)
 
 	if issuance.MaximumAmount != nil {
 		entry.SetMaximumAmount(fmt.Sprintf("%d", *issuance.MaximumAmount))

@@ -151,8 +151,8 @@ func (a *AccountRoot) SetTransferRate(value uint32) {
 }
 
 // SetTickSize assigns TickSize and updates its serialized presence.
-func (a *AccountRoot) SetTickSize(value int) {
-	a.TickSize = value
+func (a *AccountRoot) SetTickSize(value uint8) {
+	a.TickSize = int(value)
 	a.dirty = true
 	a.present |= accountrootBitTickSize
 }
@@ -278,18 +278,62 @@ func (a *AccountRoot) validateRequired() error {
 	return nil
 }
 
+func (a *AccountRoot) validateDecoded() error {
+	if a.present&accountrootBitAccount == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Account is missing")
+	}
+	if a.present&accountrootBitBalance == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Balance is missing")
+	}
+	if a.present&accountrootBitSequence == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Sequence is missing")
+	}
+	if a.present&accountrootBitOwnerCount == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field OwnerCount is missing")
+	}
+	if a.present&accountrootBitFlags == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field Flags is missing")
+	}
+	if a.present&accountrootBitMintedNFTokens != 0 && a.MintedNFTokens == 0 {
+		return errors.New("ledgerfields: AccountRoot: default field MintedNFTokens is explicitly set")
+	}
+	if a.present&accountrootBitBurnedNFTokens != 0 && a.BurnedNFTokens == 0 {
+		return errors.New("ledgerfields: AccountRoot: default field BurnedNFTokens is explicitly set")
+	}
+	if a.present&accountrootBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field PreviousTxnID is missing")
+	}
+	if a.present&accountrootBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: AccountRoot: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (a *AccountRoot) Decode(data []byte) error {
+	return a.decode(data, false)
+}
+
+func (a *AccountRoot) decodeLegacy(data []byte) error {
+	return a.decode(data, true)
+}
+
+func (a *AccountRoot) decode(data []byte, legacy bool) error {
 	*a = AccountRoot{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: AccountRoot: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -452,6 +496,9 @@ func (a *AccountRoot) Decode(data []byte) error {
 		return errors.New("ledgerfields: AccountRoot: missing LedgerEntryType")
 	}
 	a.decoded = true
+	if !legacy {
+		return a.validateDecoded()
+	}
 	return nil
 }
 

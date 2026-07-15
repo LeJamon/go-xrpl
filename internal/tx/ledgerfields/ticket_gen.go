@@ -105,18 +105,53 @@ func (t *Ticket) validateRequired() error {
 	return nil
 }
 
+func (t *Ticket) validateDecoded() error {
+	if t.present&ticketBitAccount == 0 {
+		return errors.New("ledgerfields: Ticket: required field Account is missing")
+	}
+	if t.present&ticketBitOwnerNode == 0 {
+		return errors.New("ledgerfields: Ticket: required field OwnerNode is missing")
+	}
+	if t.present&ticketBitTicketSequence == 0 {
+		return errors.New("ledgerfields: Ticket: required field TicketSequence is missing")
+	}
+	if t.present&ticketBitFlags == 0 {
+		return errors.New("ledgerfields: Ticket: required field Flags is missing")
+	}
+	if t.present&ticketBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: Ticket: required field PreviousTxnID is missing")
+	}
+	if t.present&ticketBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: Ticket: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (t *Ticket) Decode(data []byte) error {
+	return t.decode(data, false)
+}
+
+func (t *Ticket) decodeLegacy(data []byte) error {
+	return t.decode(data, true)
+}
+
+func (t *Ticket) decode(data []byte, legacy bool) error {
 	*t = Ticket{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: Ticket: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -195,6 +230,9 @@ func (t *Ticket) Decode(data []byte) error {
 		return errors.New("ledgerfields: Ticket: missing LedgerEntryType")
 	}
 	t.decoded = true
+	if !legacy {
+		return t.validateDecoded()
+	}
 	return nil
 }
 

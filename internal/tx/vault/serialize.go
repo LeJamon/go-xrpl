@@ -84,8 +84,8 @@ func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error
 	entry.SetAssetsMaximum(vaultWireNumber(v.AssetsMaximum))
 	entry.SetLossUnrealized(vaultWireNumber(v.LossUnrealized))
 	entry.SetShareMPTID(strings.ToUpper(hex.EncodeToString(v.ShareMPTID[:])))
-	entry.SetWithdrawalPolicy(int(v.WithdrawalPolicy))
-	entry.SetScale(int(v.Scale))
+	entry.SetWithdrawalPolicy(v.WithdrawalPolicy)
+	entry.SetScale(v.Scale)
 	if v.Data != "" {
 		entry.SetData(strings.ToUpper(v.Data))
 	}

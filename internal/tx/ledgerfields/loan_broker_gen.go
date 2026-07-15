@@ -129,8 +129,8 @@ func (l *LoanBroker) SetData(value string) {
 }
 
 // SetManagementFeeRate assigns ManagementFeeRate and updates its serialized presence.
-func (l *LoanBroker) SetManagementFeeRate(value int) {
-	l.ManagementFeeRate = value
+func (l *LoanBroker) SetManagementFeeRate(value uint16) {
+	l.ManagementFeeRate = int(value)
 	l.dirty = true
 	if value == 0 {
 		l.present &^= loanbrokerBitManagementFeeRate
@@ -257,18 +257,89 @@ func (l *LoanBroker) validateRequired() error {
 	return nil
 }
 
+func (l *LoanBroker) validateDecoded() error {
+	if l.present&loanbrokerBitSequence == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Sequence is missing")
+	}
+	if l.present&loanbrokerBitOwnerNode == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field OwnerNode is missing")
+	}
+	if l.present&loanbrokerBitVaultNode == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field VaultNode is missing")
+	}
+	if l.present&loanbrokerBitVaultID == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field VaultID is missing")
+	}
+	if l.present&loanbrokerBitAccount == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Account is missing")
+	}
+	if l.present&loanbrokerBitOwner == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Owner is missing")
+	}
+	if l.present&loanbrokerBitLoanSequence == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field LoanSequence is missing")
+	}
+	if l.present&loanbrokerBitData != 0 && l.Data == "" {
+		return errors.New("ledgerfields: LoanBroker: default field Data is explicitly set")
+	}
+	if l.present&loanbrokerBitManagementFeeRate != 0 && l.ManagementFeeRate == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field ManagementFeeRate is explicitly set")
+	}
+	if l.present&loanbrokerBitOwnerCount != 0 && l.OwnerCount == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field OwnerCount is explicitly set")
+	}
+	if l.present&loanbrokerBitDebtTotal != 0 && numberIsDefault(l.DebtTotal) {
+		return errors.New("ledgerfields: LoanBroker: default field DebtTotal is explicitly set")
+	}
+	if l.present&loanbrokerBitDebtMaximum != 0 && numberIsDefault(l.DebtMaximum) {
+		return errors.New("ledgerfields: LoanBroker: default field DebtMaximum is explicitly set")
+	}
+	if l.present&loanbrokerBitCoverAvailable != 0 && numberIsDefault(l.CoverAvailable) {
+		return errors.New("ledgerfields: LoanBroker: default field CoverAvailable is explicitly set")
+	}
+	if l.present&loanbrokerBitCoverRateMinimum != 0 && l.CoverRateMinimum == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field CoverRateMinimum is explicitly set")
+	}
+	if l.present&loanbrokerBitCoverRateLiquidation != 0 && l.CoverRateLiquidation == 0 {
+		return errors.New("ledgerfields: LoanBroker: default field CoverRateLiquidation is explicitly set")
+	}
+	if l.present&loanbrokerBitFlags == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field Flags is missing")
+	}
+	if l.present&loanbrokerBitPreviousTxnID == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field PreviousTxnID is missing")
+	}
+	if l.present&loanbrokerBitPreviousTxnLgrSeq == 0 {
+		return errors.New("ledgerfields: LoanBroker: required field PreviousTxnLgrSeq is missing")
+	}
+	return nil
+}
+
 // Decode populates the struct from binary ledger-entry data via a streaming
-// reader. Declared fields, including sMD_Never fields, are retained; unknown
-// fields are rejected.
+// reader and enforces the current rippled ledger template.
 func (l *LoanBroker) Decode(data []byte) error {
+	return l.decode(data, false)
+}
+
+func (l *LoanBroker) decodeLegacy(data []byte) error {
+	return l.decode(data, true)
+}
+
+func (l *LoanBroker) decode(data []byte, legacy bool) error {
 	*l = LoanBroker{}
 	sr := newStreamReader(data)
+	seenFields := make(map[[2]int]struct{})
 	sawLedgerEntryType := false
 	for sr.hasMore() {
 		typeCode, fieldCode, err := sr.readFieldHeader()
 		if err != nil {
 			return err
 		}
+		fieldID := [2]int{typeCode, fieldCode}
+		if _, exists := seenFields[fieldID]; exists {
+			return fmt.Errorf("ledgerfields: LoanBroker: duplicate field type=%d field=%d", typeCode, fieldCode)
+		}
+		seenFields[fieldID] = struct{}{}
 		switch typeCode {
 		case 1: // UInt16
 			u16Val, err := sr.readUint16()
@@ -405,6 +476,9 @@ func (l *LoanBroker) Decode(data []byte) error {
 		return errors.New("ledgerfields: LoanBroker: missing LedgerEntryType")
 	}
 	l.decoded = true
+	if !legacy {
+		return l.validateDecoded()
+	}
 	return nil
 }
 

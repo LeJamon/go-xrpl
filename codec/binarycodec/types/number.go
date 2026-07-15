@@ -3,6 +3,7 @@ package types
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"math"
 	"math/big"
@@ -35,13 +36,16 @@ const numberRangeLog = 18
 
 // numberRegex matches decimal/float/scientific number strings.
 // Pattern: optional sign, integer part, optional decimal, optional exponent
-var numberRegex = regexp.MustCompile(`^([-+]?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+var (
+	numberRegex      = regexp.MustCompile(`^([-+]?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+	jsonIntegerRegex = regexp.MustCompile(`^-?(0|[1-9][0-9]*)$`)
+)
 
-// FromJSON converts a JSON value (string) into a serialized 12-byte slice.
+// FromJSON converts a JSON string or integer into a serialized 12-byte slice.
 func (n *Number) FromJSON(value any) ([]byte, error) {
-	s, ok := value.(string)
-	if !ok {
-		return nil, ErrInvalidNumber
+	s, err := numberInputString(value)
+	if err != nil {
+		return nil, err
 	}
 
 	mantissa, exponent, err := parseAndNormalize(s)
@@ -58,6 +62,71 @@ func (n *Number) FromJSON(value any) ([]byte, error) {
 	writeInt32BE(buf, wireExponent, 8)
 
 	return buf, nil
+}
+
+func numberInputString(value any) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return v, nil
+	case json.Number:
+		if !jsonIntegerRegex.MatchString(string(v)) {
+			return "", ErrInvalidNumber
+		}
+		if strings.HasPrefix(string(v), "-") {
+			n, err := strconv.ParseInt(string(v), 10, 32)
+			if err != nil {
+				return "", ErrInvalidNumber
+			}
+			return strconv.FormatInt(n, 10), nil
+		}
+		n, err := strconv.ParseUint(string(v), 10, 32)
+		if err != nil {
+			return "", ErrInvalidNumber
+		}
+		return strconv.FormatUint(n, 10), nil
+	case int:
+		return signedJSONInteger(int64(v))
+	case int8:
+		return signedJSONInteger(int64(v))
+	case int16:
+		return signedJSONInteger(int64(v))
+	case int32:
+		return signedJSONInteger(int64(v))
+	case int64:
+		return signedJSONInteger(v)
+	case uint:
+		return unsignedJSONInteger(uint64(v))
+	case uint8:
+		return unsignedJSONInteger(uint64(v))
+	case uint16:
+		return unsignedJSONInteger(uint64(v))
+	case uint32:
+		return unsignedJSONInteger(uint64(v))
+	case uint64:
+		return unsignedJSONInteger(v)
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) || v != math.Trunc(v) ||
+			v < math.MinInt32 || v > math.MaxUint32 {
+			return "", ErrInvalidNumber
+		}
+		return strconv.FormatInt(int64(v), 10), nil
+	default:
+		return "", ErrInvalidNumber
+	}
+}
+
+func signedJSONInteger(value int64) (string, error) {
+	if value < math.MinInt32 || value > math.MaxUint32 {
+		return "", ErrInvalidNumber
+	}
+	return strconv.FormatInt(value, 10), nil
+}
+
+func unsignedJSONInteger(value uint64) (string, error) {
+	if value > math.MaxUint32 {
+		return "", ErrInvalidNumber
+	}
+	return strconv.FormatUint(value, 10), nil
 }
 
 // ToJSON takes a BinaryParser and converts the serialized byte data back to a JSON string.
@@ -93,30 +162,30 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	fracPart := match[3]
 	expPart := match[4]
 
-	// Remove leading zeros (unless entire intPart is zeros)
-	intPart = strings.TrimLeft(intPart, "0")
-	if intPart == "" {
-		intPart = "0"
-	}
-
 	mantissaStr := intPart
-	exponent := int32(0)
+	exponent := int64(0)
 
 	if fracPart != "" {
 		mantissaStr += fracPart
-		exponent -= int32(len(fracPart))
+		exponent -= int64(len(fracPart))
 	}
 
 	if expPart != "" {
-		expVal, err := strconv.ParseInt(expPart, 10, 64)
-		if err != nil {
+		expVal, err := strconv.ParseInt(expPart, 10, 32)
+		if err != nil || expVal == math.MinInt32 {
 			return nil, 0, ErrInvalidNumber
 		}
-		exponent += int32(expVal)
+		exponent += expVal
+	}
+	if exponent < math.MinInt32 || exponent > math.MaxInt32 {
+		return nil, 0, ErrInvalidNumber
 	}
 
-	mantissa := new(big.Int)
-	mantissa.SetString(mantissaStr, 10)
+	magnitude, err := strconv.ParseUint(mantissaStr, 10, 64)
+	if err != nil {
+		return nil, 0, ErrInvalidNumber
+	}
+	mantissa := new(big.Int).SetUint64(magnitude)
 
 	if sign == "-" {
 		mantissa.Neg(mantissa)
@@ -128,12 +197,12 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	}
 
 	// Normalize
-	mantissa, exponent, err := normalize(mantissa, exponent)
+	mantissa, normalizedExponent, err := normalize(mantissa, int32(exponent))
 	if err != nil {
 		return nil, 0, err
 	}
 
-	return mantissa, exponent, nil
+	return mantissa, normalizedExponent, nil
 }
 
 // normalize adjusts mantissa and exponent to the large XRPL Number range. The

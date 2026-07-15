@@ -2,6 +2,7 @@ package ledgerfields
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +17,8 @@ func rawBadCurrencyRippleState(t *testing.T) []byte {
 	entry.SetBalance(amount("rrrrrrrrrrrrrrrrrrrrBZbvji"))
 	entry.SetLowLimit(amount(fxAccount))
 	entry.SetHighLimit(amount(fxAccount))
+	entry.SetPreviousTxnID(strings.Repeat("01", 32))
+	entry.SetPreviousTxnLgrSeq(1)
 	encoded, err := entry.Encode()
 	if err != nil {
 		t.Fatalf("Encode RippleState: %v", err)
