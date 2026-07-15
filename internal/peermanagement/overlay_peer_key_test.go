@@ -114,3 +114,18 @@ func TestOverlayInboundIPLimit(t *testing.T) {
 	o.releaseInboundIP("55.104.0.2")
 	assert.True(t, o.reserveInboundIP("55.104.0.2"))
 }
+
+func TestOverlayReleasesInboundIPAfterPeerClose(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithIPLimit(1))
+	require.NoError(t, err)
+	remote, err := GenerateIdentity()
+	require.NoError(t, err)
+	peer := NewPeer(1, Endpoint{Host: "55.104.0.3", Port: 51235}, true, o.identity, o.events)
+	peer.remotePubKey = NewPublicKeyTokenFromBtcec(remote.BtcecPublicKey())
+
+	require.True(t, o.reserveInboundIP(peer.Endpoint().Host))
+	require.NoError(t, o.addPeer(peer))
+	require.NoError(t, peer.Close())
+	o.removePeer(peer.ID())
+	assert.True(t, o.reserveInboundIP(peer.Endpoint().Host))
+}

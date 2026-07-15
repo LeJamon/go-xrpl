@@ -385,7 +385,7 @@ func (o *Overlay) removePeer(peerID PeerID) {
 
 	if exists {
 		if peer.inbound {
-			o.releaseInboundIP(peer.RemoteIP())
+			o.releaseInboundIP(peer.Endpoint().Host)
 		}
 		peer.releaseUsage()
 		o.dispatchLifecycle(Event{
@@ -507,6 +507,7 @@ func isPublicPeerIP(host string) bool {
 	if err != nil {
 		return false
 	}
+	addr = addr.WithZone("")
 	addr = addr.Unmap()
 	for _, prefix := range nonPublicPeerPrefixes {
 		if prefix.Contains(addr) {
