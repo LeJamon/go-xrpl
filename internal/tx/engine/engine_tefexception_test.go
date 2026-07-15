@@ -2,8 +2,12 @@ package engine
 
 import (
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
@@ -96,8 +100,15 @@ func TestApply_PreflightPanic_YieldsTefException(t *testing.T) {
 // and the processor keeps working — a following good tx still applies. Mirrors
 // rippled applyTransactions' per-tx catch(std::exception): mark failed, continue.
 func TestBlockProcessor_ApplyPanic_BecomesErrorAndContinues(t *testing.T) {
-	view := newRecordingBaseView()
-	fundRecoveryAccount(t, view, 1_000_000, 1)
+	genesisResult, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatalf("create genesis: %v", err)
+	}
+	parent := ledger.FromGenesis(genesisResult.Header, genesisResult.StateMap, genesisResult.TxMap, drops.Fees{})
+	view, err := ledger.NewOpen(parent, time.Unix(0, 0))
+	if err != nil {
+		t.Fatalf("create open ledger: %v", err)
+	}
 
 	bp := NewBlockProcessor(recoveryEngine(view, txcore.TapNONE))
 

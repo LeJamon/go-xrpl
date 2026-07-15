@@ -590,3 +590,43 @@ rippled `3.2.0` worktree at
 - The original ledger 3025006 replay was not rerun because its VM database is
   not present locally; the supplied field-level divergence is covered directly
   by the byte-level reconstruction tests.
+
+# Issue #1326 — trusted metadata STArray serialization
+
+Target: `origin/v3.0.0` at
+`bf5709635715a158437b3718982a8a363fb01c59`. Behavioral oracle: clean local
+rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Trace trusted metadata serialization and the transaction/state commit
+      boundary, including every caller of the codec array-size guard.
+- [x] Confirm rippled 3.2.0 separates untrusted JSON limits from internally
+      generated metadata and preserves atomic ledger application.
+- [x] Add focused regressions for a 1,027-node metadata array, the 512-element
+      untrusted-input limit, and serialization failure before state commit.
+- [x] Implement the smallest production-quality API and engine changes that
+      satisfy those contracts.
+- [x] Run formatting, focused codec/transaction/engine tests, broader affected
+      suites, vet, strict lint, build, and diff review.
+- [x] Record the review results and prepare only intentional files for delivery
+      against `v3.0.0`.
+
+## Review
+
+- Rippled v3.2.0 applies its 512-element limit only while parsing untrusted JSON;
+  native `TxMeta` STArrays serialize without that cap. Its separate metadata
+  safeguard is the 5,200 modified-entry `tecOVERSIZE` limit.
+- Trusted internal metadata now bypasses only the JSON-input array guard while
+  retaining unknown-field and binary-format validation. Ordinary `Encode` and
+  `EncodeBytes` calls still reject arrays over 512.
+- `BlockProcessor` applies each transaction to an unpublished mutable snapshot,
+  serializes and inserts the tx+meta leaf there, then adopts state, transaction
+  map, and destroyed drops together. Serialization/insertion failure discards
+  the snapshot without advancing either transaction counter.
+- Applied-first result classification and TxQ transaction-index seeding match
+  rippled's open-ledger behavior. Replay callers no longer insert a second leaf.
+- Passed uncached focused and broad codec, transaction, ledger, and replay tests;
+  focused race tests; `just fmt`; `just build-all`; `just vet`; CI-pinned strict
+  golangci-lint v2.11.3; advisory lint; and `git diff --check`.

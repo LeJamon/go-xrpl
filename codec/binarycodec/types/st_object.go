@@ -21,12 +21,20 @@ const maxNestingDepth = 10
 // and the associated value is the field's value. This structure allows us to represent nested
 // and complex structures of the Ripple protocol.
 type STObject struct {
-	binarySerializer *serdes.BinarySerializer
+	binarySerializer   *serdes.BinarySerializer
+	skipJSONArrayLimit bool
 }
 
 // NewSTObject returns a new STObject with the given binary serializer.
 func NewSTObject(bs *serdes.BinarySerializer) *STObject {
 	return &STObject{binarySerializer: bs}
+}
+
+// NewTrustedSTObject returns an STObject for protocol objects constructed by
+// trusted internal code. It preserves all structural validation while skipping
+// the JSON-input-only array element limit.
+func NewTrustedSTObject(bs *serdes.BinarySerializer) *STObject {
+	return &STObject{binarySerializer: bs, skipJSONArrayLimit: true}
 }
 
 // FromJSON converts a JSON object into a serialized byte slice.
@@ -52,8 +60,11 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 		}
 
 		st := SerializedTypeFor(v.Type)
-		if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
-			return nil, err
+		setSkipJSONArrayLimit(st, t.skipJSONArrayLimit)
+		if !t.skipJSONArrayLimit {
+			if err := checkJSONArraySize(v.FieldName, v.Type, fimap[v]); err != nil {
+				return nil, err
+			}
 		}
 		b, err := st.FromJSON(fimap[v])
 		if err != nil {

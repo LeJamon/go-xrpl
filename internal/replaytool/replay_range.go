@@ -739,11 +739,6 @@ func (r *replayRangeRunner) processBlock(
 
 		result.TxResults = append(result.TxResults, txInfo)
 
-		// Add to ledger
-		if err := openLedger.AddTransactionWithMeta(blockTxResult.Hash, blockTxResult.TxWithMetaBlob); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: failed to add to ledger: %v", txEntry.TxIndex, err))
-		}
-
 		if r.verbose && r.decoded {
 			fmt.Fprintf(r.out, "        [%d] %-20s %-12s\n", txEntry.TxIndex, txInfo.TxType, txInfo.Result)
 		}
