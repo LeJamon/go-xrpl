@@ -208,7 +208,6 @@ func parseCanonicalAmountBinary(data []byte) (Amount, error) {
 	return decodeLedgerAmount("Amount", decoded)
 }
 
-// serializeAmount renders an Amount in the canonical JSON amount form.
 func serializeAmount(amount Amount, currency string, useAccountOne bool) map[string]any {
 	valueStr := amount.Value()
 	curr := currency

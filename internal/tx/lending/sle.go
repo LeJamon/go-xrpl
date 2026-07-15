@@ -78,7 +78,6 @@ type loanBrokerData struct {
 	PreviousTxnLgrSeq    uint32
 }
 
-// serializeLoanBroker encodes a LoanBroker entry to canonical binary.
 func serializeLoanBroker(b *loanBrokerData) ([]byte, error) {
 	return serializeLoanBrokerForRules(b, nil)
 }

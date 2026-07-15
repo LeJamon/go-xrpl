@@ -31,8 +31,6 @@ func escrowStateBytes(e *EscrowCreate, ownerID, destID [20]byte, transferRate, o
 		e.GetCommon().SourceTag, e.DestinationTag, seqPtr)
 }
 
-// TestEscrowSerializeGolden locks canonical fresh-SLE bytes for XRP, IOU, and
-// MPT escrows across every optional field.
 func TestEscrowSerializeGolden(t *testing.T) {
 	iou := tx.NewIssuedAmountFromFloat64(100.5, "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	mpt := state.NewMPTAmountWithIssuanceID(123456, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",

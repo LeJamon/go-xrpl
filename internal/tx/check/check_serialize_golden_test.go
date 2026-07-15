@@ -54,9 +54,6 @@ func checkGoldenCases(t *testing.T) []checkGoldenCase {
 	}
 }
 
-// TestCheckSerialize_Golden locks the persisted Check SLE bytes produced by the
-// creation path (newCheckData → SerializeCheckFromData). These vectors were
-// include the required default-zero threading fields present in a fresh rippled SLE.
 func TestCheckSerialize_Golden(t *testing.T) {
 	for _, tc := range checkGoldenCases(t) {
 		t.Run(tc.name, func(t *testing.T) {

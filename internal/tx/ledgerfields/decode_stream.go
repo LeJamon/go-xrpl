@@ -213,7 +213,6 @@ func (r *streamReader) readAmount() (any, error) {
 	return value, nil
 }
 
-// readAmountAny decodes any Amount variant through the canonical codec.
 func (r *streamReader) readAmountAny() (any, error) {
 	return r.decodeViaCodec(&types.Amount{}, -1)
 }

@@ -129,7 +129,6 @@ func decodeOraclePriceDataSeries(values []any) ([]OraclePriceData, error) {
 }
 
 // SerializeOracle serializes an Oracle ledger entry to binary format.
-// The generated ledgerfields writer owns the top-level SLE field set.
 func SerializeOracle(o *OracleData) ([]byte, error) {
 	ownerAddr, err := addresscodec.EncodeAccountIDToClassicAddress(o.Owner[:])
 	if err != nil {

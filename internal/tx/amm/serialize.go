@@ -148,7 +148,6 @@ func amountValueToAmount(field string, value any) (tx.Amount, error) {
 	return parsed, nil
 }
 
-// serializeAMMData serializes an AMMData entry.
 // Reference: rippled include/xrpl/protocol/detail/ledger_entries.macro ltAMM
 // IMPORTANT: Asset balances are NOT stored - they are read from AccountRoot/trustlines.
 func serializeAMMData(amm *AMMData) ([]byte, error) {

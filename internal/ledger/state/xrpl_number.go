@@ -383,7 +383,6 @@ func (n XRPLNumber) Exponent() int {
 	return n.exponent
 }
 
-// MantissaScale returns the precision range carried by the Number.
 func (n XRPLNumber) MantissaScale() MantissaScale { return n.scale }
 
 // bringIntoRange restores a rounded mantissa to the normalized range or clamps

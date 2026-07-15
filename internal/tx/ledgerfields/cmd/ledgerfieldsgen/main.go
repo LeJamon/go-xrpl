@@ -74,8 +74,8 @@ type fieldRender struct {
 	// STBase::isDefault() per type and gates CreatedNode.NewFields emission
 	// (rippled ApplyStateTable.cpp: `!obj.isDefault()`). Empty means the type
 	// has no default to filter.
-	DefaultExpr       string // default predicate using the entry receiver
-	SetterDefaultExpr string // default predicate using a setter's value argument
+	DefaultExpr       string
+	SetterDefaultExpr string
 	SetterGoType      string
 	SetterAssignment  string
 }

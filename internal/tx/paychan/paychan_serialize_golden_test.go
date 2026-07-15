@@ -17,7 +17,6 @@ func pcU32(v uint32) *uint32 { return &v }
 
 // TestPayChannelSerialize_Golden locks the persisted PayChannel SLE bytes
 // produced by the creation path (newPayChannelData → SerializePayChannelFromData).
-// The vectors cover valid creation inputs and lock their persisted bytes.
 func TestPayChannelSerialize_Golden(t *testing.T) {
 	minimal := &PaymentChannelCreate{
 		SettleDelay: 3600,
