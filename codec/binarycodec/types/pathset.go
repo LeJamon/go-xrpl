@@ -34,7 +34,9 @@ func serializePathCurrency(currency string) ([]byte, error) {
 
 // PathSet is the binary codec for the PathSet field type — the set of payment
 // paths carried by a Payment transaction.
-type PathSet struct{}
+type PathSet struct {
+	skipJSONArrayLimit bool
+}
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.
 var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
@@ -65,9 +67,11 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 
 	// rippled caps each inner path (STI_PATHSET) at maxSTParsedJSONArraySize as
 	// well as the outer array; the outer array is capped by checkJSONArraySize.
-	for i, path := range outer {
-		if inner, ok := path.([]any); ok && len(inner) > MaxJSONArrayElements {
-			return nil, &JSONArrayTooLargeError{Field: fmt.Sprintf("Paths[%d]", i)}
+	if !p.skipJSONArrayLimit {
+		for i, path := range outer {
+			if inner, ok := path.([]any); ok && len(inner) > MaxJSONArrayElements {
+				return nil, &JSONArrayTooLargeError{Field: fmt.Sprintf("Paths[%d]", i)}
+			}
 		}
 	}
 

@@ -65,3 +65,14 @@ func SerializedTypeFor(t string) SerializedType {
 	}
 	return nil
 }
+
+func setSkipJSONArrayLimit(st SerializedType, skip bool) {
+	switch v := st.(type) {
+	case *STObject:
+		v.skipJSONArrayLimit = skip
+	case *STArray:
+		v.skipJSONArrayLimit = skip
+	case *PathSet:
+		v.skipJSONArrayLimit = skip
+	}
+}

@@ -124,12 +124,7 @@ func SerializeMetadata(meta *Metadata) ([]byte, error) {
 		return nil, nil
 	}
 
-	hexStr, err := binarycodec.Encode(metaMap)
-	if err != nil {
-		return nil, err
-	}
-
-	return hex.DecodeString(hexStr)
+	return binarycodec.EncodeBytesTrusted(metaMap)
 }
 
 // CreateTxWithMetaBlob creates the combined VL-encoded transaction + VL-encoded metadata blob

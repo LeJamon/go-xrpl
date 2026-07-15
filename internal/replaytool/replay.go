@@ -484,11 +484,6 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 				}
 			}
 		}
-
-		// Add transaction to ledger using the pre-computed hash and blob from BlockProcessor
-		if err := openLedger.AddTransactionWithMeta(blockTxResult.Hash, blockTxResult.TxWithMetaBlob); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: failed to add to ledger: %v", txEntry.Index, err))
-		}
 	}
 
 	// Step 5: Close the ledger. Close() updates the LedgerHashes skip lists

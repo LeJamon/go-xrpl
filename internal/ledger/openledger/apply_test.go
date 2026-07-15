@@ -54,6 +54,52 @@ func freshView(t *testing.T, env *jtx.TestEnv) *ledger.Ledger {
 	return view
 }
 
+func TestTxqAdapter_ApplyTransaction_ContinuesTransactionIndex(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+	env.Fund(alice, bob, carol)
+	view := freshView(t, env)
+
+	sequence := env.Seq(alice)
+	transactions := []tx.Transaction{
+		payment.Pay(alice, bob, 1_000_000).Sequence(sequence).Build(),
+		payment.Pay(alice, carol, 1_000_000).Sequence(sequence + 1).Build(),
+	}
+	adapter := openledger.NewTxqAdapter(view, openledger.ApplyConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		Rules:                     amendment.AllSupportedRules(),
+		SkipSignatureVerification: true,
+	})
+
+	for i, transaction := range transactions {
+		blob := buildSignedBlob(t, env, transaction, alice)
+		parsed, err := tx.ParseFromBinary(blob)
+		if err != nil {
+			t.Fatalf("parse transaction %d: %v", i, err)
+		}
+		parsed.SetRawBytes(blob)
+		result, applied := adapter.ApplyTransaction(parsed)
+		if !applied {
+			t.Fatalf("transaction %d result = %s, want applied", i, result)
+		}
+		applyResult := adapter.LastApplyResult()
+		if applyResult == nil || applyResult.Metadata == nil {
+			t.Fatalf("transaction %d has no metadata", i)
+		}
+		if applyResult.Metadata.TransactionIndex != uint32(i) {
+			t.Fatalf("transaction %d metadata index = %d, want %d",
+				i, applyResult.Metadata.TransactionIndex, i)
+		}
+	}
+	if view.TxCount() != uint32(len(transactions)) {
+		t.Fatalf("ledger transaction count = %d, want %d", view.TxCount(), len(transactions))
+	}
+}
+
 // TestApplyTxs_RetrySettles submits two dependent payments in the wrong
 // order. The first creates bob with a 1 XRP payment; the second sends
 // from bob. On pass 0 the bob→carol payment fails with terNO_ACCOUNT

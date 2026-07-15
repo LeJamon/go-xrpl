@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
@@ -20,6 +21,8 @@ type BlockProcessor struct {
 
 	// txIndex tracks the current transaction index (0-based)
 	txIndex uint32
+
+	createTxWithMetaBlob func([]byte, *txcore.Metadata) ([]byte, error)
 }
 
 // BlockTxResult contains the result of applying a single transaction in a block
@@ -44,8 +47,9 @@ type BlockTxResult struct {
 // NewBlockProcessor creates a new BlockProcessor with the given engine
 func NewBlockProcessor(engine *Engine) *BlockProcessor {
 	return &BlockProcessor{
-		engine:  engine,
-		txIndex: 0,
+		engine:               engine,
+		txIndex:              0,
+		createTxWithMetaBlob: txcore.CreateTxWithMetaBlob,
 	}
 }
 
@@ -53,6 +57,7 @@ func NewBlockProcessor(engine *Engine) *BlockProcessor {
 // It handles:
 // - Calling the engine to apply the transaction
 // - Creating the tx+meta blob
+// - Publishing applied state and the transaction leaf atomically
 // The engine assigns TransactionIndex in metadata for applied transactions.
 func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlob []byte) (result BlockTxResult, err error) {
 	// Backstop for the consensus build loop: any panic escaping the engine's
@@ -84,25 +89,45 @@ func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlo
 	}
 	result.Hash = hash
 
-	// Apply the transaction using the engine.
+	base, ok := bp.engine.view.(*ledger.Ledger)
+	if !ok {
+		return result, fmt.Errorf("block processor requires a ledger-backed engine view")
+	}
+
+	staged, err := base.MutableSnapshotUnflushed()
+	if err != nil {
+		return result, fmt.Errorf("snapshot ledger for transaction apply: %w", err)
+	}
+	stagedEngine := NewEngine(staged, bp.engine.config)
+	stagedEngine.SetBaseTxCount(bp.engine.TxCount())
+	stagedEngine.invariantViolationHook = bp.engine.invariantViolationHook
+
 	// Pseudo-transactions (Amendment, SetFee, UNLModify) use ApplyPseudo()
 	// since Apply() rejects them (matching rippled's passesLocalChecks).
 	var applyResult txcore.ApplyResult
 	if transaction.TxType().IsPseudoTransaction() {
-		applyResult = bp.engine.ApplyPseudo(transaction)
+		applyResult = stagedEngine.ApplyPseudo(transaction)
 	} else {
-		applyResult = bp.engine.Apply(transaction)
+		applyResult = stagedEngine.Apply(transaction)
 	}
 	result.ApplyResult = applyResult
 
-	// Create the tx+meta blob for the transaction tree.
-	// The engine assigns TransactionIndex in metadata for applied transactions
-	// (matching rippled's txCount-based indexing), so we don't overwrite it here.
-	txWithMetaBlob, err := txcore.CreateTxWithMetaBlob(txBlob, applyResult.Metadata)
-	if err != nil {
-		return result, err
+	if applyResult.Applied {
+		// The engine assigns TransactionIndex in metadata for applied transactions
+		// (matching rippled's txCount-based indexing), so we don't overwrite it here.
+		txWithMetaBlob, err := bp.createTxWithMetaBlob(txBlob, applyResult.Metadata)
+		if err != nil {
+			return result, err
+		}
+		result.TxWithMetaBlob = txWithMetaBlob
+		if err := staged.AddTransactionWithMeta(hash, txWithMetaBlob); err != nil {
+			return result, fmt.Errorf("stage transaction metadata: %w", err)
+		}
+		if err := base.AdoptState(staged); err != nil {
+			return result, fmt.Errorf("commit transaction state and metadata: %w", err)
+		}
+		bp.engine.SetBaseTxCount(stagedEngine.TxCount())
 	}
-	result.TxWithMetaBlob = txWithMetaBlob
 
 	// Increment the processing order counter for the next transaction
 	bp.txIndex++

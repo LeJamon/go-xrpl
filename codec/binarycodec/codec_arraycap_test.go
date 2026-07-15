@@ -78,3 +78,42 @@ func TestEncode_JSONArraySizeCap(t *testing.T) {
 		}
 	})
 }
+
+func TestEncodeBytesTrusted_BypassesJSONInputArrayCap(t *testing.T) {
+	const issuer = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+
+	hashes := make([]any, 513)
+	for i := range hashes {
+		hashes[i] = strings.Repeat("A", 64)
+	}
+	memos := make([]any, 513)
+	for i := range memos {
+		memos[i] = map[string]any{"Memo": map[string]any{"MemoData": "AB"}}
+	}
+	path := make([]any, 513)
+	for i := range path {
+		path[i] = map[string]any{"account": issuer}
+	}
+
+	tests := []struct {
+		name  string
+		value map[string]any
+	}{
+		{name: "Vector256", value: map[string]any{"Amendments": hashes}},
+		{name: "STArray", value: map[string]any{"Memos": memos}},
+		{name: "nested Vector256", value: map[string]any{
+			"ModifiedNode": map[string]any{
+				"FinalFields": map[string]any{"Amendments": hashes},
+			},
+		}},
+		{name: "inner PathSet", value: map[string]any{"Paths": []any{path}}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := EncodeBytesTrusted(tc.value); err != nil {
+				t.Fatalf("trusted encode rejected protocol object: %v", err)
+			}
+		})
+	}
+}

@@ -1059,6 +1059,62 @@ func TestBacked_Snapshot(t *testing.T) {
 	}
 }
 
+func TestBacked_SnapshotMutableUnflushedDefersStore(t *testing.T) {
+	family := newMemoryFamily()
+	source, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
+	key2 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
+	if err := source.Put(key1, intToBytes(1)); err != nil {
+		t.Fatal(err)
+	}
+	sourceHash, err := source.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := source.SnapshotMutableUnflushed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := family.Len(); got != 0 {
+		t.Fatalf("stored nodes during unflushed snapshot = %d, want 0", got)
+	}
+	if err := snap.Put(key2, intToBytes(2)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := source.Hash(); err != nil || got != sourceHash {
+		t.Fatalf("source hash after fork mutation = %x, %v; want %x, nil", got, err, sourceHash)
+	}
+	if _, found, err := source.Get(key2); err != nil || found {
+		t.Fatalf("source lookup after fork mutation = %v, %v; want false, nil", found, err)
+	}
+	if err := snap.StoreDirty(func(entries []FlushEntry) error {
+		return family.StoreBatch(context.Background(), entries)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rootHash, err := snap.Hash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := NewFromRootHash(TypeState, rootHash, family)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[[32]byte][]byte{key1: intToBytes(1), key2: intToBytes(2)} {
+		item, found, err := reloaded.Get(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !found || !bytes.Equal(item.Data(), want) {
+			t.Fatalf("reloaded item %x = %v, %v; want %v, true", key, item, found, want)
+		}
+	}
+}
+
 // TestBacked_NewBacked verifies NewBacked creates a working backed map.
 func TestBacked_NewBacked(t *testing.T) {
 	family := newMemoryFamily()
