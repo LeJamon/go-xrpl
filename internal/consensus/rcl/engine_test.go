@@ -101,7 +101,9 @@ type mockAdaptor struct {
 
 	// trustChanged is the engine's TrustChangeNotifier callback, captured
 	// at Start; tests fire it via notifyTrustChanged.
-	trustChanged func()
+	trustChanged func([]consensus.NodeID, int)
+
+	quorumUnavailable bool
 
 	// Data stores
 	ledgers map[consensus.LedgerID]consensus.Ledger
@@ -466,7 +468,25 @@ func (a *mockAdaptor) GetTrustedValidators() []consensus.NodeID {
 }
 
 func (a *mockAdaptor) GetQuorum() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.quorum
+}
+
+func (a *mockAdaptor) GetTrustedValidatorsAndQuorum() ([]consensus.NodeID, int) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	result := make([]consensus.NodeID, 0, len(a.trusted))
+	for nodeID := range a.trusted {
+		result = append(result, nodeID)
+	}
+	return result, a.quorum
+}
+
+func (a *mockAdaptor) IsQuorumUnavailable() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.quorumUnavailable
 }
 
 func (a *mockAdaptor) GetNegativeUNL() []consensus.NodeID {
@@ -680,10 +700,18 @@ func (a *mockAdaptor) RelayUntrustedValidations() bool {
 }
 
 // OnTrustChanged implements the optional consensus.TrustChangeNotifier.
-func (a *mockAdaptor) OnTrustChanged(fn func()) {
+func (a *mockAdaptor) OnTrustChanged(fn func([]consensus.NodeID, int)) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	a.trustChanged = fn
+	trusted := make([]consensus.NodeID, 0, len(a.trusted))
+	for nodeID := range a.trusted {
+		trusted = append(trusted, nodeID)
+	}
+	quorum := a.quorum
+	a.mu.Unlock()
+	if fn != nil {
+		fn(trusted, quorum)
+	}
 }
 
 // notifyTrustChanged fires the engine's registered trust-change callback,
@@ -693,7 +721,8 @@ func (a *mockAdaptor) notifyTrustChanged() {
 	fn := a.trustChanged
 	a.mu.RUnlock()
 	if fn != nil {
-		fn()
+		trusted, quorum := a.GetTrustedValidatorsAndQuorum()
+		fn(trusted, quorum)
 	}
 }
 

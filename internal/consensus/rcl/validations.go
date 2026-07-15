@@ -167,6 +167,11 @@ type ValidationTracker struct {
 	// quorum is the number of validations needed for finality
 	quorum int
 
+	// quorumUnavailable is a live safety gate. It closes the brief window
+	// between a publisher-status change and installation of the corresponding
+	// trusted/quorum snapshot.
+	quorumUnavailable func() bool
+
 	// freshness is how long validations are considered fresh
 	freshness time.Duration
 
@@ -267,6 +272,19 @@ func (vt *ValidationTracker) SetTrusted(nodes []consensus.NodeID) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
+	vt.setTrustedLocked(nodes)
+}
+
+// SetTrustedAndQuorum updates the trusted set and its quorum atomically.
+func (vt *ValidationTracker) SetTrustedAndQuorum(nodes []consensus.NodeID, quorum int) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+
+	vt.setTrustedLocked(nodes)
+	vt.quorum = quorum
+}
+
+func (vt *ValidationTracker) setTrustedLocked(nodes []consensus.NodeID) {
 	vt.trusted = make(map[consensus.NodeID]bool)
 	for _, node := range nodes {
 		vt.trusted[node] = true
@@ -279,6 +297,13 @@ func (vt *ValidationTracker) SetQuorum(quorum int) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 	vt.quorum = quorum
+}
+
+// SetQuorumUnavailableFunc installs the live finality safety gate.
+func (vt *ValidationTracker) SetQuorumUnavailableFunc(fn func() bool) {
+	vt.mu.Lock()
+	defer vt.mu.Unlock()
+	vt.quorumUnavailable = fn
 }
 
 // SetSeqToKeep pins validations in [low, high) so ExpireOld will not drop
@@ -624,6 +649,9 @@ func (vt *ValidationTracker) trackBySequenceLocked(
 // Caller MUST hold vt.mu.
 func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.LedgerID) (consensus.LedgerID, uint32, bool) {
 	if vt.onFullyValidated == nil {
+		return ledgerID, 0, false
+	}
+	if vt.quorumUnavailable != nil && vt.quorumUnavailable() {
 		return ledgerID, 0, false
 	}
 	if _, done := vt.fired[ledgerID]; done {

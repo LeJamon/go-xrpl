@@ -279,6 +279,18 @@ func (p *Peer) RemoteIP() string {
 	return host
 }
 
+func (p *Peer) remoteEndpoint() (Endpoint, bool) {
+	p.mu.RLock()
+	conn := p.conn
+	p.mu.RUnlock()
+
+	if conn == nil {
+		return Endpoint{}, false
+	}
+	endpoint, err := ParseEndpoint(conn.RemoteAddr().String())
+	return endpoint, err == nil
+}
+
 // Inbound returns true if this is an inbound connection.
 func (p *Peer) Inbound() bool {
 	return p.inbound

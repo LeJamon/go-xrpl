@@ -4,11 +4,13 @@ import (
 	"container/list"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,12 +24,28 @@ const (
 	DefaultReservationFile = "peer_reservations.json"
 
 	// MaxDiscoveredPeers caps the peer-discovery set. AddPeer evicts the
-	// least-recently-seen non-connected, non-fixed entry before exceeding
+	// least-recently-seen non-connected, non-configured entry before exceeding
 	// it, so gossiped endpoint announcements cannot grow d.peers without
 	// bound (issue #1170). Sized well above any real network's reachable
-	// peer count; the live connection set and fixed peers are never evicted.
+	// peer count; live connections, fixed peers, and bootstrap peers are never
+	// evicted.
 	MaxDiscoveredPeers = 8192
+
+	recentConnectAttempt = time.Minute
 )
+
+var fixedConnectBackoff = [...]time.Duration{
+	time.Minute,
+	time.Minute,
+	2 * time.Minute,
+	3 * time.Minute,
+	5 * time.Minute,
+	8 * time.Minute,
+	13 * time.Minute,
+	21 * time.Minute,
+	34 * time.Minute,
+	55 * time.Minute,
+}
 
 // CachedEndpoint represents a cached peer endpoint.
 type CachedEndpoint struct {
@@ -333,6 +351,20 @@ type DiscoveredPeer struct {
 	lruEntry *list.Element
 }
 
+type connectAttempt struct {
+	inFlight    bool
+	failures    int
+	nextAttempt time.Time
+}
+
+type connectAttemptResult uint8
+
+const (
+	connectAttemptReleased connectAttemptResult = iota
+	connectAttemptSucceeded
+	connectAttemptFailed
+)
+
 // Discovery manages peer discovery and connection maintenance.
 type Discovery struct {
 	mu sync.RWMutex
@@ -343,11 +375,17 @@ type Discovery struct {
 	// lru orders d.peers by last-seen recency (front = most recent) so
 	// eviction at MaxDiscoveredPeers pops from the stale end instead of
 	// scanning the whole map. Every peers insert/delete updates it.
-	lru         list.List
-	connected   map[PeerID]*DiscoveredPeer
-	fixedPeers  map[string]bool
-	bootCache   *BootCache
-	reservation *ReservationTable
+	lru             list.List
+	connected       map[PeerID]*DiscoveredPeer
+	fixedPeers      map[string]bool
+	persistentPeers map[string]bool
+	// Fixed-peer backoff is endpoint keyed; recent-attempt suppression is
+	// host keyed so changing the port cannot bypass it.
+	connectAttempts map[string]*connectAttempt
+	recentAttempts  map[string]time.Time
+	bootCache       *BootCache
+	reservation     *ReservationTable
+	lookupIP        func(context.Context, string) ([]net.IPAddr, error)
 
 	events   chan<- Event
 	cancel   context.CancelFunc
@@ -359,15 +397,26 @@ type Discovery struct {
 // NewDiscovery creates a new Discovery instance.
 func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 	d := &Discovery{
-		cfg:        *cfg,
-		peers:      make(map[string]*DiscoveredPeer),
-		connected:  make(map[PeerID]*DiscoveredPeer),
-		fixedPeers: make(map[string]bool),
-		events:     events,
+		cfg:             *cfg,
+		peers:           make(map[string]*DiscoveredPeer),
+		connected:       make(map[PeerID]*DiscoveredPeer),
+		fixedPeers:      make(map[string]bool),
+		persistentPeers: make(map[string]bool),
+		connectAttempts: make(map[string]*connectAttempt),
+		recentAttempts:  make(map[string]time.Time),
+		events:          events,
+		lookupIP:        net.DefaultResolver.LookupIPAddr,
+	}
+	if d.cfg.Clock == nil {
+		d.cfg.Clock = time.Now
 	}
 
 	for _, addr := range cfg.FixedPeers {
 		d.fixedPeers[addr] = true
+		d.persistentPeers[addr] = true
+	}
+	for _, addr := range cfg.BootstrapPeers {
+		d.persistentPeers[addr] = true
 	}
 
 	if cfg.DataDir != "" {
@@ -378,20 +427,53 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 	return d
 }
 
+func (d *Discovery) now() time.Time {
+	if d.cfg.Clock != nil {
+		return d.cfg.Clock()
+	}
+	return time.Now()
+}
+
 // Start starts the discovery service.
 func (d *Discovery) Start(ctx context.Context) error {
 	if d.bootCache != nil {
-		d.bootCache.Load()
+		if err := d.bootCache.Load(); err != nil {
+			slog.Warn("Peer boot cache could not be loaded; continuing with an empty cache",
+				"t", "Discovery", "path", d.bootCache.filePath, "err", err)
+		}
 	}
 	if d.reservation != nil {
-		d.reservation.Load()
+		if err := d.reservation.Load(); err != nil {
+			slog.Warn("Peer reservations could not be loaded; continuing with an empty table",
+				"t", "Discovery", "path", d.reservation.filePath, "err", err)
+		}
 	}
 
+	bootstrapPeers, fixedPeers := d.resolveConfiguredPeers(ctx)
+	d.mu.Lock()
 	for _, addr := range d.cfg.BootstrapPeers {
+		delete(d.persistentPeers, addr)
+	}
+	for _, addr := range d.cfg.FixedPeers {
+		delete(d.fixedPeers, addr)
+		delete(d.persistentPeers, addr)
+	}
+	d.cfg.BootstrapPeers = bootstrapPeers
+	d.cfg.FixedPeers = fixedPeers
+	for _, addr := range bootstrapPeers {
+		d.persistentPeers[addr] = true
+	}
+	for _, addr := range fixedPeers {
+		d.fixedPeers[addr] = true
+		d.persistentPeers[addr] = true
+	}
+	d.mu.Unlock()
+
+	for _, addr := range bootstrapPeers {
 		d.AddPeer(addr, 0, 0)
 	}
 
-	for _, addr := range d.cfg.FixedPeers {
+	for _, addr := range fixedPeers {
 		d.AddPeer(addr, 0, 0)
 	}
 
@@ -410,6 +492,73 @@ func (d *Discovery) Start(ctx context.Context) error {
 	go d.maintenanceLoop(ctx)
 
 	return nil
+}
+
+func (d *Discovery) resolveConfiguredPeers(ctx context.Context) ([]string, []string) {
+	bootstrapSeen := make(map[string]struct{})
+	bootstrap := make([]string, 0, len(d.cfg.BootstrapPeers))
+	for _, configured := range d.cfg.BootstrapPeers {
+		for _, endpoint := range d.resolveConfiguredPeer(ctx, configured) {
+			if _, exists := bootstrapSeen[endpoint]; exists {
+				continue
+			}
+			bootstrapSeen[endpoint] = struct{}{}
+			bootstrap = append(bootstrap, endpoint)
+		}
+	}
+
+	fixedSeen := make(map[string]struct{})
+	fixed := make([]string, 0, len(d.cfg.FixedPeers))
+	for _, configured := range d.cfg.FixedPeers {
+		for _, endpoint := range d.resolveConfiguredPeer(ctx, configured) {
+			if _, exists := fixedSeen[endpoint]; exists {
+				continue
+			}
+			fixedSeen[endpoint] = struct{}{}
+			fixed = append(fixed, endpoint)
+			break
+		}
+	}
+
+	return bootstrap, fixed
+}
+
+func (d *Discovery) resolveConfiguredPeer(ctx context.Context, configured string) []string {
+	endpoint, err := ParseEndpoint(configured)
+	if err != nil {
+		slog.Warn("Configured peer endpoint is invalid; skipping",
+			"t", "Discovery", "address", configured, "err", err)
+		return nil
+	}
+	if ip := net.ParseIP(endpoint.Host); ip != nil {
+		return []string{(Endpoint{Host: ip.String(), Port: endpoint.Port}).String()}
+	}
+
+	lookupIP := d.lookupIP
+	if lookupIP == nil {
+		lookupIP = net.DefaultResolver.LookupIPAddr
+	}
+	addresses, err := lookupIP(ctx, endpoint.Host)
+	if err != nil {
+		slog.Warn("Configured peer hostname could not be resolved; skipping",
+			"t", "Discovery", "address", configured, "err", err)
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(addresses))
+	resolved := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if address.IP == nil {
+			continue
+		}
+		value := (Endpoint{Host: address.IP.String(), Port: endpoint.Port}).String()
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		resolved = append(resolved, value)
+	}
+	return resolved
 }
 
 // Stop stops the discovery service by cancelling its context. Idempotent:
@@ -442,7 +591,7 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 			existing.Hops = hops
 			existing.Source = source
 		}
-		existing.LastSeen = time.Now()
+		existing.LastSeen = d.now()
 		d.lru.MoveToFront(existing.lruEntry)
 		return
 	}
@@ -456,7 +605,7 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 	d.insertPeerLocked(&DiscoveredPeer{
 		Address:  address,
 		Hops:     hops,
-		LastSeen: time.Now(),
+		LastSeen: d.now(),
 		Source:   source,
 	})
 }
@@ -474,11 +623,12 @@ func (d *Discovery) insertPeerLocked(p *DiscoveredPeer) {
 func (d *Discovery) evictOldestLocked() bool {
 	for e := d.lru.Back(); e != nil; e = e.Prev() {
 		p := e.Value.(*DiscoveredPeer)
-		if p.Connected || d.fixedPeers[p.Address] {
+		if p.Connected || d.persistentPeers[p.Address] {
 			continue
 		}
 		d.lru.Remove(e)
 		delete(d.peers, p.Address)
+		delete(d.connectAttempts, p.Address)
 		return true
 	}
 	return false
@@ -510,7 +660,7 @@ func (d *Discovery) AddRedirectCandidate(address string, source PeerID) {
 		d.insertPeerLocked(&DiscoveredPeer{
 			Address:  address,
 			Hops:     1,
-			LastSeen: time.Now(),
+			LastSeen: d.now(),
 			Source:   source,
 		})
 	}
@@ -523,13 +673,14 @@ func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 
 	peer, exists := d.peers[address]
 	if !exists {
-		peer = &DiscoveredPeer{Address: address, LastSeen: time.Now()}
+		peer = &DiscoveredPeer{Address: address, LastSeen: d.now()}
 		d.insertPeerLocked(peer)
 	}
 
 	peer.Connected = true
 	peer.PeerID = peerID
 	d.connected[peerID] = peer
+	d.markConnectSucceededLocked(address)
 
 	// Feed the boot cache with addresses we successfully connected to, so a
 	// restart can reconnect to known-good peers (GetEndpoints feeds
@@ -630,6 +781,7 @@ func (d *Discovery) SyncConnectedHosts(hosts map[string]struct{}) {
 		}
 		if _, covered := hosts[host]; covered {
 			peer.Connected = true
+			d.markConnectSucceededLocked(peer.Address)
 		}
 	}
 }
@@ -654,6 +806,12 @@ func (d *Discovery) ConnectedCount() int {
 	return len(d.connected)
 }
 
+func (d *Discovery) IsFixed(address string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.fixedPeers[address]
+}
+
 // NeedsMorePeers returns true if we should connect to more peers.
 func (d *Discovery) NeedsMorePeers() bool {
 	d.mu.RLock()
@@ -663,20 +821,65 @@ func (d *Discovery) NeedsMorePeers() bool {
 
 // SelectPeersToConnect returns candidate addresses to connect to.
 func (d *Discovery) SelectPeersToConnect(count int) []string {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
+	now := d.now()
+	for host, until := range d.recentAttempts {
+		if !now.Before(until) {
+			delete(d.recentAttempts, host)
+		}
+	}
+	var fixedCandidates []string
 	var candidates []string
+	seen := make(map[string]struct{})
+	seenHosts := make(map[string]struct{})
 	for _, peer := range d.peers {
-		if !peer.Connected && peer.Hops <= MaxHops {
+		if peer.Connected {
+			seenHosts[connectAttemptHost(peer.Address)] = struct{}{}
+		}
+	}
+	eligible := func(address string) bool {
+		host := connectAttemptHost(address)
+		if _, duplicate := seenHosts[host]; duplicate {
+			return false
+		}
+		if until, suppressed := d.recentAttempts[host]; suppressed && now.Before(until) {
+			return false
+		}
+		for attemptedAddress, attempted := range d.connectAttempts {
+			if attempted.inFlight && connectAttemptHost(attemptedAddress) == host {
+				return false
+			}
+		}
+		attempt := d.connectAttempts[address]
+		if attempt != nil && (attempt.inFlight || now.Before(attempt.nextAttempt)) {
+			return false
+		}
+		seenHosts[host] = struct{}{}
+		return true
+	}
+	for address := range d.fixedPeers {
+		peer := d.peers[address]
+		if peer != nil && !peer.Connected && eligible(address) {
+			fixedCandidates = append(fixedCandidates, address)
+		}
+	}
+	for _, peer := range d.peers {
+		seen[peer.Address] = struct{}{}
+		if d.fixedPeers[peer.Address] {
+			continue
+		}
+		if !peer.Connected && peer.Hops <= MaxHops && eligible(peer.Address) {
 			candidates = append(candidates, peer.Address)
 		}
 	}
 
 	if d.bootCache != nil {
 		for _, entry := range d.bootCache.Endpoints(50) {
-			if _, exists := d.peers[entry.Address]; !exists {
+			if _, exists := seen[entry.Address]; !exists && eligible(entry.Address) {
 				candidates = append(candidates, entry.Address)
+				seen[entry.Address] = struct{}{}
 			}
 		}
 	}
@@ -687,8 +890,88 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 
 	if count > 0 && count < len(candidates) {
 		candidates = candidates[:count]
+	} else if count <= 0 {
+		candidates = nil
+	}
+	candidates = append(fixedCandidates, candidates...)
+	for _, address := range candidates {
+		attempt := d.connectAttempts[address]
+		if attempt == nil {
+			attempt = &connectAttempt{}
+			if d.connectAttempts == nil {
+				d.connectAttempts = make(map[string]*connectAttempt)
+			}
+			d.connectAttempts[address] = attempt
+		}
+		attempt.inFlight = true
+		if d.recentAttempts == nil {
+			d.recentAttempts = make(map[string]time.Time)
+		}
+		d.recentAttempts[connectAttemptHost(address)] = now.Add(recentConnectAttempt)
 	}
 	return candidates
+}
+
+// finishConnectAttempt releases an autoconnect reservation. Network failures
+// advance fixed peers through rippled's bounded Fibonacci-minute schedule;
+// every other result retains the one-minute recent-attempt suppression set at
+// selection time.
+func (d *Discovery) finishConnectAttempt(address string, result connectAttemptResult) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	attempt := d.connectAttempts[address]
+	if attempt == nil {
+		return
+	}
+	attempt.inFlight = false
+	if !d.fixedPeers[address] {
+		delete(d.connectAttempts, address)
+		return
+	}
+	if result == connectAttemptSucceeded {
+		attempt.failures = 0
+		attempt.nextAttempt = time.Time{}
+		return
+	}
+	if result != connectAttemptFailed {
+		return
+	}
+	attempt.failures = min(attempt.failures+1, len(fixedConnectBackoff)-1)
+	attempt.nextAttempt = d.now().Add(fixedConnectBackoff[attempt.failures])
+}
+
+func (d *Discovery) markConnectSucceededLocked(address string) {
+	if d.recentAttempts == nil {
+		d.recentAttempts = make(map[string]time.Time)
+	}
+	d.recentAttempts[connectAttemptHost(address)] = d.now().Add(recentConnectAttempt)
+	if !d.fixedPeers[address] {
+		delete(d.connectAttempts, address)
+		return
+	}
+	attempt := d.connectAttempts[address]
+	if attempt == nil {
+		attempt = &connectAttempt{}
+		if d.connectAttempts == nil {
+			d.connectAttempts = make(map[string]*connectAttempt)
+		}
+		d.connectAttempts[address] = attempt
+	}
+	attempt.inFlight = false
+	attempt.failures = 0
+	attempt.nextAttempt = time.Time{}
+}
+
+func connectAttemptHost(address string) string {
+	ep, err := ParseEndpoint(address)
+	if err != nil {
+		return strings.ToLower(address)
+	}
+	if ip := net.ParseIP(ep.Host); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(ep.Host)
 }
 
 func (d *Discovery) maintenanceLoop(ctx context.Context) {
@@ -711,11 +994,12 @@ func (d *Discovery) prune() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	cutoff := time.Now().Add(-1 * time.Hour)
+	cutoff := d.now().Add(-1 * time.Hour)
 	for addr, peer := range d.peers {
-		if !peer.Connected && peer.LastSeen.Before(cutoff) {
+		if !peer.Connected && !d.persistentPeers[addr] && peer.LastSeen.Before(cutoff) {
 			d.lru.Remove(peer.lruEntry)
 			delete(d.peers, addr)
+			delete(d.connectAttempts, addr)
 		}
 	}
 }

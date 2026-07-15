@@ -332,7 +332,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	// malformed request can be load-charged like rippled charges it.
 	peerIP := getWebSocketClientIP(wsConn.conn)
 	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
-	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
+	role := roleForRequest(peerIP, wsConn.user, cmdMap, wsConn.portCtx)
 
 	apiVersion := parseWebSocketAPIVersion(message)
 	dispatchCtx := wsConn.ctx
