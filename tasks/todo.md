@@ -630,3 +630,21 @@ rippled `3.2.0` worktree at
 - Passed uncached focused and broad codec, transaction, ledger, and replay tests;
   focused race tests; `just fmt`; `just build-all`; `just vet`; CI-pinned strict
   golangci-lint v2.11.3; advisory lint; and `git diff --check`.
+
+## PR #1329 finalization
+
+- [x] Review the complete PR diff and production callers for correctness.
+- [x] Verify every protocol-bearing change against local rippled v3.2.0.
+- [x] Make transaction staging atomic without flushing backed SHAMaps per tx.
+- [x] Remove redundant implementation narration in a separate cleanup commit.
+- [x] Diagnose the final merged-head consensus failure against both PR and base.
+- [x] Pin the mixed-node smoke to rippled v3.2.0 and pass the local topology.
+
+### Finalization review
+
+The original consensus smoke used rippled 2.6.2. Its newly funded AccountRoot
+starts at Sequence 1, while rippled v3.2.0 sets Sequence to the current ledger
+sequence in `Payment::doApply`. The Go implementation matches v3.2.0, so the old
+image created deterministic account-state and transaction-metadata divergence
+before exercising PR #1329. The smoke topology and both CI callers now use the
+project's mandated rippled 3.2.0 image and its `/config` entrypoint contract.
