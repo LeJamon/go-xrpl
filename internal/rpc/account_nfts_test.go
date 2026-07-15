@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -65,10 +66,10 @@ func (m *mockAccountNFTsLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockAccountNFTsLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockAccountNFTsLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
 func (m *mockAccountNFTsLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -142,12 +143,18 @@ func (m *mockAccountNFTsLedgerService) GetAccountNFTs(_ context.Context, account
 		return m.accountNFTsResult, nil
 	}
 	// Return empty NFTs by default
+	ledgerSeq := m.currentLedgerIndex
+	validated := false
+	if ledgerIndex != "current" {
+		ledgerSeq = m.validatedLedgerIndex
+		validated = true
+	}
 	return &types.AccountNFTsResult{
 		Account:     account,
 		AccountNFTs: []types.NFTInfo{},
-		LedgerIndex: m.validatedLedgerIndex,
+		LedgerIndex: ledgerSeq,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
-		Validated:   true,
+		Validated:   validated,
 	}, nil
 }
 func (m *mockAccountNFTsLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -208,13 +215,13 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 		{
 			name:          "Missing account field - empty params",
 			params:        map[string]any{},
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name:          "Missing account field - nil params",
 			params:        nil,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -222,7 +229,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": 12345,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -230,7 +237,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": true,
 			},
-			expectedError: "Invalid parameters:",
+			expectedError: "Invalid field 'account'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -697,6 +704,9 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 			expectError: false,
 			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, validAccount, resp["account"])
+				assert.EqualValues(t, 3, resp["ledger_current_index"])
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_index")
 			},
 		},
 		{
@@ -724,6 +734,28 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				case uint32:
 					assert.Equal(t, uint32(2), v)
 				}
+			},
+		},
+		{
+			name: "ledger_index: current sequence projects the actual open ledger",
+			params: map[string]any{
+				"account":      validAccount,
+				"ledger_index": 3,
+			},
+			setupMock: func() {
+				mock.accountNFTsResult = &types.AccountNFTsResult{
+					Account:     validAccount,
+					AccountNFTs: []types.NFTInfo{},
+					LedgerIndex: 3,
+					Validated:   false,
+				}
+				mock.accountNFTsErr = nil
+			},
+			expectError: false,
+			validateResp: func(t *testing.T, resp map[string]any) {
+				assert.EqualValues(t, 3, resp["ledger_current_index"])
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_index")
 			},
 		},
 	}
@@ -782,13 +814,13 @@ func TestAccountNFTsPagination(t *testing.T) {
 	bobAccount := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
 
 	t.Run("Limit parameter restricts result count", func(t *testing.T) {
-		// Create 10 NFTs, but limit to 4
-		nfts := make([]types.NFTInfo, 10)
-		for i := range 10 {
+		// Guest requests use rippled's minimum account_nfts page size of 20.
+		nfts := make([]types.NFTInfo, 21)
+		for i := range nfts {
 			nfts[i] = types.NFTInfo{
 				Flags:        0,
 				Issuer:       bobAccount,
-				NFTokenID:    "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B90000000000000000" + string(rune('0'+i)),
+				NFTokenID:    fmt.Sprintf("%064X", i),
 				NFTokenTaxon: 0,
 				NFTSerial:    uint32(i),
 			}
@@ -796,17 +828,17 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 		mock.accountNFTsResult = &types.AccountNFTsResult{
 			Account:     bobAccount,
-			AccountNFTs: nfts[:4], // Only return first 4
+			AccountNFTs: nfts[:20],
 			LedgerIndex: 3,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
 			Validated:   true,
-			Marker:      "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B9000000000000000003",
+			Marker:      nfts[19].NFTokenID,
 		}
 		mock.accountNFTsErr = nil
 
 		params := map[string]any{
 			"account": bobAccount,
-			"limit":   4,
+			"limit":   20,
 		}
 		paramsJSON, err := json.Marshal(params)
 		require.NoError(t, err)
@@ -822,10 +854,13 @@ func TestAccountNFTsPagination(t *testing.T) {
 		require.NoError(t, err)
 
 		nftsResp := resp["account_nfts"].([]any)
-		assert.Len(t, nftsResp, 4, "Should have only 4 NFTs with limit=4")
+		assert.Len(t, nftsResp, 20, "Should have only 20 NFTs with limit=20")
 		assert.Contains(t, resp, "marker", "Should have marker for pagination")
-		assert.Equal(t, float64(20), resp["limit"])
+		assert.EqualValues(t, 20, resp["limit"])
 		assert.NotContains(t, resp, "account")
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_index")
 		assert.Empty(t, mock.accountNFTsMarker)
 	})
 
@@ -905,6 +940,66 @@ func TestAccountNFTsPagination(t *testing.T) {
 	})
 }
 
+func TestAccountNFTsMarkerValidation(t *testing.T) {
+	const account = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	method := &handlers.AccountNftsMethod{}
+	mock := newMockAccountNFTsLedgerService()
+	ctx := &types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion2,
+		Services:   newAccountNFTsTestServices(mock),
+	}
+
+	tests := []struct {
+		name    string
+		params  map[string]any
+		service error
+		message string
+	}{
+		{
+			name:    "marker must be a string",
+			params:  map[string]any{"account": account, "marker": true},
+			message: "Invalid field 'marker', not string.",
+		},
+		{
+			name:    "marker must contain a uint256",
+			params:  map[string]any{"account": account, "marker": "DEADBEEF"},
+			message: "Invalid field 'marker'.",
+		},
+		{
+			name:    "marker must exist in the account NFT sequence",
+			params:  map[string]any{"account": account, "marker": strings.Repeat("A", 64)},
+			service: svcerr.ErrInvalidMarker,
+			message: "Invalid field 'marker'.",
+		},
+		{
+			name:    "zero marker parses but is not a sequence member",
+			params:  map[string]any{"account": account, "marker": "0"},
+			service: svcerr.ErrInvalidMarker,
+			message: "Invalid field 'marker'.",
+		},
+		{
+			name:    "limit validation precedes marker validation",
+			params:  map[string]any{"account": account, "limit": "bad", "marker": true},
+			message: "Invalid field 'limit', not unsigned integer.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mock.accountNFTsErr = tc.service
+			params, err := json.Marshal(tc.params)
+			require.NoError(t, err)
+			result, rpcErr := method.Handle(ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, rpcErr)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, tc.message, rpcErr.Message)
+		})
+	}
+}
+
 // TestAccountNFTsServiceUnavailable tests behavior when ledger service is not available
 func TestAccountNFTsServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountNftsMethod{}
@@ -972,9 +1067,9 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 				NFTSerial:    0,
 			},
 		},
-		LedgerIndex: 2,
+		LedgerIndex: 3,
 		LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
-		Validated:   true,
+		Validated:   false,
 	}
 
 	params := map[string]any{
@@ -1000,6 +1095,8 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 	assert.NotContains(t, resp, "ledger_hash")
 	assert.NotContains(t, resp, "ledger_index")
 	assert.Contains(t, resp, "validated")
+	assert.NotContains(t, resp, "limit")
+	assert.NotContains(t, resp, "marker")
 
 	// Verify NFT object fields
 	nfts := resp["account_nfts"].([]any)

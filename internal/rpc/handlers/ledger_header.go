@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -25,10 +24,8 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RPCContext, params json.RawMessag
 	var request struct {
 	}
 
-	if params != nil {
-		if err := json.Unmarshal(params, &request); err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
-		}
+	if err := ParseParams(params, &request); err != nil {
+		return nil, err
 	}
 
 	// Resolve the target ledger through the shared lookup (rippled

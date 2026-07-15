@@ -108,7 +108,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 
 	// taker (BookOffers.cpp:164-173).
 	var takerStr string
-	if rawTaker, ok := probe["taker"]; ok && !isJSONNull(rawTaker) {
+	if rawTaker, ok := probe["taker"]; ok {
 		if !isJSONString(rawTaker) {
 			return nil, types.RPCErrorExpectedField("taker", "string")
 		}
@@ -123,7 +123,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	// domain (BookOffers.cpp:175-189). Non-string OR parseHex-fail both
 	// produce the same rpcDOMAIN_MALFORMED with "Unable to parse domain.".
 	var domain string
-	if rawDomain, ok := probe["domain"]; ok && !isJSONNull(rawDomain) {
+	if rawDomain, ok := probe["domain"]; ok {
 		if !isJSONString(rawDomain) {
 			return nil, types.RPCErrorDomainMalformed("Unable to parse domain.")
 		}
@@ -163,6 +163,12 @@ func (m *BookOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 
 	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, "", withProofs)
 	if err != nil {
+		if errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RPCErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RPCErrorInvalidField("marker")
+		}
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		}
@@ -266,7 +272,7 @@ func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, is
 	var issuerStr string
 	var issuerID [20]byte
 	hasIssuer := false
-	if rawIssuer, ok := inner["issuer"]; ok && !isJSONNull(rawIssuer) {
+	if rawIssuer, ok := inner["issuer"]; ok {
 		if !isJSONString(rawIssuer) {
 			return "", [20]byte{}, types.RPCErrorExpectedField(field, "string")
 		}

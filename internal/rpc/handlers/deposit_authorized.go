@@ -18,44 +18,31 @@ const maxCredentialsArraySize = 8
 type DepositAuthorizedMethod struct{ BaseHandler }
 
 func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		SourceAccount      string          `json:"source_account"`
-		DestinationAccount string          `json:"destination_account"`
-		Credentials        json.RawMessage `json:"credentials,omitempty"`
+	rawFields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
+	sourceRaw, hasSource := rawFields["source_account"]
+	if !hasSource {
+		return nil, types.RPCErrorMissingField("source_account")
 	}
-
-	// Validate source_account: must be present and a valid Base58 address.
-	// Reference: rippled DepositAuthorized.cpp — parseBase58 → rpcACT_MALFORMED
-	if request.SourceAccount == "" {
-		return nil, types.RPCErrorInvalidParams("Missing field 'source_account'.")
+	sourceAccount, validSource := rawJSONString(sourceRaw)
+	if !validSource {
+		return nil, types.RPCErrorExpectedField("source_account", "a string")
 	}
-	if err := ValidateAccount(request.SourceAccount); err != nil {
-		return nil, err
+	if !types.IsValidClassicAddress(sourceAccount) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
-
-	// Validate destination_account: must be present and a valid Base58 address.
-	// Reference: rippled DepositAuthorized.cpp — parseBase58 → rpcACT_MALFORMED
-	if request.DestinationAccount == "" {
-		return nil, types.RPCErrorInvalidParams("Missing field 'destination_account'.")
+	destinationRaw, hasDestination := rawFields["destination_account"]
+	if !hasDestination {
+		return nil, types.RPCErrorMissingField("destination_account")
 	}
-	if err := ValidateAccount(request.DestinationAccount); err != nil {
-		return nil, err
+	destinationAccount, validDestination := rawJSONString(destinationRaw)
+	if !validDestination {
+		return nil, types.RPCErrorExpectedField("destination_account", "a string")
 	}
-
-	// Validate credentials array format before calling the service. A
-	// present-but-empty (or null / non-array) credentials field is an
-	// error, so presence must be distinguished from emptiness.
-	var credentials []string
-	if request.Credentials != nil {
-		creds, err := parseCredentialsFormat(request.Credentials)
-		if err != nil {
-			return nil, err
-		}
-		credentials = creds
+	if !types.IsValidClassicAddress(destinationAccount) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -64,9 +51,39 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawM
 
 	// Determine ledger index to use. rippled's lookupLedger defaults to the
 	// open ("current") ledger in the absence of ledger_index/ledger_hash.
-	ledgerIndex, selErr := resolveLedgerSelector(params)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
+	}
+	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	lookupExtra := ledgerEntryResponseFields(ledger, validated)
+	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, sourceAccount, ledgerIndex); err != nil {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorSrcActNotFound("Source account not found.").WithExtra(lookupExtra)
+		}
+		return nil, types.RPCErrorInternal(err.Error())
+	}
+	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, destinationAccount, ledgerIndex); err != nil {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorDstActNotFound("Destination account not found.").WithExtra(lookupExtra)
+		}
+		return nil, types.RPCErrorInternal(err.Error())
+	}
+
+	var credentials []string
+	if credentialsRaw, ok := rawFields["credentials"]; ok {
+		creds, err := parseCredentialsFormat(credentialsRaw)
+		if err != nil {
+			return nil, err
+		}
+		credentials = creds
 	}
 
 	// The service performs the ledger-side checks (source/destination
@@ -74,8 +91,8 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawM
 	// and the direct + credential-based preauth lookups).
 	result, err := ctx.Services.Ledger.GetDepositAuthorized(
 		ctx.Context,
-		request.SourceAccount,
-		request.DestinationAccount,
+		sourceAccount,
+		destinationAccount,
 		ledgerIndex,
 		credentials,
 	)
@@ -84,9 +101,9 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawM
 		case errors.Is(err, svcerr.ErrLedgerNotFound):
 			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
 		case errors.Is(err, svcerr.ErrSrcAccountNotFound):
-			return nil, types.RPCErrorSrcActNotFound("Source account not found.")
+			return nil, types.RPCErrorSrcActNotFound("Source account not found.").WithExtra(lookupExtra)
 		case errors.Is(err, svcerr.ErrDstAccountNotFound):
-			return nil, types.RPCErrorDstActNotFound("Destination account not found.")
+			return nil, types.RPCErrorDstActNotFound("Destination account not found.").WithExtra(lookupExtra)
 		case errors.Is(err, svcerr.ErrBadCredentials):
 			// Detail follows the sentinel as "bad credentials: <detail>";
 			// strip the prefix so the wire message matches rippled's
@@ -95,18 +112,16 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RPCContext, params json.RawM
 			if idx := strings.Index(detail, ": "); idx >= 0 {
 				detail = detail[idx+2:]
 			}
-			return nil, types.RPCErrorBadCredentials(detail)
+			return nil, types.RPCErrorBadCredentials(detail).WithExtra(lookupExtra)
 		}
 		return nil, types.RPCErrorInternal(err.Error())
 	}
 
 	// Build response
-	response := map[string]any{
-		"source_account":      result.SourceAccount,
-		"destination_account": result.DestinationAccount,
-		"deposit_authorized":  result.DepositAuthorized,
-	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
+	response := ledgerEntryResponseFields(ledger, validated)
+	response["source_account"] = result.SourceAccount
+	response["destination_account"] = result.DestinationAccount
+	response["deposit_authorized"] = result.DepositAuthorized
 
 	// Echo credentials in response if provided (matches rippled)
 	if len(credentials) > 0 {

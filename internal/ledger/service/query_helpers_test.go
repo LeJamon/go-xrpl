@@ -28,6 +28,8 @@ func TestNormalizeObjectType(t *testing.T) {
 		"escrow":              "Escrow",
 		"fee":                 "FeeSettings",
 		"hashes":              "LedgerHashes",
+		"loan":                "Loan",
+		"loan_broker":         "LoanBroker",
 		"mptoken":             "MPToken",
 		"mpt_issuance":        "MPTokenIssuance",
 		"nft_offer":           "NFTokenOffer",

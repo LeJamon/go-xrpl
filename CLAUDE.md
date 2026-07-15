@@ -49,6 +49,7 @@ just test-core          # ledger / txq / rpc / consensus / peermanagement
 just test-libs          # codec / crypto / shamap / storage / ...
 just test-pkg ./internal/tx/offer/...                  # one package
 just test-pkg './internal/tx/payment/... -run TestX'   # one test (quote args)
+just test-docker        # production handshake against rippled 3.2.0 (network_id=1)
 
 just vet
 just lint            # auto-installs golangci-lint at the CI-pinned version

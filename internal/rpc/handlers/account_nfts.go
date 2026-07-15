@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -16,24 +15,19 @@ import (
 type AccountNftsMethod struct{ BaseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.PaginationParams
+	fields, account, parseErr := accountPageParams(params)
+	if parseErr != nil {
+		return nil, parseErr
 	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	ledgerIndex, selErr := preflightAccountPage(ctx, params, request.Account, "Failed to get account information")
+	ledgerIndex, selErr := preflightAccountPage(ctx, params, account, "Failed to get account information")
 	if selErr != nil {
 		return nil, selErr
 	}
@@ -42,17 +36,15 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	marker, markerErr := markerString(request.Marker)
+	marker, markerErr := markerString(fields["marker"])
 	if markerErr != nil {
 		return nil, markerErr
 	}
-	if request.Marker != nil {
-		switch {
-		case marker == "0":
-			marker = strings.Repeat("0", 64)
-		case len(marker) != 64:
+	if _, present := fields["marker"]; present {
+		if marker != "0" && len(marker) != 64 {
 			return nil, types.RPCErrorInvalidField("marker")
-		default:
+		}
+		if marker != "0" {
 			if _, err := hex.DecodeString(marker); err != nil {
 				return nil, types.RPCErrorInvalidField("marker")
 			}
@@ -60,7 +52,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 	}
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
 		ctx.Context,
-		request.Account,
+		account,
 		ledgerIndex,
 		limit,
 		marker,
@@ -72,7 +64,13 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RPCErrorActMalformed("Account malformed.")
 		}
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account NFTs: %v", err))
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RPCErrorInvalidField("marker")
+		}
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
 	}
 
 	// Build NFTs array with proper field handling
@@ -97,7 +95,6 @@ func (m *AccountNftsMethod) Handle(ctx *types.RPCContext, params json.RawMessage
 		nfts[i] = nftObj
 	}
 
-	// Build response
 	response := map[string]any{
 		"account_nfts": nfts,
 	}

@@ -3,7 +3,6 @@ package service
 import (
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
@@ -26,7 +25,7 @@ func seedHistory(t *testing.T, svc *Service, lo, hi uint32) {
 		}
 		var h header.LedgerHeader
 		h.LedgerIndex = seq
-		svc.ledgerHistory[seq] = ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, stateMap, txMap)
 	}
 }
 

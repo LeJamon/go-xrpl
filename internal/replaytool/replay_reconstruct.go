@@ -145,7 +145,7 @@ func applyAffectedNode(
 			if let, ok := fields["LedgerEntryType"]; ok {
 				obj["LedgerEntryType"] = let
 			}
-			fillRequiredDefaults(obj, entryType)
+			fillCreatedDefaults(obj, entryType)
 			fillBookDirectoryDefaults(obj, entryType)
 			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
 			recordMembership(deltas, idx, entryType, obj, true)

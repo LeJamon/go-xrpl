@@ -1,6 +1,7 @@
 package tx
 
 import (
+	"errors"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
@@ -477,6 +478,82 @@ var txTemplates = map[Type]map[string]fieldStyle{
 	},
 }
 
+var commonRequiredFields = []string{
+	"TransactionType",
+	"Account",
+	"Sequence",
+	"Fee",
+	"SigningPubKey",
+}
+
+var txRequiredFields = map[Type][]string{
+	TypePayment:                      {"Destination", "Amount"},
+	TypeEscrowCreate:                 {"Destination", "Amount"},
+	TypeEscrowFinish:                 {"Owner", "OfferSequence"},
+	TypeEscrowCancel:                 {"Owner", "OfferSequence"},
+	TypeOfferCreate:                  {"TakerPays", "TakerGets"},
+	TypeOfferCancel:                  {"OfferSequence"},
+	TypeTicketCreate:                 {"TicketCount"},
+	TypeSignerListSet:                {"SignerQuorum"},
+	TypePaymentChannelCreate:         {"Destination", "Amount", "SettleDelay", "PublicKey"},
+	TypePaymentChannelFund:           {"Channel", "Amount"},
+	TypePaymentChannelClaim:          {"Channel"},
+	TypeCheckCreate:                  {"Destination", "SendMax"},
+	TypeCheckCash:                    {"CheckID"},
+	TypeCheckCancel:                  {"CheckID"},
+	TypeAccountDelete:                {"Destination"},
+	TypeNFTokenMint:                  {"NFTokenTaxon"},
+	TypeNFTokenBurn:                  {"NFTokenID"},
+	TypeNFTokenCreateOffer:           {"NFTokenID", "Amount"},
+	TypeNFTokenCancelOffer:           {"NFTokenOffers"},
+	TypeClawback:                     {"Amount"},
+	TypeAMMClawback:                  {"Holder", "Asset", "Asset2"},
+	TypeAMMCreate:                    {"Amount", "Amount2", "TradingFee"},
+	TypeAMMDeposit:                   {"Asset", "Asset2"},
+	TypeAMMWithdraw:                  {"Asset", "Asset2"},
+	TypeAMMVote:                      {"Asset", "Asset2", "TradingFee"},
+	TypeAMMBid:                       {"Asset", "Asset2"},
+	TypeAMMDelete:                    {"Asset", "Asset2"},
+	TypeXChainCreateClaimID:          {"XChainBridge", "SignatureReward", "OtherChainSource"},
+	TypeXChainCommit:                 {"XChainBridge", "XChainClaimID", "Amount"},
+	TypeXChainClaim:                  {"XChainBridge", "XChainClaimID", "Destination", "Amount"},
+	TypeXChainAccountCreateCommit:    {"XChainBridge", "Destination", "Amount", "SignatureReward"},
+	TypeXChainAddClaimAttestation:    {"XChainBridge", "AttestationSignerAccount", "PublicKey", "Signature", "OtherChainSource", "Amount", "AttestationRewardAccount", "WasLockingChainSend", "XChainClaimID"},
+	TypeXChainAddAccountCreateAttest: {"XChainBridge", "AttestationSignerAccount", "PublicKey", "Signature", "OtherChainSource", "Amount", "AttestationRewardAccount", "WasLockingChainSend", "XChainAccountCreateCount", "Destination", "SignatureReward"},
+	TypeXChainModifyBridge:           {"XChainBridge"},
+	TypeXChainCreateBridge:           {"XChainBridge", "SignatureReward"},
+	TypeOracleSet:                    {"OracleDocumentID", "LastUpdateTime", "PriceDataSeries"},
+	TypeOracleDelete:                 {"OracleDocumentID"},
+	TypeLedgerStateFix:               {"LedgerFixType"},
+	TypeMPTokenIssuanceDestroy:       {"MPTokenIssuanceID"},
+	TypeMPTokenIssuanceSet:           {"MPTokenIssuanceID"},
+	TypeMPTokenAuthorize:             {"MPTokenIssuanceID"},
+	TypeCredentialCreate:             {"Subject", "CredentialType"},
+	TypeCredentialAccept:             {"Issuer", "CredentialType"},
+	TypeCredentialDelete:             {"CredentialType"},
+	TypeNFTokenModify:                {"NFTokenID"},
+	TypePermissionedDomainSet:        {"AcceptedCredentials"},
+	TypePermissionedDomainDelete:     {"DomainID"},
+	TypeDelegateSet:                  {"Authorize", "Permissions"},
+	TypeVaultCreate:                  {"Asset"},
+	TypeVaultSet:                     {"VaultID"},
+	TypeVaultDelete:                  {"VaultID"},
+	TypeVaultDeposit:                 {"VaultID", "Amount"},
+	TypeVaultWithdraw:                {"VaultID", "Amount"},
+	TypeVaultClawback:                {"VaultID", "Holder"},
+	TypeBatch:                        {"RawTransactions"},
+	TypeLoanBrokerSet:                {"VaultID"},
+	TypeLoanBrokerDelete:             {"LoanBrokerID"},
+	TypeLoanBrokerCoverDeposit:       {"LoanBrokerID", "Amount"},
+	TypeLoanBrokerCoverWithdraw:      {"LoanBrokerID", "Amount"},
+	TypeLoanSet:                      {"LoanBrokerID", "PrincipalRequested"},
+	TypeLoanDelete:                   {"LoanID"},
+	TypeLoanManage:                   {"LoanID"},
+	TypeLoanPay:                      {"LoanID", "Amount"},
+	TypeAmendment:                    {"LedgerSequence", "Amendment"},
+	TypeUNLModify:                    {"UNLModifyDisabling", "LedgerSequence", "UNLModifyValidator"},
+}
+
 // FormatField is one field of a transaction SOTemplate, exported for the
 // server_definitions RPC TRANSACTION_FORMATS section. Style is rippled's
 // SOEStyle int (0=required, 1=optional, 2=default).
@@ -511,27 +588,76 @@ func sortedFormatFields(m map[string]fieldStyle) []FormatField {
 	return out
 }
 
-// checkTemplate enforces a transaction type's field allowlist on the set of
-// decoded field names, rejecting any codec-known field that is neither a common
-// field nor part of the type's template. This mirrors rippled's STTx template
-// application, which throws when a field is "found in disallowed location",
-// preventing such a transaction from ever reaching apply.
-func checkTemplate(txType Type, fields map[string]bool) error {
-	template, ok := txTemplates[txType]
-	if !ok {
-		// Unknown / unregistered transaction type: no template to enforce.
-		// Type resolution is handled separately by the registry.
+// ValidateTemplateFields applies the structural portion of rippled's STTx
+// template: required-field presence, explicit-default prohibition, and the
+// per-type field allowlist. It does not run transaction validation or preflight.
+func ValidateTemplateFields(txType Type, values map[string]any) error {
+	if _, ok := txTemplates[txType]; !ok {
 		return nil
 	}
+	fields := make(map[string]bool, len(values))
+	for name := range values {
+		fields[name] = true
+	}
+	for _, name := range txRequiredFields[txType] {
+		if !fields[name] {
+			return errors.New("Field '" + name + "' is required but missing.")
+		}
+	}
+	for _, name := range commonRequiredFields {
+		if !fields[name] {
+			return errors.New("Field '" + name + "' is required but missing.")
+		}
+	}
+	for name, style := range txTemplates[txType] {
+		if style == soeDEFAULT && fields[name] && isExplicitDefault(values[name]) {
+			return errors.New("Field '" + name + "' may not be explicitly set to default.")
+		}
+	}
+
+	return validateTemplateAllowlist(txType, fields)
+}
+
+func isExplicitDefault(value any) bool {
+	if value == nil {
+		return true
+	}
+	switch typed := value.(type) {
+	case []any:
+		return len(typed) == 0
+	case []map[string]any:
+		return len(typed) == 0
+	}
+	return false
+}
+
+func validateTemplateAllowlist(txType Type, fields map[string]bool) error {
+	template, ok := txTemplates[txType]
+	if !ok {
+		return nil
+	}
+	names := make([]string, 0, len(fields))
 	for name := range fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
 		if _, ok := commonFields[name]; ok {
 			continue
 		}
 		if _, ok := template[name]; ok {
 			continue
 		}
-		return ter.Errorf(ter.TemMALFORMED,
-			"field %q is not allowed for transaction type %s", name, txType)
+		return errors.New("Field '" + name + "' found in disallowed location.")
+	}
+	return nil
+}
+
+// checkTemplate preserves the transaction-engine TER contract for decoded
+// fields that appear outside their transaction template.
+func checkTemplate(txType Type, fields map[string]bool) error {
+	if err := validateTemplateAllowlist(txType, fields); err != nil {
+		return ter.Errorf(ter.TemMALFORMED, "%s", err)
 	}
 	return nil
 }

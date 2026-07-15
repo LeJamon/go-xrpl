@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -32,71 +34,74 @@ var deletionBlockerTypes = map[string]bool{
 	"vault":                                true,
 }
 
-// validAccountObjectTypes maps rippled's RPC type names to true.
-// Matches chooseLedgerEntryType() in RPCHelpers.cpp, which accepts both the
-// canonical name (case-insensitive) and the rpcName (case-sensitive).
-// isAccountObjectsValidType() excludes: amendments, directory, fee, hashes, nunl.
-var validAccountObjectTypes = map[string]bool{
-	"account":                              true,
-	"amm":                                  true,
-	"bridge":                               true,
-	"check":                                true,
-	"credential":                           true,
-	"delegate":                             true,
-	"deposit_preauth":                      true,
-	"did":                                  true,
-	"escrow":                               true,
-	"mptoken":                              true,
-	"mpt_issuance":                         true,
-	"nft_offer":                            true,
-	"nft_page":                             true,
-	"offer":                                true,
-	"oracle":                               true,
-	"payment_channel":                      true,
-	"permissioned_domain":                  true,
-	"signer_list":                          true,
-	"state":                                true,
-	"ticket":                               true,
-	"vault":                                true,
-	"xchain_owned_claim_id":                true,
-	"xchain_owned_create_account_claim_id": true,
+type accountObjectLedgerType struct {
+	canonical string
+	rpcName   string
+	valid     bool
 }
 
-// validLedgerEntryTypeNames contains all known ledger entry type rpcNames
-// (from ledger_entries.macro). Used to distinguish "valid type but not for
-// account_objects" from "completely unknown type".
-var validLedgerEntryTypeNames = map[string]bool{
-	"account":                              true,
-	"amendments":                           true,
-	"amm":                                  true,
-	"bridge":                               true,
-	"check":                                true,
-	"credential":                           true,
-	"delegate":                             true,
-	"deposit_preauth":                      true,
-	"did":                                  true,
-	"directory":                            true,
-	"escrow":                               true,
-	"fee":                                  true,
-	"hashes":                               true,
-	"mptoken":                              true,
-	"mpt_issuance":                         true,
-	"nft_offer":                            true,
-	"nft_page":                             true,
-	"nunl":                                 true,
-	"offer":                                true,
-	"oracle":                               true,
-	"payment_channel":                      true,
-	"permissioned_domain":                  true,
-	"signer_list":                          true,
-	"state":                                true,
-	"ticket":                               true,
-	"vault":                                true,
-	"xchain_owned_claim_id":                true,
-	"xchain_owned_create_account_claim_id": true,
+var accountObjectLedgerTypes = []accountObjectLedgerType{
+	{"NFTokenOffer", "nft_offer", true},
+	{"Check", "check", true},
+	{"DID", "did", true},
+	{"NegativeUNL", "nunl", false},
+	{"NFTokenPage", "nft_page", true},
+	{"SignerList", "signer_list", true},
+	{"Ticket", "ticket", true},
+	{"AccountRoot", "account", true},
+	{"DirectoryNode", "directory", false},
+	{"Amendments", "amendments", false},
+	{"LedgerHashes", "hashes", false},
+	{"Bridge", "bridge", true},
+	{"Offer", "offer", true},
+	{"DepositPreauth", "deposit_preauth", true},
+	{"XChainOwnedClaimID", "xchain_owned_claim_id", true},
+	{"RippleState", "state", true},
+	{"FeeSettings", "fee", false},
+	{"XChainOwnedCreateAccountClaimID", "xchain_owned_create_account_claim_id", true},
+	{"Escrow", "escrow", true},
+	{"PayChannel", "payment_channel", true},
+	{"AMM", "amm", true},
+	{"MPTokenIssuance", "mpt_issuance", true},
+	{"MPToken", "mptoken", true},
+	{"Oracle", "oracle", true},
+	{"Credential", "credential", true},
+	{"PermissionedDomain", "permissioned_domain", true},
+	{"Delegate", "delegate", true},
+	{"Vault", "vault", true},
+	{"LoanBroker", "loan_broker", true},
+	{"Loan", "loan", true},
+}
+
+func chooseAccountObjectType(raw json.RawMessage, present bool) (string, *types.RPCError) {
+	if !present {
+		return "", nil
+	}
+
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", types.RPCErrorExpectedField("type", "string")
+	}
+	filter, ok := value.(string)
+	if !ok {
+		return "", types.RPCErrorExpectedField("type", "string")
+	}
+
+	for _, ledgerType := range accountObjectLedgerTypes {
+		if strings.EqualFold(ledgerType.canonical, filter) || ledgerType.rpcName == filter {
+			if !ledgerType.valid {
+				return "", types.RPCErrorInvalidField("type")
+			}
+			return ledgerType.rpcName, nil
+		}
+	}
+	return "", types.RPCErrorInvalidField("type")
 }
 
 func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return nil, rpcErr
+	}
 	fields, account, parseErr := accountPageParams(params)
 	if parseErr != nil {
 		return nil, parseErr
@@ -108,68 +113,57 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 	if selErr != nil {
 		return nil, selErr
 	}
-
-	var objectType string
-	if rawType, ok := fields["type"]; ok {
-		if isJSONNull(rawType) || json.Unmarshal(rawType, &objectType) != nil {
-			return nil, types.RPCErrorInvalidField("type")
-		}
-	}
-	deletionBlockersOnly := legacyBoolValue(fields["deletion_blockers_only"])
-
-	// Determine effective type filter based on deletion_blockers_only and type params.
-	// Matches rippled's doAccountObjects logic in AccountObjects.cpp.
-	effectiveType := objectType
-	// forceEmptyResults short-circuits an impossible filter (a non-blocker
-	// type combined with deletion_blockers_only) without using a magic
-	// service-level sentinel. The service is still called so ledger
-	// metadata + the account-existence check fire.
-	forceEmptyResults := false
-
-	if deletionBlockersOnly {
-		if objectType != "" {
-			typeLower := strings.ToLower(objectType)
-			if !deletionBlockerTypes[typeLower] {
-				if !validLedgerEntryTypeNames[typeLower] {
-					return nil, types.RPCErrorInvalidField("type")
-				}
-				if !validAccountObjectTypes[typeLower] {
-					return nil, types.RPCErrorInvalidField("type")
-				}
-				// Valid type but not a blocker. Drop the filter so the
-				// service still returns ledger info / account-existence,
-				// and clear the returned objects below.
-				effectiveType = ""
-				forceEmptyResults = true
-			}
-		}
-		// If only deletion_blockers_only is set (no type), we need to filter
-		// results to only blocker types after retrieval.
-	} else if objectType != "" {
-		// Validate the type parameter against known types.
-		// rippled's chooseLedgerEntryType returns rpcINVALID_PARAMS for unknown types.
-		// isAccountObjectsValidType further rejects amendments, directory, fee, hashes, nunl.
-		typeLower := strings.ToLower(objectType)
-		if !validLedgerEntryTypeNames[typeLower] {
-			return nil, types.RPCErrorInvalidField("type")
-		}
-		if !validAccountObjectTypes[typeLower] {
-			return nil, types.RPCErrorInvalidField("type")
-		}
-	}
 	limit, limitErr := ReadLimitField(params, LimitAccountObjects, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
+	deletionBlockersOnly := false
+	if raw, ok := fields["deletion_blockers_only"]; ok {
+		deletionBlockersOnly = jsonCppBoolRaw(raw)
+	}
 
-	markerStr, mErr := markerString(fields["marker"])
+	typeRaw, typePresent := fields["type"]
+	effectiveType := ""
+	forceEmptyResults := false
+	deletionBlockerType := ""
+
+	if deletionBlockersOnly {
+		if typePresent {
+			if err := json.Unmarshal(typeRaw, &deletionBlockerType); err != nil || !deletionBlockerTypes[deletionBlockerType] {
+				deletionBlockerType = ""
+				forceEmptyResults = true
+			} else {
+				effectiveType = deletionBlockerType
+			}
+		}
+	} else {
+		var typeErr *types.RPCError
+		effectiveType, typeErr = chooseAccountObjectType(typeRaw, typePresent)
+		if typeErr != nil {
+			return nil, typeErr
+		}
+	}
+	markerStr := ""
+	var mErr *types.RPCError
+	if markerRaw, ok := fields["marker"]; ok && !isJSONNull(markerRaw) {
+		markerStr, mErr = markerString(markerRaw)
+	}
 	if mErr != nil {
 		return nil, mErr
 	}
 
 	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account objects: %v", err))
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RPCErrorInvalidField("marker")
+		}
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
 
 	// Build account_objects array with deserialized fields. When
@@ -181,10 +175,12 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RPCContext, params json.RawMess
 		result.AccountObjects = nil
 	}
 	for _, obj := range result.AccountObjects {
-		// If deletion_blockers_only is set without a specific type, filter here.
-		if deletionBlockersOnly && objectType == "" {
+		if deletionBlockersOnly {
 			objTypeLower := sleTypeToRPCName(obj.LedgerEntryType)
-			if !deletionBlockerTypes[objTypeLower] {
+			if deletionBlockerType != "" && objTypeLower != deletionBlockerType {
+				continue
+			}
+			if deletionBlockerType == "" && !deletionBlockerTypes[objTypeLower] {
 				continue
 			}
 		}
@@ -242,6 +238,14 @@ func sleTypeToRPCName(sleType string) string {
 		return "directory"
 	case "Escrow":
 		return "escrow"
+	case "FeeSettings":
+		return "fee"
+	case "LedgerHashes":
+		return "hashes"
+	case "Loan":
+		return "loan"
+	case "LoanBroker":
+		return "loan_broker"
 	case "MPToken":
 		return "mptoken"
 	case "MPTokenIssuance":
@@ -250,6 +254,8 @@ func sleTypeToRPCName(sleType string) string {
 		return "nft_offer"
 	case "NFTokenPage":
 		return "nft_page"
+	case "NegativeUNL":
+		return "nunl"
 	case "Offer":
 		return "offer"
 	case "Oracle":

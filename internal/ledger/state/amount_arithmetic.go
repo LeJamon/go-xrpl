@@ -35,6 +35,15 @@ func (a Amount) Add(b Amount) (Amount, error) {
 // AddRounded returns a + b, rounding the IOU result under mode. The AMM math
 // uses this to reproduce rippled's NumberRoundModeGuard around additions.
 func (a Amount) AddRounded(b Amount, mode RoundingMode) (Amount, error) {
+	return a.addRounded(b, mode, GetNumberSwitchover(), false)
+}
+
+// AddUniversal returns a + b using rippled 3.2's universal Number arithmetic.
+func (a Amount) AddUniversal(b Amount) (Amount, error) {
+	return a.addRounded(b, RoundToNearest, true, true)
+}
+
+func (a Amount) addRounded(b Amount, mode RoundingMode, useNumber, useLargeScale bool) (Amount, error) {
 	if a.mptRaw != nil || b.mptRaw != nil {
 		if a.mptRaw == nil || b.mptRaw == nil {
 			return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add MPT and non-MPT amounts")
@@ -60,7 +69,7 @@ func (a Amount) AddRounded(b Amount, mode RoundingMode) (Amount, error) {
 			Native: true,
 		}, nil
 	}
-	result := addIOUValuesRounded(a.iou, b.iou, mode)
+	result := addIOUValuesRoundedWithSwitchover(a.iou, b.iou, mode, useNumber, useLargeScale)
 	return Amount{
 		iou:      result,
 		Currency: a.Currency,
@@ -76,6 +85,15 @@ func (a Amount) Sub(b Amount) (Amount, error) {
 
 // SubRounded returns a - b, rounding the IOU result under mode.
 func (a Amount) SubRounded(b Amount, mode RoundingMode) (Amount, error) {
+	return a.subRounded(b, mode, GetNumberSwitchover(), false)
+}
+
+// SubUniversal returns a - b using rippled 3.2's universal Number arithmetic.
+func (a Amount) SubUniversal(b Amount) (Amount, error) {
+	return a.subRounded(b, RoundToNearest, true, true)
+}
+
+func (a Amount) subRounded(b Amount, mode RoundingMode, useNumber, useLargeScale bool) (Amount, error) {
 	if a.mptRaw != nil || b.mptRaw != nil {
 		if a.mptRaw == nil || b.mptRaw == nil {
 			return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot subtract MPT and non-MPT amounts")
@@ -89,7 +107,7 @@ func (a Amount) SubRounded(b Amount, mode RoundingMode) (Amount, error) {
 		}
 		return newMPTAmountLike(a, result.Int64()), nil
 	}
-	return a.AddRounded(b.Negate(), mode)
+	return a.addRounded(b.Negate(), mode, useNumber, useLargeScale)
 }
 
 // addIOUValues adds two IOU values using banker's rounding.
@@ -101,6 +119,10 @@ func addIOUValues(a, b IOUAmountValue) IOUAmountValue {
 // When fixUniversalNumber is enabled, delegates to XRPLNumber.Add() for Guard-based precision.
 // Reference: IOUAmount::operator+= in IOUAmount.cpp lines 137-181
 func addIOUValuesRounded(a, b IOUAmountValue, mode RoundingMode) IOUAmountValue {
+	return addIOUValuesRoundedWithSwitchover(a, b, mode, GetNumberSwitchover(), false)
+}
+
+func addIOUValuesRoundedWithSwitchover(a, b IOUAmountValue, mode RoundingMode, useNumber, useLargeScale bool) IOUAmountValue {
 	if a.IsZero() {
 		return b
 	}
@@ -110,12 +132,18 @@ func addIOUValuesRounded(a, b IOUAmountValue, mode RoundingMode) IOUAmountValue 
 
 	// When switchover is on, delegate to XRPLNumber (Guard-based precision)
 	// Reference: IOUAmount.cpp lines 149-153
-	if GetNumberSwitchover() {
-		na := NewXRPLNumberRounded(a.mantissa, a.exponent, mode)
-		nb := NewXRPLNumberRounded(b.mantissa, b.exponent, mode)
+	if useNumber {
+		scale := MantissaScaleSmall
+		if useLargeScale {
+			scale = MantissaScaleLarge
+		}
+		na := NewXRPLNumberScaled(a.mantissa, a.exponent, scale, mode)
+		nb := NewXRPLNumberScaled(b.mantissa, b.exponent, scale, mode)
 		result := na.AddRounded(nb, mode)
-		r := result.ToIOUAmountValue()
-		return r
+		if useLargeScale {
+			return numberToIOUAmountValue(result)
+		}
+		return result.ToIOUAmountValue()
 	}
 
 	// Legacy path (without fixUniversalNumber)
@@ -394,16 +422,55 @@ func pow10Big(n int) *big.Int {
 // already be lifted into [10^15, 10^16) by the caller. The result carries the
 // given sign, currency, and issuer.
 func divideIOU(numMantissa uint64, numExp int, denMantissa uint64, denExp int, negative bool, currency, issuer string) Amount {
+	mantissa, exponent := divideIOUComponents(numMantissa, numExp, denMantissa, denExp)
+	signedMantissa := int64(mantissa)
+	if negative {
+		signedMantissa = -signedMantissa
+	}
+	return NewIssuedAmountFromValueRounded(signedMantissa, exponent, currency, issuer, RoundToNearest)
+}
+
+func divideIOUComponents(numMantissa uint64, numExp int, denMantissa uint64, denExp int) (uint64, int) {
 	q := new(big.Int).SetUint64(numMantissa)
 	q.Mul(q, tenTo17)
 	q.Div(q, new(big.Int).SetUint64(denMantissa))
-	q.Add(q, big.NewInt(5))
-
-	mantissa := q.Int64()
-	if negative {
-		mantissa = -mantissa
+	if !q.IsUint64() {
+		panic("overflow in muldiv")
 	}
-	return NewIssuedAmountFromValueRounded(mantissa, numExp-denExp-17, currency, issuer, RoundToNearest)
+	return q.Uint64() + 5, numExp - denExp - 17
+}
+
+// DivideNoIssue mirrors rippled's divide(num, den, noIssue()) used for rates.
+func DivideNoIssue(num, den Amount) Amount {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
+		return Amount{iou: ZeroIOUValue()}
+	}
+
+	numMantissa, numExponent := rateMantissa(num)
+	denMantissa, denExponent := rateMantissa(den)
+	mantissa, exponent := divideIOUComponents(numMantissa, numExponent, denMantissa, denExponent)
+	n := XRPLNumber{
+		negative: num.IsNegative() != den.IsNegative(),
+		mantissa: mantissa,
+		exponent: exponent,
+		scale:    MantissaScaleLarge,
+	}
+	n.normalize(RoundToNearest)
+	return Amount{iou: numberToIOUAmountValue(n)}
+}
+
+func numberToIOUAmountValue(n XRPLNumber) IOUAmountValue {
+	mantissa, exponent := n.NormalizeToRange(uint64(MinMantissa), uint64(MaxMantissa))
+	if mantissa == 0 || exponent < MinExponent {
+		return ZeroIOUValue()
+	}
+	if exponent > MaxExponent {
+		panic("XRPLNumber→IOUAmountValue overflow")
+	}
+	return IOUAmountValue{mantissa: mantissa, exponent: exponent}
 }
 
 // Mul multiplies this Amount by another Amount using banker's rounding.

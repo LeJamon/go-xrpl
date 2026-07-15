@@ -5,14 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	ledgerheader "github.com/LeJamon/go-xrpl/internal/ledger/header"
-	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	ledgerstate "github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -21,63 +20,85 @@ import (
 type LedgerDataMethod struct{ BaseHandler }
 
 func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	rawParams := make(map[string]json.RawMessage)
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &rawParams); err != nil {
-			return nil, types.RPCErrorInvalidParams("Invalid parameters")
-		}
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
 	}
-
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
-	selection, selErr := parseRawLedgerSelector(rawParams, ledgerselector.Current(), lookupLedgerSelectorErrors)
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
 	}
-	if _, resolveErr := resolveLedgerSelection(ctx, selection); resolveErr != nil {
-		return nil, resolveErr
+	targetLedger, lookupValidated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
 	}
-	ledgerIndex := selection.String()
-
-	// Validate a present marker up front, mirroring rippled's doLedgerData which
-	// runs key.parseHex before touching the view: a present non-string marker
-	// (including JSON null), or a present string parseHex rejects, is "not
-	// valid". parseHex accepts the literal "0" as the all-zero key and otherwise
-	// requires exactly 64 hex chars; the empty string fails its length check. An
-	// absent marker is a fresh first-page query, signalled to the service by the
-	// empty sentinel. Marker stays raw JSON so a present null — which decodes to
-	// a nil any, indistinguishable from an absent marker — is still rejected, as
-	// rippled's isMember + isString checks do.
+	fields := make(map[string]json.RawMessage)
+	if params != nil {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
 	markerStr := ""
-	if rawMarker, ok := rawParams["marker"]; ok {
-		var m string
-		if err := json.Unmarshal(rawMarker, &m); err != nil {
+	markerRaw, hasMarker := fields["marker"]
+	if hasMarker {
+		var marker string
+		if err := json.Unmarshal(markerRaw, &marker); err != nil {
 			return nil, types.RPCErrorExpectedField("marker", "valid")
 		}
-		switch m {
+		switch marker {
 		case "":
 			return nil, types.RPCErrorExpectedField("marker", "valid")
 		case "0":
-			// The all-zero key: iterate from the first entry but, being a
-			// present marker, omit the base-ledger header. Normalize to the
-			// canonical 64-char form the service already parses to that key.
 			markerStr = strings.Repeat("0", 64)
 		default:
-			markerStr = m
+			markerStr = marker
 		}
 	}
 
-	binary := false
-	if raw, ok := rawParams["binary"]; ok {
-		if err := json.Unmarshal(raw, &binary); err != nil {
+	binaryMode := false
+	if raw, ok := fields["binary"]; ok {
+		var valid bool
+		binaryMode, valid = rawJSONBool(raw)
+		if !valid {
 			return nil, types.RPCErrorExpectedField("binary", "boolean")
 		}
 	}
-	limit, limitErr := ledgerDataLimit(rawParams, binary, ctx.Unlimited)
-	if limitErr != nil {
-		return nil, limitErr
+
+	maxLimit := int64(LimitLedgerData.Max)
+	if binaryMode {
+		maxLimit = int64(LimitLedgerDataBinary.Max)
+	}
+	limitValue := int64(-1)
+	if raw, ok := fields["limit"]; ok {
+		value, err := decodeRawJSONValue(raw)
+		if boolean, ok := value.(bool); ok {
+			if boolean {
+				limitValue = 1
+			} else {
+				limitValue = 0
+			}
+		} else if number, valid := value.(json.Number); err == nil && valid && !strings.ContainsAny(number.String(), ".eE") {
+			limitValue, err = number.Int64()
+			if err != nil || limitValue < math.MinInt32 || limitValue > math.MaxInt32 {
+				return nil, types.RPCErrorExpectedField("limit", "integer")
+			}
+		} else {
+			return nil, types.RPCErrorExpectedField("limit", "integer")
+		}
+	}
+	if limitValue < 0 || (limitValue > maxLimit && !ctx.Unlimited) {
+		limitValue = maxLimit
+	}
+	limit := uint32(limitValue)
+
+	typeFilter := ""
+	if raw, ok := fields["type"]; ok {
+		if err := json.Unmarshal(raw, &typeFilter); err != nil {
+			return nil, types.RPCErrorExpectedField("type", "string")
+		}
+		if !validLedgerDataType(typeFilter) {
+			return nil, types.RPCErrorInvalidField("type")
+		}
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
@@ -93,21 +114,22 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}
 
-	entryType, typeErr := ledgerDataEntryType(rawParams)
-	if typeErr != nil {
-		return nil, typeErr
-	}
-
 	// Build state array based on binary flag
 	state := make([]map[string]any, 0, len(result.State))
 	for _, item := range result.State {
-		if entryType != 0 && ledgerstate.EntryTypeCode(item.Data) != entryType {
-			continue
-		}
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
 
-		if binary {
+		decoded, decodeErr := deserializeLedgerEntry(item.Data)
+		decodedMap, _ := decoded.(map[string]any)
+		if typeFilter != "" {
+			actualType, _ := decodedMap["LedgerEntryType"].(string)
+			if !ledgerDataTypeMatches(typeFilter, actualType) {
+				continue
+			}
+		}
+
+		if binaryMode {
 			// Binary format: data as uppercase hex and index
 			state = append(state, map[string]any{
 				"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
@@ -115,17 +137,16 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 			})
 		} else {
 			// JSON format: deserialize the ledger entry
-			jsonObj, err := deserializeLedgerEntry(item.Data)
-			if err != nil {
+			if decodeErr != nil {
 				// Fallback to binary format if deserialization fails
 				state = append(state, map[string]any{
 					"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 					"index": upperIndex,
 				})
 			} else {
-				if objMap, ok := jsonObj.(map[string]any); ok {
-					objMap["index"] = upperIndex
-					state = append(state, objMap)
+				if decodedMap != nil {
+					addLedgerEntryJSONFields(decodedMap, upperIndex)
+					state = append(state, decodedMap)
 				} else {
 					state = append(state, map[string]any{
 						"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
@@ -137,15 +158,19 @@ func (m *LedgerDataMethod) Handle(ctx *types.RPCContext, params json.RawMessage)
 	}
 
 	response := map[string]any{
-		"state": state,
+		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
+		"ledger_index": result.LedgerIndex,
+		"state":        state,
+		"validated":    result.Validated,
 	}
-	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, ctx.Services.Ledger.GetCurrentLedgerIndex(), result.Validated)
-	response["ledger_hash"] = FormatLedgerHash(result.LedgerHash)
-	response["ledger_index"] = result.LedgerIndex
+	if !targetLedger.IsClosed() {
+		response["ledger_current_index"] = targetLedger.Sequence()
+	}
+	response["validated"] = lookupValidated
 
 	// Include ledger header info on first query (when no marker was provided)
-	if result.LedgerHeader != nil {
-		response["ledger"] = ledgerDataHeader(result.LedgerHeader, binary, ctx.ApiVersion)
+	if !hasMarker {
+		response["ledger"] = buildLedgerJSON(targetLedger, binaryMode, false, ctx.ApiVersion)
 	}
 
 	if result.Marker != "" {
@@ -293,6 +318,19 @@ func ledgerDataHeader(header *types.LedgerHeaderInfo, binary bool, apiVersion in
 		}
 	}
 	return ledger
+}
+
+func validLedgerDataType(filter string) bool {
+	for _, entry := range ledgerEntryFilterTypes {
+		if filter == entry.key || strings.EqualFold(entry.typeName, filter) {
+			return true
+		}
+	}
+	return false
+}
+
+func ledgerDataTypeMatches(filter, actual string) bool {
+	return strings.EqualFold(filter, actual) || filter == sleTypeToRPCName(actual)
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format

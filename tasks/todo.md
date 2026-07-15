@@ -290,6 +290,172 @@ Target: `v3.0.0`. Protocol oracle: local rippled tag `3.2.0`
   No conflict markers, whitespace errors, or unrelated worktree changes are
   present.
 
+# Issue #1306 — shared synthetic transaction metadata
+
+## Plan
+
+- [x] Trace every transaction-bearing RPC and stream response through the shared
+      JSON rendering path on `v3.0.0`.
+- [x] Compare NFT, offer, and MPT synthetic metadata behavior with the exact local
+      rippled `3.2.0` tag.
+- [x] Move synthetic-field injection to the narrowest shared renderer and remove
+      handler-specific duplication.
+- [x] Add focused regression tests for the shared renderer and affected RPC
+      surfaces.
+- [x] Run formatting, focused RPC tests, race coverage, vet, lint, and build.
+- [x] Review the final diff for endpoint coverage, mutation safety, and rippled
+      parity.
+
+## Review
+
+Implemented one shared JSON metadata enricher for `tx`, `account_tx`, simulate,
+and validated transaction/account/book streams. Expanded ledger transactions
+receive the MPT issuance ID but not NFT synthetic fields. `transaction_entry`
+now leaves metadata untouched; despite the issue text, that is the exact rippled
+3.2.0 behavior. API v2 `account_tx` also derives `delivered_amount` from the
+unmodified transaction so `DeliverMax` response projection cannot erase the
+Payment `Amount` fallback.
+
+Oracle: clean local rippled tag `3.2.0` at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+Verification:
+
+- Focused API v1/v2 synthetic-field and endpoint tests pass.
+- `go test ./internal/rpc/... ./internal/node/...` passes.
+- `go test -race ./internal/rpc/... ./internal/node/...` passes.
+- `just fmt`, `just vet`, `just lint`, `just build-all`, and `just test-core`
+  pass; lint reports 0 issues.
+- Independent final Go and rippled-conformance reviews found no defects.
+
+## PR #1316 finalization remediation
+
+- [x] Pin the exact PR head, base, clean worktree, and clean local rippled 3.2.0 oracle.
+- [x] Review the full diff for Go correctness and protocol-surface conformance.
+- [x] Close every confirmed RPC projection, stream, CTID, binary-shape, and historical delivered-amount gap.
+- [x] Re-review the completed behavior diff and pass build, vet, and lint.
+- [x] Reconcile the advanced `v3.0.0` base and reverify the combined tree.
+- [x] Commit and push the behavior fix; require green CI at the exact remote head.
+- [x] Run the separate AI-comment cleanup phase, then verify the final remote head and CI.
+
+### Finalization review
+
+Behavior remediation is complete against the pinned PR head and clean local
+rippled 3.2.0 oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+The review covered all changed RPC and subscription surfaces, ledger-local and
+historical transaction lookup, binary parsing, CTID handling, pathfinding, and
+synthetic metadata projection. Independent Go and exact-rippled reviews are
+clean, including the final zero-`uint256` parsing and ranged-lookup error
+propagation edge cases.
+
+Verification on the stable behavior tree: `just build`, `just vet`, and
+`just lint` pass; lint reports zero issues. Per the finalization workflow, local
+test execution is intentionally deferred to CI. The local audit trail remains
+outside the repository until the final remote head and CI result are known.
+
+The advanced bases at `26d0211ed971c98fe919cb28ed5fed90dd962b67` and
+`be0e448e95d8e705a19f9d826c352e2f34cd7872` were merged after GitHub reported
+successive conflicts. The only textual conflicts were in the task log;
+both issue histories were retained. The combined persistence, node wiring, and
+RPC behavior tree preserves relational indexing after node-store failures and
+guards online-delete notification when rotation is disabled. It passes the same
+build, vet, lint, and whitespace gates.
+
+Exact-head CI then exposed stale strict-lint helpers and regression fixtures plus
+three parser/runtime defects. Dead helpers were removed, exported keylets now
+have required API documentation, account RPC mocks/assertions follow rippled's
+lookup and error semantics, XChain vectors and persisted transaction-index
+checks use the canonical encodings, and aggregate-price/path-find validation was
+corrected. Strict CI lint, repository lint, build, vet, and whitespace checks
+pass on the remediation tree; the fixes await a new exact-head CI run.
+
+The next core run exposed failures previously masked by package panics. A stored
+transaction projection omitted its API v1 hash and was fixed; the remaining
+account, book, deposit-authorized, WebSocket, and simulate failures were stale
+ledger-selection or response-decoding fixtures and were aligned with rippled
+3.2.0. Strict lint, repository lint, build, vet, and whitespace checks pass on
+this second remediation tree.
+
+A third core pass reached previously masked ledger fixtures. Ledger-data limit,
+marker, selected-header, warning JSON, and ledger-entry hash expectations were
+aligned with rippled 3.2.0 without changing production behavior. All permitted
+local gates pass again; exact test verification remains CI-only.
+
+A fourth core pass exposed the remaining shared RPC fixture assumptions. The
+ledger, NFT offer, no-ripple, transaction-entry, tx, simulate, and vault fixtures
+now model their real lookup and binary contracts. Two production adapters were
+also corrected against rippled 3.2.0: simulate restores the JSON transaction type
+after STObject validation, and tx emits only the root CTID derived from metadata,
+the server network, and rippled's exclusive bounds. A shared partial ledger hash
+was restored instead of changing the contract for unrelated suites. Strict lint,
+repository lint, build, vet, formatting, and whitespace gates pass; no local
+tests were run.
+
+The next core run had one remaining failure: the historical delivered-amount
+fixture had been applied to the neighboring MPT projection test. The resolved
+modern ledger and sequence now belong to `TestTxProjectsDeliverMax`, while the
+unrelated test is restored. Strict lint, repository lint, build, vet, formatting,
+and whitespace gates pass; exact test verification remains CI-only.
+
+Exact-head CI passed completely on behavior head `6db8603a`. The separate
+comment-only cleanup removed 28 lines of redundant narration and docstrings in
+commit `9180fe4c`; strict lint, repository lint, build, vet, formatting, and
+whitespace gates passed, followed by a fully green final CI matrix. PR #1316 is
+mergeable against unchanged base `be0e448e`.
+
+# Issue #1303 — trust-layer visibility and forward compatibility
+
+Target `origin/v3.0.0`; behavioral oracle is the clean local rippled `3.2.0`
+worktree at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Match rippled's UNL-blocked operating behavior: immediately demote an
+      already-FULL node to CONNECTED and prevent promotion while blocked.
+- [x] Surface expired validator-list state in `server_info`, including rippled's
+      public warning and admin-only validator-list summary/expiry fields.
+- [x] Derive `Ledger.Rules()` from the ledger Amendments object so consensus
+      feature gates, especially NegativeUNL round hooks, use ledger truth.
+- [x] Accept future unknown overlay message types up to the universal 64 MiB
+      ceiling and skip them without disconnecting or resource charges.
+- [x] Rewrite Docker handshake interop around the production handshake path,
+      pin rippled 3.2.0, and exercise `network_id=1`.
+- [x] Add a deterministic, unit-tested manual amendment-registry checker that
+      compares a remote `feature` response without claiming scheduled coverage.
+- [x] Document host time synchronization and the safe TLS reverse-proxy topology,
+      including loopback admin isolation and trusted proxy-header handling.
+- [x] Format and run focused package tests after each change group; then run
+      build, vet, lint, core/full tests as applicable, Docker interop when the
+      local runtime permits it, and inspect the final diff against rippled 3.2.0.
+- [x] Record exact verification and review results below, then commit, push, and
+      open a PR targeting `v3.0.0`.
+
+## Review
+
+Implemented UNL-blocked mode enforcement and trust-state RPC visibility,
+ledger-backed immutable Rules snapshots, forward-compatible overlay framing,
+production-path rippled interop, and a manual freshness-checked amendment
+registry tool. The operator documentation covers NTP/chrony, TLS termination,
+loopback-only admin RPC, and trusted proxy headers. No scheduled checker workflow
+was added.
+
+Verification:
+
+- Three independent final audits are clean against the local rippled 3.2.0
+  oracle at `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Focused normal and race suites pass for ledger, consensus/adaptor, validator
+  lists, RPC, node, overlay, replay, and the amendment checker.
+- `just build-all`, `just build-nocgo`, `just vet`, `just lint` (0 issues), and
+  `just docs-check` pass.
+- The production `Peer.Connect` Docker interop passes against
+  `xrpllabsofficial/xrpld:3.2.0` on network ID 1 with the server version checked.
+- The live default manual checker reports 98 Testnet amendments on network ID 1
+  from a fresh validated ledger close.
+- `just test` passes every package except the documented out-of-scope
+  conformance suites. `just conformance --failing` reports 941 pass / 117 fail
+  overall and 879 pass / 0 fail in scope; failures remain confined to Batch,
+  Vault, XChain, and XChainSim.
+
 # Issue #1302 — testnet sync scalability and durability
 
 Target: `v3.0.0`. Behavioral oracle: clean local rippled `3.2.0` worktree at
@@ -334,3 +500,88 @@ all packages except the existing `internal/testing/conformance` Vault, Batch,
 and XChain backlog, which is outside this diff.
 
 PR: https://github.com/LeJamon/go-xrpl/pull/1319
+
+# Issue #1323 — v3.0.0 Vault replay and transaction conformance
+
+## Plan
+
+- [x] Rebase the work on a clean branch from `origin/v3.0.0`.
+- [x] Check pseudo-account, Vault, and directory behavior against local rippled 3.2.0.
+- [x] Diagnose every object in the supplied replay findings, including ledger 3025004 and the offer-directory divergences.
+- [x] Audit all six Vault transactions and shared helpers against rippled 3.2.0.
+- [x] Implement the 22 NUMBER, validation, authorization, rounding, reserve, holding, and cleanup corrections.
+- [x] Add focused transaction, invariant, parser, serialization, and replay reconstruction regressions.
+- [x] Run focused tests, transaction suites, race tests, full build, vet, lint, and repository tests.
+- [x] Complete independent read-only conformance reviews of NUMBER/invariants, create/set/delete, and deposit/withdraw/clawback.
+
+## Review
+
+- Based on `origin/v3.0.0` at `c2c4abfa61c274f6da64451b323bb54fc44ced5b`.
+- Checked protocol behavior against a clean local rippled 3.2.0 worktree at
+  `3c43f4614f87965298773279ff5b85d4c56c637b`.
+- Confirmed that pseudo-account `Balance` and `Sequence`, the XRP Vault `Asset`,
+  and both directory memberships in the VM finding are valid rippled state. The
+  original engine divergence is the serialized default-zero `AssetsMaximum`.
+- Corrected fix-aware large/legacy NUMBER arithmetic and serialization, asset
+  association, Vault invariant reconciliation, JSON field presence, and
+  malformed `AssetsMaximum` parsing.
+- Matched rippled behavior across VaultCreate, VaultSet, VaultDelete,
+  VaultDeposit, VaultWithdraw, and VaultClawback, including TER precedence,
+  private-domain and MPT authorization, freeze/lock inheritance, share/asset
+  rounding, reserve boundaries, owner counts, and ledger-object cleanup.
+- Added byte-level reconstruction coverage for ledger 3025004 plus focused
+  regressions for every independently identified discrepancy.
+- `go test ./internal/tx/... ./internal/testing/vault -count=1`, focused race
+  tests, `just vet`, `just lint`, and `just build-all` pass.
+- `go test ./... -count=1` passes every package except the existing generated
+  `internal/testing/conformance` Vault, Batch, and XChain backlog. The focused
+  Vault integration and transaction suites pass.
+- A local replay was not rerun because this machine does not contain the VM's
+  replay database; the supplied findings are covered with byte-level and
+  transaction-level regressions.
+
+PR: https://github.com/LeJamon/go-xrpl/pull/1324
+
+# AMMCreate replay default-field conformance
+
+Target: `origin/v3.0.0` at
+`13080bc66fe678314f7633f65caf36f3737e3564`. Behavioral oracle: clean local
+rippled `3.2.0` worktree at
+`3c43f4614f87965298773279ff5b85d4c56c637b`.
+
+## Plan
+
+- [x] Trace AMMCreate construction of the AMM and both RippleState objects.
+- [x] Compare all conditionally present fields with rippled 3.2.0 and its tests.
+- [x] Reproduce the XRP `Asset` and zero trust-line node field divergences.
+- [x] Implement the minimal metadata-reconstruction fix and audit adjacent
+      AMMCreate default fields.
+- [x] Run focused AMM and serialization tests, transaction tests, vet, lint,
+      and build.
+- [x] Review the final diff and record exact results below.
+
+## Review
+
+- Root cause: AMMCreate and RippleState serialization already match rippled.
+  Rippled stores required XRP AMM assets and explicitly written zero
+  `LowNode`/`HighNode` values in the SLE, but omits them from
+  `CreatedNode.NewFields` because their serialized values are defaults. Replay
+  reconstruction was treating those deliberately partial NewFields as the
+  complete object.
+- Fix: restore default XRP for either required AMM asset slot and restore absent
+  zero node hints for newly created RippleState objects before re-encoding.
+- Rippled 3.2.0 references checked: `AMMCreate.cpp`, `ApplyStateTable.cpp`,
+  `RippleStateHelpers.cpp`, `STIssue.cpp`, `STInteger.h`, and the AMM/RippleState
+  ledger-entry formats.
+- Regression coverage: byte-level CreatedNode reconstruction for XRP/IOU and
+  XRP/MPT AMMs, both XRP/IOU trust lines, and end-to-end AMMCreate metadata
+  omission behavior.
+- Passed: replaytool tests; all AMM transaction and integration tests; all
+  `internal/tx/...` tests; focused race tests; `just vet`; required and advisory
+  golangci-lint configurations; `just build-all`; `git diff --check`.
+- Full `go test ./... -count=1 -timeout 15m` passed every package except the
+  existing conformance corpus failures under Vault, XChain, and XChainSim,
+  which are listed in `scripts/conformance-out-of-scope.txt`.
+- The original ledger 3025006 replay was not rerun because its VM database is
+  not present locally; the supplied field-level divergence is covered directly
+  by the byte-level reconstruction tests.

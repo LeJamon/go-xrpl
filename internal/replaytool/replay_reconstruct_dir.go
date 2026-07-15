@@ -107,6 +107,18 @@ func directoryPlacements(entryType string, fields map[string]any) []dirPlacement
 			}
 		}
 		return out
+
+	case "Vault":
+		if owner, ok := metaAccountID(fields, "Owner"); ok {
+			add(keylet.OwnerDirPage(owner, metaUint64(fields["OwnerNode"])), dirSorted)
+		}
+		return out
+
+	case "MPTokenIssuance":
+		if issuer, ok := metaAccountID(fields, "Issuer"); ok {
+			add(keylet.OwnerDirPage(issuer, metaUint64(fields["OwnerNode"])), dirSorted)
+		}
+		return out
 	}
 
 	// Owner directory: the object's owner lists it at OwnerNode. The owner is the

@@ -219,6 +219,7 @@ func TestAdg_IsFeatureEnabledOnLedger(t *testing.T) {
 	assert.False(t, a.IsFeatureEnabledOnLedger(lcl, "NonExistentFeatureXYZ"))
 
 	_ = a.IsFeatureEnabledOnLedger(lcl, "XRPFees")
+	assert.True(t, a.IsFeatureEnabledOnLedger(lcl, "NegativeUNL"))
 }
 
 func TestAdg_IsStandalone(t *testing.T) {

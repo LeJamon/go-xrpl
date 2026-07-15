@@ -306,10 +306,12 @@ func NewFromConfig(
 	// Load UNL from config — retain both NodeID (for trust/quorum
 	// maps) and master pubkey (for NegativeUNL voting; sfUNLModifyValidator
 	// is the master pubkey).
-	validators, masterKeys, err := ParseValidatorKeysWithMaster(appCfg)
+	staticValidators, staticMasterKeys, err := ParseValidatorKeysWithMaster(appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse validators: %w", err)
 	}
+	staticValidators, staticMasterKeys = excludeLocalValidator(staticValidators, staticMasterKeys, identity)
+	validators, masterKeys := includeLocalValidator(staticValidators, staticMasterKeys, identity)
 
 	sender := NewOverlaySender(overlay)
 
@@ -407,11 +409,12 @@ func NewFromConfig(
 			pkSlice[i] = validatorlist.PublisherKey(k)
 		}
 		vlAgg, err = validatorlist.New(validatorlist.Config{
-			PublisherKeys: pkSlice,
-			SiteURIs:      append([]string(nil), appCfg.Validators.ValidatorListSites...),
-			Threshold:     appCfg.Validators.EffectiveListThreshold(),
-			Manifests:     manifestCache,
-			Logger:        slog.Default().With("component", "validator-list-aggregator"),
+			PublisherKeys:        pkSlice,
+			SiteURIs:             append([]string(nil), appCfg.Validators.ValidatorListSites...),
+			Threshold:            appCfg.Validators.EffectiveListThreshold(),
+			StaticValidatorCount: len(masterKeys),
+			Manifests:            manifestCache,
+			Logger:               slog.Default().With("component", "validator-list-aggregator"),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
@@ -489,8 +492,8 @@ func NewFromConfig(
 		Manifests:           manifestCache,
 		ValidatorList:       vlAgg,
 		ValidatorListPoller: vlPoller,
-		staticValidators:    append([]consensus.NodeID(nil), validators...),
-		staticMasterKeys:    append([][33]byte(nil), masterKeys...),
+		staticValidators:    append([]consensus.NodeID(nil), staticValidators...),
+		staticMasterKeys:    append([][33]byte(nil), staticMasterKeys...),
 		Archive:             validationArchive,
 	}
 
@@ -500,7 +503,7 @@ func NewFromConfig(
 	// by the next publisher event.
 	if vlAgg != nil {
 		vlAgg.OnChange(func(publisherNodes []consensus.NodeID, publisherMasters [][33]byte) {
-			staticV, staticM := c.snapshotStatic()
+			staticV, staticM := c.snapshotEffectiveStatic()
 			merged, mergedMasters := mergeValidators(staticV, staticM, publisherNodes, publisherMasters)
 			adaptor.SetTrustedValidators(merged, mergedMasters)
 		})
@@ -536,6 +539,14 @@ func (c *Components) snapshotStatic() ([]consensus.NodeID, [][33]byte) {
 	return v, m
 }
 
+func (c *Components) snapshotEffectiveStatic() ([]consensus.NodeID, [][33]byte) {
+	validators, masterKeys := c.snapshotStatic()
+	if c.Adaptor == nil {
+		return validators, masterKeys
+	}
+	return includeLocalValidator(validators, masterKeys, c.Adaptor.identity)
+}
+
 // StaticTrustedMasterKeys returns a snapshot of the operator's static
 // [validators] master keys. Reflects the latest ReloadStaticValidators
 // call — i.e. SIGHUP-updated state, not just the boot-time stanza.
@@ -557,21 +568,59 @@ func (c *Components) StaticTrustedMasterKeys() [][33]byte {
 // they go through the aggregator's OnChange callback wired in
 // NewFromConfig.
 func (c *Components) ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte) {
+	var identity *ValidatorIdentity
+	if c.Adaptor != nil {
+		identity = c.Adaptor.identity
+	}
+	validators, masterKeys = excludeLocalValidator(validators, masterKeys, identity)
 	c.staticMu.Lock()
 	c.staticValidators = append([]consensus.NodeID(nil), validators...)
 	c.staticMasterKeys = append([][33]byte(nil), masterKeys...)
 	c.staticMu.Unlock()
 
+	effectiveValidators, effectiveMasterKeys := c.snapshotEffectiveStatic()
+	if c.ValidatorList != nil {
+		c.ValidatorList.SetStaticValidatorCount(len(effectiveMasterKeys))
+	}
 	if c.Adaptor == nil {
 		return
 	}
 	if c.ValidatorList == nil {
-		c.Adaptor.SetTrustedValidators(validators, masterKeys)
+		c.Adaptor.SetTrustedValidators(effectiveValidators, effectiveMasterKeys)
 		return
 	}
 	pubNodes, pubMasters := c.ValidatorList.TrustedValidators()
-	merged, mergedMasters := mergeValidators(validators, masterKeys, pubNodes, pubMasters)
+	merged, mergedMasters := mergeValidators(effectiveValidators, effectiveMasterKeys, pubNodes, pubMasters)
 	c.Adaptor.SetTrustedValidators(merged, mergedMasters)
+}
+
+func includeLocalValidator(validators []consensus.NodeID, masterKeys [][33]byte, identity *ValidatorIdentity) ([]consensus.NodeID, [][33]byte) {
+	if identity == nil {
+		return validators, masterKeys
+	}
+	return mergeValidators(
+		validators,
+		masterKeys,
+		[]consensus.NodeID{identity.NodeID},
+		[][33]byte{identity.MasterKey},
+	)
+}
+
+func excludeLocalValidator(validators []consensus.NodeID, masterKeys [][33]byte, identity *ValidatorIdentity) ([]consensus.NodeID, [][33]byte) {
+	if identity == nil {
+		return validators, masterKeys
+	}
+	n := min(len(validators), len(masterKeys))
+	filteredValidators := make([]consensus.NodeID, 0, n)
+	filteredMasterKeys := make([][33]byte, 0, n)
+	for i := range n {
+		if masterKeys[i] == identity.MasterKey {
+			continue
+		}
+		filteredValidators = append(filteredValidators, validators[i])
+		filteredMasterKeys = append(filteredMasterKeys, masterKeys[i])
+	}
+	return filteredValidators, filteredMasterKeys
 }
 
 // mergeValidators returns the deduplicated union of two

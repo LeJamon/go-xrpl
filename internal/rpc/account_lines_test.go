@@ -61,10 +61,10 @@ func (m *mockAccountLinesLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockAccountLinesLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockAccountLinesLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
 func (m *mockAccountLinesLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -485,9 +485,8 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 			},
 		},
 		{
-			// Test case from rippled: invalid ledger index string -> ledgerIndexMalformed
 			// Based on lines 102-113 of AccountLines_test.cpp
-			name: "ledger_index: invalid string -> ledgerIndexMalformed",
+			name: "ledger_index: invalid string -> invalidParams",
 			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "nonsense",
@@ -512,7 +511,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = errors.New("ledger not found")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcLGR_NOT_FOUND,
 		},
 		{
 			name: "ledger_hash: valid hash",
@@ -546,7 +545,7 @@ func TestAccountLinesLedgerSpecification(t *testing.T) {
 				mock.accountLinesErr = errors.New("ledger not found")
 			},
 			expectError:  true,
-			expectedCode: types.RpcINTERNAL,
+			expectedCode: types.RpcLGR_NOT_FOUND,
 		},
 	}
 
@@ -1090,6 +1089,8 @@ func TestAccountLinesResponseFields(t *testing.T) {
 					PeerAuthorized: true,
 					Freeze:         true,
 					FreezePeer:     true,
+					DeepFreeze:     true,
+					DeepFreezePeer: true,
 				},
 			},
 			LedgerIndex: 2,
@@ -1127,6 +1128,45 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		assert.Equal(t, true, line["peer_authorized"])
 		assert.Equal(t, true, line["freeze"])
 		assert.Equal(t, true, line["freeze_peer"])
+		assert.Equal(t, true, line["deep_freeze"])
+		assert.Equal(t, true, line["deep_freeze_peer"])
+	})
+
+	t.Run("ignore_default uses only queried-side reserve", func(t *testing.T) {
+		mock.accountLinesResult = &types.AccountLinesResult{
+			Account: validAccount,
+			Lines: []types.TrustLine{
+				{
+					Account:    peerAccount,
+					Balance:    "500",
+					Currency:   "USD",
+					Limit:      "1000",
+					NoRipple:   true,
+					HasReserve: false,
+				},
+				{
+					Account:    peerAccount,
+					Balance:    "0",
+					Currency:   "EUR",
+					Limit:      "0",
+					LimitPeer:  "0",
+					HasReserve: true,
+				},
+			},
+		}
+		mock.accountLinesErr = nil
+		paramsJSON, err := json.Marshal(map[string]any{
+			"account":        validAccount,
+			"ignore_default": true,
+		})
+		require.NoError(t, err)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		response := result.(map[string]any)
+		lines := response["lines"].([]map[string]any)
+		require.Len(t, lines, 1)
+		assert.Equal(t, "EUR", lines[0]["currency"])
 	})
 
 	t.Run("Multiple trust lines with different currencies", func(t *testing.T) {
@@ -1310,6 +1350,9 @@ func TestAccountLinesMalformedAddresses(t *testing.T) {
 // Based on rippled AccountLines_test.cpp testAccountLinesHistory lambda (lines 181-206)
 func TestAccountLinesHistoricLedgers(t *testing.T) {
 	mock := newMockAccountLinesLedgerService()
+	mock.currentLedgerIndex = 59
+	mock.closedLedgerIndex = 58
+	mock.validatedLedgerIndex = 58
 	services := newAccountLinesTestServices(mock)
 
 	method := &handlers.AccountLinesMethod{}

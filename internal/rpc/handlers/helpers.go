@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -112,10 +114,115 @@ func ParseParams(params json.RawMessage, dest any) *types.RPCError {
 	if params == nil {
 		return nil
 	}
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return rpcErr
+	}
+	if _, ok := dest.(interface{ UsesLedgerSpecifier() }); ok {
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(params, &fields); err == nil {
+			delete(fields, "ledger")
+			delete(fields, "ledger_hash")
+			delete(fields, "ledger_index")
+			if stripped, err := json.Marshal(fields); err == nil {
+				params = stripped
+			}
+		}
+	}
 	if err := json.Unmarshal(params, dest); err != nil {
 		return types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return nil
+}
+
+func parseLedgerSpecifier(params json.RawMessage) (types.LedgerSpecifier, bool, *types.RPCError) {
+	if rpcErr := validateJsonCppIntegerRange(params); rpcErr != nil {
+		return types.LedgerSpecifier{}, false, rpcErr
+	}
+	hasSelector, rpcErr := ledgerRequestHasSelector(params)
+	if rpcErr != nil {
+		return types.LedgerSpecifier{}, false, rpcErr
+	}
+	if !hasSelector {
+		return types.LedgerSpecifier{}, false, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		return types.LedgerSpecifier{}, false, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	var spec types.LedgerSpecifier
+	if raw, ok := fields["ledger_hash"]; ok {
+		_ = json.Unmarshal(raw, &spec.LedgerHash)
+		return spec, true, nil
+	}
+	name := "ledger_index"
+	raw, ok := fields[name]
+	if !ok {
+		name = "ledger"
+		raw = fields[name]
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		value = strings.TrimSpace(string(raw))
+		if value == "-0" {
+			value = "0"
+		}
+	}
+	if name == "ledger" {
+		spec.Ledger = types.LedgerIndex(value)
+	} else {
+		spec.LedgerIndex = types.LedgerIndex(value)
+	}
+	return spec, true, nil
+}
+
+func validateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
+	if params == nil {
+		return nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(params))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil
+	}
+	var invalid bool
+	var walk func(any)
+	walk = func(current any) {
+		if invalid {
+			return
+		}
+		switch typed := current.(type) {
+		case json.Number:
+			raw := typed.String()
+			if strings.ContainsAny(raw, ".eE") {
+				return
+			}
+			if strings.HasPrefix(raw, "-") {
+				_, err := strconv.ParseInt(raw, 10, 32)
+				invalid = err != nil
+				return
+			}
+			_, err := strconv.ParseUint(raw, 10, 32)
+			invalid = err != nil
+		case map[string]any:
+			for _, child := range typed {
+				walk(child)
+			}
+		case []any:
+			for _, child := range typed {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	if invalid {
+		return types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	return nil
+}
+
+func ValidateJsonCppIntegerRange(params json.RawMessage) *types.RPCError {
+	return validateJsonCppIntegerRange(params)
 }
 
 // RequireAccount checks that the account parameter is non-empty.
@@ -138,8 +245,8 @@ func ValidateAccount(account string) *types.RPCError {
 	return nil
 }
 
-func resolveLedgerSelector(params json.RawMessage) (string, *types.RPCError) {
-	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+func resolveLedgerSelector(input any) (string, *types.RPCError) {
+	selection, rpcErr := parseLedgerSelectorInput(input, ledgerselector.Current())
 	if rpcErr != nil {
 		return "", rpcErr
 	}
@@ -225,6 +332,32 @@ func parseLedgerSelectorParams(
 		return ledgerselector.Selector{}, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 	}
 	return parseRawLedgerSelector(raw, defaultSelection, lookupLedgerSelectorErrors)
+}
+
+func parseLedgerSelectorInput(
+	input any,
+	defaultSelection ledgerselector.Selector,
+) (ledgerselector.Selector, *types.RPCError) {
+	switch value := input.(type) {
+	case nil:
+		return defaultSelection, nil
+	case json.RawMessage:
+		return parseLedgerSelectorParams(value, defaultSelection)
+	case types.LedgerSpecifier:
+		raw := make(map[string]json.RawMessage, 3)
+		if value.Ledger != "" {
+			raw["ledger"] = json.RawMessage(strconv.Quote(value.Ledger.String()))
+		}
+		if value.LedgerHash != "" {
+			raw["ledger_hash"] = json.RawMessage(strconv.Quote(value.LedgerHash))
+		}
+		if value.LedgerIndex != "" {
+			raw["ledger_index"] = json.RawMessage(strconv.Quote(value.LedgerIndex.String()))
+		}
+		return parseRawLedgerSelector(raw, defaultSelection, lookupLedgerSelectorErrors)
+	default:
+		return ledgerselector.Selector{}, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
 }
 
 type rawLedgerSelectorErrors struct {
@@ -368,8 +501,8 @@ func resolveLedgerSelection(
 }
 
 // LookupLedger resolves a request's ledger selector, defaulting to current.
-func LookupLedger(ctx *types.RPCContext, params json.RawMessage) (types.LedgerReader, bool, *types.RPCError) {
-	selection, rpcErr := parseLedgerSelectorParams(params, ledgerselector.Current())
+func LookupLedger(ctx *types.RPCContext, input any) (types.LedgerReader, bool, *types.RPCError) {
+	selection, rpcErr := parseLedgerSelectorInput(input, ledgerselector.Current())
 	if rpcErr != nil {
 		return nil, false, rpcErr
 	}
@@ -613,17 +746,21 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	return st, nil
 }
 
+const (
+	deliveredAmountLedgerCutoff    uint32 = 4_594_095
+	deliveredAmountCloseTimeCutoff int64  = 446_000_000
+)
+
+// SyntheticMetadataContext identifies the ledger that produced transaction
+// metadata. CloseTime is expressed in Ripple-epoch seconds.
+type SyntheticMetadataContext struct {
+	LedgerSequence uint32
+	CloseTime      int64
+}
+
 // InjectDeliveredAmount adds the synthetic snake_case "delivered_amount" field
-// to a transaction's metadata, matching rippled's RPC::insertDeliveredAmount.
-// It is emitted only for a successful Payment, CheckCash, or AccountDelete
-// (rippled's canHaveDeliveredAmount: those three types plus tesSUCCESS; CheckCash
-// also requires fix1623, which is enabled on every ledger go-xrpl serves). The
-// value is the real serialized sfDeliveredAmount metadata field when present,
-// otherwise the transaction's Amount (rippled's ledger-index / close-time gate
-// always holds for served ledgers), otherwise the literal "unavailable". The
-// real PascalCase "DeliveredAmount" metadata field is left untouched — only the
-// synthetic snake_case field is written. nil meta is a no-op.
-func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
+// to metadata for an eligible successful transaction.
+func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any, ctx SyntheticMetadataContext) {
 	if meta == nil {
 		return
 	}
@@ -646,7 +783,8 @@ func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
 
 	if da, ok := meta["DeliveredAmount"]; ok {
 		meta["delivered_amount"] = da
-	} else if amount, ok := txJSON["Amount"]; ok {
+	} else if amount, ok := txJSON["Amount"]; ok &&
+		(ctx.LedgerSequence >= deliveredAmountLedgerCutoff || ctx.CloseTime > deliveredAmountCloseTimeCutoff) {
 		meta["delivered_amount"] = amount
 	} else {
 		meta["delivered_amount"] = "unavailable"

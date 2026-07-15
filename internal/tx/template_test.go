@@ -228,3 +228,21 @@ func TestCheckTemplate_UnknownTypeNotEnforced(t *testing.T) {
 		t.Fatalf("unknown type must not be template-enforced, got: %v", err)
 	}
 }
+
+func TestValidateTemplateFieldsRejectsExplicitDefault(t *testing.T) {
+	values := map[string]any{
+		"Account":         "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59",
+		"Amount":          "1",
+		"Destination":     "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"Fee":             "10",
+		"Paths":           []any{},
+		"Sequence":        uint32(1),
+		"SigningPubKey":   "",
+		"TransactionType": "Payment",
+	}
+
+	err := ValidateTemplateFields(TypePayment, values)
+	if err == nil || err.Error() != "Field 'Paths' may not be explicitly set to default." {
+		t.Fatalf("error = %v", err)
+	}
+}

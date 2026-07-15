@@ -4,9 +4,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -16,64 +18,87 @@ type TransactionEntryMethod struct{ BaseHandler }
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
 func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	targetLedger, _, lerr := LookupLedger(ctx, params)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	targetLedger, validated, lerr := LookupLedger(ctx, parsedLedgerSpec)
 	if lerr != nil {
 		return nil, lerr
 	}
-
-	var fields map[string]json.RawMessage
-	if len(params) > 0 && !isJSONNull(params) {
+	fields := make(map[string]json.RawMessage)
+	if len(params) != 0 {
 		if err := json.Unmarshal(params, &fields); err != nil {
 			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 		}
 	}
-	rawTxHash, hasTxHash := fields["tx_hash"]
+	lookupExtra := make(map[string]any)
+	if targetLedger.IsClosed() {
+		lookupExtra["ledger_hash"] = FormatLedgerHash(targetLedger.Hash())
+		lookupExtra["ledger_index"] = targetLedger.Sequence()
+	} else {
+		lookupExtra["ledger_current_index"] = targetLedger.Sequence()
+	}
+	lookupExtra["validated"] = validated
+	txHashRaw, hasTxHash := fields["tx_hash"]
 	if !hasTxHash {
-		return nil, types.RPCErrorFieldNotFoundTransaction()
+		return nil, types.RPCErrorFieldNotFoundTransaction().WithExtra(lookupExtra)
 	}
 	if !targetLedger.IsClosed() {
-		return nil, types.RPCErrorNotYetImplemented()
+		return nil, types.RPCErrorNotYetImplemented().WithExtra(lookupExtra)
 	}
 
 	var txHashString string
-	_ = json.Unmarshal(rawTxHash, &txHashString)
-
-	txHashBytes, err := hex.DecodeString(txHashString)
-	if err != nil || len(txHashBytes) != 32 {
-		return nil, types.RPCErrorMalformedRequestBare()
-	}
-
+	_ = json.Unmarshal(txHashRaw, &txHashString)
 	var txHash [32]byte
-	copy(txHash[:], txHashBytes)
-
-	var txData []byte
-	if err := targetLedger.ForEachTransaction(func(candidate [32]byte, data []byte) bool {
-		if candidate != txHash {
-			return true
+	if txHashString != "0" {
+		txHashBytes, err := hex.DecodeString(txHashString)
+		if err != nil || len(txHashBytes) != 32 {
+			return nil, types.RPCErrorMalformedRequestBare().WithExtra(lookupExtra)
 		}
-		txData = append([]byte(nil), data...)
-		return false
-	}); err != nil {
-		return nil, types.RPCErrorInternal("Failed to read ledger transactions")
-	}
-	if txData == nil {
-		return nil, types.RPCErrorTransactionNotFound("Transaction not found.")
+		copy(txHash[:], txHashBytes)
 	}
 
-	storedTx, err := decodeTxBlob(txData)
+	var txInfo *types.TransactionInfo
+	var lookupErr error
+	if source, ok := targetLedger.(types.LedgerTransactionSource); ok {
+		txData, found, readErr := source.GetLedgerTransaction(txHash)
+		if readErr != nil {
+			return nil, types.RPCErrorInternal("Failed to read transaction data")
+		}
+		if found {
+			txIndex, hasIndex := txcore.TransactionIndexFromTxWithMetaBlob(txData)
+			if !hasIndex {
+				txIndex = ^uint32(0)
+			}
+			txInfo = &types.TransactionInfo{
+				TxData:      txData,
+				LedgerIndex: targetLedger.Sequence(),
+				LedgerHash:  FormatLedgerHash(targetLedger.Hash()),
+				Validated:   validated,
+				TxIndex:     txIndex,
+			}
+		}
+	} else {
+		txInfo, lookupErr = ctx.Services.Ledger.GetTransaction(txHash)
+	}
+	if lookupErr != nil || txInfo == nil {
+		return nil, types.RPCErrorTransactionNotFound("Transaction not found.").WithExtra(lookupExtra)
+	}
+	targetSeq := targetLedger.Sequence()
+	if txInfo.LedgerIndex != targetSeq {
+		return nil, types.RPCErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq)).WithExtra(lookupExtra)
+	}
+
+	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
 		return nil, types.RPCErrorInternal("Failed to parse transaction data")
 	}
 
-	ledgerHash := fmt.Sprintf("%X", targetLedger.Hash())
-	ledgerIndex := targetLedger.Sequence()
-	validated := targetLedger.IsValidated()
+	ledgerHash := FormatLedgerHash(targetLedger.Hash())
 
-	injectDeliverMax(storedTx.TxJSON, ctx.ApiVersion)
-
-	response := map[string]any{
-		"tx_json": storedTx.TxJSON,
-	}
+	response := maps.Clone(lookupExtra)
+	response["tx_json"] = projectTransactionJSON(storedTx.TxJSON, strings.ToUpper(txHashString), ctx.ApiVersion)
 
 	if ctx.ApiVersion > 1 {
 		response["meta"] = storedTx.Meta
@@ -89,17 +114,16 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RPCContext, params json.RawMe
 			response["ledger_hash"] = ledgerHash
 		}
 		if validated {
-			response["ledger_index"] = ledgerIndex
+			response["ledger_index"] = txInfo.LedgerIndex
 			closeTimeSec := targetLedger.CloseTime()
 			if closeTimeSec > 0 {
 				response["close_time_iso"] = protocol.FormatCloseTimeISO(protocol.FromRippleTime(uint32(closeTimeSec)))
 			}
 		}
 	} else {
-		storedTx.TxJSON["hash"] = strings.ToUpper(txHashString)
-		response["ledger_index"] = ledgerIndex
+		response["ledger_index"] = txInfo.LedgerIndex
 		response["ledger_hash"] = ledgerHash
-		response["validated"] = validated
+		response["validated"] = txInfo.Validated
 	}
 
 	return response, nil

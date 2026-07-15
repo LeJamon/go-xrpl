@@ -11,6 +11,15 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
+func mustNewOpenWithHeader(t *testing.T, h header.LedgerHeader, stateMap, txMap *shamap.SHAMap) *ledger.Ledger {
+	t.Helper()
+	l, err := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
+	return l
+}
+
 func TestEvictOldHistoryLocked(t *testing.T) {
 	svc, err := New(DefaultConfig())
 	if err != nil {
@@ -34,7 +43,7 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 		h.Hash[0] = salt
 		h.Hash[1] = byte(seq)
 		h.Hash[2] = byte(seq >> 8)
-		l := ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+		l := mustNewOpenWithHeader(t, h, stateMap, txMap)
 		var txHash [32]byte
 		txHash[0] = 0xAA
 		txHash[1] = byte(seq)
@@ -108,7 +117,7 @@ func TestEvictOldHistoryLocked_BelowWindow(t *testing.T) {
 		}
 		var h header.LedgerHeader
 		h.LedgerIndex = seq
-		svc.ledgerHistory[seq] = ledger.NewOpenWithHeader(h, stateMap, txMap, drops.Fees{})
+		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, stateMap, txMap)
 	}
 
 	before := len(svc.ledgerHistory)
@@ -175,7 +184,7 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 	var adoptedHeader header.LedgerHeader
 	adoptedHeader.LedgerIndex = adoptedSeq
 	adoptedHeader.Hash[0] = 0x77
-	adopted := ledger.NewOpenWithHeader(adoptedHeader, adoptedState, adoptedTx, drops.Fees{})
+	adopted := mustNewOpenWithHeader(t, adoptedHeader, adoptedState, adoptedTx)
 
 	// Seed entries below the post-eviction cutoff so the drain path has
 	// observable work to do.
@@ -184,7 +193,7 @@ func TestDrainPendingValidation_EvictsHistory(t *testing.T) {
 		st, tx := freshMaps()
 		var h header.LedgerHeader
 		h.LedgerIndex = seq
-		svc.ledgerHistory[seq] = ledger.NewOpenWithHeader(h, st, tx, drops.Fees{})
+		svc.ledgerHistory[seq] = mustNewOpenWithHeader(t, h, st, tx)
 	}
 
 	svc.mu.Lock()

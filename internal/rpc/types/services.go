@@ -125,6 +125,9 @@ type ValidatorListReader interface {
 	// number of publishers whose lists must agree on a validator
 	// before it enters the effective UNL).
 	Threshold() int
+	// IsUNLBlocked reports whether publisher-list expiry or an empty trusted
+	// union has locked the node out of consensus participation.
+	IsUNLBlocked() bool
 	// Publishers returns a snapshot of per-publisher state for the
 	// `validators` RPC.
 	Publishers() []ValidatorListPublisherInfo
@@ -223,6 +226,11 @@ type ServiceContainer struct {
 	// (rippled getJson at ValidatorList.cpp:1657-1661). Nil-safe — a nil
 	// func means "no static keys".
 	LocalStaticTrustedKeysBase58 func() []string
+
+	// TrustedValidatorKeysBase58 returns the current effective trusted UNL,
+	// including configured static validators, the local identity, and validators
+	// selected from publisher lists. Surfaced as `trusted_validator_keys`.
+	TrustedValidatorKeysBase58 func() []string
 
 	// SigningKeysBase58 returns the master→signing key map projected as
 	// base58 strings. Surfaced by the `validators` RPC as `signing_keys`
@@ -707,6 +715,23 @@ type TxTablesProvider interface {
 	UseTxTables() bool
 }
 
+// TxSearchResult reports how completely a requested ledger range was searched
+// when a transaction hash is absent.
+type TxSearchResult int
+
+const (
+	TxSearchUnknown TxSearchResult = iota
+	TxSearchSome
+	TxSearchAll
+)
+
+// RangedTransactionLookup is the optional transaction-table lookup used by the
+// tx RPC when both ledger range bounds are present. Keeping it separate from
+// TransactionSubmitter lets lightweight ledger mocks omit relational search.
+type RangedTransactionLookup interface {
+	GetTransactionWithRange(ctx context.Context, txHash [32]byte, minLedger, maxLedger uint32) (*TransactionInfo, TxSearchResult, error)
+}
+
 // TransactionSubmitter handles transaction submission and retrieval.
 // FailHardSubmitter is the optional rippled-faithful surface for
 // submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
@@ -901,6 +926,16 @@ type LedgerReader interface {
 	ForEachTransaction(fn func(txHash [32]byte, txData []byte) bool) error
 }
 
+// LedgerTransactionSource is implemented by ledger readers that can query the
+// transaction tree of that exact ledger.
+type LedgerTransactionSource interface {
+	GetLedgerTransaction(txHash [32]byte) ([]byte, bool, error)
+}
+
+type LedgerAmendmentRulesSource interface {
+	LedgerAmendmentRules() *amendment.Rules
+}
+
 // LedgerServerInfo contains server status information from the ledger service
 type LedgerServerInfo struct {
 	Standalone            bool
@@ -1013,6 +1048,8 @@ type SubmitResult struct {
 
 	// CurrentLedger is the current open ledger sequence
 	CurrentLedger uint32
+	// CurrentLedgerCloseTime is the open-ledger close time in Ripple-epoch seconds.
+	CurrentLedgerCloseTime int64
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
@@ -1084,6 +1121,9 @@ type TrustLine struct {
 	PeerAuthorized bool   `json:"peer_authorized,omitempty"`
 	Freeze         bool   `json:"freeze,omitempty"`
 	FreezePeer     bool   `json:"freeze_peer,omitempty"`
+	DeepFreeze     bool   `json:"deep_freeze,omitempty"`
+	DeepFreezePeer bool   `json:"deep_freeze_peer,omitempty"`
+	HasReserve     bool   `json:"-"`
 }
 
 // AccountLinesResult contains the result of account_lines RPC

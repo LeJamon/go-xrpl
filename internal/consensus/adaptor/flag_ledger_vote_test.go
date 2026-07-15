@@ -448,11 +448,12 @@ func TestRunAmendmentVote_UsesParentCloseTime(t *testing.T) {
 
 	parentClose := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	flagClose := parentClose.Add(time.Hour)
-	prev := ledger.NewFromHeader(header.LedgerHeader{
+	prev, err := ledger.NewFromHeader(header.LedgerHeader{
 		LedgerIndex:     256,
 		ParentCloseTime: parentClose,
 		CloseTime:       flagClose,
 	}, stateMap, txMap, drops.Fees{})
+	require.NoError(t, err)
 
 	val := &consensus.Validation{
 		NodeID:     a.identity.NodeID,

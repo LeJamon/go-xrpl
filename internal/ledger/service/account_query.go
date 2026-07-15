@@ -164,6 +164,9 @@ type TrustLine struct {
 	PeerAuthorized bool   `json:"peer_authorized,omitempty"`
 	Freeze         bool   `json:"freeze,omitempty"`
 	FreezePeer     bool   `json:"freeze_peer,omitempty"`
+	DeepFreeze     bool   `json:"deep_freeze,omitempty"`
+	DeepFreezePeer bool   `json:"deep_freeze_peer,omitempty"`
+	HasReserve     bool   `json:"-"`
 }
 
 // AccountLinesResult contains the result of account_lines RPC
@@ -249,6 +252,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
 				line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
 				line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
+				line.DeepFreeze = (rs.Flags & state.LsfLowDeepFreeze) != 0
+				line.DeepFreezePeer = (rs.Flags & state.LsfHighDeepFreeze) != 0
+				line.HasReserve = (rs.Flags & state.LsfLowReserve) != 0
 				line.QualityIn = rs.LowQualityIn
 				line.QualityOut = rs.LowQualityOut
 			} else {
@@ -261,6 +267,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 				line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
 				line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
 				line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
+				line.DeepFreeze = (rs.Flags & state.LsfHighDeepFreeze) != 0
+				line.DeepFreezePeer = (rs.Flags & state.LsfLowDeepFreeze) != 0
+				line.HasReserve = (rs.Flags & state.LsfHighReserve) != 0
 				line.QualityIn = rs.HighQualityIn
 				line.QualityOut = rs.HighQualityOut
 			}
@@ -313,6 +322,15 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
 		if err != nil {
 			return nil, err
+		}
+		if hasMarker {
+			data, readErr := targetLedger.Read(keylet.Keylet{Key: afterKey})
+			if readErr != nil {
+				return nil, readErr
+			}
+			if data == nil {
+				return nil, svcerr.ErrStaleMarker
+			}
 		}
 
 		// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
@@ -369,7 +387,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 			return nil, err
 		}
 		if hasMarker && !found {
-			return nil, svcerr.ErrInvalidMarker
+			return nil, svcerr.ErrStaleMarker
 		}
 
 		return &AccountOffersResult{
@@ -914,7 +932,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 				channel.PublicKeyHex = payChan.PublicKey
 				pkBytes, derr := hex.DecodeString(payChan.PublicKey)
 				if derr == nil && len(pkBytes) > 0 {
-					if encoded, encErr := addresscodec.EncodeNodePublicKey(pkBytes); encErr == nil {
+					if encoded, encErr := addresscodec.EncodeAccountPublicKey(pkBytes); encErr == nil {
 						channel.PublicKey = encoded
 					}
 				}
@@ -1075,6 +1093,25 @@ type AccountNFTsResult struct {
 	Marker      string
 }
 
+func parseAccountNFTMarker(marker string) ([32]byte, bool, error) {
+	var markerID [32]byte
+	if marker == "" {
+		return markerID, false, nil
+	}
+	if marker == "0" {
+		return markerID, true, nil
+	}
+	if len(marker) != 64 {
+		return markerID, true, svcerr.ErrInvalidMarker
+	}
+	decoded, err := hex.DecodeString(marker)
+	if err != nil {
+		return markerID, true, svcerr.ErrInvalidMarker
+	}
+	copy(markerID[:], decoded)
+	return markerID, true, nil
+}
+
 // GetAccountNFTs retrieves NFTs owned by an account
 func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountNFTsResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*AccountNFTsResult, error) {
@@ -1092,21 +1129,18 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			limit = 256
 		}
 
-		var markerID [32]byte
-		hasMarker := marker != ""
-		if hasMarker {
-			decoded, err := hex.DecodeString(marker)
-			if err != nil || len(decoded) != len(markerID) {
-				return nil, svcerr.ErrInvalidMarker
-			}
-			copy(markerID[:], decoded)
+		markerID, markerSet, markerErr := parseAccountNFTMarker(marker)
+		if markerErr != nil {
+			return nil, markerErr
 		}
 
-		var nfts []NFTInfo
-		markerFound := !hasMarker
-		var nextMarker string
-
-		targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
+		type nftPage struct {
+			key  [32]byte
+			page *state.NFTokenPageData
+		}
+		pages := make(map[[32]byte]*state.NFTokenPageData)
+		pageKeys := make([][32]byte, 0)
+		if err := targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 			if ctx.Err() != nil {
 				return false
 			}
@@ -1133,40 +1167,88 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 			if err != nil {
 				return true
 			}
-
-			for _, token := range page.NFTokens {
-				if !markerFound {
-					if token.NFTokenID == markerID {
-						markerFound = true
-					}
-					continue
-				}
-
-				nft := extractNFTInfo(token.NFTokenID, token.URI)
-				nfts = append(nfts, nft)
-				if uint32(len(nfts)) == limit {
-					nextMarker = nft.NFTokenID
-					return false
-				}
-			}
-
+			pages[key] = page
+			pageKeys = append(pageKeys, key)
 			return true
-		})
-		if err := ctx.Err(); err != nil {
+		}); err != nil {
 			return nil, err
 		}
-		if !markerFound {
-			return nil, svcerr.ErrInvalidMarker
+
+		sort.Slice(pageKeys, func(i, j int) bool {
+			return bytes.Compare(pageKeys[i][:], pageKeys[j][:]) < 0
+		})
+
+		first := keylet.NFTokenPageMin(accountID)
+		if markerSet {
+			first = keylet.NFTokenPageForToken(first, markerID)
+		}
+		var current nftPage
+		for _, pageKey := range pageKeys {
+			if bytes.Compare(pageKey[:], first.Key[:]) > 0 {
+				current = nftPage{key: pageKey, page: pages[pageKey]}
+				break
+			}
+		}
+		if current.page == nil {
+			lastKey := keylet.NFTokenPageMax(accountID).Key
+			current = nftPage{key: lastKey, page: pages[lastKey]}
 		}
 
-		return &AccountNFTsResult{
+		result := &AccountNFTsResult{
 			Account:     account,
-			AccountNFTs: nfts,
+			AccountNFTs: make([]NFTInfo, 0),
 			LedgerIndex: targetLedger.Sequence(),
 			LedgerHash:  targetLedger.Hash(),
 			Validated:   validated,
-			Marker:      nextMarker,
-		}, nil
+		}
+
+		pastMarker := markerID == ([32]byte{})
+		markerFound := false
+		visited := make(map[[32]byte]struct{})
+		for current.page != nil {
+			if _, duplicate := visited[current.key]; duplicate {
+				return nil, errors.New("NFTokenPage chain contains a cycle")
+			}
+			visited[current.key] = struct{}{}
+
+			for _, token := range current.page.NFTokens {
+				tokenID := token.NFTokenID
+				if !pastMarker {
+					maskedComparison := bytes.Compare(tokenID[20:], markerID[20:])
+					if maskedComparison < 0 {
+						continue
+					}
+					if maskedComparison == 0 && bytes.Compare(tokenID[:], markerID[:]) < 0 {
+						continue
+					}
+					if tokenID == markerID {
+						markerFound = true
+						continue
+					}
+				}
+				if markerSet && !markerFound {
+					return nil, svcerr.ErrInvalidMarker
+				}
+				pastMarker = true
+				result.AccountNFTs = append(result.AccountNFTs, extractNFTInfo(tokenID, token.URI))
+				if uint32(len(result.AccountNFTs)) == limit {
+					result.Marker = formatHashHex(tokenID)
+					return result, nil
+				}
+			}
+
+			nextKey := current.page.NextPageMin
+			if nextKey == ([32]byte{}) {
+				current = nftPage{}
+				continue
+			}
+			current = nftPage{key: nextKey, page: pages[nextKey]}
+		}
+
+		if markerSet && !markerFound {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		return result, nil
 	})
 }
 
@@ -1218,12 +1300,10 @@ func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 		locked[currency] = amount
 		return
 	}
-	locked[currency] = addLockedSaturating(existing, amount)
+	locked[currency] = addIssuedSaturating(existing, amount)
 }
 
-// addLockedSaturating returns existing+add, clamping to the largest IOU amount on
-// overflow rather than panicking, matching rippled's saturating escrow sum.
-func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
+func addIssuedSaturating(existing, add tx.Amount) (result tx.Amount) {
 	defer func() {
 		if recover() != nil {
 			result = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, add.Currency, add.Issuer)
@@ -1239,15 +1319,6 @@ func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
 // GetGatewayBalances retrieves obligations and balances for a gateway account
 func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error) {
 	return withAccountQuery(s, ctx, account, ledgerIndex, func(targetLedger *ledger.Ledger, accountID [20]byte, validated bool) (*GatewayBalancesResult, error) {
-		accountKey := keylet.Account(accountID)
-		exists, err := targetLedger.Exists(accountKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check account existence: %w", err)
-		}
-		if !exists {
-			return nil, svcerr.ErrAccountNotFound
-		}
-
 		hotWalletIDs := make(map[[20]byte]bool)
 		for _, hw := range hotWallets {
 			_, hwIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(hw)
@@ -1332,14 +1403,11 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			}
 
 			if hotWalletIDs[peerID] {
-				// Hot wallet: report the balance they hold (negated from gateway side).
-				if gatewayBalance.Signum() < 0 {
-					balanceText := gatewayBalance.Negate().Value()
-					hotBalances[peerAddr] = append(hotBalances[peerAddr], CurrencyBalance{
-						Currency: currency,
-						Value:    balanceText,
-					})
-				}
+				balanceText := gatewayBalance.Negate().Value()
+				hotBalances[peerAddr] = append(hotBalances[peerAddr], CurrencyBalance{
+					Currency: currency,
+					Value:    balanceText,
+				})
 			} else if gatewayBalance.Signum() > 0 {
 				// Gateway holds currency from peer (unusual) — asset.
 				balanceText := gatewayBalance.Value()
@@ -1357,8 +1425,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 				// Normal obligation: negate the negative balance to the amount owed.
 				owedAmount := gatewayBalance.Negate()
 				if existing, ok := obligations[currency]; ok {
-					sum, _ := existing.Add(owedAmount)
-					obligations[currency] = sum
+					obligations[currency] = addIssuedSaturating(existing, owedAmount)
 				} else {
 					obligations[currency] = owedAmount
 				}

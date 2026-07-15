@@ -272,11 +272,13 @@ func TestReadMessageCaps(t *testing.T) {
 		{"vlcollection_20mib_ok", TypeValidatorListCollection, 20 * mib, false},
 		{"manifests_20mib_ok", TypeManifests, 20 * mib, false},
 		{"validatorlist_20mib_ok", TypeValidatorList, 20 * mib, false},
+		{"unknown_20mib_ok", MessageType(9999), 20 * mib, false},
 		// Request-shaped types keep their stricter hardening caps.
 		{"ping_20mib_rejected", TypePing, 20 * mib, true},
 		{"getledger_20mib_rejected", TypeGetLedger, 20 * mib, true},
 		// The protocol ceiling is hard even for the most permissive type.
 		{"ledgerdata_over_ceiling_rejected", TypeLedgerData, MaxMessageSize + 1, true},
+		{"unknown_over_ceiling_rejected", MessageType(9999), MaxMessageSize + 1, true},
 	}
 
 	for _, tt := range tests {

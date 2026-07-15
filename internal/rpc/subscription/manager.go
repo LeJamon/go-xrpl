@@ -94,6 +94,7 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
+	conn.SetAPIVersion(request.ApiVersion)
 
 	// Streams. "rt_transactions" is the deprecated alias rippled keeps around
 	// (Subscribe.cpp:151-156); we fold it into the canonical
@@ -732,6 +733,12 @@ func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []b
 	deliver(sm.collectStreamTargets(streamType), data)
 }
 
+// BroadcastToStreamVersioned selects the transaction representation recorded
+// by each subscriber's latest subscribe request.
+func (sm *Manager) BroadcastToStreamVersioned(streamType types.SubscriptionType, v1, v2 []byte) {
+	deliverVersioned(sm.collectStreamTargets(streamType), v1, v2)
+}
+
 func (sm *Manager) collectStreamTargets(streamType types.SubscriptionType) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -753,10 +760,24 @@ func deliver(targets []*types.Connection, data []byte) {
 	}
 }
 
+func deliverVersioned(targets []*types.Connection, v1, v2 []byte) {
+	for _, c := range targets {
+		data := v2
+		if c.APIVersion() == types.ApiVersion1 {
+			data = v1
+		}
+		c.TrySend(data)
+	}
+}
+
 // BroadcastToAccounts sends a message to every connection subscribed to
 // any of the named accounts on the SubAccounts stream.
 func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets(types.SubAccounts, accounts), data)
+}
+
+func (sm *Manager) BroadcastToAccountsVersioned(v1, v2 []byte, accounts []string) {
+	deliverVersioned(sm.collectAccountTargets(types.SubAccounts, accounts), v1, v2)
 }
 
 // BroadcastToAccountsProposed sends a message to accounts_proposed
@@ -765,7 +786,23 @@ func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
 	deliver(sm.collectAccountTargets(types.SubAccountsProposed, accounts), data)
 }
 
+func (sm *Manager) BroadcastToAccountsProposedVersioned(v1, v2 []byte, accounts []string) {
+	deliverVersioned(sm.collectAccountTargets(types.SubAccountsProposed, accounts), v1, v2)
+}
+
+// BroadcastToAcceptedAccountsVersioned unions normal and real-time account
+// listeners so a connection subscribed through both receives one accepted tx.
+func (sm *Manager) BroadcastToAcceptedAccountsVersioned(v1, v2 []byte, accounts []string) {
+	deliverVersioned(sm.collectAccountTargetsForStreams(
+		[]types.SubscriptionType{types.SubAccounts, types.SubAccountsProposed}, accounts,
+	), v1, v2)
+}
+
 func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []*types.Connection {
+	return sm.collectAccountTargetsForStreams([]types.SubscriptionType{stream}, accounts)
+}
+
+func (sm *Manager) collectAccountTargetsForStreams(streams []types.SubscriptionType, accounts []string) []*types.Connection {
 	if len(accounts) == 0 {
 		return nil
 	}
@@ -780,13 +817,20 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 	}
 	var targets []*types.Connection
 	for _, conn := range sm.Connections {
-		cfg, ok := conn.Subscriptions[stream]
-		if !ok {
-			continue
-		}
-		for _, subAcc := range cfg.Accounts {
-			if accountSet[subAcc] {
-				targets = append(targets, conn)
+		matched := false
+		for _, stream := range streams {
+			cfg, ok := conn.Subscriptions[stream]
+			if !ok {
+				continue
+			}
+			for _, subAcc := range cfg.Accounts {
+				if accountSet[subAcc] {
+					targets = append(targets, conn)
+					matched = true
+					break
+				}
+			}
+			if matched {
 				break
 			}
 		}
@@ -797,13 +841,25 @@ func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts
 // BroadcastToOrderBook sends a message to order book subscribers whose
 // configured TakerGets/TakerPays match the broadcast's currency pair.
 func (sm *Manager) BroadcastToOrderBook(data []byte, takerGets, takerPays types.CurrencySpec) {
-	deliver(sm.collectOrderBookTargets(takerGets, takerPays), data)
+	sm.BroadcastToOrderBooks(data, []types.OrderBookSpec{{TakerGets: takerGets, TakerPays: takerPays}})
 }
 
-func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySpec) []*types.Connection {
+func (sm *Manager) BroadcastToOrderBooks(data []byte, books []types.OrderBookSpec) {
+	deliver(sm.collectOrderBookTargets(books), data)
+}
+
+func (sm *Manager) BroadcastToOrderBookVersioned(v1, v2 []byte, takerGets, takerPays types.CurrencySpec) {
+	sm.BroadcastToOrderBooksVersioned(v1, v2, []types.OrderBookSpec{{TakerGets: takerGets, TakerPays: takerPays}})
+}
+
+func (sm *Manager) BroadcastToOrderBooksVersioned(v1, v2 []byte, books []types.OrderBookSpec) {
+	deliverVersioned(sm.collectOrderBookTargets(books), v1, v2)
+}
+
+func (sm *Manager) collectOrderBookTargets(books []types.OrderBookSpec) []*types.Connection {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
-	if len(sm.Connections) == 0 {
+	if len(sm.Connections) == 0 || len(books) == 0 {
 		return nil
 	}
 	var targets []*types.Connection
@@ -819,8 +875,13 @@ func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySp
 		// state collapsed to per-BookRequest storage.
 		matched := false
 		for _, b := range cfg.Books {
-			if types.BookMatchesCurrency(b, takerGets, takerPays) {
-				matched = true
+			for _, book := range books {
+				if types.BookMatches(b, book) {
+					matched = true
+					break
+				}
+			}
+			if matched {
 				break
 			}
 		}

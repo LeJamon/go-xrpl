@@ -66,6 +66,24 @@ func (m *mockLedgerEntryService) GetLedgerEntry(_ context.Context, entryKey [32]
 	}, nil
 }
 
+func (m *mockLedgerEntryService) GetLedgerBySequence(sequence uint32) (types.LedgerReader, error) {
+	return &mockLedgerReader{
+		seq:       sequence,
+		hash:      [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+		closed:    sequence != m.currentLedgerIndex,
+		validated: sequence <= m.validatedLedgerIndex,
+	}, nil
+}
+
+func (m *mockLedgerEntryService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
+	return &mockLedgerReader{
+		seq:       m.validatedLedgerIndex,
+		hash:      hash,
+		closed:    true,
+		validated: true,
+	}, nil
+}
+
 // newLedgerEntryTestServices builds a per-test ServiceContainer wrapping mock.
 func newLedgerEntryTestServices(mock *mockLedgerEntryService) *types.ServiceContainer {
 	return &types.ServiceContainer{
@@ -681,10 +699,22 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for error case")
 			require.NotNil(t, rpcErr, "Expected RPC error")
 			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
-			assert.Empty(t, rpcErr.Message)
+			assert.Equal(t, "No ledger_entry params provided.", rpcErr.Message)
 			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
+
+	t.Run("API v1 preserves lookup metadata", func(t *testing.T) {
+		v1ctx := *ctx
+		v1ctx.ApiVersion = types.ApiVersion1
+		result, rpcErr := method.Handle(&v1ctx, json.RawMessage(`{"ledger_index":"validated"}`))
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "unknownOption", rpcErr.ErrorString)
+		assert.Equal(t, uint32(2), rpcErr.Extra["ledger_index"])
+		assert.Equal(t, true, rpcErr.Extra["validated"])
+		assert.Contains(t, rpcErr.Extra, "ledger_hash")
+	})
 }
 
 // Ledger Specification Tests
@@ -1041,9 +1071,7 @@ func TestLedgerEntryMethodMetadata(t *testing.T) {
 	})
 }
 
-// Entry Type Priority Tests
-
-// TestLedgerEntryTypePriority tests that index takes priority over other entry types
+// TestLedgerEntryTypePriority verifies that multiple selectors are rejected.
 func TestLedgerEntryTypePriority(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
@@ -1059,7 +1087,7 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 	indexValue := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
 	checkValue := "B33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
 
-	t.Run("Index takes priority over check", func(t *testing.T) {
+	t.Run("Index and check conflict", func(t *testing.T) {
 		mock.ledgerEntryResult = &types.LedgerEntryResult{
 			Index:       indexValue,
 			LedgerIndex: 2,
@@ -1078,17 +1106,10 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 		require.NoError(t, err)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
-		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
-
-		resultJSON, err := json.Marshal(result)
-		require.NoError(t, err)
-		var resp map[string]any
-		err = json.Unmarshal(resultJSON, &resp)
-		require.NoError(t, err)
-
-		// Should return the index value, not the check value
-		assert.Equal(t, indexValue, resp["index"])
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+		assert.Equal(t, "Too many fields provided.", rpcErr.Message)
 	})
 }
 
@@ -1343,6 +1364,51 @@ func TestLedgerEntryV3IndexShortcuts(t *testing.T) {
 			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
+}
+
+func TestLedgerEntryFixedLocationSelectors(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RPCContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   newLedgerEntryTestServices(mock),
+	}
+
+	tests := []struct {
+		field string
+		key   [32]byte
+	}{
+		{"amendments", keylet.Amendments().Key},
+		{"fee", keylet.Fees().Key},
+		{"nunl", keylet.NegativeUNL().Key},
+		{"hashes", keylet.LedgerHashes().Key},
+	}
+	for _, tc := range tests {
+		t.Run(tc.field, func(t *testing.T) {
+			params, err := json.Marshal(map[string]any{tc.field: true})
+			require.NoError(t, err)
+			result, rpcErr := method.Handle(ctx, params)
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+			assert.Equal(t, tc.key, mock.lastRequestedKey)
+		})
+	}
+
+	t.Run("hashes sequence", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"hashes":65536}`))
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+		assert.Equal(t, keylet.LedgerHashesForSeq(65536).Key, mock.lastRequestedKey)
+	})
+
+	t.Run("multiple selectors precede ledger lookup", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"fee":true,"index":null,"ledger_hash":null}`))
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "Too many fields provided.", rpcErr.Message)
+	})
 }
 
 // TestLedgerEntryNotFoundReturnsIndex pins the rippled 3.2.0 change to return
@@ -2480,7 +2546,7 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 	}
 	mock.ledgerEntryErr = nil
 
-	t.Run("First valid entry type is used (index has priority)", func(t *testing.T) {
+	t.Run("Multiple entry types are rejected", func(t *testing.T) {
 		params := map[string]any{
 			"index":        index1,
 			"check":        index2,
@@ -2491,17 +2557,10 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
-		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
-
-		resultJSON, err := json.Marshal(result)
-		require.NoError(t, err)
-		var resp map[string]any
-		err = json.Unmarshal(resultJSON, &resp)
-		require.NoError(t, err)
-
-		// index should take priority
-		assert.Equal(t, index1, resp["index"])
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "invalidParams", rpcErr.ErrorString)
+		assert.Equal(t, "Too many fields provided.", rpcErr.Message)
 	})
 }
 
@@ -2822,7 +2881,6 @@ func TestLedgerEntryHexFallback(t *testing.T) {
 	// All entry types that should accept a direct hex string
 	hexEntryTypes := []string{
 		"amm",
-		"bridge",
 		"credential",
 		"delegate",
 		"deposit_preauth",
@@ -2932,7 +2990,8 @@ func TestLedgerEntryVault(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "Invalid vault owner")
+		assert.Equal(t, "malformedOwner", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid field 'owner', not AccountID.", rpcErr.Message)
 	})
 }
 
@@ -2996,7 +3055,7 @@ func TestLedgerEntryDelegate(t *testing.T) {
 	})
 }
 
-// TestLedgerEntryBridge tests bridge entry lookup by hex string
+// TestLedgerEntryBridge covers rippled's bridge selector envelope and object key derivation.
 func TestLedgerEntryBridge(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
@@ -3009,7 +3068,7 @@ func TestLedgerEntryBridge(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("bridge by hex string", func(t *testing.T) {
+	t.Run("bridge hex string follows released parseObjectID behavior", func(t *testing.T) {
 		params := map[string]any{
 			"bridge":       "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D",
 			"ledger_index": "validated",
@@ -3018,8 +3077,10 @@ func TestLedgerEntryBridge(t *testing.T) {
 		require.NoError(t, err)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
-		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
+		require.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid field 'bridge', not hex string or object.", rpcErr.Message)
 	})
 
 	t.Run("bridge invalid hex", func(t *testing.T) {
@@ -3032,7 +3093,8 @@ func TestLedgerEntryBridge(t *testing.T) {
 
 		_, rpcErr := method.Handle(ctx, paramsJSON)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "Invalid bridge")
+		assert.Equal(t, "malformedRequest", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid field 'bridge', not hex string or object.", rpcErr.Message)
 	})
 }
 
@@ -3164,7 +3226,7 @@ func TestLedgerEntryUppercaseHex(t *testing.T) {
 	require.True(t, ok)
 
 	// Verify uppercase hex
-	assert.Equal(t, "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652", ledgerHash,
+	assert.Equal(t, "4BC50C9B00000000000000000000000000000000000000000000000000000000", ledgerHash,
 		"ledger_hash should use uppercase hex")
 	// Verify no lowercase letters in the hash
 	assert.Equal(t, ledgerHash, strings.ToUpper(ledgerHash),

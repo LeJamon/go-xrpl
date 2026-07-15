@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -143,6 +147,13 @@ func queuedTxInfos(details []*txq.CandidateDetails) []types.QueuedTxInfo {
 // each part to JSON. The blob format is: [VL-length][tx_blob][VL-length][meta_blob].
 // Returns (txJSON, metaJSON) as json.RawMessage, or empty JSON objects on error.
 func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage) {
+	return decodeTxWithMetaToJSONAt(data, handlers.SyntheticMetadataContext{})
+}
+
+func decodeTxWithMetaToJSONAt(
+	data []byte,
+	ctx handlers.SyntheticMetadataContext,
+) (json.RawMessage, json.RawMessage) {
 	emptyObj := json.RawMessage("{}")
 
 	if len(data) == 0 {
@@ -183,6 +194,7 @@ func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage) {
 		metaHex := hex.EncodeToString(metaBlob)
 		metaMap, err := binarycodec.Decode(metaHex)
 		if err == nil {
+			handlers.InjectSyntheticFields(txMap, metaMap, ctx)
 			if m, err := json.Marshal(metaMap); err == nil {
 				metaJSON = m
 			}
@@ -305,22 +317,17 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	return ev
 }
 
-// bookPair holds a single (takerGets, takerPays) currency pair touched
-// by a transaction. Used to fan one tx out to N per-book subscribers.
-type bookPair struct {
-	takerGets types.CurrencySpec
-	takerPays types.CurrencySpec
-}
-
 // extractBookPairsFromTxData walks a VL-encoded tx+meta blob and
-// returns every distinct (takerGets, takerPays) pair from affected
-// Offer nodes. Mirrors rippled's per-tx fan-out in NetworkOPs::pubProposedTx
-// which feeds each Offer change into the matching subBook subscribers.
-func extractBookPairsFromTxData(data []byte) []bookPair {
+// returns every distinct order book from affected Offer nodes.
+func extractBookPairsFromTxData(data []byte) []types.OrderBookSpec {
 	_, metaJSON := decodeTxWithMetaToJSON(data)
 	if len(metaJSON) == 0 {
 		return nil
 	}
+	return extractBookPairsFromMetadata(metaJSON)
+}
+
+func extractBookPairsFromMetadata(metaJSON []byte) []types.OrderBookSpec {
 	var meta struct {
 		AffectedNodes []map[string]json.RawMessage `json:"AffectedNodes"`
 	}
@@ -328,28 +335,50 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 		return nil
 	}
 	seen := make(map[string]struct{})
-	var out []bookPair
+	var out []types.OrderBookSpec
 	for _, node := range meta.AffectedNodes {
-		for _, raw := range node {
-			var nd struct {
-				LedgerEntryType string         `json:"LedgerEntryType"`
-				FinalFields     map[string]any `json:"FinalFields"`
-			}
-			if err := json.Unmarshal(raw, &nd); err != nil {
-				continue
-			}
-			if nd.LedgerEntryType != "Offer" || nd.FinalFields == nil {
-				continue
-			}
-			gets := currencySpecFromAmount(nd.FinalFields["TakerGets"])
-			pays := currencySpecFromAmount(nd.FinalFields["TakerPays"])
-			key := gets.Currency + "/" + gets.Issuer + "|" + pays.Currency + "/" + pays.Issuer
-			if _, ok := seen[key]; ok {
-				continue
-			}
-			seen[key] = struct{}{}
-			out = append(out, bookPair{takerGets: gets, takerPays: pays})
+		var raw json.RawMessage
+		var fieldName string
+		switch {
+		case node["ModifiedNode"] != nil:
+			raw = node["ModifiedNode"]
+			fieldName = "PreviousFields"
+		case node["CreatedNode"] != nil:
+			raw = node["CreatedNode"]
+			fieldName = "NewFields"
+		case node["DeletedNode"] != nil:
+			raw = node["DeletedNode"]
+			fieldName = "FinalFields"
+		default:
+			continue
 		}
+
+		var fieldsByName map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fieldsByName); err != nil {
+			continue
+		}
+		var ledgerEntryType string
+		if err := json.Unmarshal(fieldsByName["LedgerEntryType"], &ledgerEntryType); err != nil || ledgerEntryType != "Offer" {
+			continue
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(fieldsByName[fieldName], &fields); err != nil {
+			continue
+		}
+		gets := currencySpecFromAmount(fields["TakerGets"])
+		pays := currencySpecFromAmount(fields["TakerPays"])
+		if !validBookCurrencySpec(gets) || !validBookCurrencySpec(pays) {
+			continue
+		}
+		domain, _ := fields["DomainID"].(string)
+		book := types.OrderBookSpec{TakerGets: gets, TakerPays: pays, Domain: domain}
+		key := gets.Currency + "\x00" + gets.Issuer + "\x00" + strings.ToUpper(gets.MPTIssuanceID) + "\x00" +
+			pays.Currency + "\x00" + pays.Issuer + "\x00" + strings.ToUpper(pays.MPTIssuanceID) + "\x00" + strings.ToUpper(domain)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, book)
 	}
 	return out
 }
@@ -361,19 +390,23 @@ func currencySpecFromAmount(raw any) types.CurrencySpec {
 	case map[string]any:
 		currency, _ := v["currency"].(string)
 		issuer, _ := v["issuer"].(string)
-		return types.CurrencySpec{Currency: currency, Issuer: issuer}
+		mptIssuanceID, _ := v["mpt_issuance_id"].(string)
+		return types.CurrencySpec{Currency: currency, Issuer: issuer, MPTIssuanceID: mptIssuanceID}
 	default:
 		return types.CurrencySpec{}
 	}
 }
 
+func validBookCurrencySpec(spec types.CurrencySpec) bool {
+	return spec.Currency != "" || spec.MPTIssuanceID != ""
+}
+
 func buildProposedTxEvent(ev service.SubmittedTxEvent) *rpc.ProposedTransactionEvent {
 	txJSON := json.RawMessage("{}")
-	var sourceAccount string
 	if len(ev.RawBlob) > 0 {
 		if decoded, err := binarycodec.Decode(hex.EncodeToString(ev.RawBlob)); err == nil {
-			if acc, ok := decoded["Account"].(string); ok {
-				sourceAccount = acc
+			if ev.OwnerFunds != "" {
+				decoded["owner_funds"] = ev.OwnerFunds
 			}
 			if encoded, err := json.Marshal(decoded); err == nil {
 				txJSON = encoded
@@ -386,7 +419,7 @@ func buildProposedTxEvent(ev service.SubmittedTxEvent) *rpc.ProposedTransactionE
 		ev.Result.Code,
 		ev.Result.Message,
 		ev.CurrentLedger,
-		sourceAccount,
+		upperHex(ev.TxHash[:]),
 	)
 }
 
@@ -503,6 +536,115 @@ func metaTransactionResult(metaJSON json.RawMessage) string {
 		return "tesSUCCESS"
 	}
 	return meta.TransactionResult
+}
+
+func metaTransactionResultDetails(metaJSON json.RawMessage) (string, int, string) {
+	name := metaTransactionResult(metaJSON)
+	code, err := definitions.Get().TransactionResultCode(name)
+	if err != nil {
+		return name, 0, "-"
+	}
+	return name, int(code), ter.Result(code).Message()
+}
+
+func buildValidatedTransactionEvent(
+	txResult service.TransactionResultEvent,
+	event *service.LedgerAcceptedEvent,
+	defaultNetworkID uint32,
+) (*rpc.TransactionEvent, string) {
+	info := event.LedgerInfo
+	closeTime := rippleEpochSeconds(info.CloseTime)
+	txJSON, metaJSON := decodeTxWithMetaToJSONAt(txResult.TxData, handlers.SyntheticMetadataContext{
+		LedgerSequence: txResult.LedgerIndex,
+		CloseTime:      closeTime,
+	})
+	engineResult, engineResultCode, engineResultMessage := metaTransactionResultDetails(metaJSON)
+
+	streamEvent := &rpc.TransactionEvent{
+		Type:                "transaction",
+		EngineResult:        engineResult,
+		EngineResultCode:    engineResultCode,
+		EngineResultMessage: engineResultMessage,
+		LedgerIndex:         txResult.LedgerIndex,
+		LedgerHash:          upperHex(info.Hash[:]),
+		Transaction:         txJSON,
+		Meta:                metaJSON,
+		Hash:                upperHex(txResult.TxHash[:]),
+		Validated:           txResult.Validated,
+		Status:              "closed",
+	}
+	if !txResult.Validated {
+		return streamEvent, engineResult
+	}
+
+	if !info.CloseTime.IsZero() {
+		streamEvent.CloseTimeISO = info.CloseTime.UTC().Format(time.RFC3339)
+	}
+
+	var txFields map[string]any
+	if err := json.Unmarshal(txJSON, &txFields); err != nil || txFields == nil {
+		return streamEvent, engineResult
+	}
+	if closeTime >= 0 && closeTime <= int64(^uint32(0)) {
+		txFields["date"] = uint32(closeTime)
+	}
+	if event.Ledger != nil {
+		_, reserveBase, reserveInc := service.FeesFromLedger(event.Ledger)
+		if funds, ok := handlers.TransactionOwnerFunds(txFields, event.Ledger, reserveBase, reserveInc); ok {
+			txFields["owner_funds"] = funds
+		}
+	}
+	if encoded, err := json.Marshal(txFields); err == nil {
+		streamEvent.Transaction = encoded
+	}
+
+	transactionIndex, ok := metadataTransactionIndex(metaJSON)
+	if !ok {
+		return streamEvent, engineResult
+	}
+	networkID := defaultNetworkID
+	if raw, exists := txFields["NetworkID"]; exists {
+		if override, valid := uint32JSONValue(raw); valid {
+			networkID = override
+		}
+	}
+	if ctid, ok := handlers.EncodeCTID(txResult.LedgerIndex, transactionIndex, networkID); ok {
+		streamEvent.CTID = ctid
+	}
+	return streamEvent, engineResult
+}
+
+func rippleEpochSeconds(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	seconds := t.Unix() - protocol.RippleEpochUnix
+	if seconds < 0 {
+		return 0
+	}
+	return seconds
+}
+
+func metadataTransactionIndex(metaJSON json.RawMessage) (uint32, bool) {
+	var metadata struct {
+		TransactionIndex *uint32 `json:"TransactionIndex"`
+	}
+	if err := json.Unmarshal(metaJSON, &metadata); err != nil || metadata.TransactionIndex == nil {
+		return 0, false
+	}
+	return *metadata.TransactionIndex, true
+}
+
+func uint32JSONValue(value any) (uint32, bool) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return 0, false
+	}
+	var parsed uint32
+	if err := json.Unmarshal(encoded, &parsed); err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 // parseVLLength parses a variable-length field prefix.

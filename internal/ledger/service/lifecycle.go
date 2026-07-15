@@ -109,6 +109,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	if s.eventCallback != nil {
 		event := &LedgerAcceptedEvent{
 			LedgerInfo:         ledgerInfo,
+			Ledger:             s.closedLedger,
 			TransactionResults: txResults,
 		}
 		s.dispatchLedgerEvent(event)
@@ -561,6 +562,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	if s.eventCallback != nil {
 		event := &LedgerAcceptedEvent{
 			LedgerInfo:         ledgerInfo,
+			Ledger:             s.closedLedger,
 			TransactionResults: txResults,
 		}
 		if promotedByDrain {
@@ -650,6 +652,12 @@ func (s *Service) SetValidatedLedgerAt(seq uint32, expectedHash [32]byte, signTi
 	}
 
 	if event != nil {
+		if event.LedgerInfo != nil {
+			event.LedgerInfo.Validated = true
+		}
+		for i := range event.TransactionResults {
+			event.TransactionResults[i].Validated = true
+		}
 		s.dispatchLedgerEvent(event)
 	}
 }
@@ -817,7 +825,10 @@ func (s *Service) adoptLedgerWithStateLocked(
 		txMap = empty
 	}
 
-	adopted := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	adopted, err := ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("failed to construct adopted ledger: %w", err)
+	}
 
 	// Invalidate the history tail if adopted doesn't chain to our seq-1 entry
 	// (divergent fork) so RPCs don't resolve stale state. See fixMismatchLocked.
@@ -916,6 +927,7 @@ func (s *Service) adoptLedgerWithStateLocked(
 		if s.eventCallback != nil {
 			event := &LedgerAcceptedEvent{
 				LedgerInfo:         ledgerInfo,
+				Ledger:             adopted,
 				TransactionResults: txResults,
 			}
 			if promotedByDrain {

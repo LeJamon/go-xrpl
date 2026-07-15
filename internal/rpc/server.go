@@ -701,6 +701,9 @@ func dispatchMethod(
 	adminGate func(string) *types.RPCError,
 	log xrpllog.Logger,
 ) (any, *types.RPCError) {
+	if rpcErr := handlers.ValidateJsonCppIntegerRange(params); rpcErr != nil {
+		return nil, rpcErr
+	}
 	// Resolve the handler without yet failing: the api-version and FORBID gates
 	// run ahead of the unknown-command failure, with the busy gate between them.
 	handler, exists := registry.Get(method)

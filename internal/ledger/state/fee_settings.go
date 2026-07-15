@@ -34,6 +34,8 @@ type FeeSettings struct {
 	// Tracking fields (not always present)
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+
+	feeFieldsPresent bool
 }
 
 // Ledger entry type for FeeSettings
@@ -79,15 +81,19 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 			case 5: // PreviousTxnLgrSeq
 				fee.PreviousTxnLgrSeq = f.UInt32()
 			case int(fieldCodeReferenceFeeUnits):
+				fee.feeFieldsPresent = true
 				fee.ReferenceFeeUnits = f.UInt32()
 			case int(fieldCodeReserveBase):
+				fee.feeFieldsPresent = true
 				fee.ReserveBase = f.UInt32()
 			case int(fieldCodeReserveIncrement):
+				fee.feeFieldsPresent = true
 				fee.ReserveIncrement = f.UInt32()
 			}
 
 		case stUInt64:
 			if f.FieldCode == int(fieldCodeBaseFee) {
+				fee.feeFieldsPresent = true
 				fee.BaseFee = f.UInt64()
 			}
 
@@ -98,12 +104,15 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 				drops := xrpDrops(f.Value)
 				switch f.FieldCode {
 				case int(fieldCodeBaseFeeDrops):
+					fee.feeFieldsPresent = true
 					fee.BaseFeeDrops = drops
 					fee.XRPFeesMode = true
 				case int(fieldCodeReserveBaseDrops):
+					fee.feeFieldsPresent = true
 					fee.ReserveBaseDrops = drops
 					fee.XRPFeesMode = true
 				case int(fieldCodeReserveIncrementDrops):
+					fee.feeFieldsPresent = true
 					fee.ReserveIncrementDrops = drops
 					fee.XRPFeesMode = true
 				}
@@ -168,44 +177,35 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 }
 
 // GetBaseFee returns the base transaction fee in drops.
-// Returns the modern BaseFeeDrops if set, otherwise falls back to legacy BaseFee.
 func (f *FeeSettings) GetBaseFee() uint64 {
-	if f.BaseFeeDrops > 0 {
+	if f.XRPFeesMode {
 		return f.BaseFeeDrops
 	}
-	if f.BaseFee > 0 {
-		return f.BaseFee
-	}
-	return uint64(drops.DefaultBaseFee)
+	return f.BaseFee
 }
 
 // GetReserveBase returns the account reserve base in drops.
-// Returns the modern ReserveBaseDrops if set, otherwise falls back to legacy ReserveBase.
 func (f *FeeSettings) GetReserveBase() uint64 {
-	if f.ReserveBaseDrops > 0 {
+	if f.XRPFeesMode {
 		return f.ReserveBaseDrops
 	}
-	if f.ReserveBase > 0 {
-		return uint64(f.ReserveBase)
-	}
-	return uint64(drops.DefaultReserveBase)
+	return uint64(f.ReserveBase)
 }
 
 // GetReserveIncrement returns the owner reserve increment in drops.
-// Returns the modern ReserveIncrementDrops if set, otherwise falls back to legacy ReserveIncrement.
 func (f *FeeSettings) GetReserveIncrement() uint64 {
-	if f.ReserveIncrementDrops > 0 {
+	if f.XRPFeesMode {
 		return f.ReserveIncrementDrops
 	}
-	if f.ReserveIncrement > 0 {
-		return uint64(f.ReserveIncrement)
-	}
-	return uint64(drops.DefaultReserveIncrement)
+	return uint64(f.ReserveIncrement)
 }
 
-// Fees resolves the active modern or legacy fields and fills missing values
-// from the network defaults.
+// Fees resolves the active modern or legacy fields. The Go zero value uses the
+// network defaults; parsed entries preserve explicitly serialized zero fees.
 func (f *FeeSettings) Fees() drops.Fees {
+	if !f.feeFieldsPresent && !f.XRPFeesMode && f.BaseFee == 0 && f.ReferenceFeeUnits == 0 && f.ReserveBase == 0 && f.ReserveIncrement == 0 {
+		return drops.DefaultFees()
+	}
 	return drops.Fees{
 		Base:      drops.XRPAmount(f.GetBaseFee()),
 		Reserve:   drops.XRPAmount(f.GetReserveBase()),

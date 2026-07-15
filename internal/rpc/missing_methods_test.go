@@ -57,6 +57,7 @@ type mockValidatorList struct {
 
 func (m *mockValidatorList) PublisherCount() int                            { return 0 }
 func (m *mockValidatorList) Threshold() int                                 { return 0 }
+func (m *mockValidatorList) IsUNLBlocked() bool                             { return false }
 func (m *mockValidatorList) Publishers() []types.ValidatorListPublisherInfo { return nil }
 func (m *mockValidatorList) Sites() []types.ValidatorListSiteInfo           { return nil }
 func (m *mockValidatorList) TrustedMasterKeys() [][33]byte                  { return m.masterKeys }
@@ -274,8 +275,7 @@ func TestLedgerHeaderMethod(t *testing.T) {
 
 	method := &handlers.LedgerHeaderMethod{}
 
-	t.Run("Current ledger returns error when GetLedgerBySequence not implemented", func(t *testing.T) {
-		// The mock returns "not implemented" for GetLedgerBySequence
+	t.Run("Current ledger returns the open ledger header", func(t *testing.T) {
 		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -286,12 +286,16 @@ func TestLedgerHeaderMethod(t *testing.T) {
 		params := json.RawMessage(`{"ledger_index": "current"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
+		require.Nil(t, rpcErr)
+		response := result.(map[string]any)
+		assert.Equal(t, uint32(3), response["ledger_current_index"])
+		assert.Equal(t, false, response["validated"])
+		assert.Contains(t, response, "ledger_data")
+		ledger := response["ledger"].(map[string]any)
+		assert.Equal(t, false, ledger["closed"])
 	})
 
-	t.Run("Validated ledger returns error when GetLedgerBySequence not implemented", func(t *testing.T) {
+	t.Run("Validated ledger returns the closed ledger header", func(t *testing.T) {
 		ctx := &types.RPCContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -302,9 +306,14 @@ func TestLedgerHeaderMethod(t *testing.T) {
 		params := json.RawMessage(`{"ledger_index": "validated"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
+		require.Nil(t, rpcErr)
+		response := result.(map[string]any)
+		assert.Equal(t, uint32(2), response["ledger_index"])
+		assert.Equal(t, true, response["validated"])
+		assert.Contains(t, response, "ledger_hash")
+		assert.Contains(t, response, "ledger_data")
+		ledger := response["ledger"].(map[string]any)
+		assert.Equal(t, true, ledger["closed"])
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -359,9 +368,9 @@ func TestLedgerRequestMethod(t *testing.T) {
 	})
 
 	t.Run("Not found and no acquisition subsystem returns lgrNotFound", func(t *testing.T) {
-		// ledger_hash path: the mock has no ledger and no RequestLedger wired.
+		// The all-zero hash is absent from the mock and no RequestLedger is wired.
 		result, rpcErr := method.Handle(newCtx(), json.RawMessage(
-			`{"ledger_hash":"`+strings.Repeat("B", 64)+`"}`))
+			`{"ledger_hash":"`+strings.Repeat("0", 64)+`"}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
@@ -1485,7 +1494,7 @@ func TestVaultInfoMethod(t *testing.T) {
 			Services:   services,
 		}
 
-		params := json.RawMessage(`{"vault_id": "0000000000000000000000000000000000000000000000000000000000000000"}`)
+		params := json.RawMessage(`{"vault_id": "0000000000000000000000000000000000000000000000000000000000000001"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
 		assert.Nil(t, result)

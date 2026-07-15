@@ -61,7 +61,7 @@ func (m *mockNFTOffersLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockNFTOffersLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return newDefaultLedgerReader(seq, seq == m.validatedLedgerIndex), nil
 }
 func (m *mockNFTOffersLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
 	return nil, errors.New("not implemented")
@@ -203,7 +203,7 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 			name:          "Empty nft_id field",
 			params:        map[string]any{"nft_id": ""},
 			expectError:   true,
-			expectedError: "Missing field 'nft_id'",
+			expectedError: "Invalid field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -238,8 +238,11 @@ func TestNftBuyOffersErrorValidation(t *testing.T) {
 				"nft_id": "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4",
 				"marker": "invalid_marker",
 			},
+			setupMock: func() {
+				mock.nftBuyOffersErr = svcerr.ErrInvalidMarker
+			},
 			expectError:   true,
-			expectedError: "Invalid marker",
+			expectedError: "Invalid parameters.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 	}
@@ -324,9 +327,9 @@ func TestNftBuyOffersSuccess(t *testing.T) {
 
 	assert.Equal(t, "00081388DC1AB4E7C57F8067A3AB15BEA8B0F1A0DE14678200000099000001F4", respMap["nft_id"])
 	assert.Contains(t, respMap, "offers")
-	assert.Contains(t, respMap, "ledger_index")
-	assert.Contains(t, respMap, "ledger_hash")
-	assert.Contains(t, respMap, "validated")
+	assert.NotContains(t, respMap, "ledger_index")
+	assert.NotContains(t, respMap, "ledger_hash")
+	assert.NotContains(t, respMap, "validated")
 
 	offers, ok := respMap["offers"].([]map[string]any)
 	require.True(t, ok)
@@ -486,7 +489,7 @@ func TestNftSellOffersErrorValidation(t *testing.T) {
 			name:          "Empty nft_id field",
 			params:        map[string]any{"nft_id": ""},
 			expectError:   true,
-			expectedError: "Missing field 'nft_id'",
+			expectedError: "Invalid field 'nft_id'",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{

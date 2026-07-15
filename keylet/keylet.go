@@ -125,6 +125,62 @@ func LedgerHashesForSeq(ledgerSeq uint32) Keylet {
 	}
 }
 
+// Bridge returns the keylet for a bridge entry.
+func Bridge(door [20]byte, currency [20]byte) Keylet {
+	return Keylet{
+		Type: entry.TypeBridge,
+		Key:  indexHash(spaceBridge, door[:], currency[:]),
+	}
+}
+
+// XChainBridge identifies the assets and door accounts on both sides of a bridge.
+type XChainBridge struct {
+	LockingDoor     [20]byte
+	LockingCurrency [20]byte
+	LockingIssuer   [20]byte
+	IssuingDoor     [20]byte
+	IssuingCurrency [20]byte
+	IssuingIssuer   [20]byte
+}
+
+// XChainClaimID returns the keylet for an owned cross-chain claim entry.
+func XChainClaimID(bridge XChainBridge, sequence uint64) Keylet {
+	var seqBytes [8]byte
+	binary.BigEndian.PutUint64(seqBytes[:], sequence)
+	return Keylet{
+		Type: entry.TypeXChainOwnedClaimID,
+		Key: indexHash(
+			spaceXCClaimID,
+			bridge.LockingDoor[:],
+			bridge.LockingCurrency[:],
+			bridge.LockingIssuer[:],
+			bridge.IssuingDoor[:],
+			bridge.IssuingCurrency[:],
+			bridge.IssuingIssuer[:],
+			seqBytes[:],
+		),
+	}
+}
+
+// XChainCreateAccountClaimID returns the keylet for an owned create-account claim entry.
+func XChainCreateAccountClaimID(bridge XChainBridge, sequence uint64) Keylet {
+	var seqBytes [8]byte
+	binary.BigEndian.PutUint64(seqBytes[:], sequence)
+	return Keylet{
+		Type: entry.TypeXChainOwnedCreateAccountClaimID,
+		Key: indexHash(
+			spaceXCCreateAc,
+			bridge.LockingDoor[:],
+			bridge.LockingCurrency[:],
+			bridge.LockingIssuer[:],
+			bridge.IssuingDoor[:],
+			bridge.IssuingCurrency[:],
+			bridge.IssuingIssuer[:],
+			seqBytes[:],
+		),
+	}
+}
+
 // Offer returns the keylet for an offer entry.
 func Offer(accountID [20]byte, sequence uint32) Keylet {
 	var seqBytes [4]byte

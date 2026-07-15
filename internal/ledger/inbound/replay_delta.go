@@ -486,7 +486,10 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 		return fmt.Errorf("snapshot parent state: %w", err)
 	}
 
-	r.result = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
+	r.result, err = ledger.NewFromHeader(*hdr, stateMap, txMap, drops.Fees{})
+	if err != nil {
+		return fmt.Errorf("construct replay ledger: %w", err)
+	}
 	r.txs = decoded
 
 	r.logger.Info("replay delta verified",
@@ -568,7 +571,10 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		// subtracts dropsDestroyed accumulated during apply.
 		Drops: r.parent.TotalDrops(),
 	}
-	child := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.GetFees())
+	child, err := ledger.NewOpenWithHeader(openHdr, stateMap, txMap, r.parent.GetFees())
+	if err != nil {
+		return nil, fmt.Errorf("construct replay ledger: %w", err)
+	}
 
 	// Override per-ledger config fields from the verified header /
 	// parent. The caller's EngineConfig keeps fees, network ID, logger,

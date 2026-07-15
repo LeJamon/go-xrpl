@@ -91,3 +91,18 @@ func TestEngine_TimerEntry_AmendmentBlockedDemotesToConnected(t *testing.T) {
 		t.Fatalf("blocked node after tick: want OpModeConnected, got %v", got)
 	}
 }
+
+func TestEngine_TimerEntry_UNLBlockedDemotesToConnected(t *testing.T) {
+	adaptor := newMockAdaptor()
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeFull
+	adaptor.unlBlocked = true
+
+	engine := NewEngine(adaptor, DefaultConfig())
+	engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: consensus.LedgerID{1}}, true)
+	engine.timerEntry()
+
+	if got := adaptor.GetOperatingMode(); got != consensus.OpModeConnected {
+		t.Fatalf("UNL-blocked node after tick: want OpModeConnected, got %v", got)
+	}
+}

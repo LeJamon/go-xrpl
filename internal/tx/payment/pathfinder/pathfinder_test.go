@@ -234,8 +234,12 @@ func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]by
 
 // addBookDir creates a book directory entry so BookExists can find it.
 func addBookDir(t *testing.T, ledger *mockLedgerView, takerPays, takerGets payment.Issue) {
+	addBookDirWithDomain(t, ledger, takerPays, takerGets, nil)
+}
+
+func addBookDirWithDomain(t *testing.T, ledger *mockLedgerView, takerPays, takerGets payment.Issue, domainID *[32]byte) {
 	t.Helper()
-	base := keylet.BookBase(bookSide(takerPays), bookSide(takerGets), nil)
+	base := keylet.BookBase(bookSide(takerPays), bookSide(takerGets), domainID)
 	k := keylet.Quality(base, 1)
 
 	dir := &state.DirectoryNode{
@@ -768,6 +772,19 @@ func TestBookIndex_BookExists(t *testing.T) {
 	bi := NewBookIndex(ledger)
 	require.True(t, bi.BookExists(xrpIssue, usdIssue), "book directory should exist")
 	require.False(t, bi.BookExists(usdIssue, xrpIssue), "reverse book should not exist")
+}
+
+func TestBookIndexBookExistsUsesPermissionedDomain(t *testing.T) {
+	ledger := newMockLedger()
+	gw := testAccountID(3)
+	xrpIssue := payment.Issue{Currency: "XRP"}
+	usdIssue := payment.Issue{Currency: "USD", Issuer: gw}
+	domainID := [32]byte{31: 1}
+	addBookDirWithDomain(t, ledger, xrpIssue, usdIssue, &domainID)
+
+	restricted := newBookIndexForDomain(ledger, &domainID)
+	require.True(t, restricted.BookExists(xrpIssue, usdIssue))
+	require.False(t, NewBookIndex(ledger).BookExists(xrpIssue, usdIssue))
 }
 
 // TestBookIndex_BookExists_HexCurrency is a regression test for the old

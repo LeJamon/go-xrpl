@@ -143,16 +143,8 @@ func TestLedgerBasicRequest(t *testing.T) {
 
 		resp := resultToMap(t, result)
 		assert.NotContains(t, resp, "ledger")
-		assert.NotContains(t, resp, "validated")
-		closed := resp["closed"].(map[string]any)["ledger"].(map[string]any)
-		open := resp["open"].(map[string]any)["ledger"].(map[string]any)
-		assert.Equal(t, true, closed["closed"])
-		assert.Equal(t, "2", closed["ledger_index"])
-		assert.Equal(t, map[string]any{
-			"parent_hash":  open["parent_hash"],
-			"ledger_index": "3",
-			"closed":       false,
-		}, open)
+		assert.Equal(t, true, resp["closed"].(map[string]any)["closed"])
+		assert.Equal(t, false, resp["open"].(map[string]any)["closed"])
 	})
 
 	t.Run("Options without selector are ignored", func(t *testing.T) {
@@ -162,6 +154,19 @@ func TestLedgerBasicRequest(t *testing.T) {
 		assert.Contains(t, resp, "closed")
 		assert.Contains(t, resp, "open")
 		assert.NotContains(t, resp, "queue_data")
+	})
+
+	t.Run("No selector ignores full permission gate and warns on type", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true,"type":"account"}`))
+		require.Nil(t, rpcErr)
+		resp := resultToMap(t, result)
+		assert.Contains(t, resp, "closed")
+		warnings, ok := resp["warnings"].([]any)
+		require.True(t, ok)
+		require.Len(t, warnings, 1)
+		warning, ok := warnings[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, float64(2004), warning["id"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {
@@ -379,6 +384,72 @@ func TestLedgerFullOption(t *testing.T) {
 		assert.True(t, isMap, "With expand, transactions should be objects")
 		assert.Contains(t, txObj, "hash")
 	})
+}
+
+func TestLedgerExpandedDeliveredAmountHistoricalCloseTime(t *testing.T) {
+	tests := []struct {
+		name              string
+		closeTime         int64
+		expectedDelivered string
+	}{
+		{
+			name:              "at close-time cutoff",
+			closeTime:         446_000_000,
+			expectedDelivered: "unavailable",
+		},
+		{
+			name:              "after close-time cutoff",
+			closeTime:         446_000_001,
+			expectedDelivered: "100",
+		},
+	}
+
+	for _, tc := range tests {
+		for _, apiVersion := range []int{types.ApiVersion1, types.ApiVersion2} {
+			apiName := "api_v1"
+			metaKey := "metaData"
+			if apiVersion == types.ApiVersion2 {
+				apiName = "api_v2"
+				metaKey = "meta"
+			}
+			t.Run(tc.name+"/"+apiName, func(t *testing.T) {
+				txData, err := json.Marshal(handlers.StoredTransaction{
+					TxJSON: map[string]any{"TransactionType": "Payment", "Amount": "100"},
+					Meta:   map[string]any{"TransactionResult": "tesSUCCESS"},
+				})
+				require.NoError(t, err)
+
+				reader := newDefaultLedgerReader(4_594_094, true)
+				reader.closeTime = tc.closeTime
+				reader.transactions = []struct {
+					hash [32]byte
+					data []byte
+				}{
+					{hash: [32]byte{1}, data: txData},
+				}
+				mock := &ledgerMock{mockLedgerService: newMockLedgerService()}
+				mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+					require.Equal(t, uint32(4_594_094), seq)
+					return reader, nil
+				}
+				ctx := &types.RPCContext{
+					Context:    context.Background(),
+					Role:       types.RoleGuest,
+					ApiVersion: apiVersion,
+					Services:   &types.ServiceContainer{Ledger: mock},
+				}
+				params := json.RawMessage(`{"ledger_index":4594094,"transactions":true,"expand":true}`)
+
+				result, rpcErr := (&handlers.LedgerMethod{}).Handle(ctx, params)
+				require.Nil(t, rpcErr)
+				response := result.(map[string]any)
+				ledger := response["ledger"].(map[string]any)
+				entry := ledger["transactions"].([]any)[0].(map[string]any)
+				meta := entry[metaKey].(map[string]any)
+				require.Equal(t, tc.expectedDelivered, meta["delivered_amount"])
+			})
+		}
+	}
 }
 
 // TestLedgerAccountsOption tests the accounts option
@@ -620,7 +691,6 @@ func TestLedgerResponseStructure(t *testing.T) {
 
 	// Ledger object fields
 	ledger := resp["ledger"].(map[string]any)
-	assert.Contains(t, ledger, "accepted")
 	assert.Contains(t, ledger, "account_hash")
 	assert.Contains(t, ledger, "close_flags")
 	assert.Contains(t, ledger, "close_time")
@@ -635,8 +705,6 @@ func TestLedgerResponseStructure(t *testing.T) {
 	assert.Contains(t, ledger, "ledger_index")
 	assert.Contains(t, ledger, "parent_close_time")
 	assert.Contains(t, ledger, "parent_hash")
-	assert.Contains(t, ledger, "seqNum")
-	assert.Contains(t, ledger, "totalCoins")
 	assert.Contains(t, ledger, "total_coins")
 	assert.Contains(t, ledger, "transaction_hash")
 

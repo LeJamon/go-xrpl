@@ -2,8 +2,69 @@ package tx
 
 import (
 	"bytes"
+	"encoding/json"
+	"math"
 	"testing"
 )
+
+func TestTransactionIndexFromMetadata(t *testing.T) {
+	metaData, err := SerializeMetadata(&Metadata{TransactionIndex: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := TransactionIndexFromMetadata(metaData)
+	if !ok {
+		t.Fatal("TransactionIndexFromMetadata rejected canonical metadata")
+	}
+	if got != 37 {
+		t.Fatalf("transaction index = %d, want 37", got)
+	}
+}
+
+func TestTransactionIndexFromTxWithMetaBlob_JSONFallback(t *testing.T) {
+	tests := []struct {
+		name         string
+		value        any
+		includeField bool
+		want         uint32
+		wantOK       bool
+	}{
+		{name: "zero", value: 0, includeField: true, wantOK: true},
+		{name: "integral", value: 19, includeField: true, want: 19, wantOK: true},
+		{name: "maximum", value: uint64(math.MaxUint32), includeField: true, want: math.MaxUint32, wantOK: true},
+		{name: "fractional", value: 1.5, includeField: true},
+		{name: "negative", value: -1, includeField: true},
+		{name: "overflow", value: uint64(math.MaxUint32) + 1, includeField: true},
+		{name: "string", value: "7", includeField: true},
+		{name: "null", value: nil, includeField: true},
+		{name: "missing"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := map[string]any{}
+			if tc.includeField {
+				meta["TransactionIndex"] = tc.value
+			}
+			blob, err := json.Marshal(map[string]any{
+				"tx_json": map[string]any{},
+				"meta":    meta,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			got, ok := TransactionIndexFromTxWithMetaBlob(blob)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && got != tc.want {
+				t.Fatalf("transaction index = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
 
 func TestSplitTxWithMetaBlob_RoundTrip(t *testing.T) {
 	txData := []byte("transaction data here")

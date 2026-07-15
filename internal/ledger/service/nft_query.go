@@ -183,7 +183,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 	}
 
 	// Handle pagination: if we got reserve offers, there are more
-	if uint32(len(offersCollected)) == reserve && marker == "" {
+	if uint32(len(offersCollected)) == reserve {
 		// We fetched limit+1 offers, so there's more
 		result.Limit = limit
 		result.Marker = offersCollected[len(offersCollected)-1].NFTOfferIndex

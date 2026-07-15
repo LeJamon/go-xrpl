@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -27,25 +28,26 @@ func (s *Service) persistLedger(ctx context.Context, l *ledger.Ledger) error {
 
 func (s *Service) persistValidatedLedger(ctx context.Context, l *ledger.Ledger, updateTip bool) error {
 	seq := l.Sequence()
+	var persistErr error
 
 	if s.nodeStore != nil {
 		if err := s.persistToNodeStore(ctx, l, seq); err != nil {
-			return err
+			persistErr = err
 		}
 	}
 
 	if s.relationalDB != nil {
 		if err := s.persistToRelationalDB(ctx, l); err != nil {
-			return err
+			persistErr = errors.Join(persistErr, err)
 		}
-		if updateTip && s.nodeStore != nil {
+		if persistErr == nil && updateTip && s.nodeStore != nil {
 			if err := s.persistValidatedTip(ctx, l); err != nil {
-				return err
+				persistErr = err
 			}
 		}
 	}
 
-	return nil
+	return persistErr
 }
 
 // persistJob is one unit of persistence work: a ledger to persist, or a
@@ -417,13 +419,13 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 				affected[destinationID] = struct{}{}
 			}
 
-			var txnSeq uint32
+			txnSeq := invalidTransactionIndex
 			if len(metaBlob) > 0 {
+				if txIndex, ok := tx.TransactionIndexFromMetadata(metaBlob); ok {
+					txnSeq = txIndex
+				}
 				metaHex := hex.EncodeToString(metaBlob)
 				if metaJSON, err := binarycodec.Decode(metaHex); err == nil {
-					if v, ok := metaJSON["TransactionIndex"].(float64); ok {
-						txnSeq = uint32(v)
-					}
 					addMetaAffectedAccounts(metaJSON, affected)
 				}
 			}

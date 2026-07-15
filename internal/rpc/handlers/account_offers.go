@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -28,13 +30,31 @@ func (m *AccountOffersMethod) Handle(ctx *types.RPCContext, params json.RawMessa
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	markerStr, mErr := markerString(fields["marker"])
+	marker, mErr := markerString(fields["marker"])
 	if mErr != nil {
 		return nil, mErr
 	}
-	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, account, ledgerIndex, limit, markerStr)
+	if _, present := fields["marker"]; present {
+		if marker == "" {
+			return nil, types.RPCErrorInvalidField("marker")
+		}
+	}
+
+	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, account, ledgerIndex, limit, marker)
 	if err != nil {
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account offers: %v", err))
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RPCErrorInvalidField("marker")
+		}
+		if errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
 	}
 
 	// Build response

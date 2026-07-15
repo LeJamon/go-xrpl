@@ -62,8 +62,25 @@ func FromJSON(data []byte) (Transaction, error) {
 	if err := json.Unmarshal(data, tx); err != nil {
 		return nil, err
 	}
+	presentFields, err := jsonPresentFields(data)
+	if err != nil {
+		return nil, err
+	}
+	tx.GetCommon().SetPresentFields(presentFields)
 
 	return tx, nil
+}
+
+func jsonPresentFields(data []byte) (map[string]bool, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]bool, len(raw))
+	for name := range raw {
+		fields[name] = true
+	}
+	return fields, nil
 }
 
 // ToJSON converts a Transaction to JSON

@@ -1,15 +1,16 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
 
-	ledgerselector "github.com/LeJamon/go-xrpl/internal/ledger/selector"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -20,146 +21,79 @@ import (
 type AccountTxMethod struct{ BaseHandler }
 
 func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	// notEnabled takes precedence over any parameter validation, matching
-	// rippled's useTxTables() gate as the first statement of doAccountTxJson.
 	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
+	if err := validateJsonCppIntegerRange(params); err != nil {
+		return nil, err
+	}
 
-	var rawParams map[string]json.RawMessage
-	if len(params) != 0 {
-		if err := json.Unmarshal(params, &rawParams); err != nil {
+	fields := make(map[string]json.RawMessage)
+	if len(bytes.TrimSpace(params)) != 0 {
+		if err := json.Unmarshal(params, &fields); err != nil {
 			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
 		}
 	}
-	var binary, forward bool
-	if ctx.ApiVersion > types.ApiVersion1 {
-		var boolErr *types.RPCError
-		binary, boolErr = parseAccountTxBool(rawParams, "binary", ctx.ApiVersion)
-		if boolErr != nil {
-			return nil, boolErr
+
+	if ctx.ApiVersion > 1 {
+		if raw, ok := fields["binary"]; ok {
+			if _, isBool := accountTxBoolValue(raw); !isBool {
+				return nil, types.RPCErrorInvalidField("binary")
+			}
 		}
-		forward, boolErr = parseAccountTxBool(rawParams, "forward", ctx.ApiVersion)
-		if boolErr != nil {
-			return nil, boolErr
+		if raw, ok := fields["forward"]; ok {
+			if _, isBool := accountTxBoolValue(raw); !isBool {
+				return nil, types.RPCErrorInvalidField("forward")
+			}
 		}
 	}
 
-	// Explicit zero is invalid; non-admin limits are clamped to [10, 400].
 	limit, limitErr := ReadLimitField(params, LimitAccountTx, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	if ctx.ApiVersion <= types.ApiVersion1 {
-		var boolErr *types.RPCError
-		binary, boolErr = parseAccountTxBool(rawParams, "binary", ctx.ApiVersion)
-		if boolErr != nil {
-			return nil, boolErr
-		}
-		forward, boolErr = parseAccountTxBool(rawParams, "forward", ctx.ApiVersion)
-		if boolErr != nil {
-			return nil, boolErr
-		}
+
+	binary := accountTxBool(fields["binary"])
+	forward := accountTxBool(fields["forward"])
+
+	accountRaw, ok := fields["account"]
+	if !ok {
+		return nil, types.RPCErrorMissingField("account")
+	}
+	accountValue, decodeErr := decodeAccountTxValue(accountRaw)
+	if decodeErr != nil {
+		return nil, types.RPCErrorInvalidField("account")
+	}
+	account, ok := accountValue.(string)
+	if !ok {
+		return nil, types.RPCErrorInvalidField("account")
+	}
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
 
-	var request types.AccountParam
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
+	ledgerSelection, ledgerErr := parseAccountTxLedgerSelection(ctx, fields)
+	if ledgerErr != nil {
+		return nil, ledgerErr
 	}
 
-	var requestedMin, requestedMax int64
-	var singleSelection *ledgerselector.Selector
-	rawMin, hasMin := rawParams["ledger_index_min"]
-	rawMax, hasMax := rawParams["ledger_index_max"]
-	hasMinMax := hasMin || hasMax
-	_, hasLedgerHash := rawParams["ledger_hash"]
-	_, hasLedgerIndex := rawParams["ledger_index"]
-	hasLedgerSpec := hasLedgerHash || hasLedgerIndex
-
-	// API v2: reject conflicting ledger parameters (ledger_index_min/max vs ledger_hash/ledger_index)
-	if ctx.ApiVersion > 1 && hasMinMax && hasLedgerSpec {
-		return nil, types.RPCErrorInvalidParams("invalidParams")
-	}
-
-	if hasMinMax {
-		requestedMax = int64(^uint32(0))
-		if hasMin {
-			value, rangeErr := parseAccountTxRangeBound(rawMin, "ledger_index_min", 0)
-			if rangeErr != nil {
-				return nil, rangeErr
-			}
-			requestedMin = value
-		}
-		if hasMax {
-			value, rangeErr := parseAccountTxRangeBound(rawMax, "ledger_index_max", ^uint32(0))
-			if rangeErr != nil {
-				return nil, rangeErr
-			}
-			requestedMax = value
-		}
-	} else if hasLedgerSpec {
-		selection, selectionErr := parseAccountTxLedgerSelector(rawParams)
-		if selectionErr != nil {
-			return nil, selectionErr
-		}
-		singleSelection = &selection
-	}
-
-	// Parse marker only after all ledger arguments have been accepted.
 	var marker *types.AccountTxMarker
-	if rawMarker, ok := rawParams["marker"]; ok {
-		parsed, markerErr := parseAccountTxMarker(rawMarker)
+	if raw, ok := fields["marker"]; ok {
+		var markerErr *types.RPCError
+		marker, markerErr = parseAccountTxMarker(raw)
 		if markerErr != nil {
 			return nil, markerErr
 		}
-		marker = parsed
 	}
 
-	validatedMin, validatedMax, hasValidatedRange := accountTxValidatedRange(ctx.Services.Ledger)
-	if !hasValidatedRange {
-		if ctx.ApiVersion <= types.ApiVersion1 {
-			return nil, types.RPCErrorLgrIdxsInvalid()
-		}
-		return nil, types.RPCErrorNotSynced("")
-	}
-	ledgerIndexMin := int64(validatedMin)
-	ledgerIndexMax := int64(validatedMax)
-	if hasMinMax {
-		if ctx.ApiVersion > types.ApiVersion1 &&
-			((requestedMax > int64(validatedMax) && requestedMax != int64(^uint32(0))) ||
-				(requestedMin < int64(validatedMin) && requestedMin != 0)) {
-			return nil, types.RPCErrorLgrIdxMalformed()
-		}
-		if requestedMin > ledgerIndexMin {
-			ledgerIndexMin = requestedMin
-		}
-		if requestedMax < ledgerIndexMax {
-			ledgerIndexMax = requestedMax
-		}
-		if ledgerIndexMax < ledgerIndexMin {
-			if ctx.ApiVersion <= types.ApiVersion1 {
-				return nil, types.RPCErrorLgrIdxsInvalid()
-			}
-			return nil, types.RPCErrorInvalidLgrRange()
-		}
-	} else if singleSelection != nil {
-		resolved, resolveErr := resolveLedgerSelection(ctx, *singleSelection)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if !resolved.Validated || resolved.Sequence < validatedMin || resolved.Sequence > validatedMax {
-			return nil, types.RPCErrorLgrNotValidated()
-		}
-		ledgerIndexMin = int64(resolved.Sequence)
-		ledgerIndexMax = int64(resolved.Sequence)
+	ledgerIndexMin, ledgerIndexMax, ledgerErr := resolveAccountTxLedgerSelection(ctx, ledgerSelection)
+	if ledgerErr != nil {
+		return nil, ledgerErr
 	}
 
 	result, err := ctx.Services.Ledger.GetAccountTransactions(
 		ctx.Context,
-		request.Account,
+		account,
 		ledgerIndexMin,
 		ledgerIndexMax,
 		limit,
@@ -234,6 +168,8 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			txEntry["ledger_index"] = txn.LedgerIndex
 		} else {
 			// JSON mode: decode tx_blob and meta into JSON objects
+			var sourceTxJSON map[string]any
+			ledgerInfo := lookupLedger(txn.LedgerIndex)
 
 			// Determine the tx JSON key based on API version
 			txKey := "tx"
@@ -249,8 +185,12 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 				txEntry["hash"] = txHashHex
 				txEntry["ledger_index"] = txn.LedgerIndex
 			} else {
+				sourceTxJSON = maps.Clone(txJSON)
+				ctidNetworkID := networkID
+				if override, ok := jsonUint32(sourceTxJSON["NetworkID"]); ok {
+					ctidNetworkID = override
+				}
 				// Add date inside the tx JSON (both v1 and v2)
-				ledgerInfo := lookupLedger(txn.LedgerIndex)
 				if ledgerInfo.found && ledgerInfo.closeTimeSec > 0 {
 					txJSON["date"] = ledgerInfo.closeTimeSec
 				}
@@ -258,22 +198,17 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 				// Inject DeliverMax for Payment transactions
 				injectDeliverMax(txJSON, ctx.ApiVersion)
 
-				if isV2 {
-					// API v2 retains ledger_index inside tx_json; hash is emitted
-					// at the transaction-entry root.
-					txJSON["ledger_index"] = txn.LedgerIndex
-				} else {
+				if !isV2 {
 					txJSON["hash"] = txHashHex
-					txJSON["inLedger"] = txn.LedgerIndex
-					txJSON["ledger_index"] = txn.LedgerIndex
 				}
-
-				if ctid, ok := encodeCTID(
-					txn.LedgerIndex,
-					txn.TxnSeq,
-					transactionNetworkID(txJSON, networkID),
-				); ok {
-					txJSON["ctid"] = ctid
+				if txn.LedgerIndex > 0 {
+					txJSON["ledger_index"] = txn.LedgerIndex
+					if !isV2 {
+						txJSON["inLedger"] = txn.LedgerIndex
+					}
+					if ctid, ok := EncodeCTID(txn.LedgerIndex, txn.TxnSeq, ctidNetworkID); ok {
+						txJSON["ctid"] = ctid
+					}
 				}
 
 				txEntry[txKey] = txJSON
@@ -284,8 +219,11 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 			if metaErr != nil {
 				txEntry["meta"] = strings.ToUpper(hex.EncodeToString(txn.Meta))
 			} else {
-				if txJSONMap, ok := txEntry[txKey].(map[string]any); ok {
-					enrichTransactionMeta(metaJSON, txJSONMap)
+				if sourceTxJSON != nil {
+					InjectSyntheticFields(sourceTxJSON, metaJSON, SyntheticMetadataContext{
+						LedgerSequence: txn.LedgerIndex,
+						CloseTime:      ledgerInfo.closeTimeSec,
+					})
 				}
 				txEntry["meta"] = metaJSON
 			}
@@ -294,7 +232,6 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 				txEntry["hash"] = txHashHex
 				txEntry["ledger_index"] = txn.LedgerIndex
 				// API v2: add per-entry ledger_hash and close_time_iso
-				ledgerInfo := lookupLedger(txn.LedgerIndex)
 				if ledgerInfo.found {
 					txEntry["ledger_hash"] = strings.ToUpper(hex.EncodeToString(ledgerInfo.hash[:]))
 					if ledgerInfo.closeTimeSec > 0 {
@@ -326,165 +263,278 @@ func (m *AccountTxMethod) Handle(ctx *types.RPCContext, params json.RawMessage) 
 	return response, nil
 }
 
-func accountTxValidatedRange(service types.LedgerService) (uint32, uint32, bool) {
-	maxSequence := service.GetValidatedLedgerIndex()
-	if maxSequence == 0 {
-		maxSequence = service.GetServerInfo().ValidatedLedgerSeq
-	}
-	if maxSequence == 0 {
-		return 0, 0, false
-	}
-
-	minSequence := maxSequence
-	for _, interval := range strings.Split(service.GetServerInfo().CompleteLedgers, ",") {
-		parts := strings.Split(strings.TrimSpace(interval), "-")
-		if len(parts) == 0 || len(parts) > 2 {
-			continue
-		}
-		first, err := strconv.ParseUint(parts[0], 10, 32)
-		if err != nil {
-			continue
-		}
-		last := first
-		if len(parts) == 2 {
-			last, err = strconv.ParseUint(parts[1], 10, 32)
-			if err != nil {
-				continue
-			}
-		}
-		if uint64(maxSequence) >= first && uint64(maxSequence) <= last {
-			minSequence = uint32(first)
-			break
-		}
-	}
-	return minSequence, maxSequence, true
-}
-
-func parseAccountTxBool(raw map[string]json.RawMessage, field string, apiVersion int) (bool, *types.RPCError) {
-	value, present := raw[field]
-	if !present {
-		return false, nil
-	}
-	if apiVersion > types.ApiVersion1 {
-		var result bool
-		if err := json.Unmarshal(value, &result); err != nil || isJSONNull(value) {
-			return false, types.RPCErrorInvalidField(field)
-		}
-		return result, nil
-	}
-
-	var legacy any
-	if err := json.Unmarshal(value, &legacy); err != nil {
-		return false, types.RPCErrorInvalidField(field)
-	}
-	switch typed := legacy.(type) {
-	case nil:
-		return false, nil
-	case bool:
-		return typed, nil
-	case string:
-		return typed != "", nil
-	case float64:
-		return typed != 0, nil
-	default:
-		return false, types.RPCErrorInvalidField(field)
-	}
-}
-
-func parseAccountTxRangeBound(raw json.RawMessage, field string, negativeDefault uint32) (int64, *types.RPCError) {
-	var value int64
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s'.", field))
-	}
-	if value < 0 {
-		return int64(negativeDefault), nil
-	}
-	if uint64(value) > uint64(^uint32(0)) {
-		return 0, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s'.", field))
+func decodeAccountTxValue(raw json.RawMessage) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
 	}
 	return value, nil
 }
 
-func parseAccountTxLedgerSelector(raw map[string]json.RawMessage) (ledgerselector.Selector, *types.RPCError) {
-	if rawHash, ok := raw["ledger_hash"]; ok {
-		var value string
-		if isJSONNull(rawHash) || json.Unmarshal(rawHash, &value) != nil {
-			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledgerHashNotString")
+func accountTxBoolValue(raw json.RawMessage) (bool, bool) {
+	value, err := decodeAccountTxValue(raw)
+	if err != nil {
+		return false, false
+	}
+	b, ok := value.(bool)
+	return b, ok
+}
+
+func accountTxBool(raw json.RawMessage) bool {
+	value, err := decodeAccountTxValue(raw)
+	if err != nil {
+		return false
+	}
+	switch value := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return value
+	case json.Number:
+		n, err := value.Float64()
+		return err == nil && n != 0
+	case string:
+		return value != ""
+	case []any:
+		return len(value) != 0
+	case map[string]any:
+		return len(value) != 0
+	default:
+		return false
+	}
+}
+
+type accountTxLedgerSelection struct {
+	hasRange bool
+	min      uint32
+	max      uint32
+	spec     json.RawMessage
+}
+
+func parseAccountTxLedgerSelection(ctx *types.RPCContext, fields map[string]json.RawMessage) (accountTxLedgerSelection, *types.RPCError) {
+	minRaw, hasMin := fields["ledger_index_min"]
+	maxRaw, hasMax := fields["ledger_index_max"]
+	_, hasHash := fields["ledger_hash"]
+	_, hasIndex := fields["ledger_index"]
+
+	if ctx.ApiVersion > 1 && (hasMin || hasMax) && (hasHash || hasIndex) {
+		return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("invalidParams")
+	}
+	if hasMin || hasMax {
+		min := uint32(0)
+		max := uint32(math.MaxUint32)
+		var err *types.RPCError
+		if hasMin {
+			min, err = accountTxRangeBound(minRaw, 0, "ledger_index_min")
+			if err != nil {
+				return accountTxLedgerSelection{}, err
+			}
 		}
-		selection, err := ledgerselector.ParseHash(value)
+		if hasMax {
+			max, err = accountTxRangeBound(maxRaw, math.MaxUint32, "ledger_index_max")
+			if err != nil {
+				return accountTxLedgerSelection{}, err
+			}
+		}
+		return accountTxLedgerSelection{hasRange: true, min: min, max: max}, nil
+	}
+
+	if hashRaw, ok := fields["ledger_hash"]; ok {
+		value, err := decodeAccountTxValue(hashRaw)
+		hash, isString := value.(string)
+		if err != nil || !isString {
+			return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("ledgerHashNotString")
+		}
+		decoded, err := hex.DecodeString(hash)
+		if err != nil || len(decoded) != 32 {
+			return accountTxLedgerSelection{}, types.RPCErrorInvalidParams("ledgerHashMalformed")
+		}
+		spec, _ := json.Marshal(map[string]json.RawMessage{"ledger_hash": hashRaw})
+		return accountTxLedgerSelection{spec: spec}, nil
+	} else if indexRaw, ok := fields["ledger_index"]; ok {
+		index, err := accountTxLedgerIndex(indexRaw)
 		if err != nil {
-			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledgerHashMalformed")
+			return accountTxLedgerSelection{}, err
 		}
-		return selection, nil
+		spec, _ := json.Marshal(map[string]any{"ledger_index": index})
+		return accountTxLedgerSelection{spec: spec}, nil
+	} else {
+		return accountTxLedgerSelection{}, nil
+	}
+}
+
+func resolveAccountTxLedgerSelection(ctx *types.RPCContext, selection accountTxLedgerSelection) (int64, int64, *types.RPCError) {
+	validatedMin, validatedMax, ok := accountTxValidatedRange(ctx.Services.Ledger.GetServerInfo().CompleteLedgers)
+	if !ok {
+		if ctx.ApiVersion == types.ApiVersion1 {
+			return 0, 0, types.NewRPCError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
+		}
+		return 0, 0, types.NewRPCError(types.RpcNOT_SYNCED, "notSynced", "notSynced", "Not synced to the network.")
 	}
 
-	rawIndex := raw["ledger_index"]
-	var shortcut string
-	if err := json.Unmarshal(rawIndex, &shortcut); err == nil {
-		switch shortcut {
+	if selection.hasRange {
+		if ctx.ApiVersion > 1 &&
+			((selection.max > validatedMax && selection.max != math.MaxUint32) ||
+				(selection.min < validatedMin && selection.min != 0)) {
+			return 0, 0, types.NewRPCError(types.RpcLGR_IDX_MALFORMED, "lgrIdxMalformed", "lgrIdxMalformed", "Ledger index malformed.")
+		}
+		min, max := validatedMin, validatedMax
+		if selection.min > min {
+			min = selection.min
+		}
+		if selection.max < max {
+			max = selection.max
+		}
+		if max < min {
+			if ctx.ApiVersion == types.ApiVersion1 {
+				return 0, 0, types.NewRPCError(types.RpcLGR_IDXS_INVALID, "lgrIdxsInvalid", "lgrIdxsInvalid", "Ledger indexes invalid.")
+			}
+			return 0, 0, types.RPCErrorInvalidLgrRange()
+		}
+		return int64(min), int64(max), nil
+	}
+
+	if selection.spec == nil {
+		return int64(validatedMin), int64(validatedMax), nil
+	}
+	ledger, validated, err := LookupLedger(ctx, selection.spec)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !validated || !ledger.IsValidated() || ledger.Sequence() < validatedMin || ledger.Sequence() > validatedMax {
+		return 0, 0, types.NewRPCError(types.RpcLGR_NOT_VALIDATED, "lgrNotValidated", "lgrNotValidated", "Ledger not validated.")
+	}
+	return int64(ledger.Sequence()), int64(ledger.Sequence()), nil
+}
+
+func accountTxValidatedRange(complete string) (uint32, uint32, bool) {
+	parts := strings.Split(complete, ",")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return 0, 0, false
+	}
+	bounds := strings.Split(strings.TrimSpace(parts[len(parts)-1]), "-")
+	minParsed, minErr := strconv.ParseUint(bounds[0], 10, 32)
+	maxParsed := minParsed
+	var maxErr error
+	if len(bounds) > 1 {
+		maxParsed, maxErr = strconv.ParseUint(bounds[len(bounds)-1], 10, 32)
+	}
+	min, max := uint32(minParsed), uint32(maxParsed)
+	minOK, maxOK := minErr == nil, maxErr == nil
+	return min, max, minOK && maxOK && min <= max
+}
+
+func accountTxRangeBound(raw json.RawMessage, negativeDefault uint32, field string) (uint32, *types.RPCError) {
+	value, err := decodeAccountTxValue(raw)
+	if err != nil {
+		return 0, types.RPCErrorInvalidParams("Invalid field '" + field + "'.")
+	}
+	var number float64
+	switch value := value.(type) {
+	case nil:
+		return 0, nil
+	case bool:
+		if value {
+			return 1, nil
+		}
+		return 0, nil
+	case json.Number:
+		number, err = value.Float64()
+	case string:
+		parsed, parseErr := strconv.ParseInt(value, 10, 64)
+		if parseErr != nil {
+			err = parseErr
+		} else {
+			number = float64(parsed)
+		}
+	default:
+		err = errors.New("not numeric")
+	}
+	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
+		return 0, types.RPCErrorInvalidParams("Invalid field '" + field + "'.")
+	}
+	if number < 0 {
+		return negativeDefault, nil
+	}
+	if number > math.MaxUint32 {
+		return 0, types.RPCErrorInvalidParams("Invalid field '" + field + "'.")
+	}
+	return uint32(number), nil
+}
+
+func accountTxLedgerIndex(raw json.RawMessage) (types.LedgerIndex, *types.RPCError) {
+	value, err := decodeAccountTxValue(raw)
+	if err != nil {
+		return "", types.RPCErrorInvalidParams("ledger_index string malformed")
+	}
+	switch value := value.(type) {
+	case nil:
+		return "current", nil
+	case json.Number:
+		number, err := value.Float64()
+		if err != nil || number < 0 || number > math.MaxUint32 || math.IsNaN(number) || math.IsInf(number, 0) {
+			return "", types.RPCErrorInvalidParams("ledgerIndexMalformed")
+		}
+		return types.LedgerIndex(strconv.FormatUint(uint64(uint32(number)), 10)), nil
+	case string:
+		switch value {
 		case "", "current":
-			return ledgerselector.Current(), nil
-		case "closed":
-			return ledgerselector.Closed(), nil
-		case "validated":
-			return ledgerselector.Validated(), nil
+			return "current", nil
+		case "closed", "validated":
+			return types.LedgerIndex(value), nil
 		default:
-			return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledger_index string malformed")
+			return "", types.RPCErrorInvalidParams("ledger_index string malformed")
 		}
+	default:
+		return "", types.RPCErrorInvalidParams("ledger_index string malformed")
 	}
-
-	var sequence uint32
-	if err := json.Unmarshal(rawIndex, &sequence); err != nil {
-		return ledgerselector.Selector{}, types.RPCErrorInvalidParams("ledger_index string malformed")
-	}
-	return ledgerselector.FromSequence(sequence), nil
 }
 
 func parseAccountTxMarker(raw json.RawMessage) (*types.AccountTxMarker, *types.RPCError) {
 	invalid := func() *types.RPCError {
 		return types.RPCErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
+	value, err := decodeAccountTxValue(raw)
+	if err != nil {
 		return nil, invalid()
 	}
-	rawLedger, hasLedger := fields["ledger"]
-	rawSequence, hasSequence := fields["seq"]
-	if !hasLedger || !hasSequence {
-		return nil, invalid()
-	}
-	ledgerSequence, ok := accountTxMarkerUInt(rawLedger)
+	markerMap, ok := value.(map[string]any)
 	if !ok {
 		return nil, invalid()
 	}
-	transactionSequence, ok := accountTxMarkerUInt(rawSequence)
+	ledgerValue, hasLedger := markerMap["ledger"]
+	seqValue, hasSeq := markerMap["seq"]
+	if !hasLedger || !hasSeq {
+		return nil, invalid()
+	}
+	ledger, ok := accountTxUint32(ledgerValue)
 	if !ok {
 		return nil, invalid()
 	}
-	return &types.AccountTxMarker{
-		LedgerSeq: ledgerSequence,
-		TxnSeq:    transactionSequence,
-	}, nil
+	seq, ok := accountTxUint32(seqValue)
+	if !ok {
+		return nil, invalid()
+	}
+	return &types.AccountTxMarker{LedgerSeq: ledger, TxnSeq: seq}, nil
 }
 
-func accountTxMarkerUInt(raw json.RawMessage) (uint32, bool) {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return 0, false
-	}
-	switch typed := value.(type) {
+func accountTxUint32(value any) (uint32, bool) {
+	switch value := value.(type) {
 	case nil:
 		return 0, true
 	case bool:
-		if typed {
+		if value {
 			return 1, true
 		}
 		return 0, true
-	case float64:
-		if typed < 0 || typed > math.MaxUint32 || math.Trunc(typed) != typed {
+	case json.Number:
+		number, err := value.Float64()
+		if err != nil || number < 0 || number > math.MaxUint32 || math.Round(number) != number {
 			return 0, false
 		}
-		return uint32(typed), true
+		return uint32(number), true
 	default:
 		return 0, false
 	}

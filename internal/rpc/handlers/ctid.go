@@ -6,10 +6,12 @@ import (
 )
 
 const (
-	ctidMaxLedgerSeq = uint32(0x0FFFFFFF)
-	ctidMaxComponent = uint32(0xFFFF)
-	ctidPrefix       = uint64(0xC000000000000000)
-	ctidPrefixMask   = uint64(0xF000000000000000)
+	ctidMaxLedgerSeq      = uint32(0x0FFFFFFF)
+	ctidMaxComponent      = uint32(0xFFFF)
+	ctidPrefix            = uint64(0xC000000000000000)
+	ctidPrefixMask        = uint64(0xF000000000000000)
+	maxCTIDLedgerSequence = ctidMaxLedgerSeq
+	maxCTIDComponent      = ctidMaxComponent
 )
 
 func encodeCTID(ledgerSeq, txIndex, networkID uint32) (string, bool) {
@@ -18,6 +20,10 @@ func encodeCTID(ledgerSeq, txIndex, networkID uint32) (string, bool) {
 	}
 	value := ctidPrefix | uint64(ledgerSeq)<<32 | uint64(txIndex)<<16 | uint64(networkID)
 	return fmt.Sprintf("%016X", value), true
+}
+
+func EncodeCTID(ledgerSequence, transactionIndex, networkID uint32) (string, bool) {
+	return encodeCTID(ledgerSequence, transactionIndex, networkID)
 }
 
 func encodeTxResponseCTID(ledgerSeq, txIndex, networkID uint32) (string, bool) {

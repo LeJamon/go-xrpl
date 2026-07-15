@@ -18,7 +18,15 @@ import (
 // ledgerDataMock wraps mockLedgerService and overrides GetLedgerData
 type ledgerDataMock struct {
 	*mockLedgerService
-	getLedgerDataFn func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error)
+	getLedgerBySequenceFn func(seq uint32) (types.LedgerReader, error)
+	getLedgerDataFn       func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error)
+}
+
+func (m *ledgerDataMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
+	if m.getLedgerBySequenceFn != nil {
+		return m.getLedgerBySequenceFn(seq)
+	}
+	return m.mockLedgerService.GetLedgerBySequence(seq)
 }
 
 func (m *ledgerDataMock) GetLedgerData(ctx context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
@@ -26,13 +34,6 @@ func (m *ledgerDataMock) GetLedgerData(ctx context.Context, ledgerIndex string, 
 		return m.getLedgerDataFn(ledgerIndex, limit, marker)
 	}
 	return m.mockLedgerService.GetLedgerData(ctx, ledgerIndex, limit, marker)
-}
-
-func (m *ledgerDataMock) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	if seq == 0 || seq > m.currentLedgerIndex {
-		return nil, svcerr.ErrLedgerNotFound
-	}
-	return newDefaultLedgerReader(seq, seq <= m.validatedLedgerIndex), nil
 }
 
 // newDefaultLedgerDataResult creates a default LedgerDataResult for testing
@@ -163,7 +164,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		assert.Equal(t, uint32(256), capturedLimit, "JSON limit 257 should be clamped to 256")
 	})
 
-	t.Run("JSON mode limit below 16 passes through", func(t *testing.T) {
+	t.Run("JSON mode positive limit below 16 passes through", func(t *testing.T) {
 		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        5,
@@ -173,7 +174,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
-		assert.Equal(t, uint32(5), capturedLimit)
+		assert.Equal(t, uint32(5), capturedLimit, "Positive JSON limit should pass through")
 	})
 
 	t.Run("JSON mode limit 255 passes through", func(t *testing.T) {
@@ -232,7 +233,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		assert.Equal(t, uint32(2048), capturedLimit, "Binary limit above 2048 should be clamped to 2048")
 	})
 
-	t.Run("Binary mode limit below 16 passes through", func(t *testing.T) {
+	t.Run("Binary mode positive limit below 16 passes through", func(t *testing.T) {
 		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
@@ -243,7 +244,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
-		assert.Equal(t, uint32(3), capturedLimit)
+		assert.Equal(t, uint32(3), capturedLimit, "Positive binary limit should pass through")
 	})
 
 	t.Run("Explicit zero returns an empty page with marker", func(t *testing.T) {
@@ -446,7 +447,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("First page has marker without limit echo", func(t *testing.T) {
+	t.Run("First page has marker and no limit field", func(t *testing.T) {
 		callCount = 0
 		params := map[string]any{
 			"ledger_index": "current",
@@ -503,10 +504,16 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 	var ledgerHash [32]byte
 	ledgerHash[0] = 0xAB
 	ledgerHash[31] = 0xCD
+	currentLedger := newDefaultLedgerReader(3, false)
+	currentLedger.hash = ledgerHash
+	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+		require.Equal(t, uint32(3), seq)
+		return currentLedger, nil
+	}
 
 	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 		return &types.LedgerDataResult{
-			LedgerIndex: 2,
+			LedgerIndex: 3,
 			LedgerHash:  ledgerHash,
 			State: []types.LedgerDataItem{
 				{
@@ -514,7 +521,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 					Data:  []byte{0x11, 0x00, 0x01},
 				},
 			},
-			Validated: true,
+			Validated: false,
 		}, nil
 	}
 
@@ -549,7 +556,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 
 	switch v := resp["ledger_current_index"].(type) {
 	case float64:
-		assert.Equal(t, float64(2), v)
+		assert.Equal(t, float64(3), v)
 	default:
 		t.Errorf("unexpected ledger_current_index type: %T", v)
 	}
@@ -565,7 +572,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 	assert.Equal(t, strings.ToUpper(indexStr), indexStr, "state entry index should be uppercase hex")
 
 	// validated should be bool
-	assert.Equal(t, true, resp["validated"])
+	assert.Equal(t, false, resp["validated"])
 
 	// No marker means no limit in response
 	_, hasLimit := resp["limit"]
@@ -664,26 +671,27 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 	accountHash[0] = 0x01
 	parentHash[0] = 0x02
 	txHash[0] = 0x03
+	closedLedger := &mockLedgerReader{
+		seq:                 2,
+		hash:                ledgerHash,
+		parentHash:          parentHash,
+		txMapHash:           txHash,
+		stateMapHash:        accountHash,
+		closed:              true,
+		validated:           true,
+		totalDrops:          99999999999999980,
+		closeTime:           776000030,
+		closeTimeResolution: 10,
+		parentCloseTime:     776000020,
+	}
+	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
+		require.Equal(t, uint32(2), seq)
+		return closedLedger, nil
+	}
 
 	mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 		result := newDefaultLedgerDataResult(2, false)
-		if marker == "" {
-			result.LedgerHeader = &types.LedgerHeaderInfo{
-				AccountHash:         accountHash,
-				CloseFlags:          0,
-				CloseTime:           776000030,
-				CloseTimeHuman:      "2024-Aug-01 12:00:30.000000000 UTC",
-				CloseTimeISO:        "2024-08-01T12:00:30Z",
-				CloseTimeResolution: 10,
-				Closed:              true,
-				LedgerHash:          ledgerHash,
-				LedgerIndex:         3,
-				ParentCloseTime:     776000020,
-				ParentHash:          parentHash,
-				TotalCoins:          99999999999999980,
-				TransactionHash:     txHash,
-			}
-		}
+		result.LedgerHash = ledgerHash
 		return result, nil
 	}
 

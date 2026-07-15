@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -25,34 +27,50 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RPCContext, params json.RawMes
 		return nil, selErr
 	}
 
-	var destination string
+	destinationAccount := ""
 	if rawDestination, ok := fields["destination_account"]; ok {
-		if isJSONNull(rawDestination) || json.Unmarshal(rawDestination, &destination) != nil {
+		var valid bool
+		destinationAccount, valid = rawJSONString(rawDestination)
+		if !valid {
 			return nil, types.RPCErrorInvalidField("destination_account")
 		}
-		if destination != "" && !types.IsValidXRPLAddress(destination) {
-			return nil, types.RPCErrorActMalformed("Destination account malformed.")
-		}
+	}
+	if destinationAccount != "" && !types.IsValidClassicAddress(destinationAccount) {
+		return nil, types.RPCErrorActMalformed("Account malformed.")
 	}
 
 	limit, limitErr := ReadLimitField(params, LimitAccountChannels, ctx.Unlimited)
 	if limitErr != nil {
 		return nil, limitErr
 	}
-	markerStr, mErr := markerString(fields["marker"])
+	marker, mErr := markerString(fields["marker"])
 	if mErr != nil {
 		return nil, mErr
+	}
+	if _, present := fields["marker"]; present {
+		if marker == "" {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
 	}
 	result, err := ctx.Services.Ledger.GetAccountChannels(
 		ctx.Context,
 		account,
-		destination,
+		destinationAccount,
 		ledgerIndex,
 		limit,
-		markerStr,
+		marker,
 	)
 	if err != nil {
-		return nil, mapAccountQueryErr(err, fmt.Sprintf("Failed to get account channels: %v", err))
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RPCErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+		return nil, types.RPCErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}
 
 	// Build channels array with proper field handling

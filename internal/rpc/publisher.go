@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -38,7 +39,7 @@ type EventPublisher interface {
 	PublishProposedTransaction(event *ProposedTransactionEvent, accounts []string)
 
 	// PublishOrderBookChange publishes an order book change to book subscribers
-	PublishOrderBookChange(event *OrderBookChangeEvent, takerGets, takerPays types.CurrencySpec)
+	PublishOrderBookChange(event *TransactionEvent, books []types.OrderBookSpec)
 
 	// GetSubscriberCount returns the number of active subscribers for a stream type
 	GetSubscriberCount(streamType types.SubscriptionType) int
@@ -77,19 +78,41 @@ func (p *Publisher) PublishTransaction(event *TransactionEvent, affectedAccounts
 		return
 	}
 
-	data, err := json.Marshal(event)
+	v1, err := marshalTransactionEvent(event, types.ApiVersion1)
+	if err != nil {
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal TransactionEvent", "err", err)
+		return
+	}
+	v2, err := marshalTransactionEvent(event, types.ApiVersion2)
 	if err != nil {
 		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal TransactionEvent", "err", err)
 		return
 	}
 
-	// Broadcast to transactions stream
-	p.manager.BroadcastToStream(types.SubTransactions, data, nil)
+	p.manager.BroadcastToStreamVersioned(types.SubTransactions, v1, v2)
+	p.manager.BroadcastToStreamVersioned(types.SubTransactionsProposed, v1, v2)
 
-	// Also broadcast to affected account subscribers
 	if len(affectedAccounts) > 0 {
-		p.manager.BroadcastToAccounts(data, affectedAccounts)
+		p.manager.BroadcastToAcceptedAccountsVersioned(v1, v2, affectedAccounts)
 	}
+}
+
+func marshalTransactionEvent(event *TransactionEvent, apiVersion int) ([]byte, error) {
+	txJSON, err := handlers.ProjectTransactionRaw(event.Transaction, event.Hash, apiVersion)
+	if err != nil {
+		return nil, err
+	}
+
+	projected := *event
+	if apiVersion > 1 {
+		projected.Transaction = nil
+		projected.TxJson = txJSON
+	} else {
+		projected.Transaction = txJSON
+		projected.TxJson = nil
+		projected.Hash = ""
+	}
+	return json.Marshal(&projected)
 }
 
 // PublishValidation broadcasts a validation event to validation stream subscribers
@@ -174,34 +197,59 @@ func (p *Publisher) PublishProposedTransaction(event *ProposedTransactionEvent, 
 		return
 	}
 
-	data, err := json.Marshal(event)
+	v1, err := marshalProposedTransactionEvent(event, types.ApiVersion1)
+	if err != nil {
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ProposedTransactionEvent", "err", err)
+		return
+	}
+	v2, err := marshalProposedTransactionEvent(event, types.ApiVersion2)
 	if err != nil {
 		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal ProposedTransactionEvent", "err", err)
 		return
 	}
 
-	// Broadcast to transactions_proposed stream (all proposed txs)
-	p.manager.BroadcastToStream(types.SubTransactionsProposed, data, nil)
-	// Also broadcast to accounts_proposed subscribers for specific accounts
+	p.manager.BroadcastToStreamVersioned(types.SubTransactionsProposed, v1, v2)
 	if len(accounts) > 0 {
-		p.manager.BroadcastToAccountsProposed(data, accounts)
+		p.manager.BroadcastToAccountsProposedVersioned(v1, v2, accounts)
 	}
 }
 
-// PublishOrderBookChange broadcasts an order book change to book subscribers
-func (p *Publisher) PublishOrderBookChange(event *OrderBookChangeEvent, takerGets, takerPays types.CurrencySpec) {
-	if event == nil || p.manager == nil {
-		return
-	}
-
-	data, err := json.Marshal(event)
+func marshalProposedTransactionEvent(event *ProposedTransactionEvent, apiVersion int) ([]byte, error) {
+	txJSON, err := handlers.ProjectTransactionRaw(event.Transaction, event.Hash, apiVersion)
 	if err != nil {
-		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal OrderBookChangeEvent", "err", err)
+		return nil, err
+	}
+
+	projected := *event
+	if apiVersion > 1 {
+		projected.Transaction = nil
+		projected.TxJson = txJSON
+	} else {
+		projected.Transaction = txJSON
+		projected.TxJson = nil
+		projected.Hash = ""
+	}
+	return json.Marshal(&projected)
+}
+
+// PublishOrderBookChange broadcasts an order book change to book subscribers
+func (p *Publisher) PublishOrderBookChange(event *TransactionEvent, books []types.OrderBookSpec) {
+	if event == nil || p.manager == nil || len(books) == 0 {
 		return
 	}
 
-	// Broadcast to subscribers of this specific order book
-	p.manager.BroadcastToOrderBook(data, takerGets, takerPays)
+	v1, err := marshalTransactionEvent(event, types.ApiVersion1)
+	if err != nil {
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal order-book TransactionEvent", "err", err)
+		return
+	}
+	v2, err := marshalTransactionEvent(event, types.ApiVersion2)
+	if err != nil {
+		xrpllog.Named(xrpllog.PartitionRPC).Error("Failed to marshal order-book TransactionEvent", "err", err)
+		return
+	}
+
+	p.manager.BroadcastToOrderBooksVersioned(v1, v2, books)
 }
 
 // GetSubscriberCount returns the number of active subscribers for a stream type
@@ -228,7 +276,7 @@ func (p *NoOpPublisher) PublishManifest(event *ManifestEvent)                   
 func (p *NoOpPublisher) PublishPeerStatus(event *PeerStatusEvent)                      {}
 func (p *NoOpPublisher) PublishProposedTransaction(event *ProposedTransactionEvent, accounts []string) {
 }
-func (p *NoOpPublisher) PublishOrderBookChange(event *OrderBookChangeEvent, takerGets, takerPays types.CurrencySpec) {
+func (p *NoOpPublisher) PublishOrderBookChange(event *TransactionEvent, books []types.OrderBookSpec) {
 }
 func (p *NoOpPublisher) GetSubscriberCount(streamType types.SubscriptionType) int { return 0 }
 

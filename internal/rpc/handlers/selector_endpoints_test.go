@@ -133,7 +133,7 @@ func TestResolvePathFindLedgerSelectors(t *testing.T) {
 	t.Run("omitted uses closed view without metadata", func(t *testing.T) {
 		service, _ := newSelectorEndpointService(t)
 		ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
-		view, meta, rpcErr := resolvePathFindLedger(ctx, map[string]json.RawMessage{})
+		view, meta, rpcErr := resolvePathFindLedger(ctx, types.LedgerSpecifier{}, false)
 		if rpcErr != nil || view != service.closedView || meta != nil {
 			t.Fatalf("view=%#v meta=%#v error=%#v", view, meta, rpcErr)
 		}
@@ -162,7 +162,11 @@ func TestResolvePathFindLedgerSelectors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			service, hash := newSelectorEndpointService(t)
 			ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
-			view, meta, rpcErr := resolvePathFindLedger(ctx, selectorProbe(t, test.probe(hash)))
+			spec, hasSelector, parseErr := parseLedgerSpecifier(json.RawMessage(test.probe(hash)))
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			view, meta, rpcErr := resolvePathFindLedger(ctx, spec, hasSelector)
 			if rpcErr != nil {
 				t.Fatal(rpcErr)
 			}
@@ -177,9 +181,8 @@ func TestResolvePathFindLedgerSelectors(t *testing.T) {
 	}
 
 	t.Run("conflicting selectors", func(t *testing.T) {
-		service, hash := newSelectorEndpointService(t)
-		ctx := &types.RPCContext{Services: &types.ServiceContainer{Ledger: service}}
-		_, _, rpcErr := resolvePathFindLedger(ctx, selectorProbe(t, `{"ledger_hash":"`+hash+`","ledger_index":7}`))
+		_, hash := newSelectorEndpointService(t)
+		_, _, rpcErr := parseLedgerSpecifier(json.RawMessage(`{"ledger_hash":"` + hash + `","ledger_index":7}`))
 		if rpcErr == nil || rpcErr.Message != "Exactly one of 'ledger_hash' or 'ledger_index' can be specified." {
 			t.Fatalf("error = %#v", rpcErr)
 		}

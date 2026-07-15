@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ValidatorsMethod handles the `validators` admin RPC. Mirrors rippled's
@@ -29,22 +30,19 @@ import (
 type ValidatorsMethod struct{ AdminHandler }
 
 func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any, *types.RPCError) {
+	var services *types.ServiceContainer
+	if ctx != nil {
+		services = ctx.Services
+	}
+	listSnapshot := resolveValidatorListSnapshot(services, time.Now())
 	publisherLists := []map[string]any{}
 	trustedKeys := []string{}
 	signingKeys := map[string]any{}
-	localStatic := []string{}
 	negativeUNL := []string{}
-
-	var earliestExpirationUnix int64
-	anyMissingExpiration := false
-	publisherCount := 0
-	threshold := 0
 
 	if ctx != nil && ctx.Services != nil {
 		if vl := ctx.Services.ValidatorList; vl != nil {
-			publisherCount = vl.PublisherCount()
-			threshold = vl.Threshold()
-			for _, p := range vl.Publishers() {
+			for _, p := range listSnapshot.publishers {
 				entry := map[string]any{
 					"pubkey_publisher": p.PublicKeyHex,
 					"available":        p.Available,
@@ -98,44 +96,17 @@ func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any
 					}
 					entry["remaining"] = rem
 				}
-				// Chained-extension walk for `expires()` (rippled
-				// ValidatorList.cpp:1560-1607): if a `remaining` entry's
-				// validFrom <= the chained validUntil, extend the chain
-				// to that entry's validUntil. The `validator_list`
-				// summary at the end uses earliestExpirationUnix.
-				chainedExp := p.ExpirationUnix
-				if chainedExp > 0 && len(p.Remaining) > 0 {
-					// p.Remaining is already sorted by sequence by the
-					// adapter; effective times within a single publisher's
-					// queue are monotonic by construction (validFrom <
-					// next validFrom for a rotation chain).
-					for _, r := range p.Remaining {
-						if r.EffectiveUnix == 0 || r.ExpirationUnix == 0 {
-							break
-						}
-						if r.EffectiveUnix > chainedExp {
-							break
-						}
-						chainedExp = r.ExpirationUnix
-					}
-				}
-				if chainedExp > 0 {
-					if earliestExpirationUnix == 0 || chainedExp < earliestExpirationUnix {
-						earliestExpirationUnix = chainedExp
-					}
-				} else {
-					anyMissingExpiration = true
-				}
 				publisherLists = append(publisherLists, entry)
 			}
+		}
+		if fn := ctx.Services.TrustedValidatorKeysBase58; fn != nil {
+			trustedKeys = nonNilStrings(fn())
+		} else if vl := ctx.Services.ValidatorList; vl != nil {
 			for _, mk := range vl.TrustedMasterKeys() {
 				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
 					trustedKeys = append(trustedKeys, enc)
 				}
 			}
-		}
-		if fn := ctx.Services.LocalStaticTrustedKeysBase58; fn != nil {
-			localStatic = nonNilStrings(fn())
 		}
 		if fn := ctx.Services.SigningKeysBase58; fn != nil {
 			for master, signing := range fn() {
@@ -152,66 +123,95 @@ func (m *ValidatorsMethod) Handle(ctx *types.RPCContext, _ json.RawMessage) (any
 		quorum = ctx.Services.ValidationQuorum()
 	}
 
-	// Match rippled ValidatorList::count (ValidatorList.cpp:1547-1551):
-	// publisherLists_.size() + (localPublisherList non-empty ? 1 : 0).
-	// The non-empty local static stanza counts as a single source on top
-	// of the publisher set.
-	listCount := publisherCount
-	if len(localStatic) > 0 {
-		listCount++
-	}
-
-	validatorListSummary := map[string]any{
-		"count":                    listCount,
-		"validator_list_threshold": threshold,
-	}
-	// Status / expiration gating mirrors rippled's expires() +
-	// getJson (ValidatorList.cpp:1560-1651). Three cases:
-	//
-	//  1. No publishers configured but the local [validators] stanza
-	//     is populated — rippled's expires() returns the local
-	//     validUntil which is TimeKeeper::time_point::max(); getJson
-	//     emits status="active" expiration="never".
-	//  2. Any publisher's current.validUntil is unset (unfetched) — or
-	//     no source of trust at all — emit status="unknown".
-	//  3. Otherwise emit the earliest publisher validUntil; status is
-	//     "expired" when any publisher is expired/unavailable, else
-	//     "active".
-	switch {
-	case publisherCount == 0 && len(localStatic) > 0:
-		validatorListSummary["status"] = "active"
-		validatorListSummary["expiration"] = "never"
-	case publisherCount == 0 || anyMissingExpiration || earliestExpirationUnix == 0:
-		validatorListSummary["status"] = "unknown"
-		validatorListSummary["expiration"] = "unknown"
-	default:
-		expiry := time.Unix(earliestExpirationUnix, 0)
-		validatorListSummary["expiration"] = formatRippledTime(expiry)
-		// Mirrors rippled ValidatorList.cpp:1641-1644 — status is a pure
-		// timestamp comparison of the earliest validUntil against
-		// wall-clock now, NOT a join over publisher Status/Available
-		// signals. Those latter signals already feed `available` /
-		// `expiration` per publisher; mixing them in here would break
-		// monitors that key on `validator_list.status`.
-		if time.Now().After(expiry) {
-			validatorListSummary["status"] = "expired"
-		} else {
-			validatorListSummary["status"] = "active"
-		}
-	}
+	validatorListSummary := listSnapshot.summary
+	validatorListSummary["validator_list_threshold"] = listSnapshot.threshold
 
 	resp := map[string]any{
 		"trusted_validator_keys": trustedKeys,
 		"publisher_lists":        publisherLists,
 		"validation_quorum":      quorum,
 		"validator_list":         validatorListSummary,
-		"local_static_keys":      localStatic,
+		"local_static_keys":      listSnapshot.localStatic,
 		"signing_keys":           signingKeys,
 	}
 	if len(negativeUNL) > 0 {
 		resp["NegativeUNL"] = negativeUNL
 	}
 	return resp, nil
+}
+
+type validatorListSnapshot struct {
+	publishers  []types.ValidatorListPublisherInfo
+	localStatic []string
+	threshold   int
+	summary     map[string]any
+	expires     uint32
+}
+
+func resolveValidatorListSnapshot(services *types.ServiceContainer, now time.Time) validatorListSnapshot {
+	snapshot := validatorListSnapshot{localStatic: []string{}}
+	if services == nil {
+		snapshot.summary = map[string]any{"count": 0, "status": "unknown", "expiration": "unknown"}
+		return snapshot
+	}
+	if services.LocalStaticTrustedKeysBase58 != nil {
+		snapshot.localStatic = nonNilStrings(services.LocalStaticTrustedKeysBase58())
+	}
+
+	publisherCount := 0
+	if services.ValidatorList != nil {
+		publisherCount = services.ValidatorList.PublisherCount()
+		snapshot.threshold = services.ValidatorList.Threshold()
+		snapshot.publishers = services.ValidatorList.Publishers()
+	}
+
+	listCount := publisherCount
+	if len(snapshot.localStatic) > 0 {
+		listCount++
+	}
+	snapshot.summary = map[string]any{"count": listCount}
+
+	var earliestExpirationUnix int64
+	missingExpiration := len(snapshot.publishers) < publisherCount
+	for _, publisher := range snapshot.publishers {
+		chainedExpiration := publisher.ExpirationUnix
+		for _, remaining := range publisher.Remaining {
+			if chainedExpiration == 0 || remaining.EffectiveUnix == 0 || remaining.ExpirationUnix == 0 || remaining.EffectiveUnix > chainedExpiration {
+				break
+			}
+			chainedExpiration = remaining.ExpirationUnix
+		}
+		if chainedExpiration == 0 {
+			missingExpiration = true
+			continue
+		}
+		if earliestExpirationUnix == 0 || chainedExpiration < earliestExpirationUnix {
+			earliestExpirationUnix = chainedExpiration
+		}
+	}
+
+	switch {
+	case publisherCount == 0 && len(snapshot.localStatic) > 0:
+		snapshot.summary["status"] = "active"
+		snapshot.summary["expiration"] = "never"
+		snapshot.expires = ^uint32(0)
+	case publisherCount == 0 || missingExpiration || earliestExpirationUnix == 0:
+		snapshot.summary["status"] = "unknown"
+		snapshot.summary["expiration"] = "unknown"
+	default:
+		expiry := time.Unix(earliestExpirationUnix, 0)
+		snapshot.summary["expiration"] = formatRippledTime(expiry)
+		if expiry.After(now) {
+			snapshot.summary["status"] = "active"
+		} else {
+			snapshot.summary["status"] = "expired"
+		}
+		rippleSeconds := earliestExpirationUnix - protocol.RippleEpochUnix
+		if rippleSeconds > 0 && rippleSeconds <= int64(^uint32(0)) {
+			snapshot.expires = uint32(rippleSeconds)
+		}
+	}
+	return snapshot
 }
 
 // ValidatorListSitesMethod handles the `validator_list_sites` admin

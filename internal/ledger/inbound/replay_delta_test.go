@@ -390,7 +390,8 @@ func TestInboundReplayDelta_ParentHashMismatch(t *testing.T) {
 	txSnap, err := other.TxMapSnapshot()
 	require.NoError(t, err)
 	require.NoError(t, txSnap.SetImmutable())
-	wrong := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{})
+	wrong, err := ledger.NewFromHeader(hdr, stateSnap, txSnap, drops.Fees{})
+	require.NoError(t, err)
 
 	rd := NewReplayDelta(expectedHash, 42, wrong, nil)
 	err = rd.GotResponse(resp)

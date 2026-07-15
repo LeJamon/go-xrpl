@@ -66,12 +66,25 @@ func TestResolveLedgerSelector(t *testing.T) {
 		if rpcErr.Code != types.RPCErrorInvalidParams("").Code {
 			t.Errorf("error code = %d, want invalid_params", rpcErr.Code)
 		}
+		if rpcErr.Message != "Invalid field 'ledger_hash', not hex string." {
+			t.Errorf("message = %q", rpcErr.Message)
+		}
 	})
 
 	t.Run("malformed hash — non-hex", func(t *testing.T) {
 		_, rpcErr := resolveLedgerSelector(json.RawMessage(`{"ledger_hash":"` + strings.Repeat("z", 64) + `"}`))
 		if rpcErr == nil {
 			t.Fatalf("want rpcINVALID_PARAMS for non-hex hash, got nil")
+		}
+	})
+
+	t.Run("legacy ledger uses only 64-character strings as hashes", func(t *testing.T) {
+		_, rpcErr := resolveLedgerSelector(types.LedgerSpecifier{Ledger: "1234567890123"})
+		if rpcErr == nil {
+			t.Fatal("want rpcINVALID_PARAMS for non-numeric legacy ledger index")
+		}
+		if rpcErr.Message != "Invalid field 'ledger', not string or number." {
+			t.Errorf("message = %q", rpcErr.Message)
 		}
 	})
 }
