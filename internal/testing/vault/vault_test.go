@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
@@ -29,6 +30,49 @@ func newVaultEnv(t *testing.T) *jtx.TestEnv {
 	env.EnableFeature("SingleAssetVault")
 	env.Close()
 	return env
+}
+
+func TestVault_ZeroAssetsMaximumIsAbsent(t *testing.T) {
+	env := newVaultEnv(t)
+	owner := jtx.NewAccount("owner")
+	env.Fund(owner)
+
+	seq := env.Seq(owner)
+	zero := "0"
+	create := vault.NewVaultCreate(owner.Address, tx.Asset{Currency: "XRP"})
+	create.Common.Fee = createFee
+	create.AssetsMaximum = &zero
+	jtx.RequireTxSuccess(t, env.Submit(create))
+
+	vaultKey := keylet.Vault(owner.AccountID(), seq)
+	assertPresent := func(want bool) {
+		t.Helper()
+		data, err := env.LedgerEntry(vaultKey)
+		if err != nil {
+			t.Fatalf("read vault: %v", err)
+		}
+		decoded, err := binarycodec.DecodeBytes(data)
+		if err != nil {
+			t.Fatalf("decode vault: %v", err)
+		}
+		_, got := decoded["AssetsMaximum"]
+		if got != want {
+			t.Fatalf("AssetsMaximum presence = %v, want %v", got, want)
+		}
+	}
+	assertPresent(false)
+
+	id := vaultID(owner, seq)
+	nonzero := "1"
+	set := vault.NewVaultSet(owner.Address, id)
+	set.AssetsMaximum = &nonzero
+	jtx.RequireTxSuccess(t, env.Submit(set))
+	assertPresent(true)
+
+	set = vault.NewVaultSet(owner.Address, id)
+	set.AssetsMaximum = &zero
+	jtx.RequireTxSuccess(t, env.Submit(set))
+	assertPresent(false)
 }
 
 // TestVault_XRPLifecycle exercises create → deposit → withdraw → delete.

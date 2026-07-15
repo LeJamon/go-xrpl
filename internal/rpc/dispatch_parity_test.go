@@ -176,4 +176,37 @@ func TestWSCommandAliasAndMissingCommand(t *testing.T) {
 		assert.Equal(t, "error", resp["status"])
 		assert.Equal(t, "missingCommand", resp["error"])
 	})
+
+	for _, tc := range []struct {
+		name    string
+		request map[string]any
+	}{
+		{
+			name:    "missing command",
+			request: map[string]any{"api_version": float64(0)},
+		},
+		{
+			name:    "non-string command",
+			request: map[string]any{"command": float64(1), "api_version": float64(0)},
+		},
+		{
+			name:    "disagreeing aliases",
+			request: map[string]any{"command": "ping", "method": "pong", "api_version": float64(0)},
+		},
+	} {
+		t.Run("invalid api version precedes "+tc.name, func(t *testing.T) {
+			tc.request["id"] = float64(4)
+			tc.request["jsonrpc"] = "2.0"
+			tc.request["ripplerpc"] = "2.0"
+			resp := roundtrip(tc.request)
+			assert.Equal(t, "invalid_API_version", resp["error"])
+			assert.Equal(t, float64(4), resp["id"])
+			assert.Equal(t, "2.0", resp["jsonrpc"])
+			assert.Equal(t, "2.0", resp["ripplerpc"])
+			assert.Equal(t, float64(0), resp["api_version"])
+			assert.Equal(t, tc.request, resp["request"])
+			assert.NotContains(t, resp, "error_code")
+			assert.NotContains(t, resp, "error_message")
+		})
+	}
 }

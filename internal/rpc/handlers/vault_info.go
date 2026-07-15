@@ -3,10 +3,8 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -15,101 +13,132 @@ import (
 type VaultInfoMethod struct{ BaseHandler }
 
 func (m *VaultInfoMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.LedgerSpecifier
-		VaultID string `json:"vault_id,omitempty"`
-		Owner   string `json:"owner,omitempty"`
-		Seq     uint32 `json:"seq,omitempty"`
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	targetLedger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	response := vaultInfoLedgerFields(targetLedger, validated)
+	ledgerIndex, selectorErr := resolveLedgerSelector(parsedLedgerSpec)
+	if selectorErr != nil {
+		return nil, selectorErr
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	var rawParams map[string]json.RawMessage
+	if err := ParseParams(params, &rawParams); err != nil {
 		return nil, err
 	}
-
-	hasVaultID := request.VaultID != ""
-	hasOwner := request.Owner != ""
-	hasSeq := request.Seq > 0
-
-	// Validate parameter combinations
-	if hasVaultID && (hasOwner || hasSeq) {
-		return nil, types.RPCErrorInvalidParams("Cannot specify vault_id with owner/seq")
-	}
-	if !hasVaultID && (!hasOwner || !hasSeq) {
-		return nil, types.RPCErrorInvalidParams("Must specify either vault_id or (owner + seq)")
-	}
-
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
-	if selErr != nil {
-		return nil, selErr
-	}
-
-	var vaultKey [32]byte
-
-	if hasVaultID {
-		// Direct vault ID lookup
-		vaultIDBytes, err := hex.DecodeString(request.VaultID)
-		if err != nil || len(vaultIDBytes) != 32 {
-			return nil, types.RPCErrorInvalidParams("Invalid vault_id: must be 64-character hex string")
-		}
-		copy(vaultKey[:], vaultIDBytes)
-	} else {
-		// Lookup by owner + seq
-		_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(request.Owner)
-		if err != nil {
-			return nil, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid owner address: %v", err))
-		}
-		var ownerID [20]byte
-		copy(ownerID[:], ownerBytes)
-
-		vaultKeylet := keylet.Vault(ownerID, request.Seq)
-		vaultKey = vaultKeylet.Key
+	vaultKey, parseErr := parseVaultInfoKey(rawParams)
+	if parseErr != nil {
+		return nil, parseErr.WithExtra(response)
 	}
 
 	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
-	if err != nil {
+	if err != nil || vaultEntry == nil {
 		if rerr := mapLedgerLookupErr(err); rerr != nil {
-			return nil, rerr
+			return nil, rerr.WithExtra(response)
 		}
-		return nil, types.RPCErrorEntryNotFoundBare("Vault not found")
+		return nil, types.RPCErrorEntryNotFoundBare("").WithExtra(response)
 	}
 
-	vaultDecoded, decodeErr := binarycodec.Decode(hex.EncodeToString(vaultEntry.Node))
+	vaultDecoded, decodeErr := decodeLedgerEntryNode(vaultEntry.Node)
 	if decodeErr != nil {
-		return nil, types.RPCErrorInternal("Failed to decode Vault: " + decodeErr.Error())
+		return nil, types.RPCErrorInternal("Failed to decode Vault: " + decodeErr.Error()).WithExtra(response)
 	}
 
-	// Get the ShareMPTID to lookup the MPToken issuance
 	shareMPTIDHex, ok := vaultDecoded["ShareMPTID"].(string)
-	if ok && shareMPTIDHex != "" {
-		shareMPTIDBytes, hexErr := hex.DecodeString(shareMPTIDHex)
-		if hexErr == nil && len(shareMPTIDBytes) == 32 {
-			var mptIssuanceKey [32]byte
-			copy(mptIssuanceKey[:], shareMPTIDBytes)
+	shareMPTIDBytes, shareErr := hex.DecodeString(shareMPTIDHex)
+	if !ok || shareErr != nil || len(shareMPTIDBytes) != 24 {
+		return nil, types.RPCErrorInternal("Vault has invalid ShareMPTID").WithExtra(response)
+	}
+	var shareMPTID [24]byte
+	copy(shareMPTID[:], shareMPTIDBytes)
+	mptIssuanceKey := keylet.MPTIssuance(shareMPTID).Key
 
-			mptIssuanceEntry, mptErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, mptIssuanceKey, ledgerIndex)
-			if mptErr == nil {
-				mptIssuanceDecoded, mptDecodeErr := binarycodec.Decode(hex.EncodeToString(mptIssuanceEntry.Node))
-				if mptDecodeErr == nil {
-					vaultDecoded["shares"] = mptIssuanceDecoded
-				}
-			}
+	mptIssuanceEntry, mptErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, mptIssuanceKey, ledgerIndex)
+	if mptErr != nil || mptIssuanceEntry == nil {
+		if rerr := mapLedgerLookupErr(mptErr); rerr != nil {
+			return nil, rerr.WithExtra(response)
 		}
+		return nil, types.RPCErrorEntryNotFoundBare("").WithExtra(response)
+	}
+	mptIssuanceDecoded, mptDecodeErr := decodeLedgerEntryNode(mptIssuanceEntry.Node)
+	if mptDecodeErr != nil {
+		return nil, types.RPCErrorInternal("Failed to decode MPTokenIssuance: " + mptDecodeErr.Error()).WithExtra(response)
 	}
 
-	// Build the response
-	response := map[string]any{
-		"vault":        vaultDecoded,
-		"ledger_index": vaultEntry.LedgerIndex,
-		"validated":    vaultEntry.Validated,
-	}
-
-	if vaultEntry.LedgerHash != [32]byte{} {
-		response["ledger_hash"] = FormatLedgerHash(vaultEntry.LedgerHash)
-	}
-
+	addLedgerEntryJSONFields(vaultDecoded, strings.ToUpper(hex.EncodeToString(vaultKey[:])))
+	addLedgerEntryJSONFields(mptIssuanceDecoded, strings.ToUpper(hex.EncodeToString(mptIssuanceKey[:])))
+	vaultDecoded["shares"] = mptIssuanceDecoded
+	response["vault"] = vaultDecoded
 	return response, nil
+}
+
+func parseVaultInfoKey(params map[string]json.RawMessage) ([32]byte, *types.RPCError) {
+	vaultIDRaw, hasVaultID := params["vault_id"]
+	ownerRaw, hasOwner := params["owner"]
+	seqRaw, hasSeq := params["seq"]
+
+	if hasVaultID && !hasOwner && !hasSeq {
+		var vaultID string
+		_ = json.Unmarshal(vaultIDRaw, &vaultID)
+		vaultIDBytes, err := hex.DecodeString(vaultID)
+		if err != nil || len(vaultIDBytes) != 32 {
+			return [32]byte{}, vaultInfoMalformedInvalidParams()
+		}
+		var vaultKey [32]byte
+		copy(vaultKey[:], vaultIDBytes)
+		if vaultKey == ([32]byte{}) {
+			return [32]byte{}, types.RPCErrorMalformedRequestBare()
+		}
+		return vaultKey, nil
+	}
+
+	if !hasVaultID && hasOwner && hasSeq {
+		var owner string
+		_ = json.Unmarshal(ownerRaw, &owner)
+		ownerID, err := decodeAccountID(owner)
+		if err != nil {
+			return [32]byte{}, vaultInfoMalformedActMalformed()
+		}
+		sequence, ok := parseJSONUInt32(seqRaw)
+		if !ok || sequence == 0 {
+			return [32]byte{}, vaultInfoMalformedInvalidParams()
+		}
+		return keylet.Vault(ownerID, sequence).Key, nil
+	}
+
+	return [32]byte{}, vaultInfoMalformedInvalidParams()
+}
+
+func vaultInfoMalformedInvalidParams() *types.RPCError {
+	return types.NewRPCError(
+		types.RpcINVALID_PARAMS,
+		"malformedRequest",
+		"invalidParams",
+		"Invalid parameters.",
+	)
+}
+
+func vaultInfoMalformedActMalformed() *types.RPCError {
+	return types.NewRPCError(
+		types.RpcACT_MALFORMED,
+		"malformedRequest",
+		"actMalformed",
+		"Account malformed.",
+	)
+}
+
+func vaultInfoLedgerFields(ledger types.LedgerReader, validated bool) map[string]any {
+	response := map[string]any{"validated": validated}
+	if ledger.IsClosed() {
+		response["ledger_hash"] = FormatLedgerHash(ledger.Hash())
+		response["ledger_index"] = ledger.Sequence()
+	} else {
+		response["ledger_current_index"] = ledger.Sequence()
+	}
+	return response
 }

@@ -621,8 +621,19 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// Bind to the live accessor (not a boot-time copy) so a SIGHUP
 		// reload of the [validators] stanza is visible to the RPC.
 		componentsRef := consensusComponents
+		adaptorRef := consensusComponents.Adaptor
 		services.LocalStaticTrustedKeysBase58 = func() []string {
 			masters := componentsRef.StaticTrustedMasterKeys()
+			out := make([]string, 0, len(masters))
+			for _, mk := range masters {
+				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
+					out = append(out, enc)
+				}
+			}
+			return out
+		}
+		services.TrustedValidatorKeysBase58 = func() []string {
+			masters := adaptorRef.GetTrustedMasterKeys()
 			out := make([]string, 0, len(masters))
 			for _, mk := range masters {
 				if enc, err := addresscodec.EncodeNodePublicKey(mk[:]); err == nil {
@@ -635,10 +646,10 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			// Mirrors rippled getJson at ValidatorList.cpp:1726-1734 —
 			// `signing_keys` only surfaces master→signing pairs for
 			// masters present in keyListings_, i.e. validators listed
-			// by at least one publisher or pinned in the local
-			// [validators] stanza. Without this filter we would leak
-			// every gossiped manifest, including ones unrelated to any
-			// trusted publisher.
+			// by at least one publisher, pinned in the local
+			// [validators] stanza, or used as the local identity. Without
+			// this filter we would leak every gossiped manifest, including
+			// ones unrelated to any trusted publisher.
 			vlAgg := consensusComponents.ValidatorList
 			services.SigningKeysBase58 = func() map[string]string {
 				snap := mc.MasterToSigning()
@@ -646,11 +657,14 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 					return nil
 				}
 				listed := make(map[[33]byte]struct{})
-				for _, mk := range componentsRef.StaticTrustedMasterKeys() {
+				for _, mk := range adaptorRef.GetTrustedMasterKeys() {
 					listed[mk] = struct{}{}
 				}
 				if vlAgg != nil {
 					for _, p := range vlAgg.PublisherSnapshot() {
+						if p.Status != validatorlist.StatusAvailable {
+							continue
+						}
 						for _, mk := range p.Validators {
 							listed[mk] = struct{}{}
 						}
@@ -673,7 +687,6 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 				return out
 			}
 		}
-		adaptorRef := consensusComponents.Adaptor
 		services.NegativeUNLBase58 = func() []string {
 			masters := adaptorRef.GetNegativeUNLMasters()
 			if len(masters) == 0 {
@@ -781,12 +794,6 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		}
 	}
 
-	// pubProposedTransaction → transactions_proposed / accounts_proposed
-	// (NetworkOPs.cpp:1535-1544 → 3054-3090 → 3550-3611). The service
-	// only fires this callback for applied submissions and supplies the
-	// full mentioned-accounts set, so the fan-out matches rippled's
-	// pubProposedAccountTransaction which iterates every account
-	// referenced by the tx (source, destination, regular key, signers).
 	ledgerService.SetSubmittedTxCallback(func(ev service.SubmittedTxEvent) {
 		publisher.PublishProposedTransaction(
 			buildProposedTxEvent(ev),
@@ -811,7 +818,9 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		// callback fires from both the standalone accept path and the
 		// consensus SetValidatedLedger path, so the rotator sees every
 		// validated sequence. Notify never blocks.
-		rotator.Notify(event.LedgerInfo.Sequence)
+		if rotator != nil {
+			rotator.Notify(event.LedgerInfo.Sequence)
+		}
 
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
@@ -831,24 +840,8 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		ledgerHashStr := upperHex(event.LedgerInfo.Hash[:])
-
 		for _, txResult := range event.TransactionResults {
-			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
-			engineResult := metaTransactionResult(metaJSON)
-
-			txEvent := &rpc.TransactionEvent{
-				Type:                "transaction",
-				EngineResult:        engineResult,
-				EngineResultCode:    0,
-				EngineResultMessage: "The transaction was applied. Only final in a validated ledger.",
-				LedgerIndex:         txResult.LedgerIndex,
-				LedgerHash:          ledgerHashStr,
-				Transaction:         txJSON,
-				Meta:                metaJSON,
-				Hash:                upperHex(txResult.TxHash[:]),
-				Validated:           txResult.Validated,
-			}
+			txEvent, engineResult := buildValidatedTransactionEvent(txResult, event, uint32(networkID))
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 
 			// Per-book delivery is tesSUCCESS-only — rippled gates
@@ -863,19 +856,7 @@ func Run(appConfig *config.Config, configPath string, standalone bool, rootLogge
 			if len(pairs) == 0 {
 				continue
 			}
-			for _, pair := range pairs {
-				ev := &rpc.OrderBookChangeEvent{
-					Type:        "transaction",
-					Status:      "closed",
-					LedgerIndex: txResult.LedgerIndex,
-					LedgerHash:  ledgerHashStr,
-					LedgerTime:  ledgerTime,
-					Transaction: txJSON,
-					Meta:        metaJSON,
-					Validated:   txResult.Validated,
-				}
-				publisher.PublishOrderBookChange(ev, pair.takerGets, pair.takerPays)
-			}
+			publisher.PublishOrderBookChange(txEvent, pairs)
 		}
 
 		// pubBookChanges → book_changes aggregate stream

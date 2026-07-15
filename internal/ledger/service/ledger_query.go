@@ -184,13 +184,6 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		return nil, err
 	}
 
-	// rippled clamps ledger_data's JSON page to jsonPageLength (256);
-	// over-limit requests are capped, not collapsed to a smaller default
-	// (LedgerData.cpp). GetLedgerData is JSON-only, so the cap is 256.
-	if limit == 0 || limit > 256 {
-		limit = 256
-	}
-
 	result := &LedgerDataResult{
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),

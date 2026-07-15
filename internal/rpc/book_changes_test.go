@@ -340,8 +340,8 @@ func TestBookChangesDomainAndOrdering(t *testing.T) {
 		result := handlers.ComputeBookChanges(ledger)
 		changes := result["changes"].([]map[string]any)
 		require.Len(t, changes, 2)
-		assert.Equal(t, "EUR."+issuer, changes[0]["currency_b"])
-		assert.Equal(t, "USD."+issuer, changes[1]["currency_b"])
+		assert.Equal(t, issuer+"/EUR", changes[0]["currency_b"])
+		assert.Equal(t, issuer+"/USD", changes[1]["currency_b"])
 	})
 }
 

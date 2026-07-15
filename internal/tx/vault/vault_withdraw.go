@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -69,14 +70,11 @@ func (v *VaultWithdraw) Validate() error {
 		return ErrVaultAmountNotPos
 	}
 
-	// A present Destination must not be the zero account. When no Destination
-	// is given, a DestinationTag is meaningless and rejected.
+	// A present Destination must not be the zero account.
 	if v.Destination != "" {
 		if id, err := state.DecodeAccountID(v.Destination); err == nil && id == ([20]byte{}) {
 			return ErrVaultDestZero
 		}
-	} else if v.DestinationTag != nil {
-		return ErrVaultDestTagNoAccount
 	}
 
 	return nil
@@ -114,6 +112,11 @@ func (v *VaultWithdraw) destination(accountID [20]byte) ([20]byte, error) {
 	return state.DecodeAccountID(v.Destination)
 }
 
+func checkVaultShareFrozen(view tx.LedgerView, account [20]byte, vd *vaultData) ter.Result {
+	share := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
+	return checkFrozen(view, share, account)
+}
+
 // Preclaim checks the vault exists, the amount denominates the asset or shares,
 // the withdrawal can be delivered to the destination, and nothing is frozen.
 // Reference: rippled VaultWithdraw::preclaim.
@@ -138,14 +141,25 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return ter.TecWRONG_ASSET
 	}
 
-	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
-		return ter.TefINTERNAL
-	}
-
 	dstID, derr := v.destination(accountID)
 	if derr != nil {
 		return ter.TemMALFORMED
 	}
+	asset := vaultAssetOf(vd)
+	if res := canTransfer(
+		view,
+		asset,
+		vd.Account,
+		dstID,
+		config.RequireRules().FixCleanup3_2_0Enabled(),
+	); res != ter.TesSUCCESS {
+		return res
+	}
+
+	if vd.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
+		return ter.TefINTERNAL
+	}
+
 	// canWithdraw's trust-limit branch is exempt for the share MPT, so a
 	// share-denominated withdrawal pre-amendment skipped the destination's IOU
 	// trust limit entirely. Post-fixCleanup3_1_3 the shares are converted to the
@@ -154,7 +168,12 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 	limitAmount := v.Amount
 	if config.RequireRules().Enabled(amendment.FeatureFixCleanup3_1_3) && v.amountIsShares(vd) &&
 		!isNativeAsset(vd.Asset) && !vd.AssetIsMPT {
-		assets, res := v.sharesToAssetAmount(view, vd)
+		assets, res := v.sharesToAssetAmount(
+			view,
+			vd,
+			accountID,
+			config.RequireRules(),
+		)
 		if res != ter.TesSUCCESS {
 			return res
 		}
@@ -164,8 +183,17 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		return res
 	}
 
-	asset := vaultAssetOf(vd)
-	if res := tx.AssetFrozen(view, dstID, asset); res != ter.TesSUCCESS {
+	authType := mptutil.WeakAuth
+	if dstID != accountID {
+		authType = mptutil.StrongAuth
+	}
+	if res := requireAuth(view, asset, dstID, authType, config.ParentCloseTime); res != ter.TesSUCCESS {
+		return res
+	}
+	if res := checkFrozen(view, asset, dstID); res != ter.TesSUCCESS {
+		return res
+	}
+	if res := checkVaultShareFrozen(view, accountID, vd); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -175,7 +203,19 @@ func (v *VaultWithdraw) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 // sharesToAssetAmount converts the share-denominated withdrawal Amount into the
 // equivalent IOU asset amount, so the destination trust-line limit can be
 // enforced. Reference: rippled VaultWithdraw::preclaim sharesToAssetsWithdraw.
-func (v *VaultWithdraw) sharesToAssetAmount(view tx.LedgerView, vd *vaultData) (tx.Amount, ter.Result) {
+func (v *VaultWithdraw) sharesToAssetAmount(
+	view tx.LedgerView,
+	vd *vaultData,
+	accountID [20]byte,
+	rules *amendment.Rules,
+) (amount tx.Amount, result ter.Result) {
+	result = ter.TesSUCCESS
+	defer func() {
+		if recover() != nil {
+			amount = tx.Amount{}
+			result = ter.TecPATH_DRY
+		}
+	}()
 	shareData, rerr := view.Read(keylet.MPTIssuance(vd.ShareMPTID))
 	if rerr != nil || shareData == nil {
 		return tx.Amount{}, ter.TefINTERNAL
@@ -184,15 +224,143 @@ func (v *VaultWithdraw) sharesToAssetAmount(view tx.LedgerView, vd *vaultData) (
 	if perr != nil || issuance.OutstandingAmount == 0 {
 		return tx.Amount{}, ter.TefINTERNAL
 	}
-	sharesN, aerr := amountToNumber(v.Amount)
+	sharesN, aerr := amountToNumberForRules(v.Amount, rules)
 	if aerr != nil {
 		return tx.Amount{}, ter.TefINTERNAL
 	}
-	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
-	lossN, _ := vaultNumber(vd.LossUnrealized)
-	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
-	assetsN := sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, sharesN)
+	assetsTotalN, _ := vaultNumberForRules(vd.AssetsTotal, rules)
+	lossN, _ := vaultNumberForRules(vd.LossUnrealized, rules)
+	scale := vaultNumberScale(rules)
+	if rules.FixCleanup3_2_0Enabled() && isSoleShareholder(view, accountID, vd.ShareMPTID, issuance.OutstandingAmount) {
+		lossN = state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest)
+	}
+	shareTotalN := state.NewXRPLNumberScaled(int64(issuance.OutstandingAmount), 0, scale, state.RoundToNearest)
+	asset := vaultAssetOf(vd)
+	assetsN := sharesToAssetsWithdraw(
+		assetsTotalN,
+		lossN,
+		shareTotalN,
+		sharesN,
+		asset.IsNative() || asset.IsMPT(),
+	)
 	return state.NewIssuedAmountFromValue(assetsN.Mantissa(), assetsN.Exponent(), vd.Asset.Currency, vd.Asset.Issuer), ter.TesSUCCESS
+}
+
+func assetWithdrawalAmounts(
+	assetsTotal,
+	lossUnrealized,
+	shareTotal,
+	assets state.XRPLNumber,
+	integral bool,
+) (sharesRedeemed, assetsWithdrawn state.XRPLNumber) {
+	sharesRedeemed = assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets, false)
+	assetsWithdrawn = sharesToAssetsWithdraw(
+		assetsTotal,
+		lossUnrealized,
+		shareTotal,
+		sharesRedeemed,
+		integral,
+	)
+	return sharesRedeemed, assetsWithdrawn
+}
+
+func (v *VaultWithdraw) withdrawalAmounts(
+	ctx *tx.ApplyContext,
+	vd *vaultData,
+	issuance *state.MPTokenIssuanceData,
+) (
+	assetsTotalN, availN, assetsWithdrawnN state.XRPLNumber,
+	shares uint64,
+	fix320 bool,
+	result ter.Result,
+) {
+	result = ter.TesSUCCESS
+	defer func() {
+		if recover() != nil {
+			result = ter.TecPATH_DRY
+		}
+	}()
+
+	rules := ctx.Rules()
+	numberScale := vaultNumberScale(rules)
+	assetsTotalN, _ = vaultNumberForRules(vd.AssetsTotal, rules)
+	availN, _ = vaultNumberForRules(vd.AssetsAvailable, rules)
+	lossN, _ := vaultNumberForRules(vd.LossUnrealized, rules)
+	shareTotalN := state.NewXRPLNumberScaled(
+		int64(issuance.OutstandingAmount),
+		0,
+		numberScale,
+		state.RoundToNearest,
+	)
+
+	fix320 = rules.FixCleanup3_2_0Enabled()
+	asset := vaultAssetOf(vd)
+	integral := asset.IsNative() || asset.IsMPT()
+	if fix320 && isSoleShareholder(ctx.View, ctx.AccountID, vd.ShareMPTID, issuance.OutstandingAmount) {
+		lossN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
+	}
+
+	var sharesRedeemedN state.XRPLNumber
+	if v.amountIsShares(vd) {
+		var err error
+		sharesRedeemedN, err = amountToNumberForRules(v.Amount, rules)
+		if err != nil {
+			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TefINTERNAL
+		}
+		assetsWithdrawnN = sharesToAssetsWithdraw(
+			assetsTotalN,
+			lossN,
+			shareTotalN,
+			sharesRedeemedN,
+			integral,
+		)
+	} else {
+		assetsN, err := amountToNumberForRules(v.Amount, rules)
+		if err != nil {
+			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TefINTERNAL
+		}
+		sharesRedeemedN, assetsWithdrawnN = assetWithdrawalAmounts(
+			assetsTotalN,
+			lossN,
+			shareTotalN,
+			assetsN,
+			integral,
+		)
+		if sharesRedeemedN.IsZero() {
+			return assetsTotalN, availN, assetsWithdrawnN, 0, fix320, ter.TecPRECISION_LOSS
+		}
+	}
+
+	shares = uint64(sharesRedeemedN.ToInt64WithMode(state.RoundTowardsZero))
+	return assetsTotalN, availN, assetsWithdrawnN, shares, fix320, ter.TesSUCCESS
+}
+
+func addWithdrawDestinationHolding(ctx *tx.ApplyContext, asset tx.Asset) ter.Result {
+	if asset.IsMPT() {
+		id, ok := assetMPTID(asset)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		exists, err := ctx.View.Exists(keylet.MPTokenByID(id, ctx.AccountID))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if !exists && mptIDIssuer(id) != ctx.AccountID && ctx.Account.OwnerCount >= 2 &&
+			ctx.PriorBalance() < ctx.AccountReserve(tx.ConfineOwnerCount(ctx.Account.OwnerCount, 1)) {
+			return ter.TecINSUFFICIENT_RESERVE
+		}
+	}
+	delta, result := addEmptyHolding(ctx, ctx.AccountID, asset)
+	if result == ter.TecDUPLICATE {
+		return ter.TesSUCCESS
+	}
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if delta > 0 {
+		ctx.Account.OwnerCount = tx.ConfineOwnerCount(ctx.Account.OwnerCount, int(delta))
+	}
+	return ter.TesSUCCESS
 }
 
 // Apply redeems the caller's shares for the underlying asset and delivers it to
@@ -217,39 +385,12 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
-	availN, _ := vaultNumber(vd.AssetsAvailable)
-	lossN, _ := vaultNumber(vd.LossUnrealized)
-	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
-
-	fix320 := ctx.Rules().FixCleanup3_2_0Enabled()
-	// The sole shareholder owns the future value too, so the unrealized-loss
-	// subtraction is waived — otherwise they could burn every share yet strand
-	// future value in the vault.
-	if fix320 && isSoleShareholder(ctx.View, ctx.AccountID, vd.ShareMPTID, issuance.OutstandingAmount) {
-		lossN = newVaultNumber(0, 0)
+	rules := ctx.Rules()
+	asset := vaultAssetOf(vd)
+	assetsTotalN, availN, assetsWithdrawnN, shares, fix320, result := v.withdrawalAmounts(ctx, vd, issuance)
+	if result != ter.TesSUCCESS {
+		return result
 	}
-
-	var sharesRedeemedN, assetsWithdrawnN state.XRPLNumber
-	if v.amountIsShares(vd) {
-		sharesRedeemedN, err = amountToNumber(v.Amount)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		assetsWithdrawnN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, sharesRedeemedN)
-	} else {
-		assetsN, aerr := amountToNumber(v.Amount)
-		if aerr != nil {
-			return ter.TefINTERNAL
-		}
-		sharesRedeemedN = assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, assetsN, true)
-		if sharesRedeemedN.IsZero() {
-			return ter.TecPRECISION_LOSS
-		}
-		assetsWithdrawnN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, sharesRedeemedN)
-	}
-
-	shares := uint64(sharesRedeemedN.ToInt64WithMode(state.RoundTowardsZero))
 
 	// The caller must hold enough shares.
 	token, terr := readMPToken(ctx.View, keylet.MPTokenByID(vd.ShareMPTID, ctx.AccountID))
@@ -277,7 +418,10 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 		vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsWithdrawnN))
 		vd.AssetsAvailable = numberToString(availN.Sub(assetsWithdrawnN))
 	}
-	newVault, serr := serializeVault(vd)
+	if err := associateVaultAsset(vd, rules); err != nil {
+		return ter.TefINTERNAL
+	}
+	newVault, serr := serializeVaultForRules(vd, rules)
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -301,11 +445,14 @@ func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	if derr != nil {
 		return ter.TefINTERNAL
 	}
-	asset := vaultAssetOf(vd)
 	if dstID == ctx.AccountID {
-		if _, res := addEmptyHolding(ctx, ctx.AccountID, asset); res != ter.TesSUCCESS && res != ter.TecDUPLICATE {
+		if res := addWithdrawDestinationHolding(ctx, asset); res != ter.TesSUCCESS {
 			return res
 		}
+	}
+	holding, herr := actualAssetHolding(ctx.View, vd.Account, asset, rules)
+	if herr != nil || holding.Cmp(assetsWithdrawnN) < 0 {
+		return ter.TefINTERNAL
 	}
 	if res := sendAssetFromVault(ctx, vd.Account, dstID, asset, assetsWithdrawnN); res != ter.TesSUCCESS {
 		return res

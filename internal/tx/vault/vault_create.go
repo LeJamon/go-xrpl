@@ -2,6 +2,7 @@ package vault
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -39,6 +40,25 @@ type VaultCreate struct {
 	Scale *uint8 `json:"Scale,omitempty" xrpl:"Scale,omitempty"`
 }
 
+func (v *VaultCreate) UnmarshalJSON(data []byte) error {
+	type alias VaultCreate
+	decoded := struct {
+		AssetsMaximum json.RawMessage `json:"AssetsMaximum"`
+		*alias
+	}{alias: (*alias)(v)}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.AssetsMaximum != nil {
+		maximum, err := parseAssetsMaximumJSON(decoded.AssetsMaximum)
+		if err != nil {
+			return err
+		}
+		v.AssetsMaximum = maximum
+	}
+	return nil
+}
+
 // NewVaultCreate creates a new VaultCreate transaction
 func NewVaultCreate(account string, asset tx.Asset) *VaultCreate {
 	return &VaultCreate{
@@ -71,7 +91,7 @@ func (v *VaultCreate) Validate() error {
 
 	// Data is a Blob: present-but-empty and over-length (in decoded bytes)
 	// are both rejected.
-	if v.Data != "" {
+	if v.Data != "" || v.Common.HasField("Data") {
 		dataBytes, err := decodeBlob(v.Data)
 		if err != nil {
 			return ErrVaultDataTooLong
@@ -92,7 +112,7 @@ func (v *VaultCreate) Validate() error {
 	}
 
 	// Validate DomainID if present
-	if v.DomainID != "" {
+	if v.DomainID != "" || v.Common.HasField("DomainID") {
 		if _, err := tx.ParseHash256NonZero(v.DomainID); err != nil {
 			if isZeroHash(v.DomainID) {
 				return ErrVaultDomainIDZero
@@ -105,14 +125,13 @@ func (v *VaultCreate) Validate() error {
 		}
 	}
 
-	// Validate AssetsMaximum if present. It is a NUMBER: negative is rejected.
-	if v.AssetsMaximum != nil && isNegativeNumberString(*v.AssetsMaximum) {
-		return ErrVaultAssetsMaxNeg
+	if err := validateAssetsMaximum(v.AssetsMaximum); err != nil {
+		return err
 	}
 
 	// MPTokenMetadata is a Blob: present-but-empty and over-length (in decoded
 	// bytes) are both rejected.
-	if v.MPTokenMetadata != "" {
+	if v.MPTokenMetadata != "" || v.Common.HasField("MPTokenMetadata") {
 		metaBytes, err := decodeBlob(v.MPTokenMetadata)
 		if err != nil {
 			return ErrVaultMetadataTooLong
@@ -143,30 +162,16 @@ func isNativeAsset(a tx.Asset) bool {
 	return a.IsNative()
 }
 
-// isNegativeNumberString reports whether a NUMBER field's string form is
-// strictly negative. The binary codec renders negatives with a leading '-'
-// and normalises zero to "0", so a leading '-' is a reliable sign test.
-func isNegativeNumberString(s string) bool {
-	return strings.HasPrefix(strings.TrimSpace(s), "-")
-}
-
 func (v *VaultCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(v)
 }
 
 func (v *VaultCreate) RequiredAmendments() [][32]byte {
 	amendments := [][32]byte{amendment.FeatureSingleAssetVault, amendment.FeatureMPTokensV1}
-	if v.DomainID != "" {
+	if v.DomainID != "" || v.Common.HasField("DomainID") {
 		amendments = append(amendments, amendment.FeaturePermissionedDomains)
 	}
 	return amendments
-}
-
-// CalculateBaseFee returns one owner reserve increment: creating a vault also
-// creates a pseudo-account, so rippled charges the increment as the base fee.
-// Reference: rippled VaultCreate::calculateBaseFee.
-func (v *VaultCreate) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
-	return config.ReserveIncrement
 }
 
 // Preclaim runs the stateful checks: the vault asset must be addable, must not
@@ -198,7 +203,7 @@ func (v *VaultCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.R
 		}
 	}
 
-	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := checkFrozen(view, asset, accountID); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -236,13 +241,6 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDUPLICATE
 	}
 
-	// Creating a vault also creates its pseudo-account, so the owner is charged
-	// for two objects up front (rippled adjustOwnerCount(+2)).
-	newOwnerCount := owner.OwnerCount + 2
-	if ctx.PriorBalance() < ctx.AccountReserve(newOwnerCount) {
-		return ter.TecINSUFFICIENT_RESERVE
-	}
-
 	// Link the vault into the owner's directory.
 	ownerDirKey := keylet.OwnerDir(accountID)
 	vaultDir, err := state.DirInsert(ctx.View, ownerDirKey, vaultKey.Key, false, func(d *state.DirectoryNode) {
@@ -250,6 +248,11 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	})
 	if err != nil {
 		return ter.TecDIR_FULL
+	}
+
+	newOwnerCount := tx.ConfineOwnerCount(owner.OwnerCount, 2)
+	if ctx.PriorBalance() < ctx.AccountReserve(newOwnerCount) {
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	// Compute the share issuance scale and flags. Scale applies to IOU assets
@@ -360,9 +363,16 @@ func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 	if v.AssetsMaximum != nil {
-		vd.AssetsMaximum = *v.AssetsMaximum
+		maximum, nerr := parseCreateSetNumberForRules(*v.AssetsMaximum, ctx.Rules())
+		if nerr != nil {
+			return ter.TefINTERNAL
+		}
+		vd.AssetsMaximum = canonicalCreateSetAssetsMaximum(asset, maximum)
 	}
-	vaultBytes, err := serializeVault(vd)
+	if err := associateVaultAsset(vd, ctx.Rules()); err != nil {
+		return ter.TefINTERNAL
+	}
+	vaultBytes, err := serializeVaultForRules(vd, ctx.Rules())
 	if err != nil {
 		return ter.TefINTERNAL
 	}

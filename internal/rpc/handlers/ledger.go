@@ -11,9 +11,8 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 )
 
 // rippleEpochTime is 2000-01-01T00:00:00Z
@@ -23,6 +22,13 @@ var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 type LedgerMethod struct{ BaseHandler }
 
 func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
+	if boolErr := validateLedgerBooleanOptions(params); boolErr != nil {
+		return nil, boolErr
+	}
+	ledgerSpec, hasLedgerSelector, selectorErr := parseLedgerSpecifier(params)
+	if selectorErr != nil {
+		return nil, selectorErr
+	}
 	var request struct {
 		types.LedgerSpecifier
 		Accounts     bool `json:"accounts,omitempty"`
@@ -37,15 +43,35 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
+	request.LedgerSpecifier = ledgerSpec
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
+	if !hasLedgerSelector {
+		closed, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetClosedLedgerIndex())
+		if err != nil || closed == nil {
+			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+		}
+		open, err := ctx.Services.Ledger.GetLedgerBySequence(ctx.Services.Ledger.GetCurrentLedgerIndex())
+		if err != nil || open == nil {
+			return nil, types.RPCErrorLgrNotFound("ledgerNotFound")
+		}
+		response := map[string]any{
+			"closed": buildLedgerJSON(closed, false, false, ctx.ApiVersion),
+			"open":   buildLedgerJSON(open, false, false, ctx.ApiVersion),
+		}
+		addLedgerTypeWarning(response, params)
+		return response, nil
+	}
+	dumpQueue := request.Queue && hasLedgerSelector
 
-	// full and accounts dump every state node; rippled gates both behind an
-	// unlimited (admin / identified) role else rpcNO_PERMISSION
-	// (LedgerHandler.cpp:66-72). full also implies expand + transactions +
-	// accounts (LedgerToJson.cpp isFull/isExpanded).
+	// Resolve the target before the permission gate, matching LedgerHandler::check.
+	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lerr != nil {
+		return nil, lerr
+	}
+
 	if request.Full || request.Accounts {
 		if !ctx.Unlimited {
 			return nil, types.RPCErrorNoPermission("ledger")
@@ -57,36 +83,37 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		request.Accounts = true
 	}
 
-	// Resolve the target ledger through the shared lookup (rippled
-	// RPC::lookupLedger), which defaults to the current ledger and emits the
-	// rippled-faithful ledgerHashMalformed / ledgerIndexMalformed /
-	// ledgerNotFound errors.
-	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
-	if lerr != nil {
-		return nil, lerr
+	if dumpQueue && targetLedger.IsClosed() {
+		return nil, types.RPCErrorInvalidParams("Invalid parameters.")
 	}
 
-	// Build ledger info (shared with ledger_request).
-	ledgerInfo := ledgerInfoJSON(targetLedger)
-	ledgerHash := ledgerInfo["ledger_hash"].(string)
+	ledgerInfo := buildLedgerJSON(targetLedger, request.Binary, request.Full, ctx.ApiVersion)
+	ledgerHash := FormatLedgerHash(targetLedger.Hash())
 
 	closeTimeSec := targetLedger.CloseTime()
 	closeTimeISO := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second).UTC().Format(time.RFC3339)
+	syntheticContext := SyntheticMetadataContext{
+		LedgerSequence: targetLedger.Sequence(),
+		CloseTime:      closeTimeSec,
+	}
 
 	_, reserveBase, reserveInc := ctx.Services.Ledger.GetCurrentFees()
+	var ownerFundsView types.LedgerStateView
+	ownerFundsReserveBase, ownerFundsReserveInc := reserveBase, reserveInc
+	if request.OwnerFunds && request.Expand {
+		ownerFundsView = ownerFundsLedgerView(ctx, targetLedger)
+		if ownerFundsView != nil {
+			ownerFundsReserveBase, ownerFundsReserveInc = reserveSettingsFromLedger(ownerFundsView, reserveBase, reserveInc)
+		}
+	}
 
 	if request.Transactions {
 		var txList []any
 		apiVersion := ctx.ApiVersion
-		// owner_funds only annotates expanded (non-binary) OfferCreate txs.
-		var ownerFundsView types.LedgerStateView
-		if request.OwnerFunds && request.Expand && !request.Binary {
-			ownerFundsView = ownerFundsLedgerView(ctx, targetLedger)
-		}
 		targetLedger.ForEachTransaction(func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
 			if request.Expand {
-				txEntry := expandTransaction(txData, hashStr, request.Binary, apiVersion)
+				txEntry := expandTransaction(txData, hashStr, request.Binary, apiVersion, syntheticContext)
 				// Add per-entry context fields for v2+
 				if apiVersion > 1 && !request.Binary {
 					if targetLedger.IsClosed() {
@@ -101,7 +128,10 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 					}
 				}
 				if ownerFundsView != nil {
-					annotateOwnerFunds(txEntry, apiVersion, ownerFundsView, reserveBase, reserveInc)
+					storedTx, _ := decodeTxBlob(txData)
+					if !annotateOwnerFunds(txEntry, storedTx.TxJSON, ownerFundsView, ownerFundsReserveBase, ownerFundsReserveInc) {
+						return false
+					}
 				}
 				txList = append(txList, txEntry)
 			} else {
@@ -121,23 +151,182 @@ func (m *LedgerMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (an
 		ledgerInfo["accountState"] = dumpAccountState(ctx, targetLedger, request.Binary, request.Expand)
 	}
 
-	response := map[string]any{
-		"ledger":       ledgerInfo,
-		"ledger_hash":  ledgerHash,
-		"ledger_index": targetLedger.Sequence(),
-		"validated":    validated,
+	response := map[string]any{"ledger": ledgerInfo}
+	if targetLedger.IsClosed() {
+		response["ledger_hash"] = ledgerHash
+		response["ledger_index"] = targetLedger.Sequence()
+	} else {
+		response["ledger_current_index"] = targetLedger.Sequence()
 	}
+	response["validated"] = validated
 
-	response["reserve_base_drops"] = fmt.Sprintf("%d", reserveBase)
-	response["reserve_inc_drops"] = fmt.Sprintf("%d", reserveInc)
-
-	if request.Queue {
-		if queueData := buildLedgerQueueData(ctx, request.Binary, request.Expand); len(queueData) > 0 {
+	if dumpQueue {
+		queueData, queueInternalError := buildLedgerQueueData(
+			ctx,
+			request.Binary,
+			request.Expand,
+			request.OwnerFunds,
+			ownerFundsView,
+			ownerFundsReserveBase,
+			ownerFundsReserveInc,
+		)
+		if len(queueData) > 0 {
 			response["queue_data"] = queueData
+		}
+		if queueInternalError {
+			return nil, types.RPCErrorInternal("ledger queue owner_funds failed for MPT OfferCreate").WithExtra(response)
+		}
+	}
+	addLedgerTypeWarning(response, params)
+
+	return response, nil
+}
+
+func buildLedgerJSON(l types.LedgerReader, binaryMode, full bool, apiVersion int) map[string]any {
+	if binaryMode {
+		if !l.IsClosed() {
+			return map[string]any{"closed": false}
+		}
+		return map[string]any{
+			"closed":      true,
+			"ledger_data": strings.ToUpper(hex.EncodeToString(serializeLedgerHeader(l))),
 		}
 	}
 
-	return response, nil
+	parentHash := l.ParentHash()
+	ledger := map[string]any{
+		"parent_hash": strings.ToUpper(hex.EncodeToString(parentHash[:])),
+	}
+	if apiVersion > 1 {
+		ledger["ledger_index"] = l.Sequence()
+	} else {
+		ledger["ledger_index"] = strconv.FormatUint(uint64(l.Sequence()), 10)
+	}
+
+	if l.IsClosed() {
+		ledger["closed"] = true
+	} else if !full {
+		ledger["closed"] = false
+		return ledger
+	}
+
+	hash := l.Hash()
+	txHash := l.TxMapHash()
+	stateHash := l.StateMapHash()
+	ledger["ledger_hash"] = strings.ToUpper(hex.EncodeToString(hash[:]))
+	ledger["transaction_hash"] = strings.ToUpper(hex.EncodeToString(txHash[:]))
+	ledger["account_hash"] = strings.ToUpper(hex.EncodeToString(stateHash[:]))
+	ledger["total_coins"] = strconv.FormatUint(l.TotalDrops(), 10)
+	ledger["close_flags"] = l.CloseFlags()
+	ledger["parent_close_time"] = l.ParentCloseTime()
+	ledger["close_time"] = l.CloseTime()
+	ledger["close_time_resolution"] = l.CloseTimeResolution()
+
+	if closeTime := l.CloseTime(); closeTime != 0 {
+		utc := rippleEpochTime.Add(time.Duration(closeTime) * time.Second).UTC()
+		ledger["close_time_human"] = utc.Format("2006-Jan-02 15:04:05.000000000 UTC")
+		ledger["close_time_iso"] = utc.Format(time.RFC3339)
+		if l.CloseFlags()&1 != 0 {
+			ledger["close_time_estimated"] = true
+		}
+	}
+	return ledger
+}
+
+func addLedgerTypeWarning(response map[string]any, params json.RawMessage) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		return
+	}
+	if _, ok := fields["type"]; !ok {
+		return
+	}
+	response["warnings"] = []types.WarningObject{{
+		ID: 2004,
+		Message: "Some fields from your request are deprecated. Please check the documentation at " +
+			"https://xrpl.org/docs/references/http-websocket-apis/ and update your request. " +
+			"Field `type` is deprecated.",
+	}}
+}
+
+func validateLedgerBooleanOptions(params json.RawMessage) *types.RPCError {
+	if params == nil {
+		return nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		return nil
+	}
+	for _, name := range []string{"full", "transactions", "accounts", "expand", "binary", "owner_funds", "queue"} {
+		raw, ok := fields[name]
+		if !ok {
+			continue
+		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+		if _, ok := value.(bool); !ok {
+			return types.RPCErrorInvalidParams("Invalid parameters.")
+		}
+	}
+	return nil
+}
+
+func ledgerRequestHasSelector(params json.RawMessage) (bool, *types.RPCError) {
+	if params == nil {
+		return false, nil
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(params, &fields); err != nil {
+		return false, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	selectorNames := []string{"ledger", "ledger_hash", "ledger_index"}
+	present := make([]string, 0, 1)
+	for _, name := range selectorNames {
+		if _, ok := fields[name]; ok {
+			present = append(present, name)
+		}
+	}
+	if len(present) > 1 {
+		if _, hasLegacy := fields["ledger"]; hasLegacy {
+			return false, types.RPCErrorInvalidParams("Exactly one of 'ledger', 'ledger_hash', or 'ledger_index' can be specified.")
+		}
+		return false, types.RPCErrorInvalidParams("Exactly one of 'ledger_hash' or 'ledger_index' can be specified.")
+	}
+	if len(present) == 0 {
+		return false, nil
+	}
+
+	name := present[0]
+	var value any
+	if err := json.Unmarshal(fields[name], &value); err != nil {
+		return false, types.RPCErrorInvalidParams("Invalid parameters.")
+	}
+	if name == "ledger_hash" {
+		hash, ok := value.(string)
+		if !ok || len(hash) != 64 {
+			return false, types.RPCErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
+		}
+		if _, err := hex.DecodeString(hash); err != nil {
+			return false, types.RPCErrorInvalidParams("Invalid field 'ledger_hash', not hex string.")
+		}
+		return true, nil
+	}
+	if _, stringValue := value.(string); stringValue {
+		return true, nil
+	}
+	if _, numberValue := value.(float64); numberValue {
+		rawNumber := strings.TrimSpace(string(fields[name]))
+		if strings.ContainsAny(rawNumber, ".eE") {
+			return false, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
+		}
+		if strings.HasPrefix(rawNumber, "-") {
+			return true, nil
+		}
+		return true, nil
+	}
+	return false, types.RPCErrorInvalidParams(fmt.Sprintf("Invalid field '%s', not string or number.", name))
 }
 
 // ownerFundsLedgerView resolves the state view for the target ledger so
@@ -150,6 +339,13 @@ func ownerFundsLedgerView(ctx *types.RPCContext, l types.LedgerReader) types.Led
 	if !ok {
 		return nil
 	}
+	if l.IsClosed() {
+		view, _, err := src.GetLedgerViewByHash(l.Hash())
+		if err != nil {
+			return nil
+		}
+		return view
+	}
 	view, _, err := src.GetLedgerViewBySeq(l.Sequence())
 	if err != nil {
 		return nil
@@ -161,61 +357,45 @@ func ownerFundsLedgerView(ctx *types.RPCContext, l types.LedgerReader) types.Led
 // when the offer is not self-funded, matching LedgerToJson.cpp:206-224. The
 // value is the offer owner's available funds for the TakerGets asset computed
 // with fhIGNORE_FREEZE (so freezes do not zero the reported funds).
-func annotateOwnerFunds(txEntry map[string]any, apiVersion int, view types.LedgerStateView, reserveBase, reserveInc uint64) {
-	txFields := txEntry
-	if apiVersion > 1 {
-		inner, ok := txEntry["tx_json"].(map[string]any)
-		if !ok {
-			return
-		}
-		txFields = inner
+func annotateOwnerFunds(
+	txEntry map[string]any,
+	txJSON map[string]any,
+	view types.LedgerStateView,
+	reserveBase, reserveInc uint64,
+) bool {
+	if ledgerOwnerFundsUnsupportedMPT(txJSON) {
+		return false
 	}
 
-	if txFields["TransactionType"] != "OfferCreate" {
-		return
+	if funds, ok := TransactionOwnerFunds(txJSON, view, reserveBase, reserveInc); ok {
+		txEntry["owner_funds"] = funds
 	}
-	account, _ := txFields["Account"].(string)
-	if account == "" {
-		return
-	}
-	amount, ok := parseLedgerAmount(txFields["TakerGets"])
-	if !ok {
-		return
-	}
-
-	// Self-funded offers (issuer == account) carry no owner_funds.
-	if !amount.IsNative() && amount.Issuer == account {
-		return
-	}
-
-	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
-	if err != nil || len(idBytes) != 20 {
-		return
-	}
-	var accountID [20]byte
-	copy(accountID[:], idBytes)
-
-	funds := tx.AccountFunds(view, accountID, amount, false, reserveBase, reserveInc)
-	txEntry["owner_funds"] = funds.Value()
+	return true
 }
 
-// parseLedgerAmount converts a transaction-JSON amount value (an XRP drops
-// string or an issued-currency object) into a state.Amount via the codec's
-// own unmarshaler, so XRP and IOU shapes are handled identically to the rest
-// of the stack.
-func parseLedgerAmount(raw any) (state.Amount, bool) {
-	if raw == nil {
-		return state.Amount{}, false
+func ledgerOwnerFundsUnsupportedMPT(txJSON map[string]any) bool {
+	// Released rippled 3.2.0 stops expanded transaction enumeration when
+	// owner_funds reaches a non-issuer MPT offer.
+	if txJSON["TransactionType"] != "OfferCreate" {
+		return false
 	}
-	encoded, err := json.Marshal(raw)
+	amount, ok := parseTransactionAmount(txJSON["TakerGets"])
+	if !ok || !amount.IsMPT() {
+		return false
+	}
+	account, _ := txJSON["Account"].(string)
+	_, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil || len(accountBytes) != 20 {
+		return false
+	}
+	issuanceID, err := mptutil.DecodeID(amount.MPTIssuanceID())
 	if err != nil {
-		return state.Amount{}, false
+		return false
 	}
-	var amount state.Amount
-	if err := json.Unmarshal(encoded, &amount); err != nil {
-		return state.Amount{}, false
-	}
-	return amount, true
+	var accountID [20]byte
+	copy(accountID[:], accountBytes)
+	issuerID := mptutil.Issuer(issuanceID)
+	return accountID != issuerID
 }
 
 // dumpAccountState walks the full state tree and returns the accountState
@@ -227,7 +407,7 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 	state := make([]any, 0)
 	marker := ""
 	for {
-		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, 0, marker)
+		result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, LimitLedgerData.Max, marker)
 		if err != nil || result == nil {
 			break
 		}
@@ -264,13 +444,18 @@ func dumpAccountState(ctx *types.RPCContext, l types.LedgerReader, binary, expan
 // fields plus the account, retry/preflight bookkeeping and the transaction
 // body (tx for API v1, merged tx_json for v2+). Returns nil when the queue is
 // empty or unwired.
-func buildLedgerQueueData(ctx *types.RPCContext, binary, expanded bool) []any {
+func buildLedgerQueueData(
+	ctx *types.RPCContext,
+	binary, expanded, ownerFunds bool,
+	ownerFundsView types.LedgerStateView,
+	reserveBase, reserveInc uint64,
+) ([]any, bool) {
 	if ctx.Services == nil || ctx.Services.QueueAllTxs == nil {
-		return nil
+		return nil, false
 	}
 	txs := ctx.Services.QueueAllTxs()
 	if len(txs) == 0 {
-		return nil
+		return nil, false
 	}
 
 	apiVersion := ctx.ApiVersion
@@ -297,42 +482,56 @@ func buildLedgerQueueData(ctx *types.RPCContext, binary, expanded bool) []any {
 		}
 
 		txBody := buildQueueTxBody(qtx, binary, expanded, apiVersion)
-		if apiVersion > 1 {
-			for k, v := range txBody {
-				entry[k] = v
+		if ownerFunds && expanded && ownerFundsView != nil {
+			body, ok := txBody.(map[string]any)
+			if ok && !annotateOwnerFunds(body, qtx.TxJSON, ownerFundsView, reserveBase, reserveInc) {
+				queueData = append(queueData, entry)
+				return queueData, true
 			}
+		}
+		if body, ok := txBody.(map[string]any); ok {
+			if apiVersion > 1 {
+				for k, v := range body {
+					entry[k] = v
+				}
+			} else {
+				entry["tx"] = body
+			}
+		} else if apiVersion > 1 {
+			entry["hash"] = txBody
 		} else {
 			entry["tx"] = txBody
 		}
 
 		queueData = append(queueData, entry)
 	}
-	return queueData
+	return queueData, false
 }
 
 // buildQueueTxBody renders the queued transaction body the way
 // fillJsonQueue's nested fillJsonTx call does (LedgerToJson.cpp:311): a hash
 // or tx_blob in non-expanded / binary modes, otherwise the flattened tx
 // fields with the hash injected.
-func buildQueueTxBody(qtx types.QueuedTxInfo, binary, expanded bool, apiVersion int) map[string]any {
+func buildQueueTxBody(qtx types.QueuedTxInfo, binary, expanded bool, apiVersion int) any {
 	hashStr := strings.ToUpper(hex.EncodeToString(qtx.TxID[:]))
 	if !expanded {
-		return map[string]any{"hash": hashStr}
+		return hashStr
 	}
 	if binary {
-		body := map[string]any{"hash": hashStr}
+		body := map[string]any{}
 		if blob, err := binarycodec.Encode(qtx.TxJSON); err == nil {
 			body["tx_blob"] = blob
+		}
+		if apiVersion > 1 {
+			body["hash"] = hashStr
 		}
 		return body
 	}
 	if apiVersion > 1 {
-		return map[string]any{"tx_json": qtx.TxJSON, "hash": hashStr}
+		txJSON := projectTransactionJSON(qtx.TxJSON, "", apiVersion)
+		return map[string]any{"tx_json": txJSON, "hash": hashStr, "validated": false}
 	}
-	body := make(map[string]any, len(qtx.TxJSON)+1)
-	maps.Copy(body, qtx.TxJSON)
-	body["hash"] = hashStr
-	return body
+	return projectTransactionJSON(qtx.TxJSON, hashStr, apiVersion)
 }
 
 // expandTransaction builds an expanded transaction object from raw txData.
@@ -344,21 +543,35 @@ func buildQueueTxBody(qtx types.QueuedTxInfo, binary, expanded bool, apiVersion 
 //
 // For binary mode, tx_blob and meta_blob/meta are returned as hex strings.
 // Reference: rippled LedgerToJson.cpp fillJsonTx()
-func expandTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]any {
+func expandTransaction(
+	txData []byte,
+	hashStr string,
+	binary bool,
+	apiVersion int,
+	ctx SyntheticMetadataContext,
+) map[string]any {
 	storedTx, err := decodeTxBlob(txData)
 	if err == nil && storedTx.TxJSON != nil {
-		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion)
+		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion, ctx)
 	}
 
 	// Cannot decode: return raw blob
 	txEntry := map[string]any{}
 	txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txData))
-	txEntry["hash"] = hashStr
+	if apiVersion > 1 || !binary {
+		txEntry["hash"] = hashStr
+	}
 	return txEntry
 }
 
 // expandStoredTransaction formats a JSON-stored transaction for the response.
-func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary bool, apiVersion int) map[string]any {
+func expandStoredTransaction(
+	storedTx StoredTransaction,
+	hashStr string,
+	binary bool,
+	apiVersion int,
+	ctx SyntheticMetadataContext,
+) map[string]any {
 	txEntry := map[string]any{}
 
 	if binary {
@@ -367,7 +580,9 @@ func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary 
 		if err == nil {
 			txEntry["tx_blob"] = txBlob
 		}
-		txEntry["hash"] = hashStr
+		if apiVersion > 1 {
+			txEntry["hash"] = hashStr
+		}
 		// Encode metadata to binary hex
 		if storedTx.Meta != nil {
 			metaBlob, err := binarycodec.Encode(storedTx.Meta)
@@ -383,21 +598,27 @@ func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary 
 	}
 
 	if apiVersion > 1 {
-		// API v2+: use tx_json and meta keys
-		txEntry["tx_json"] = storedTx.TxJSON
+		txEntry["tx_json"] = projectTransactionJSON(storedTx.TxJSON, "", apiVersion)
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
-			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
+			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["meta"] = storedTx.Meta
 		}
 	} else {
-		// API v1: flatten tx fields at top level, metadata under "metaData"
-		maps.Copy(txEntry, storedTx.TxJSON)
-		txEntry["hash"] = hashStr
+		maps.Copy(txEntry, projectTransactionJSON(storedTx.TxJSON, hashStr, apiVersion))
 		if storedTx.Meta != nil {
-			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
+			injectExpandedLedgerDeliveredAmount(storedTx.TxJSON, storedTx.Meta, ctx)
+			InjectMPTokenIssuanceID(storedTx.TxJSON, storedTx.Meta)
 			txEntry["metaData"] = storedTx.Meta
 		}
 	}
 	return txEntry
+}
+
+func injectExpandedLedgerDeliveredAmount(txJSON, meta map[string]any, ctx SyntheticMetadataContext) {
+	txType, _ := txJSON["TransactionType"].(string)
+	if txType == "Payment" || txType == "CheckCash" {
+		InjectDeliveredAmount(txJSON, meta, ctx)
+	}
 }

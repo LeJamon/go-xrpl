@@ -14,32 +14,51 @@ import (
 type AccountCurrenciesMethod struct{ BaseHandler }
 
 func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawMessage) (any, *types.RPCError) {
-	var request struct {
-		types.AccountParam
-		types.LedgerSpecifier
+	rawFields, fieldsErr := rawJSONFields(params)
+	if fieldsErr != nil {
+		return nil, fieldsErr
 	}
 
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
+	account := ""
+	if accountRaw, ok := rawFields["account"]; ok {
+		var valid bool
+		account, valid = rawJSONString(accountRaw)
+		if !valid {
+			return nil, types.RPCErrorInvalidField("account")
+		}
+	} else if identRaw, ok := rawFields["ident"]; ok {
+		var valid bool
+		account, valid = rawJSONString(identRaw)
+		if !valid {
+			return nil, types.RPCErrorInvalidField("ident")
+		}
+	} else {
+		return nil, types.RPCErrorMissingField("account")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
-
-	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	parsedLedgerSpec, _, ledgerSpecErr := parseLedgerSpecifier(params)
+	if ledgerSpecErr != nil {
+		return nil, ledgerSpecErr
+	}
+	ledgerIndex, selErr := resolveLedgerSelector(parsedLedgerSpec)
 	if selErr != nil {
 		return nil, selErr
+	}
+	ledger, validated, lookupErr := LookupLedger(ctx, parsedLedgerSpec)
+	if lookupErr != nil {
+		return nil, lookupErr
+	}
+	if !types.IsValidClassicAddress(account) {
+		return nil, types.RPCErrorActMalformed("Account malformed.").WithExtra(ledgerEntryResponseFields(ledger, validated))
 	}
 
 	// Get account currencies from the ledger service
 	result, err := ctx.Services.Ledger.GetAccountCurrencies(
 		ctx.Context,
-		request.Account,
+		account,
 		ledgerIndex,
 	)
 	if err != nil {
@@ -56,13 +75,9 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RPCContext, params json.RawM
 	}
 
 	// Build response
-	response := map[string]any{
-		"ledger_hash":        FormatLedgerHash(result.LedgerHash),
-		"ledger_index":       result.LedgerIndex,
-		"receive_currencies": result.ReceiveCurrencies,
-		"send_currencies":    result.SendCurrencies,
-		"validated":          result.Validated,
-	}
+	response := ledgerEntryResponseFields(ledger, validated)
+	response["receive_currencies"] = result.ReceiveCurrencies
+	response["send_currencies"] = result.SendCurrencies
 
 	return response, nil
 }

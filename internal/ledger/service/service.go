@@ -136,7 +136,6 @@ type Service struct {
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
-	// Transaction position within its ledger (hash -> 0-based index)
 	txPositionIndex map[[32]byte]uint32
 
 	// Pending transactions accumulated during the open ledger phase;

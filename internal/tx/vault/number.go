@@ -1,42 +1,42 @@
 package vault
 
 import (
-	"encoding/binary"
 	"fmt"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
-// This file is the local Number seam for the vault package. The vault ledger
-// NUMBER fields are carried as their canonical decimal/scientific string; these
-// helpers bridge that representation to state.XRPLNumber for the exact rippled
-// share-conversion arithmetic. A shared state.Number helper (built in a sibling
-// PR) can later replace the string carriage without touching call sites.
-
-// vaultNumber parses a NUMBER field string ("" meaning zero) into an XRPLNumber.
-// It round-trips through the binary codec so the parse is byte-identical to how
-// the field decodes off the ledger.
+// vaultNumber parses a NUMBER field string ("" meaning zero) using the legacy
+// small range. Rules-aware Vault paths use vaultNumberForRules.
 func vaultNumber(s string) (state.XRPLNumber, error) {
-	if s == "" || s == "0" {
-		return newVaultNumber(0, 0), nil
-	}
-	num := &types.Number{}
-	b, err := num.FromJSON(s)
-	if err != nil {
-		return newVaultNumber(0, 0), fmt.Errorf("parse number %q: %w", s, err)
-	}
-	mantissa := int64(binary.BigEndian.Uint64(b[:8]))
-	exp := int32(binary.BigEndian.Uint32(b[8:12]))
-	return newVaultNumber(mantissa, int(exp)), nil
+	return vaultNumberScaled(s, state.MantissaScaleSmall)
 }
 
-func newVaultNumber(mantissa int64, exponent int) state.XRPLNumber {
-	return state.NewXRPLNumberScaled(
-		mantissa,
-		exponent,
-		state.MantissaScaleLarge,
-		state.RoundToNearest,
+func vaultNumberForRules(s string, rules *amendment.Rules) (state.XRPLNumber, error) {
+	return vaultNumberScaled(s, vaultNumberScale(rules))
+}
+
+func vaultNumberScaled(s string, scale state.MantissaScale) (state.XRPLNumber, error) {
+	if s == "" || s == "0" {
+		return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest), nil
+	}
+	number, err := state.ParseXRPLNumber(s, scale, state.RoundToNearest)
+	if err != nil {
+		return state.NewXRPLNumberScaled(0, 0, scale, state.RoundToNearest), fmt.Errorf("parse number %q: %w", s, err)
+	}
+	return number, nil
+}
+
+func vaultNumberScale(rules *amendment.Rules) state.MantissaScale {
+	if rules == nil {
+		return state.MantissaScaleForRulesWithFix(false, false, false, false)
+	}
+	return state.MantissaScaleForRulesWithFix(
+		true,
+		rules.Enabled(amendment.FeatureSingleAssetVault),
+		rules.Enabled(amendment.FeatureLendingProtocol),
+		rules.FixCleanup3_2_0Enabled(),
 	)
 }
 
@@ -54,7 +54,7 @@ func numberToString(n state.XRPLNumber) string {
 // drops and MPT in its integer units; an IOU carries a decimal value.
 func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
 	if a.IsNative() {
-		return newVaultNumber(a.Drops(), 0), nil
+		return state.NewXRPLNumber(a.Drops(), 0), nil
 	}
 	if a.IsMPT() {
 		return vaultNumber(a.Value())
@@ -62,9 +62,39 @@ func amountToNumber(a state.Amount) (state.XRPLNumber, error) {
 	return vaultNumber(a.Value())
 }
 
+func amountToNumberForRules(a state.Amount, rules *amendment.Rules) (state.XRPLNumber, error) {
+	scale := vaultNumberScale(rules)
+	if a.IsNative() {
+		return state.NewXRPLNumberScaled(a.Drops(), 0, scale, state.RoundToNearest), nil
+	}
+	return vaultNumberScaled(a.Value(), scale)
+}
+
+func associateVaultAsset(vd *vaultData, rules *amendment.Rules) error {
+	integral := vd.AssetIsMPT || isNativeAsset(vd.Asset)
+	for _, field := range []*string{
+		&vd.AssetsTotal,
+		&vd.AssetsAvailable,
+		&vd.AssetsMaximum,
+		&vd.LossUnrealized,
+	} {
+		value, err := vaultNumberForRules(*field, rules)
+		if err != nil {
+			return err
+		}
+		rounded, remove := state.AssociateAssetField(value, integral, true)
+		if remove {
+			*field = ""
+		} else {
+			*field = numberToString(rounded)
+		}
+	}
+	return nil
+}
+
 // pow10 returns 10^scale as an XRPLNumber.
 func pow10(scale uint8) state.XRPLNumber {
-	return newVaultNumber(1, int(scale))
+	return state.NewXRPLNumber(1, int(scale))
 }
 
 // roundToVaultScale rounds a deposit amount down to the vault's post-deposit
@@ -90,11 +120,15 @@ func assetsToSharesDeposit(assetsTotal, shareTotal, assets state.XRPLNumber, sca
 
 // sharesToAssetsDeposit converts a share count back to assets on the deposit
 // path (used to verify the exchange does not exceed the offered amount).
-func sharesToAssetsDeposit(assetsTotal, shareTotal, shares state.XRPLNumber, scale uint8) state.XRPLNumber {
+func sharesToAssetsDeposit(
+	assetsTotal, shareTotal, shares state.XRPLNumber,
+	scale uint8,
+	integral bool,
+) state.XRPLNumber {
 	if assetsTotal.IsZero() {
-		return shares.Div(pow10(scale))
+		return shares.Div(pow10(scale)).RoundToAsset(integral)
 	}
-	return assetsTotal.Mul(shares).Div(shareTotal)
+	return assetsTotal.Mul(shares).Div(shareTotal).RoundToAsset(integral)
 }
 
 // assetsToSharesWithdraw converts a withdrawal of assets into the shares that
@@ -102,20 +136,23 @@ func sharesToAssetsDeposit(assetsTotal, shareTotal, shares state.XRPLNumber, sca
 func assetsToSharesWithdraw(assetsTotal, lossUnrealized, shareTotal, assets state.XRPLNumber, truncate bool) state.XRPLNumber {
 	effective := assetsTotal.Sub(lossUnrealized)
 	if effective.IsZero() {
-		return newVaultNumber(0, 0)
+		return effective
 	}
 	result := shareTotal.Mul(assets).Div(effective)
 	if truncate {
-		result = result.Truncate()
+		return result.Truncate()
 	}
-	return result
+	return result.RoundToAsset(true)
 }
 
 // sharesToAssetsWithdraw converts a share count into the assets it redeems.
-func sharesToAssetsWithdraw(assetsTotal, lossUnrealized, shareTotal, shares state.XRPLNumber) state.XRPLNumber {
+func sharesToAssetsWithdraw(
+	assetsTotal, lossUnrealized, shareTotal, shares state.XRPLNumber,
+	integral bool,
+) state.XRPLNumber {
 	effective := assetsTotal.Sub(lossUnrealized)
 	if effective.IsZero() {
-		return newVaultNumber(0, 0)
+		return effective
 	}
-	return effective.Mul(shares).Div(shareTotal)
+	return effective.Mul(shares).Div(shareTotal).RoundToAsset(integral)
 }

@@ -8,6 +8,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func modernDeliveredAmountContext() handlers.SyntheticMetadataContext {
+	return handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095}
+}
+
 // InjectDeliveredAmount Tests
 // Based on rippled src/test/rpc/DeliveredAmount_test.cpp and the
 // RPC::insertDeliveredAmount / getDeliveredAmount logic in DeliveredAmount.cpp.
@@ -41,7 +45,7 @@ func TestDeliveredAmountIneligibleTypeSkipped(t *testing.T) {
 				"TransactionResult": "tesSUCCESS",
 			}
 
-			handlers.InjectDeliveredAmount(txJSON, meta)
+			handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
 			_, has := meta["delivered_amount"]
 			assert.False(t, has,
@@ -57,21 +61,24 @@ func TestDeliveredAmountEligibleTypes(t *testing.T) {
 	t.Run("Payment", func(t *testing.T) {
 		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 		handlers.InjectDeliveredAmount(
-			map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}, meta)
+			map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}, meta,
+			modernDeliveredAmountContext())
 		assert.Equal(t, "1000000", meta["delivered_amount"])
 	})
 
 	t.Run("CheckCash", func(t *testing.T) {
 		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 		handlers.InjectDeliveredAmount(
-			map[string]interface{}{"TransactionType": "CheckCash", "Amount": "2000000"}, meta)
+			map[string]interface{}{"TransactionType": "CheckCash", "Amount": "2000000"}, meta,
+			modernDeliveredAmountContext())
 		assert.Equal(t, "2000000", meta["delivered_amount"])
 	})
 
 	t.Run("AccountDelete with no Amount falls back to unavailable", func(t *testing.T) {
 		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 		handlers.InjectDeliveredAmount(
-			map[string]interface{}{"TransactionType": "AccountDelete"}, meta)
+			map[string]interface{}{"TransactionType": "AccountDelete"}, meta,
+			modernDeliveredAmountContext())
 		assert.Equal(t, "unavailable", meta["delivered_amount"])
 	})
 }
@@ -83,7 +90,8 @@ func TestDeliveredAmountFailedTxSkipped(t *testing.T) {
 		t.Run(res, func(t *testing.T) {
 			meta := map[string]interface{}{"TransactionResult": res}
 			handlers.InjectDeliveredAmount(
-				map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}, meta)
+				map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}, meta,
+				modernDeliveredAmountContext())
 			_, has := meta["delivered_amount"]
 			assert.False(t, has, "failed tx (%s) must not get delivered_amount", res)
 		})
@@ -101,7 +109,7 @@ func TestDeliveredAmountFromRealField(t *testing.T) {
 			"DeliveredAmount":   "3000000",
 		}
 
-		handlers.InjectDeliveredAmount(txJSON, meta)
+		handlers.InjectDeliveredAmount(txJSON, meta, handlers.SyntheticMetadataContext{})
 
 		assert.Equal(t, "3000000", meta["delivered_amount"],
 			"delivered_amount should come from the real DeliveredAmount field, not Amount")
@@ -128,22 +136,57 @@ func TestDeliveredAmountFromRealField(t *testing.T) {
 			"DeliveredAmount":   iou,
 		}
 
-		handlers.InjectDeliveredAmount(txJSON, meta)
+		handlers.InjectDeliveredAmount(txJSON, meta, handlers.SyntheticMetadataContext{})
 
 		delivered := meta["delivered_amount"].(map[string]interface{})
 		assert.Equal(t, "100", delivered["value"])
 	})
 }
 
+func TestDeliveredAmountHistoricalCutoffs(t *testing.T) {
+	txJSON := map[string]any{"TransactionType": "Payment", "Amount": "100"}
+
+	t.Run("serialized value always wins", func(t *testing.T) {
+		meta := map[string]any{
+			"TransactionResult": "tesSUCCESS",
+			"DeliveredAmount":   "25",
+		}
+		handlers.InjectDeliveredAmount(txJSON, meta, handlers.SyntheticMetadataContext{
+			LedgerSequence: 1,
+			CloseTime:      446_000_000,
+		})
+		assert.Equal(t, "25", meta["delivered_amount"])
+	})
+
+	tests := []struct {
+		name string
+		ctx  handlers.SyntheticMetadataContext
+		want any
+	}{
+		{name: "ledger before cutoff", ctx: handlers.SyntheticMetadataContext{LedgerSequence: 4_594_094}, want: "unavailable"},
+		{name: "ledger at cutoff", ctx: handlers.SyntheticMetadataContext{LedgerSequence: 4_594_095}, want: "100"},
+		{name: "ledger after cutoff", ctx: handlers.SyntheticMetadataContext{LedgerSequence: 4_594_096}, want: "100"},
+		{name: "close time before cutoff", ctx: handlers.SyntheticMetadataContext{CloseTime: 445_999_999}, want: "unavailable"},
+		{name: "close time at cutoff", ctx: handlers.SyntheticMetadataContext{CloseTime: 446_000_000}, want: "unavailable"},
+		{name: "close time after cutoff", ctx: handlers.SyntheticMetadataContext{CloseTime: 446_000_001}, want: "100"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := map[string]any{"TransactionResult": "tesSUCCESS"}
+			handlers.InjectDeliveredAmount(txJSON, meta, tc.ctx)
+			assert.Equal(t, tc.want, meta["delivered_amount"])
+		})
+	}
+}
+
 // TestDeliveredAmountFallbackToAmount verifies that with no real DeliveredAmount
-// field, the tx Amount is used (the full-delivery case; the ledger-index /
-// close-time gate always holds for ledgers go-xrpl serves).
+// field, the tx Amount is used for modern ledgers.
 func TestDeliveredAmountFallbackToAmount(t *testing.T) {
 	t.Run("XRP drops", func(t *testing.T) {
 		txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": "50000000"}
 		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 
-		handlers.InjectDeliveredAmount(txJSON, meta)
+		handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
 		assert.Equal(t, "50000000", meta["delivered_amount"])
 		_, hasReal := meta["DeliveredAmount"]
@@ -159,7 +202,7 @@ func TestDeliveredAmountFallbackToAmount(t *testing.T) {
 		txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": iou}
 		meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 
-		handlers.InjectDeliveredAmount(txJSON, meta)
+		handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
 		delivered := meta["delivered_amount"].(map[string]interface{})
 		assert.Equal(t, "250.75", delivered["value"])
@@ -175,7 +218,7 @@ func TestDeliveredAmountUnavailable(t *testing.T) {
 	txJSON := map[string]interface{}{"TransactionType": "Payment"} // no Amount
 	meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 
-	handlers.InjectDeliveredAmount(txJSON, meta)
+	handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
 	assert.Equal(t, "unavailable", meta["delivered_amount"])
 }
@@ -190,7 +233,7 @@ func TestDeliveredAmountIdempotent(t *testing.T) {
 		"delivered_amount":  "1234567",
 	}
 
-	handlers.InjectDeliveredAmount(txJSON, meta)
+	handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
 	assert.Equal(t, "1234567", meta["delivered_amount"],
 		"an existing delivered_amount must not be overwritten by the Amount fallback")
@@ -200,7 +243,7 @@ func TestDeliveredAmountIdempotent(t *testing.T) {
 func TestDeliveredAmountNilMeta(t *testing.T) {
 	txJSON := map[string]interface{}{"TransactionType": "Payment", "Amount": "1000000"}
 	require.NotPanics(t, func() {
-		handlers.InjectDeliveredAmount(txJSON, nil)
+		handlers.InjectDeliveredAmount(txJSON, nil, modernDeliveredAmountContext())
 	})
 }
 
@@ -210,7 +253,7 @@ func TestDeliveredAmountMissingTransactionType(t *testing.T) {
 	txJSON := map[string]interface{}{"Amount": "1000000"} // no TransactionType
 	meta := map[string]interface{}{"TransactionResult": "tesSUCCESS"}
 
-	handlers.InjectDeliveredAmount(txJSON, meta)
+	handlers.InjectDeliveredAmount(txJSON, meta, modernDeliveredAmountContext())
 
 	_, has := meta["delivered_amount"]
 	assert.False(t, has, "missing TransactionType should yield no delivered_amount")

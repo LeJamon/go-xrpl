@@ -148,12 +148,12 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 
 	// Ambiguous: when the vault asset's issuer is the vault owner, the clawback
 	// must name the asset explicitly.
-	if v.Amount == nil && !isNativeAsset(vd.Asset) && !vd.AssetIsMPT {
-		ownerAddr, oerr := state.EncodeAccountID(vd.Owner)
-		if oerr != nil {
+	if v.Amount == nil && !isNativeAsset(vaultAssetOf(vd)) {
+		issuerID, ok := vaultAssetIssuer(vd)
+		if !ok {
 			return ter.TefINTERNAL
 		}
-		if vd.Asset.Issuer == ownerAddr {
+		if issuerID == vd.Owner {
 			return ter.TecWRONG_ASSET
 		}
 	}
@@ -167,11 +167,12 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 		}
 		if v.Amount != nil && v.Amount.Signum() != 0 {
 			held := holderMPTBalance(view, vd.ShareMPTID, holderID)
-			want, aerr := amountToNumber(*v.Amount)
+			scale := vaultNumberScale(config.RequireRules())
+			want, aerr := amountToNumberForRules(*v.Amount, config.RequireRules())
 			if aerr != nil {
 				return ter.TefINTERNAL
 			}
-			if want.Cmp(newVaultNumber(int64(held), 0)) != 0 {
+			if want.Cmp(state.NewXRPLNumberScaled(int64(held), 0, scale, state.RoundToNearest)) != 0 {
 				return ter.TecLIMIT_EXCEEDED
 			}
 		}
@@ -180,17 +181,35 @@ func (v *VaultClawback) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter
 
 	// Asset clawback by the issuer.
 	if assetMatches(clawbackAssetAmount(v, vd), vd) {
-		if isNativeAsset(vd.Asset) {
+		if isNativeAsset(vaultAssetOf(vd)) {
 			return ter.TecNO_PERMISSION
 		}
-		if vd.Asset.Issuer != v.Account {
+		issuerID, ok := vaultAssetIssuer(vd)
+		if !ok {
+			return ter.TefINTERNAL
+		}
+		if issuerID != accountID {
 			return ter.TecNO_PERMISSION
 		}
 		if accountID == holderID {
 			return ter.TecNO_PERMISSION
 		}
 		if vd.AssetIsMPT {
-			return ter.TecNO_PERMISSION // MPT-asset clawback deferred
+			assetData, rerr := view.Read(keylet.MPTIssuance(vd.AssetMPTID))
+			if rerr != nil {
+				return ter.TefINTERNAL
+			}
+			if assetData == nil {
+				return ter.TecOBJECT_NOT_FOUND
+			}
+			assetIssuance, perr := state.ParseMPTokenIssuance(assetData)
+			if perr != nil {
+				return ter.TefINTERNAL
+			}
+			if assetIssuance.Flags&entry.LsfMPTCanClawback == 0 {
+				return ter.TecNO_PERMISSION
+			}
+			return ter.TesSUCCESS
 		}
 		issuerAcct, ierr := tx.ReadAccountRoot(view, accountID)
 		if ierr != nil || issuerAcct == nil {
@@ -232,59 +251,24 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
-	availN, _ := vaultNumber(vd.AssetsAvailable)
-	lossN, _ := vaultNumber(vd.LossUnrealized)
-	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
-
-	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
-	var sharesDestroyed uint64
-	assetsRecoveredN := newVaultNumber(0, 0)
-	clampAssets := false
-
-	if v.clawsBackShares(vd, accountID) {
-		// Owner burns every share held by the holder; the assets are already gone.
-		sharesDestroyed = held
-	} else if v.Amount == nil || v.Amount.Signum() == 0 {
-		sharesDestroyed = held
-		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, newVaultNumber(int64(held), 0))
-		// Pre-fixCleanup3_1_3 the zero-amount path returned without clamping to
-		// AssetsAvailable, over-recovering when a loan was outstanding.
-		clampAssets = ctx.Rules().Enabled(amendment.FeatureFixCleanup3_1_3)
-	} else {
-		amountN, aerr := amountToNumber(*v.Amount)
-		if aerr != nil {
-			return ter.TefINTERNAL
-		}
-		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, amountN, true)
-		s := uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
-		if s > held {
-			s = held
-		}
-		sharesDestroyed = s
-		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, newVaultNumber(int64(s), 0))
-		clampAssets = true
-	}
-
-	// Clamp the recovered assets to what the vault has available, truncating the
-	// shares so the recovery cannot breach AssetsAvailable.
-	if clampAssets && assetsRecoveredN.Cmp(availN) > 0 {
-		assetsRecoveredN = availN
-		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, availN, true)
-		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
-		assetsRecoveredN = sharesToAssetsWithdraw(assetsTotalN, lossN, shareTotalN, newVaultNumber(int64(sharesDestroyed), 0))
-		if assetsRecoveredN.Cmp(availN) > 0 {
-			return ter.TecINTERNAL
-		}
-	}
-
-	if sharesDestroyed == 0 {
-		return ter.TecPRECISION_LOSS
+	rules := ctx.Rules()
+	assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, result := v.clawbackAmounts(
+		ctx,
+		vd,
+		issuance,
+		accountID,
+		holderID,
+	)
+	if result != ter.TesSUCCESS {
+		return result
 	}
 
 	vd.AssetsTotal = numberToString(assetsTotalN.Sub(assetsRecoveredN))
 	vd.AssetsAvailable = numberToString(availN.Sub(assetsRecoveredN))
-	newVault, serr := serializeVault(vd)
+	if err := associateVaultAsset(vd, rules); err != nil {
+		return ter.TefINTERNAL
+	}
+	newVault, serr := serializeVaultForRules(vd, rules)
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -307,9 +291,97 @@ func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 		if res := sendAssetFromVault(ctx, vd.Account, accountID, vaultAssetOf(vd), assetsRecoveredN); res != ter.TesSUCCESS {
 			return res
 		}
+		holding, err := actualAssetHolding(ctx.View, vd.Account, vaultAssetOf(vd), rules)
+		if err != nil || holding.Signum() < 0 {
+			return ter.TefINTERNAL
+		}
 	}
 
 	return ter.TesSUCCESS
+}
+
+func (v *VaultClawback) clawbackAmounts(
+	ctx *tx.ApplyContext,
+	vd *vaultData,
+	issuance *state.MPTokenIssuanceData,
+	accountID, holderID [20]byte,
+) (
+	assetsTotalN, availN, assetsRecoveredN state.XRPLNumber,
+	sharesDestroyed uint64,
+	result ter.Result,
+) {
+	result = ter.TesSUCCESS
+	defer func() {
+		if recover() != nil {
+			result = ter.TecPATH_DRY
+		}
+	}()
+
+	rules := ctx.Rules()
+	numberScale := vaultNumberScale(rules)
+	assetsTotalN, _ = vaultNumberForRules(vd.AssetsTotal, rules)
+	availN, _ = vaultNumberForRules(vd.AssetsAvailable, rules)
+	lossN, _ := vaultNumberForRules(vd.LossUnrealized, rules)
+	shareTotalN := state.NewXRPLNumberScaled(
+		int64(issuance.OutstandingAmount),
+		0,
+		numberScale,
+		state.RoundToNearest,
+	)
+	asset := vaultAssetOf(vd)
+	integral := asset.IsNative() || asset.IsMPT()
+	held := holderMPTBalance(ctx.View, vd.ShareMPTID, holderID)
+	assetsRecoveredN = state.NewXRPLNumberScaled(0, 0, numberScale, state.RoundToNearest)
+	clampAssets := false
+
+	if v.clawsBackShares(vd, accountID) {
+		sharesDestroyed = held
+	} else if v.Amount == nil || v.Amount.Signum() == 0 {
+		sharesDestroyed = held
+		assetsRecoveredN = sharesToAssetsWithdraw(
+			assetsTotalN,
+			lossN,
+			shareTotalN,
+			state.NewXRPLNumberScaled(int64(held), 0, numberScale, state.RoundToNearest),
+			integral,
+		)
+		clampAssets = rules.Enabled(amendment.FeatureFixCleanup3_1_3)
+	} else {
+		amountN, err := amountToNumberForRules(*v.Amount, rules)
+		if err != nil {
+			return assetsTotalN, availN, assetsRecoveredN, 0, ter.TefINTERNAL
+		}
+		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, amountN, false)
+		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
+		assetsRecoveredN = sharesToAssetsWithdraw(
+			assetsTotalN,
+			lossN,
+			shareTotalN,
+			sharesN,
+			integral,
+		)
+		clampAssets = true
+	}
+
+	if clampAssets && assetsRecoveredN.Cmp(availN) > 0 {
+		assetsRecoveredN = availN
+		sharesN := assetsToSharesWithdraw(assetsTotalN, lossN, shareTotalN, availN, true)
+		sharesDestroyed = uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
+		assetsRecoveredN = sharesToAssetsWithdraw(
+			assetsTotalN,
+			lossN,
+			shareTotalN,
+			sharesN,
+			integral,
+		)
+		if assetsRecoveredN.Cmp(availN) > 0 {
+			return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TecINTERNAL
+		}
+	}
+	if sharesDestroyed == 0 {
+		return assetsTotalN, availN, assetsRecoveredN, 0, ter.TecPRECISION_LOSS
+	}
+	return assetsTotalN, availN, assetsRecoveredN, sharesDestroyed, ter.TesSUCCESS
 }
 
 // clawbackAssetAmount returns a tx.Amount denominating the vault asset, used to
@@ -318,8 +390,23 @@ func clawbackAssetAmount(v *VaultClawback, vd *vaultData) tx.Amount {
 	if v.Amount != nil {
 		return *v.Amount
 	}
+	if vd.AssetIsMPT {
+		issuer, err := state.EncodeAccountID(mptIDIssuer(vd.AssetMPTID))
+		if err != nil {
+			return tx.Amount{}
+		}
+		return state.NewMPTAmountWithIssuanceID(0, issuer, hex.EncodeToString(vd.AssetMPTID[:]))
+	}
 	if isNativeAsset(vd.Asset) {
 		return tx.Amount{Native: true}
 	}
 	return state.NewIssuedAmountFromValue(0, state.MinExponent, vd.Asset.Currency, vd.Asset.Issuer)
+}
+
+func vaultAssetIssuer(vd *vaultData) ([20]byte, bool) {
+	if vd.AssetIsMPT {
+		return mptIDIssuer(vd.AssetMPTID), true
+	}
+	issuer, err := state.DecodeAccountID(vd.Asset.Issuer)
+	return issuer, err == nil
 }

@@ -27,6 +27,11 @@ func ParseJSON(data []byte) (Transaction, error) {
 		if err := json.Unmarshal(data, &baseTx); err != nil {
 			return nil, fmt.Errorf("failed to parse transaction: %w", err)
 		}
+		presentFields, err := jsonPresentFields(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse transaction fields: %w", err)
+		}
+		baseTx.SetPresentFields(presentFields)
 		baseTx.txType = txType
 		return &baseTx, nil
 	}

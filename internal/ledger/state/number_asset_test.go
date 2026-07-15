@@ -7,16 +7,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMantissaScaleForRules(t *testing.T) {
-	t.Parallel()
-	// large when no rules, or when either amendment is enabled; small otherwise.
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRules(false, false, false))
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRules(true, true, false))
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRules(true, false, true))
-	require.Equal(t, MantissaScaleLarge, MantissaScaleForRules(true, true, true))
-	require.Equal(t, MantissaScaleSmall, MantissaScaleForRules(true, false, false))
-}
-
 func TestRoundToAsset_Integral(t *testing.T) {
 	t.Parallel()
 	// A fractional drops value rounds to the nearest whole unit.

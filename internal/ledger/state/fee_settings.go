@@ -131,39 +131,27 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 }
 
 // GetBaseFee returns the base transaction fee in drops.
-// Returns the modern BaseFeeDrops if set, otherwise falls back to legacy BaseFee.
 func (f *FeeSettings) GetBaseFee() uint64 {
-	if f.BaseFeeDrops > 0 {
+	if f.XRPFeesMode {
 		return f.BaseFeeDrops
 	}
-	if f.BaseFee > 0 {
-		return f.BaseFee
-	}
-	return 10 // Default: 10 drops
+	return f.BaseFee
 }
 
 // GetReserveBase returns the account reserve base in drops.
-// Returns the modern ReserveBaseDrops if set, otherwise falls back to legacy ReserveBase.
 func (f *FeeSettings) GetReserveBase() uint64 {
-	if f.ReserveBaseDrops > 0 {
+	if f.XRPFeesMode {
 		return f.ReserveBaseDrops
 	}
-	if f.ReserveBase > 0 {
-		return uint64(f.ReserveBase)
-	}
-	return 10_000_000 // Default: 10 XRP
+	return uint64(f.ReserveBase)
 }
 
 // GetReserveIncrement returns the owner reserve increment in drops.
-// Returns the modern ReserveIncrementDrops if set, otherwise falls back to legacy ReserveIncrement.
 func (f *FeeSettings) GetReserveIncrement() uint64 {
-	if f.ReserveIncrementDrops > 0 {
+	if f.XRPFeesMode {
 		return f.ReserveIncrementDrops
 	}
-	if f.ReserveIncrement > 0 {
-		return uint64(f.ReserveIncrement)
-	}
-	return 2_000_000 // Default: 2 XRP
+	return uint64(f.ReserveIncrement)
 }
 
 // IsUsingModernFees returns true if the entry encodes the post-XRPFees field

@@ -82,7 +82,7 @@ func (s *Service) loadLatestLedger(ctx context.Context) (*ledger.Ledger, error) 
 	}
 	h.Validated = true
 	h.Accepted = true
-	return ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{}), nil
+	return ledger.NewFromHeader(*h, stateMap, txMap, drops.Fees{})
 }
 
 func (s *Service) verifyStoredSHAMap(ctx context.Context, root [32]byte, mapType shamap.Type) error {

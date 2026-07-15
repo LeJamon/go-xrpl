@@ -63,10 +63,10 @@ func (m *mockNoRippleCheckLedgerService) GetGenesisAccount() (string, error) {
 	return "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", nil
 }
 func (m *mockNoRippleCheckLedgerService) GetLedgerBySequence(seq uint32) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerBySequence(seq, m.currentLedgerIndex, m.validatedLedgerIndex)
 }
 func (m *mockNoRippleCheckLedgerService) GetLedgerByHash(hash [32]byte) (types.LedgerReader, error) {
-	return nil, errors.New("not implemented")
+	return accountQueryLedgerByHash(hash, m.validatedLedgerIndex)
 }
 func (m *mockNoRippleCheckLedgerService) SubmitTransaction(txJSON []byte, txBlobHex ...string) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
@@ -131,7 +131,7 @@ func (m *mockNoRippleCheckLedgerService) GetAccountChannels(_ context.Context, a
 func (m *mockNoRippleCheckLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNoRippleCheckLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountNFTsResult, error) {
+func (m *mockNoRippleCheckLedgerService) GetAccountNFTs(_ context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountNFTsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNoRippleCheckLedgerService) GetGatewayBalances(_ context.Context, account string, hotWallets []string, ledgerIndex string) (*types.GatewayBalancesResult, error) {
@@ -209,7 +209,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 			name:          "Missing account field",
 			params:        map[string]any{},
 			expectError:   true,
-			expectedError: "Missing required parameter: account",
+			expectedError: "Missing field 'account'.",
 		},
 		{
 			name: "Missing role field",
@@ -634,15 +634,12 @@ func TestNoRippleCheckTransactionsFieldValidationAPIv2(t *testing.T) {
 		Services:   services,
 	}
 
-	// In API v2, transactions must be a boolean, not a string
-	// Note: Go's JSON unmarshaling catches this type mismatch during parsing
 	params := `{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", "role": "user", "transactions": "true"}`
 
 	resp, err := method.Handle(ctx, []byte(params))
 
 	require.NotNil(t, err, "Expected error for non-boolean transactions in API v2")
-	// JSON unmarshal catches the type mismatch before our custom validation
-	assert.Contains(t, err.Message, "cannot unmarshal string into Go struct field")
+	assert.Equal(t, "Invalid field 'transactions'.", err.Message)
 	assert.Nil(t, resp)
 }
 

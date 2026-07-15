@@ -1,9 +1,15 @@
 package peermanagement
 
 import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -198,6 +204,53 @@ func TestPeerConstants(t *testing.T) {
 	assert.Equal(t, 10*time.Second, DefaultConnectTimeout)
 	assert.Equal(t, 5*time.Second, DefaultHandshakeTimeout)
 	assert.Equal(t, 64, DefaultSendBufferSize)
+}
+
+func TestPeerReadLoopSkipsUnknownMessage(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	events := make(chan Event, 2)
+	peer := NewPeer(PeerID(1), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, events)
+	peer.handshakeCfg.EnableCompression = true
+	peer.capabilities = NewPeerCapabilities()
+	peer.capabilities.Features.Enable(FeatureCompression)
+
+	unknownChunk := []byte("forward-compatible-message")
+	unknownPayload := bytes.Repeat(unknownChunk, 2*1024*1024/len(unknownChunk)+1)
+	malformedCompressed := []byte{0xff}
+
+	var frames bytes.Buffer
+	require.NoError(t, message.WriteMessageCompressed(
+		&frames,
+		message.MessageType(9999),
+		malformedCompressed,
+		message.AlgorithmLZ4,
+		message.MaxMessageSize,
+	))
+	require.NoError(t, message.WriteMessage(&frames, message.MessageType(9998), unknownPayload))
+	knownPayload := []byte{0x08, 0x00}
+	require.NoError(t, message.WriteMessage(&frames, message.TypePing, knownPayload))
+	peer.bufReader = bufio.NewReader(bytes.NewReader(frames.Bytes()))
+
+	err = peer.readLoop(context.Background())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, io.EOF))
+	require.Len(t, events, 1)
+	evt := <-events
+	assert.Equal(t, uint16(message.TypePing), evt.MessageType)
+	assert.Equal(t, knownPayload, evt.Payload)
+	assert.Zero(t, peer.BadDataCount())
+	assert.Zero(t, peer.consecutiveDecompressFailures.Load())
+
+	unknownStats := peer.traffic.Stats(CategoryUnknown)
+	assert.Zero(t, unknownStats.MessagesIn)
+	assert.Zero(t, unknownStats.BytesIn)
+	assert.Equal(t, uint64(1), peer.traffic.TotalStats().MessagesIn)
+	wantWireBytes := message.HeaderSizeCompressed + len(malformedCompressed) +
+		message.HeaderSizeUncompressed + len(unknownPayload) +
+		message.HeaderSizeUncompressed + len(knownPayload)
+	assert.Equal(t, uint64(wantWireBytes), peer.metrics.recv.totalBytesSnapshot())
 }
 
 // TestEndpoint tests Endpoint type

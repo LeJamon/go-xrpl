@@ -2,6 +2,7 @@ package vault
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -28,6 +29,25 @@ type VaultSet struct {
 	// AssetsMaximum is the maximum assets (optional). NUMBER field, carried as
 	// its decimal/scientific string form.
 	AssetsMaximum *string `json:"AssetsMaximum,omitempty" xrpl:"AssetsMaximum,omitempty"`
+}
+
+func (v *VaultSet) UnmarshalJSON(data []byte) error {
+	type alias VaultSet
+	decoded := struct {
+		AssetsMaximum json.RawMessage `json:"AssetsMaximum"`
+		*alias
+	}{alias: (*alias)(v)}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.AssetsMaximum != nil {
+		maximum, err := parseAssetsMaximumJSON(decoded.AssetsMaximum)
+		if err != nil {
+			return err
+		}
+		v.AssetsMaximum = maximum
+	}
+	return nil
 }
 
 // NewVaultSet creates a new VaultSet transaction
@@ -67,7 +87,7 @@ func (v *VaultSet) Validate() error {
 
 	// Data is a Blob: present-but-empty and over-length (in decoded bytes)
 	// are both rejected.
-	if v.Data != "" {
+	if v.Data != "" || v.Common.HasField("Data") {
 		dataBytes, err := decodeBlob(v.Data)
 		if err != nil {
 			return ErrVaultDataTooLong
@@ -80,13 +100,12 @@ func (v *VaultSet) Validate() error {
 		}
 	}
 
-	// Validate AssetsMaximum if present. It is a NUMBER: negative is rejected.
-	if v.AssetsMaximum != nil && isNegativeNumberString(*v.AssetsMaximum) {
-		return ErrVaultAssetsMaxNeg
+	if err := validateAssetsMaximum(v.AssetsMaximum); err != nil {
+		return err
 	}
 
 	// Must update at least one field
-	if v.DomainID == "" && v.AssetsMaximum == nil && v.Data == "" {
+	if !v.hasDomainID() && v.AssetsMaximum == nil && v.Data == "" && !v.Common.HasField("Data") {
 		return ErrVaultNoFieldsToUpdate
 	}
 
@@ -95,6 +114,17 @@ func (v *VaultSet) Validate() error {
 
 func (v *VaultSet) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(v)
+}
+
+func (v *VaultSet) hasDomainID() bool {
+	return v.DomainID != "" || v.Common.HasField("DomainID")
+}
+
+func (v *VaultSet) CheckExtraFeatures(rules *amendment.Rules) error {
+	if v.hasDomainID() && !rules.Enabled(amendment.FeaturePermissionedDomains) {
+		return ter.Errorf(ter.TemDISABLED, "PermissionedDomains amendment is disabled")
+	}
+	return nil
 }
 
 func (v *VaultSet) RequiredAmendments() [][32]byte {
@@ -144,7 +174,7 @@ func (v *VaultSet) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Resu
 		return ter.TefINTERNAL
 	}
 
-	if v.DomainID != "" {
+	if v.hasDomainID() {
 		if vd.Flags&VaultFlagPrivate == 0 {
 			return ter.TecNO_PERMISSION
 		}
@@ -185,21 +215,21 @@ func (v *VaultSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		vd.Data = v.Data
 	}
 	if v.AssetsMaximum != nil {
-		newMax, nerr := vaultNumber(*v.AssetsMaximum)
+		newMax, nerr := parseCreateSetNumberForRules(*v.AssetsMaximum, ctx.Rules())
 		if nerr != nil {
 			return ter.TefINTERNAL
 		}
-		total, terr := vaultNumber(vd.AssetsTotal)
+		total, terr := parseCreateSetNumberForRules(zeroNumberString(vd.AssetsTotal), ctx.Rules())
 		if terr != nil {
 			return ter.TefINTERNAL
 		}
 		if newMax.Signum() != 0 && newMax.Cmp(total) < 0 {
 			return ter.TecLIMIT_EXCEEDED
 		}
-		vd.AssetsMaximum = *v.AssetsMaximum
+		vd.AssetsMaximum = canonicalCreateSetAssetsMaximum(vaultAssetOf(vd), newMax)
 	}
 
-	if v.DomainID != "" {
+	if v.hasDomainID() {
 		shareKey := keylet.MPTIssuance(vd.ShareMPTID)
 		shareData, rerr := ctx.View.Read(shareKey)
 		if rerr != nil || shareData == nil {
@@ -228,7 +258,10 @@ func (v *VaultSet) Apply(ctx *tx.ApplyContext) ter.Result {
 		}
 	}
 
-	newVault, serr := serializeVault(vd)
+	if err := associateVaultAsset(vd, ctx.Rules()); err != nil {
+		return ter.TefINTERNAL
+	}
+	newVault, serr := serializeVaultForRules(vd, ctx.Rules())
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -237,6 +270,13 @@ func (v *VaultSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	return ter.TesSUCCESS
+}
+
+func zeroNumberString(s string) string {
+	if s == "" {
+		return "0"
+	}
+	return s
 }
 
 // isZeroBytes reports whether every byte in b is zero.

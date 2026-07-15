@@ -38,7 +38,10 @@ func TestReplayClose_CheckpointSeedBoundary(t *testing.T) {
 	}
 	block := parent.Sequence() + 1
 	hdr := seedBlockHeader(parent)
-	open := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	open, err := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
 
 	if err := open.Close(hdr.CloseTime, 0); err != nil {
 		t.Fatalf("closing first replayed block %d after checkpoint seed: %v", block, err)
@@ -91,7 +94,10 @@ func TestReplayClose_DoubleSkipListUpdateRejected(t *testing.T) {
 	}
 
 	// Close() runs the update a second time and must reject the now-ahead state.
-	open := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	open, err := ledger.NewOpenWithHeader(hdr, seed, shamap.New(shamap.TypeTransaction), drops.Fees{})
+	if err != nil {
+		t.Fatalf("NewOpenWithHeader: %v", err)
+	}
 	if err := open.Close(hdr.CloseTime, 0); err == nil {
 		t.Fatal("Close after a double skip-list update: want error, got nil")
 	} else {

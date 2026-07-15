@@ -6,6 +6,8 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/mptutil"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -107,6 +109,13 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	if !assetMatches(v.Amount, vd) {
 		return ter.TecWRONG_ASSET
 	}
+	asset := vaultAssetOf(vd)
+	if result := mptutil.CanTransferAsset(view, asset, accountID, vd.Account, false); result != ter.TesSUCCESS {
+		return result
+	}
+	if vd.AssetIsMPT && vd.AssetMPTID == vd.ShareMPTID {
+		return ter.TefINTERNAL
+	}
 
 	shareData, rerr := view.Read(keylet.MPTIssuance(vd.ShareMPTID))
 	if rerr != nil || shareData == nil {
@@ -120,8 +129,11 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		return ter.TefINTERNAL
 	}
 
-	asset := vaultAssetOf(vd)
-	if res := tx.AssetFrozen(view, accountID, asset); res != ter.TesSUCCESS {
+	if res := checkFrozen(view, asset, accountID); res != ter.TesSUCCESS {
+		return res
+	}
+	shareAsset := tx.Asset{MPTIssuanceID: hex.EncodeToString(vd.ShareMPTID[:])}
+	if res := checkFrozen(view, shareAsset, accountID); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -130,28 +142,36 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 		if issuance.DomainID == nil {
 			return ter.TecNO_AUTH
 		}
-		// Domain credential validation is enforced in Apply via the MPToken
-		// authorization path; a missing domain is rejected above.
+		if result := mptutil.ValidDomain(view, *issuance.DomainID, accountID, config.ParentCloseTime); result != ter.TesSUCCESS && result != ter.TecEXPIRED {
+			return result
+		}
 	}
 
-	// The depositor must be authorized to hold the asset (MPT assets only).
-	if res := tx.RequireAuth(view, asset, accountID); res != ter.TesSUCCESS {
+	if res := mptutil.RequireAssetAuthAt(view, asset, accountID, mptutil.LegacyAuth, config.ParentCloseTime); res != ter.TesSUCCESS {
 		return res
 	}
 
 	// The depositor must hold at least the deposited amount.
+	issuerID := [20]byte{}
+	if !asset.IsNative() && !asset.IsMPT() {
+		issuerID, err = state.DecodeAccountID(asset.Issuer)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+	}
+	rules := config.RequireRules()
 	holds, herr := spendableAsset(view, config, accountID, asset)
 	if herr != nil {
 		return ter.TefINTERNAL
 	}
-	assetsN, aerr := amountToNumber(v.Amount)
+	assetsN, aerr := amountToNumberForRules(v.Amount, rules)
 	if aerr != nil {
 		return ter.TefINTERNAL
 	}
 	integral := asset.IsNative() || asset.IsMPT()
-	fix320 := config.RequireRules().FixCleanup3_2_0Enabled()
+	fix320 := rules.FixCleanup3_2_0Enabled()
 	if fix320 {
-		assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
+		assetsTotalN, _ := vaultNumberForRules(vd.AssetsTotal, rules)
 		assetsN = roundToVaultScale(assetsN, assetsTotalN, integral)
 		if assetsN.IsZero() {
 			return ter.TecPRECISION_LOSS
@@ -163,8 +183,8 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	// IOU only: reject a deposit that canonicalizes to a no-op at the depositor's
 	// own trust-line scale. Issuer-as-depositor uses an unbounded balance, skip.
 	if fix320 && !integral {
-		if issuerID, ierr := state.DecodeAccountID(asset.Issuer); ierr == nil && accountID != issuerID {
-			origN, _ := amountToNumber(v.Amount)
+		if accountID != issuerID {
+			origN, _ := amountToNumberForRules(v.Amount, rules)
 			balScale := holds.AssetExponent(false, state.RoundToNearest)
 			if origN.RoundToAssetScale(false, balScale, state.RoundToNearest).IsZero() {
 				return ter.TecPRECISION_LOSS
@@ -173,6 +193,124 @@ func (v *VaultDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.
 	}
 
 	return ter.TesSUCCESS
+}
+
+func vaultDepositDomainCredentialIDs(view tx.LedgerView, domainIDHex string, account [20]byte) ([]string, ter.Result) {
+	domainBytes, err := hex.DecodeString(domainIDHex)
+	if err != nil || len(domainBytes) != 32 {
+		return nil, ter.TefINTERNAL
+	}
+	var domainID [32]byte
+	copy(domainID[:], domainBytes)
+	raw, err := view.Read(keylet.PermissionedDomainByID(domainID))
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
+	if raw == nil {
+		return nil, ter.TecOBJECT_NOT_FOUND
+	}
+	domain, err := state.ParsePermissionedDomain(raw)
+	if err != nil {
+		return nil, ter.TefINTERNAL
+	}
+	ids := make([]string, 0, len(domain.AcceptedCredentials))
+	for _, accepted := range domain.AcceptedCredentials {
+		key := keylet.Credential(account, accepted.Issuer, accepted.CredentialType)
+		exists, err := view.Exists(key)
+		if err != nil {
+			return nil, ter.TefINTERNAL
+		}
+		if exists {
+			ids = append(ids, hex.EncodeToString(key.Key[:]))
+		}
+	}
+	return ids, ter.TesSUCCESS
+}
+
+func vaultDepositVerifyDomain(ctx *tx.ApplyContext, domainIDHex string, account [20]byte) ter.Result {
+	ids, result := vaultDepositDomainCredentialIDs(ctx.View, domainIDHex, account)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	foundExpired, result := credential.RemoveExpiredCredentials(ctx, ids)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+	if foundExpired && account == ctx.AccountID {
+		accountRoot, err := tx.ReadAccountRoot(ctx.View, account)
+		if err != nil || accountRoot == nil {
+			return ter.TefINTERNAL
+		}
+		*ctx.Account = *accountRoot
+	}
+	for _, idHex := range ids {
+		idBytes, _ := hex.DecodeString(idHex)
+		var id [32]byte
+		copy(id[:], idBytes)
+		raw, err := ctx.View.Read(keylet.CredentialByID(id))
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if raw == nil {
+			continue
+		}
+		cred, err := credential.ParseCredentialEntry(raw)
+		if err != nil {
+			return ter.TefINTERNAL
+		}
+		if cred.IsAccepted() {
+			return ter.TesSUCCESS
+		}
+	}
+	if foundExpired {
+		return ter.TecEXPIRED
+	}
+	return ter.TecNO_PERMISSION
+}
+
+func vaultDepositEnforceShareAuthorization(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData, shareMPTID [24]byte) ter.Result {
+	if issuance.DomainID == nil {
+		return ter.TecNO_AUTH
+	}
+	token, err := readMPToken(ctx.View, keylet.MPTokenByID(shareMPTID, ctx.AccountID))
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	result := vaultDepositVerifyDomain(ctx, *issuance.DomainID, ctx.AccountID)
+	if result != ter.TesSUCCESS {
+		if result == ter.TecEXPIRED {
+			return result
+		}
+		return ter.TecNO_AUTH
+	}
+	if token != nil {
+		return ter.TesSUCCESS
+	}
+	return ensureHolderMPToken(ctx, ctx.AccountID, shareMPTID)
+}
+
+func vaultDepositExchange(assetsTotal, shareTotal, assets state.XRPLNumber, scale uint8, integral bool) (
+	sharesCreated state.XRPLNumber,
+	assetsDeposited state.XRPLNumber,
+	shares uint64,
+	result ter.Result,
+) {
+	result = ter.TesSUCCESS
+	defer func() {
+		if recover() != nil {
+			result = ter.TecPATH_DRY
+		}
+	}()
+	sharesCreated = assetsToSharesDeposit(assetsTotal, shareTotal, assets, scale)
+	if sharesCreated.IsZero() {
+		return sharesCreated, assetsDeposited, 0, ter.TecPRECISION_LOSS
+	}
+	assetsDeposited = sharesToAssetsDeposit(assetsTotal, shareTotal, sharesCreated, scale, integral)
+	if assetsDeposited.Cmp(assets) > 0 {
+		return sharesCreated, assetsDeposited, 0, ter.TefINTERNAL
+	}
+	shares = uint64(sharesCreated.ToInt64WithMode(state.RoundTowardsZero))
+	return sharesCreated, assetsDeposited, shares, ter.TesSUCCESS
 }
 
 // Apply mints shares to the depositor in exchange for the deposited asset.
@@ -197,9 +335,12 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	// Ensure the depositor holds a share MPToken.
 	private := vd.Flags&VaultFlagPrivate != 0
-	if res := ensureHolderMPToken(ctx, ctx.AccountID, vd.ShareMPTID); res != ter.TesSUCCESS {
+	if private && ctx.AccountID != vd.Owner {
+		if res := vaultDepositEnforceShareAuthorization(ctx, issuance, vd.ShareMPTID); res != ter.TesSUCCESS {
+			return res
+		}
+	} else if res := ensureHolderMPToken(ctx, ctx.AccountID, vd.ShareMPTID); res != ter.TesSUCCESS {
 		return res
 	}
 	if private && ctx.AccountID == vd.Owner {
@@ -209,43 +350,55 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	}
 
 	// Compute the share/asset exchange.
-	assetsN, aerr := amountToNumber(v.Amount)
+	rules := ctx.Rules()
+	assetsN, aerr := amountToNumberForRules(v.Amount, rules)
 	if aerr != nil {
 		return ter.TefINTERNAL
 	}
-	assetsTotalN, _ := vaultNumber(vd.AssetsTotal)
-	if ctx.Rules().FixCleanup3_2_0Enabled() {
+	assetsTotalN, _ := vaultNumberForRules(vd.AssetsTotal, rules)
+	if rules.FixCleanup3_2_0Enabled() {
 		asset := vaultAssetOf(vd)
 		assetsN = roundToVaultScale(assetsN, assetsTotalN, asset.IsNative() || asset.IsMPT())
 		if assetsN.IsZero() {
 			return ter.TefINTERNAL
 		}
 	}
-	shareTotalN := newVaultNumber(int64(issuance.OutstandingAmount), 0)
-	sharesN := assetsToSharesDeposit(assetsTotalN, shareTotalN, assetsN, vd.Scale)
-	if sharesN.IsZero() {
-		return ter.TecPRECISION_LOSS
-	}
-	assetsDepositedN := sharesToAssetsDeposit(assetsTotalN, shareTotalN, sharesN, vd.Scale)
-	if assetsDepositedN.Cmp(assetsN) > 0 {
-		return ter.TefINTERNAL
+	shareTotalN := state.NewXRPLNumberScaled(
+		int64(issuance.OutstandingAmount),
+		0,
+		vaultNumberScale(rules),
+		state.RoundToNearest,
+	)
+	asset := vaultAssetOf(vd)
+	_, assetsDepositedN, shares, result := vaultDepositExchange(
+		assetsTotalN,
+		shareTotalN,
+		assetsN,
+		vd.Scale,
+		asset.IsNative() || asset.IsMPT(),
+	)
+	if result != ter.TesSUCCESS {
+		return result
 	}
 
 	// Update the vault totals.
 	newTotal := assetsTotalN.Add(assetsDepositedN)
-	availN, _ := vaultNumber(vd.AssetsAvailable)
+	availN, _ := vaultNumberForRules(vd.AssetsAvailable, rules)
 	vd.AssetsTotal = numberToString(newTotal)
 	vd.AssetsAvailable = numberToString(availN.Add(assetsDepositedN))
 
 	// Enforce the maximum after the increment.
 	if vd.AssetsMaximum != "" {
-		maxN, _ := vaultNumber(vd.AssetsMaximum)
+		maxN, _ := vaultNumberForRules(vd.AssetsMaximum, rules)
 		if maxN.Signum() != 0 && newTotal.Cmp(maxN) > 0 {
 			return ter.TecLIMIT_EXCEEDED
 		}
 	}
 
-	newVault, serr := serializeVault(vd)
+	if err := associateVaultAsset(vd, rules); err != nil {
+		return ter.TefINTERNAL
+	}
+	newVault, serr := serializeVaultForRules(vd, rules)
 	if serr != nil {
 		return ter.TefINTERNAL
 	}
@@ -257,12 +410,41 @@ func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	if res := sendAssetToVault(ctx, vd.Account, v.Amount, assetsDepositedN); res != ter.TesSUCCESS {
 		return res
 	}
+	if !rules.FixCleanup3_2_0Enabled() {
+		holding, err := actualAssetHolding(ctx.View, ctx.AccountID, asset, rules)
+		if err != nil || holding.Signum() < 0 {
+			return ter.TefINTERNAL
+		}
+	}
 
 	// Mint the shares to the depositor.
-	shares := uint64(sharesN.ToInt64WithMode(state.RoundTowardsZero))
 	if res := mintShares(ctx, vd.ShareMPTID, ctx.AccountID, shares); res != ter.TesSUCCESS {
 		return res
 	}
 
 	return ter.TesSUCCESS
+}
+
+func (v *VaultDeposit) ApplyOnTec(ctx *tx.ApplyContext) {
+	vaultID, ok := v.vaultIDBytes()
+	if !ok {
+		return
+	}
+	vd, err := readVault(ctx.View, keylet.VaultByID(vaultID))
+	if err != nil || vd == nil || vd.Flags&VaultFlagPrivate == 0 || ctx.AccountID == vd.Owner {
+		return
+	}
+	raw, err := ctx.View.Read(keylet.MPTIssuance(vd.ShareMPTID))
+	if err != nil || raw == nil {
+		return
+	}
+	issuance, err := state.ParseMPTokenIssuance(raw)
+	if err != nil || issuance.DomainID == nil {
+		return
+	}
+	ids, result := vaultDepositDomainCredentialIDs(ctx.View, *issuance.DomainID, ctx.AccountID)
+	if result != ter.TesSUCCESS {
+		return
+	}
+	credential.RemoveExpiredCredentialsOnTec(ctx, ids)
 }
