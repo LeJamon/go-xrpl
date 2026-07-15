@@ -62,9 +62,13 @@ type Overlay struct {
 	ledgerSync *LedgerSyncHandler
 
 	// Peer management
-	peers   map[PeerID]*Peer
-	peersMu sync.RWMutex
-	nextID  atomic.Uint64
+	peers          map[PeerID]*Peer
+	peerKeys       map[string]PeerID
+	peerEndpoints  map[string]PeerID
+	inboundIPs     map[string]int
+	pendingInbound map[PeerID]struct{}
+	peersMu        sync.RWMutex
+	nextID         atomic.Uint64
 
 	// peerWG joins every peer.Run goroutine launched by handleInbound
 	// or Connect. Stop blocks on it for deterministic shutdown.
@@ -786,6 +790,10 @@ func New(opts ...Option) (*Overlay, error) {
 		discovery:       NewDiscovery(&cfg, events),
 		ledgerSync:      NewLedgerSyncHandler(events),
 		peers:           make(map[PeerID]*Peer),
+		peerKeys:        make(map[string]PeerID),
+		peerEndpoints:   make(map[string]PeerID),
+		inboundIPs:      make(map[string]int),
+		pendingInbound:  make(map[PeerID]struct{}),
 		events:          events,
 		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
 		txMessages:      make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
@@ -845,7 +853,7 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 	if err == nil {
 		return id, nil
 	}
-	if !errors.Is(err, fs.ErrNotExist) {
+	if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, ErrInvalidPrivateKey) {
 		return nil, err
 	}
 

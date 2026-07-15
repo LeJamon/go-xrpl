@@ -385,6 +385,7 @@ type Discovery struct {
 	recentAttempts  map[string]time.Time
 	bootCache       *BootCache
 	reservation     *ReservationTable
+	lookupIP        func(context.Context, string) ([]net.IPAddr, error)
 
 	events   chan<- Event
 	cancel   context.CancelFunc
@@ -404,6 +405,7 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		connectAttempts: make(map[string]*connectAttempt),
 		recentAttempts:  make(map[string]time.Time),
 		events:          events,
+		lookupIP:        net.DefaultResolver.LookupIPAddr,
 	}
 	if d.cfg.Clock == nil {
 		d.cfg.Clock = time.Now
@@ -447,11 +449,31 @@ func (d *Discovery) Start(ctx context.Context) error {
 		}
 	}
 
+	bootstrapPeers, fixedPeers := d.resolveConfiguredPeers(ctx)
+	d.mu.Lock()
 	for _, addr := range d.cfg.BootstrapPeers {
+		delete(d.persistentPeers, addr)
+	}
+	for _, addr := range d.cfg.FixedPeers {
+		delete(d.fixedPeers, addr)
+		delete(d.persistentPeers, addr)
+	}
+	d.cfg.BootstrapPeers = bootstrapPeers
+	d.cfg.FixedPeers = fixedPeers
+	for _, addr := range bootstrapPeers {
+		d.persistentPeers[addr] = true
+	}
+	for _, addr := range fixedPeers {
+		d.fixedPeers[addr] = true
+		d.persistentPeers[addr] = true
+	}
+	d.mu.Unlock()
+
+	for _, addr := range bootstrapPeers {
 		d.AddPeer(addr, 0, 0)
 	}
 
-	for _, addr := range d.cfg.FixedPeers {
+	for _, addr := range fixedPeers {
 		d.AddPeer(addr, 0, 0)
 	}
 
@@ -470,6 +492,73 @@ func (d *Discovery) Start(ctx context.Context) error {
 	go d.maintenanceLoop(ctx)
 
 	return nil
+}
+
+func (d *Discovery) resolveConfiguredPeers(ctx context.Context) ([]string, []string) {
+	bootstrapSeen := make(map[string]struct{})
+	bootstrap := make([]string, 0, len(d.cfg.BootstrapPeers))
+	for _, configured := range d.cfg.BootstrapPeers {
+		for _, endpoint := range d.resolveConfiguredPeer(ctx, configured) {
+			if _, exists := bootstrapSeen[endpoint]; exists {
+				continue
+			}
+			bootstrapSeen[endpoint] = struct{}{}
+			bootstrap = append(bootstrap, endpoint)
+		}
+	}
+
+	fixedSeen := make(map[string]struct{})
+	fixed := make([]string, 0, len(d.cfg.FixedPeers))
+	for _, configured := range d.cfg.FixedPeers {
+		for _, endpoint := range d.resolveConfiguredPeer(ctx, configured) {
+			if _, exists := fixedSeen[endpoint]; exists {
+				continue
+			}
+			fixedSeen[endpoint] = struct{}{}
+			fixed = append(fixed, endpoint)
+			break
+		}
+	}
+
+	return bootstrap, fixed
+}
+
+func (d *Discovery) resolveConfiguredPeer(ctx context.Context, configured string) []string {
+	endpoint, err := ParseEndpoint(configured)
+	if err != nil {
+		slog.Warn("Configured peer endpoint is invalid; skipping",
+			"t", "Discovery", "address", configured, "err", err)
+		return nil
+	}
+	if ip := net.ParseIP(endpoint.Host); ip != nil {
+		return []string{(Endpoint{Host: ip.String(), Port: endpoint.Port}).String()}
+	}
+
+	lookupIP := d.lookupIP
+	if lookupIP == nil {
+		lookupIP = net.DefaultResolver.LookupIPAddr
+	}
+	addresses, err := lookupIP(ctx, endpoint.Host)
+	if err != nil {
+		slog.Warn("Configured peer hostname could not be resolved; skipping",
+			"t", "Discovery", "address", configured, "err", err)
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(addresses))
+	resolved := make([]string, 0, len(addresses))
+	for _, address := range addresses {
+		if address.IP == nil {
+			continue
+		}
+		value := (Endpoint{Host: address.IP.String(), Port: endpoint.Port}).String()
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		resolved = append(resolved, value)
+	}
+	return resolved
 }
 
 // Stop stops the discovery service by cancelling its context. Idempotent:
@@ -717,6 +806,12 @@ func (d *Discovery) ConnectedCount() int {
 	return len(d.connected)
 }
 
+func (d *Discovery) IsFixed(address string) bool {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.fixedPeers[address]
+}
+
 // NeedsMorePeers returns true if we should connect to more peers.
 func (d *Discovery) NeedsMorePeers() bool {
 	d.mu.RLock()
@@ -735,6 +830,7 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 			delete(d.recentAttempts, host)
 		}
 	}
+	var fixedCandidates []string
 	var candidates []string
 	seen := make(map[string]struct{})
 	seenHosts := make(map[string]struct{})
@@ -763,8 +859,17 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 		seenHosts[host] = struct{}{}
 		return true
 	}
+	for address := range d.fixedPeers {
+		peer := d.peers[address]
+		if peer != nil && !peer.Connected && eligible(address) {
+			fixedCandidates = append(fixedCandidates, address)
+		}
+	}
 	for _, peer := range d.peers {
 		seen[peer.Address] = struct{}{}
+		if d.fixedPeers[peer.Address] {
+			continue
+		}
 		if !peer.Connected && peer.Hops <= MaxHops && eligible(peer.Address) {
 			candidates = append(candidates, peer.Address)
 		}
@@ -785,7 +890,10 @@ func (d *Discovery) SelectPeersToConnect(count int) []string {
 
 	if count > 0 && count < len(candidates) {
 		candidates = candidates[:count]
+	} else if count <= 0 {
+		candidates = nil
 	}
+	candidates = append(fixedCandidates, candidates...)
 	for _, address := range candidates {
 		attempt := d.connectAttempts[address]
 		if attempt == nil {

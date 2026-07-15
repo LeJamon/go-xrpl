@@ -1,0 +1,116 @@
+package peermanagement
+
+import (
+	"net"
+	"sync"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func newPeerWithRemoteKey(t *testing.T, o *Overlay, id PeerID, endpoint Endpoint, key *Identity) *Peer {
+	t.Helper()
+	peer := NewPeer(id, endpoint, false, o.identity, o.events)
+	peer.remotePubKey = NewPublicKeyTokenFromBtcec(key.BtcecPublicKey())
+	peer.setState(PeerStateConnected)
+	return peer
+}
+
+func TestOverlayRejectsDuplicateRemotePublicKey(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()))
+	require.NoError(t, err)
+	remote, err := GenerateIdentity()
+	require.NoError(t, err)
+
+	first := newPeerWithRemoteKey(t, o, 1, Endpoint{Host: "192.0.2.30", Port: 51235}, remote)
+	duplicate := newPeerWithRemoteKey(t, o, 2, Endpoint{Host: "198.51.100.30", Port: 51235}, remote)
+	require.NoError(t, o.addPeer(first))
+	assert.ErrorIs(t, o.addPeer(duplicate), ErrAlreadyConnected)
+	assert.Len(t, o.Peers(), 1)
+
+	o.removePeer(first.ID())
+	require.NoError(t, o.addPeer(duplicate))
+	o.removePeer(duplicate.ID())
+}
+
+func TestOverlayRemotePublicKeyReservationIsAtomic(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()))
+	require.NoError(t, err)
+	remote, err := GenerateIdentity()
+	require.NoError(t, err)
+	peers := []*Peer{
+		newPeerWithRemoteKey(t, o, 1, Endpoint{Host: "192.0.2.31", Port: 51235}, remote),
+		newPeerWithRemoteKey(t, o, 2, Endpoint{Host: "198.51.100.31", Port: 51235}, remote),
+	}
+	results := make([]error, len(peers))
+	var wg sync.WaitGroup
+	for i, peer := range peers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = o.reservePeerKey(peer, false)
+		}()
+	}
+	wg.Wait()
+
+	winner := -1
+	for i, err := range results {
+		if err == nil {
+			require.Equal(t, -1, winner)
+			winner = i
+		} else {
+			assert.ErrorIs(t, err, ErrAlreadyConnected)
+		}
+	}
+	require.NotEqual(t, -1, winner)
+	for _, peer := range peers {
+		o.releasePeerKey(peer)
+	}
+}
+
+func TestOverlayAllowsDistinctKeysOnSameIP(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()))
+	require.NoError(t, err)
+	firstKey, err := GenerateIdentity()
+	require.NoError(t, err)
+	secondKey, err := GenerateIdentity()
+	require.NoError(t, err)
+
+	first := newPeerWithRemoteKey(t, o, 1, Endpoint{Host: "192.0.2.32", Port: 51235}, firstKey)
+	second := newPeerWithRemoteKey(t, o, 2, Endpoint{Host: "192.0.2.32", Port: 51236}, secondKey)
+	require.NoError(t, o.addPeer(first))
+	require.NoError(t, o.addPeer(second))
+	assert.True(t, o.isConnectedTo(first.Endpoint()))
+	assert.True(t, o.isConnectedTo(second.Endpoint()))
+	assert.False(t, o.isConnectedTo(Endpoint{Host: "192.0.2.32", Port: 51237}))
+	o.removePeer(first.ID())
+	o.removePeer(second.ID())
+}
+
+func TestOverlayRejectsDuplicateResolvedEndpoint(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()))
+	require.NoError(t, err)
+	firstKey, err := GenerateIdentity()
+	require.NoError(t, err)
+	secondKey, err := GenerateIdentity()
+	require.NoError(t, err)
+	first := newPeerWithRemoteKey(t, o, 1, Endpoint{Host: "alias-a.example", Port: 51235}, firstKey)
+	first.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.34"), Port: 51235}}
+	second := newPeerWithRemoteKey(t, o, 2, Endpoint{Host: "alias-b.example", Port: 51235}, secondKey)
+	second.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("192.0.2.34"), Port: 51235}}
+
+	require.NoError(t, o.addPeer(first))
+	assert.ErrorIs(t, o.addPeer(second), ErrAlreadyConnected)
+	o.removePeer(first.ID())
+}
+
+func TestOverlayInboundIPLimit(t *testing.T) {
+	o, err := New(WithDataDir(t.TempDir()), WithIPLimit(2))
+	require.NoError(t, err)
+	assert.True(t, o.reserveInboundIP("55.104.0.2"))
+	assert.True(t, o.reserveInboundIP("55.104.0.2"))
+	assert.False(t, o.reserveInboundIP("55.104.0.2"))
+	o.releaseInboundIP("55.104.0.2")
+	assert.True(t, o.reserveInboundIP("55.104.0.2"))
+}

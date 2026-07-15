@@ -227,6 +227,8 @@ func loadPortConfig(v *viper.Viper, portName string, serverDefaults ServerConfig
 	if err := portViper.Unmarshal(&portConfig); err != nil {
 		return PortConfig{}, fmt.Errorf("failed to unmarshal port config: %w", err)
 	}
+	portConfig.Admin = append(append([]string(nil), serverDefaults.Admin...), portConfig.Admin...)
+	portConfig.SecureGateway = append(append([]string(nil), serverDefaults.SecureGateway...), portConfig.SecureGateway...)
 
 	return portConfig, nil
 }
@@ -252,5 +254,11 @@ func applyServerDefaults(portViper *viper.Viper, serverDefaults ServerConfig) {
 	}
 	if serverDefaults.Password != "" {
 		portViper.SetDefault("password", serverDefaults.Password)
+	}
+	if serverDefaults.AdminUser != "" {
+		portViper.SetDefault("admin_user", serverDefaults.AdminUser)
+	}
+	if serverDefaults.AdminPassword != "" {
+		portViper.SetDefault("admin_password", serverDefaults.AdminPassword)
 	}
 }

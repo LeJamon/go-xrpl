@@ -125,6 +125,42 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, "http", portConfig.Protocol)
 }
 
+func TestLoadConfig_ServerAccessDefaults(t *testing.T) {
+	tempDir := t.TempDir()
+	mainConfigPath := writeConfig(t, tempDir, "xrpld.toml", `
+database_path = "/tmp/test/db"
+network_id = "main"
+debug_logfile = "/tmp/test/debug.log"
+
+[server]
+ports = ["port_test"]
+admin = ["127.0.0.1"]
+admin_user = "common-user"
+admin_password = "common-password"
+secure_gateway = ["10.0.0.0/8"]
+
+[port_test]
+port = 8080
+ip = "127.0.0.1"
+protocol = "http"
+admin = ["::1"]
+admin_password = "port-password"
+secure_gateway = ["192.168.0.0/16"]
+
+[node_db]
+type = "pebble"
+path = "/tmp/test/db"
+`)
+
+	cfg, err := LoadConfig(Paths{Main: mainConfigPath})
+	require.NoError(t, err)
+	port := cfg.Ports["port_test"]
+	assert.Equal(t, []string{"127.0.0.1", "::1"}, port.Admin)
+	assert.Equal(t, "common-user", port.AdminUser)
+	assert.Equal(t, "port-password", port.AdminPassword)
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16"}, port.SecureGateway)
+}
+
 // TestLoadConfig_MinimalConfig verifies that the optional tuning sections
 // ([overlay], [transaction_queue], [sqlite], ledger_history, fetch_depth,
 // node_size, relay_*, max_transactions) may be omitted entirely.

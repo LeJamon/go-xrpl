@@ -136,6 +136,19 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
+	if !o.reserveInboundIP(endpoint.Host) {
+		slog.Info("Inbound rejected: IP connection limit reached",
+			"t", "Overlay", "remote", remoteAddr)
+		conn.Close()
+		return
+	}
+	added := false
+	defer func() {
+		if !added {
+			o.releasePeerKey(peer)
+			o.releaseInboundIP(endpoint.Host)
+		}
+	}()
 	if err := peer.AcceptConnection(conn); err != nil {
 		slog.Warn("Inbound rejected: peer not in disconnected state",
 			"t", "Overlay", "remote", remoteAddr, "err", err)
@@ -172,7 +185,12 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	peer.setState(PeerStateConnected)
 	slog.Info("Inbound peer connected", "t", "Overlay", "remote", remoteAddr)
 
-	o.addPeer(peer)
+	if err := o.addPeer(peer); err != nil {
+		slog.Info("Inbound rejected after handshake", "t", "Overlay", "remote", remoteAddr, "err", err)
+		conn.Close()
+		return
+	}
+	added = true
 
 	o.peerWG.Add(1)
 	go func() {
@@ -187,6 +205,13 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 }
 
 func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsConn peertls.PeerConn) error {
+	reservedKey := false
+	defer func() {
+		if reservedKey {
+			o.releasePeerKey(peer)
+		}
+	}()
+
 	// Accept() does not drive the handshake; complete it before reading
 	// the Finished bytes for SharedValue.
 	handshakeCtx, cancel := context.WithTimeout(ctx, o.cfg.HandshakeTimeout)
@@ -284,17 +309,25 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	// of the upgrade, never both on the same stream. The slot check needs
 	// the verified public key (set above) so reserved/cluster peers still
 	// bypass the inbound cap.
-	if o.isConnectedTo(peer.Endpoint()) {
+	if o.isConnectedTo(postHandshakeEndpoint(peer, peer.Endpoint())) {
 		slog.Info("Inbound rejected: already connected",
-			"t", "Overlay", "remote", peer.Endpoint().Host)
-		return errInboundRejected
-	}
-	if !o.hasInboundSlot(peer) {
-		slog.Info("Inbound rejected: no slots",
 			"t", "Overlay", "remote", peer.Endpoint().Host)
 		o.writeInboundRedirect(tlsConn)
 		return errInboundRejected
 	}
+	bypassInboundLimit := o.isClusterPeer(peer) || o.isReservedPeer(peer)
+	if err := o.reservePeerKey(peer, bypassInboundLimit); err != nil {
+		if errors.Is(err, ErrMaxPeersReached) {
+			slog.Info("Inbound rejected: no slots",
+				"t", "Overlay", "remote", peer.Endpoint().Host)
+		} else {
+			slog.Info("Inbound rejected: duplicate public key",
+				"t", "Overlay", "remote", peer.Endpoint().Host)
+		}
+		o.writeInboundRedirect(tlsConn)
+		return errInboundRejected
+	}
+	reservedKey = true
 
 	resp := BuildHandshakeResponse(req, o.identity, sharedValue, hsCfg, protocol) //nolint:bodyclose // locally-built response serialized via Write; nothing to close
 	setInboundHandshakeState(peer, bufReader, protocol, hsCfg, resp.Header)
@@ -303,6 +336,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)
 	}
 
+	reservedKey = false
 	return nil
 }
 

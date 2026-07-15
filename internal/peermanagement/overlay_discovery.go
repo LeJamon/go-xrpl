@@ -38,14 +38,8 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 	// because Autoconnect reported `candidates=0 needed=N` indefinitely.
 	o.reconcileDiscoveryConnected()
 
-	if !o.discovery.NeedsMorePeers() {
-		return
-	}
-
-	count := o.cfg.MaxOutbound - o.outboundCount()
-	if count <= 0 {
-		return
-	}
+	count := o.cfg.MaxOutbound - o.ordinaryOutboundCount()
+	count = max(count, 0)
 
 	addrs := o.discovery.SelectPeersToConnect(count)
 	slog.Info("Autoconnect", "t", "Overlay", "candidates", len(addrs), "needed", count)

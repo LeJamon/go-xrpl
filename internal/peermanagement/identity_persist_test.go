@@ -41,7 +41,7 @@ func TestLoadOrCreateIdentityReturnsPersistenceError(t *testing.T) {
 	}
 }
 
-func TestLoadOrCreateIdentityPreservesCorruptIdentity(t *testing.T) {
+func TestLoadOrCreateIdentityReplacesCorruptIdentity(t *testing.T) {
 	dataDir := t.TempDir()
 	keyPath := filepath.Join(dataDir, "node_identity.key")
 	want := []byte("not-a-private-key")
@@ -49,15 +49,19 @@ func TestLoadOrCreateIdentityPreservesCorruptIdentity(t *testing.T) {
 		t.Fatalf("write corrupt identity: %v", err)
 	}
 
-	if _, err := loadOrCreateIdentity(dataDir); err == nil {
-		t.Fatal("expected corrupt identity error")
+	id, err := loadOrCreateIdentity(dataDir)
+	if err != nil {
+		t.Fatalf("replace corrupt identity: %v", err)
 	}
 	got, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatalf("read preserved identity: %v", err)
 	}
-	if string(got) != string(want) {
-		t.Fatalf("identity file was replaced: got %q, want %q", got, want)
+	if string(got) == string(want) {
+		t.Fatal("corrupt identity was not replaced")
+	}
+	if string(got) != id.PrivateKeyHex() {
+		t.Fatalf("persisted identity = %q, want %q", got, id.PrivateKeyHex())
 	}
 }
 

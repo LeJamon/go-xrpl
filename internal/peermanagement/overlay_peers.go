@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
@@ -41,7 +42,7 @@ func (o *Overlay) Connect(addr string) error {
 	}
 
 	// Check if we can make more outbound connections
-	if o.outboundCount() >= o.cfg.MaxOutbound {
+	if !o.discovery.IsFixed(addr) && o.ordinaryOutboundCount() >= o.cfg.MaxOutbound {
 		return ErrMaxPeersReached
 	}
 
@@ -79,13 +80,16 @@ func (o *Overlay) Connect(addr string) error {
 	}
 
 	// Re-check after handshake: another goroutine may have connected
-	// to the same host (inbound or outbound) while we were handshaking.
-	if o.isConnectedTo(endpoint) {
+	// to the resolved endpoint while we were handshaking.
+	if o.isConnectedTo(postHandshakeEndpoint(peer, endpoint)) {
 		peer.Close()
 		return ErrAlreadyConnected
 	}
 
-	o.addPeer(peer)
+	if err := o.addPeer(peer); err != nil {
+		peer.Close()
+		return err
+	}
 
 	o.peerWG.Add(1)
 	go func() {
@@ -99,6 +103,13 @@ func (o *Overlay) Connect(addr string) error {
 	}()
 
 	return nil
+}
+
+func postHandshakeEndpoint(peer *Peer, configured Endpoint) Endpoint {
+	if remote, ok := peer.remoteEndpoint(); ok {
+		return remote
+	}
+	return configured
 }
 
 // OnValidatorMessage is called by the consensus router on every inbound
@@ -306,9 +317,28 @@ func (o *Overlay) IsValidatorSquelchedOnPeer(peerID PeerID, validator []byte) bo
 // persists in the manager after disconnect, so a misbehaving peer that
 // reconnects from the same address inherits its prior balance — this
 // is what enables charge-based blacklisting.
-func (o *Overlay) addPeer(peer *Peer) {
+func (o *Overlay) addPeer(peer *Peer) error {
+	key, hasKey := remotePeerKey(peer)
+	endpoint := endpointKey(postHandshakeEndpoint(peer, peer.Endpoint()))
 	o.peersMu.Lock()
+	if _, exists := o.peers[peer.ID()]; exists {
+		o.peersMu.Unlock()
+		return ErrAlreadyConnected
+	}
+	if owner, exists := o.peerEndpoints[endpoint]; exists && owner != peer.ID() {
+		o.peersMu.Unlock()
+		return ErrAlreadyConnected
+	}
+	if hasKey {
+		if owner, exists := o.peerKeys[key]; exists && owner != peer.ID() {
+			o.peersMu.Unlock()
+			return ErrAlreadyConnected
+		}
+		o.peerKeys[key] = peer.ID()
+	}
+	o.peerEndpoints[endpoint] = peer.ID()
 	o.peers[peer.ID()] = peer
+	delete(o.pendingInbound, peer.ID())
 	o.peersMu.Unlock()
 
 	if o.resourceManager != nil {
@@ -330,6 +360,7 @@ func (o *Overlay) addPeer(peer *Peer) {
 		Endpoint: peer.Endpoint(),
 		Inbound:  peer.Inbound(),
 	})
+	return nil
 }
 
 // removePeer removes a peer from the overlay and releases its
@@ -340,9 +371,22 @@ func (o *Overlay) removePeer(peerID PeerID) {
 	o.peersMu.Lock()
 	peer, exists := o.peers[peerID]
 	delete(o.peers, peerID)
+	for key, owner := range o.peerKeys {
+		if owner == peerID {
+			delete(o.peerKeys, key)
+		}
+	}
+	for endpoint, owner := range o.peerEndpoints {
+		if owner == peerID {
+			delete(o.peerEndpoints, endpoint)
+		}
+	}
 	o.peersMu.Unlock()
 
 	if exists {
+		if peer.inbound {
+			o.releaseInboundIP(peer.RemoteIP())
+		}
 		peer.releaseUsage()
 		o.dispatchLifecycle(Event{
 			Type:     EventPeerDisconnected,
@@ -351,6 +395,125 @@ func (o *Overlay) removePeer(peerID PeerID) {
 			Inbound:  peer.Inbound(),
 		})
 	}
+}
+
+func remotePeerKey(peer *Peer) (string, bool) {
+	key := peer.RemotePublicKey()
+	if key == nil {
+		return "", false
+	}
+	return string(key.Bytes()), true
+}
+
+func (o *Overlay) reservePeerKey(peer *Peer, bypassInboundLimit bool) error {
+	key, ok := remotePeerKey(peer)
+	if !ok {
+		return ErrInvalidPublicKey
+	}
+	o.peersMu.Lock()
+	defer o.peersMu.Unlock()
+	if owner, exists := o.peerKeys[key]; exists && owner != peer.ID() {
+		return ErrAlreadyConnected
+	}
+	if peer.Inbound() && !bypassInboundLimit {
+		active := 0
+		for _, current := range o.peers {
+			if current.inbound {
+				active++
+			}
+		}
+		if active+len(o.pendingInbound) >= o.cfg.MaxInbound {
+			return ErrMaxPeersReached
+		}
+		o.pendingInbound[peer.ID()] = struct{}{}
+	}
+	o.peerKeys[key] = peer.ID()
+	return nil
+}
+
+func (o *Overlay) releasePeerKey(peer *Peer) {
+	key, ok := remotePeerKey(peer)
+	if !ok {
+		return
+	}
+	o.peersMu.Lock()
+	if owner, exists := o.peerKeys[key]; exists && owner == peer.ID() {
+		delete(o.peerKeys, key)
+	}
+	delete(o.pendingInbound, peer.ID())
+	o.peersMu.Unlock()
+}
+
+func (o *Overlay) reserveInboundIP(host string) bool {
+	if !isPublicPeerIP(host) {
+		return true
+	}
+	o.peersMu.Lock()
+	defer o.peersMu.Unlock()
+	if o.inboundIPs[host] >= o.cfg.IPLimit {
+		return false
+	}
+	o.inboundIPs[host]++
+	return true
+}
+
+func (o *Overlay) releaseInboundIP(host string) {
+	o.peersMu.Lock()
+	o.releaseInboundIPLocked(host)
+	o.peersMu.Unlock()
+}
+
+func (o *Overlay) releaseInboundIPLocked(host string) {
+	if !isPublicPeerIP(host) {
+		return
+	}
+	if o.inboundIPs[host] <= 1 {
+		delete(o.inboundIPs, host)
+		return
+	}
+	o.inboundIPs[host]--
+}
+
+var nonPublicPeerPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/128"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2001:20::/28"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
+
+func isPublicPeerIP(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return false
+	}
+	addr = addr.Unmap()
+	for _, prefix := range nonPublicPeerPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
 }
 
 // bumpPeerDisconnectCharges is the callback Peer.Charge invokes when a
@@ -395,21 +558,29 @@ func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	return ok
 }
 
-// isConnectedTo checks if we're already connected to a host.
-// Compares by resolved remote IP to handle DNS names vs raw IPs.
+// isConnectedTo checks whether an exact remote endpoint is active.
 func (o *Overlay) isConnectedTo(endpoint Endpoint) bool {
 	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
+	peers := make([]*Peer, 0, len(o.peers))
 	for _, peer := range o.peers {
-		if peer.RemoteIP() == endpoint.Host {
+		peers = append(peers, peer)
+	}
+	o.peersMu.RUnlock()
+
+	target := endpointKey(endpoint)
+	for _, peer := range peers {
+		if remote, ok := peer.remoteEndpoint(); ok && endpointKey(remote) == target {
 			return true
 		}
-		if peer.Endpoint().Host == endpoint.Host {
+		if endpointKey(peer.Endpoint()) == target {
 			return true
 		}
 	}
 	return false
+}
+
+func endpointKey(endpoint Endpoint) string {
+	return (Endpoint{Host: connectAttemptHost(endpoint.String()), Port: endpoint.Port}).String()
 }
 
 // canAcceptInbound checks if we can accept another inbound connection.
@@ -445,6 +616,25 @@ func (o *Overlay) outboundCount() int {
 	count := 0
 	for _, peer := range o.peers {
 		if !peer.Inbound() {
+			count++
+		}
+	}
+	return count
+}
+
+func (o *Overlay) ordinaryOutboundCount() int {
+	o.peersMu.RLock()
+	peers := make([]*Peer, 0, len(o.peers))
+	for _, peer := range o.peers {
+		if !peer.Inbound() {
+			peers = append(peers, peer)
+		}
+	}
+	o.peersMu.RUnlock()
+
+	count := 0
+	for _, peer := range peers {
+		if !o.discovery.IsFixed(peer.Endpoint().String()) {
 			count++
 		}
 	}

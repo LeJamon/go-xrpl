@@ -1,7 +1,10 @@
 package peermanagement
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
@@ -215,6 +218,63 @@ func TestDiscoveryBootstrapPeers(t *testing.T) {
 	}
 
 	d.Stop()
+}
+
+func TestDiscoveryStartResolvesConfiguredPeers(t *testing.T) {
+	d := NewDiscovery(&Config{
+		MaxOutbound: 25,
+		BootstrapPeers: []string{
+			"bootstrap-a.example:51235",
+			"bootstrap-b.example:51235",
+			"192.0.2.12:51235",
+		},
+		FixedPeers: []string{
+			"fixed-a.example:51235",
+			"fixed-b.example:51235",
+		},
+	}, make(chan Event, 1))
+	d.lookupIP = func(_ context.Context, host string) ([]net.IPAddr, error) {
+		switch host {
+		case "bootstrap-a.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}, {IP: net.ParseIP("192.0.2.11")}}, nil
+		case "bootstrap-b.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.10")}}, nil
+		case "fixed-a.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.20")}}, nil
+		case "fixed-b.example":
+			return []net.IPAddr{{IP: net.ParseIP("192.0.2.20")}, {IP: net.ParseIP("192.0.2.21")}}, nil
+		default:
+			return nil, errors.New("unexpected lookup")
+		}
+	}
+
+	require.NoError(t, d.Start(t.Context()))
+	t.Cleanup(d.Stop)
+	assert.ElementsMatch(t, []string{
+		"192.0.2.10:51235",
+		"192.0.2.11:51235",
+		"192.0.2.12:51235",
+	}, d.cfg.BootstrapPeers)
+	assert.ElementsMatch(t, []string{
+		"192.0.2.20:51235",
+		"192.0.2.21:51235",
+	}, d.cfg.FixedPeers)
+
+	d.SyncConnectedHosts(map[string]struct{}{"192.0.2.20": {}})
+	d.mu.RLock()
+	assert.True(t, d.peers["192.0.2.20:51235"].Connected)
+	d.mu.RUnlock()
+}
+
+func TestDiscoverySelectsFixedPeersBeyondOrdinaryCapacity(t *testing.T) {
+	d := NewDiscovery(&Config{
+		FixedPeers: []string{"192.0.2.40:51235"},
+	}, make(chan Event, 1))
+	require.NoError(t, d.Start(t.Context()))
+	t.Cleanup(d.Stop)
+	d.AddPeer("192.0.2.41:51235", 0, 0)
+
+	assert.Equal(t, []string{"192.0.2.40:51235"}, d.SelectPeersToConnect(0))
 }
 
 func TestBootCache(t *testing.T) {
