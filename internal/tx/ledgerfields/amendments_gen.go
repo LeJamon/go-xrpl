@@ -319,7 +319,8 @@ func (a *Amendments) Encode() ([]byte, error) {
 	if err := a.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(a.ToMap())
+	out := a.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

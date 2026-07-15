@@ -631,7 +631,14 @@ func (p *PayChannel) Encode() ([]byte, error) {
 	if err := p.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(p.ToMap())
+	out := p.ToMap()
+	if p.present&paychannelBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if p.present&paychannelBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

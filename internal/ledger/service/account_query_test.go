@@ -118,12 +118,14 @@ func insertXRPEscrow(t *testing.T, svc *Service, ownerAddr, destAddr string, seq
 	copy(ownerID[:], ownerBytes)
 
 	hexStr, err := binarycodec.Encode(map[string]any{
-		"LedgerEntryType": "Escrow",
-		"Account":         ownerAddr,
-		"Destination":     destAddr,
-		"Amount":          drops,
-		"OwnerNode":       "0",
-		"Flags":           uint32(0),
+		"LedgerEntryType":   "Escrow",
+		"Account":           ownerAddr,
+		"Destination":       destAddr,
+		"Amount":            drops,
+		"OwnerNode":         "0",
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	if err != nil {
 		t.Fatalf("encode escrow: %v", err)

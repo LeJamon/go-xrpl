@@ -811,7 +811,14 @@ func (a *AccountRoot) Encode() ([]byte, error) {
 	if err := a.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(a.ToMap())
+	out := a.ToMap()
+	if a.present&accountrootBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if a.present&accountrootBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

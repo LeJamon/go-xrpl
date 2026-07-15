@@ -278,11 +278,13 @@ func TestGeneratedDecoderAdaptersRejectMalformedConversions(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := binarycodec.EncodeBytes(map[string]any{
-		"LedgerEntryType": "RippleState",
-		"Flags":           uint32(0),
-		"Balance":         "1",
-		"LowLimit":        map[string]any{"value": "0", "currency": "USD", "issuer": low},
-		"HighLimit":       map[string]any{"value": "0", "currency": "USD", "issuer": high},
+		"LedgerEntryType":   "RippleState",
+		"Flags":             uint32(0),
+		"Balance":           "1",
+		"LowLimit":          map[string]any{"value": "0", "currency": "USD", "issuer": low},
+		"HighLimit":         map[string]any{"value": "0", "currency": "USD", "issuer": high},
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 	if err != nil {
 		t.Fatal(err)

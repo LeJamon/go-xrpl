@@ -341,7 +341,8 @@ func (n *NegativeUNL) Encode() ([]byte, error) {
 	if err := n.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(n.ToMap())
+	out := n.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

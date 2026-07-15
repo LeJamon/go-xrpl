@@ -128,15 +128,17 @@ func TestSerializeLoanBrokerCanonicalFieldStyles(t *testing.T) {
 			t.Fatalf("serialize loan broker: %v", err)
 		}
 		assertLendingEncoding(t, got, map[string]any{
-			"LedgerEntryType": "LoanBroker",
-			"Flags":           uint32(0),
-			"Sequence":        uint32(0),
-			"OwnerNode":       "0",
-			"VaultNode":       "0",
-			"VaultID":         strings.Repeat("0", 64),
-			"Account":         accountAddr,
-			"Owner":           ownerAddr,
-			"LoanSequence":    uint32(0),
+			"LedgerEntryType":   "LoanBroker",
+			"Flags":             uint32(0),
+			"Sequence":          uint32(0),
+			"OwnerNode":         "0",
+			"VaultNode":         "0",
+			"VaultID":           strings.Repeat("0", 64),
+			"Account":           accountAddr,
+			"Owner":             ownerAddr,
+			"LoanSequence":      uint32(0),
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
 		})
 	})
 
@@ -209,16 +211,18 @@ func TestSerializeLoanCanonicalFieldStyles(t *testing.T) {
 			t.Fatalf("serialize loan: %v", err)
 		}
 		assertLendingEncoding(t, got, map[string]any{
-			"LedgerEntryType": "Loan",
-			"Flags":           uint32(0),
-			"OwnerNode":       "0",
-			"LoanBrokerNode":  "0",
-			"LoanBrokerID":    strings.Repeat("0", 64),
-			"LoanSequence":    uint32(0),
-			"Borrower":        borrowerAddr,
-			"StartDate":       uint32(0),
-			"PaymentInterval": uint32(0),
-			"PeriodicPayment": "0",
+			"LedgerEntryType":   "Loan",
+			"Flags":             uint32(0),
+			"OwnerNode":         "0",
+			"LoanBrokerNode":    "0",
+			"LoanBrokerID":      strings.Repeat("0", 64),
+			"LoanSequence":      uint32(0),
+			"Borrower":          borrowerAddr,
+			"StartDate":         uint32(0),
+			"PaymentInterval":   uint32(0),
+			"PeriodicPayment":   "0",
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
 		})
 	})
 

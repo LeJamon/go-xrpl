@@ -510,7 +510,14 @@ func (r *RippleState) Encode() ([]byte, error) {
 	if r.decoded && !r.dirty && len(r.decodedBinary) != 0 {
 		return append([]byte(nil), r.decodedBinary...), nil
 	}
-	return binarycodec.EncodeBytes(r.ToMap())
+	out := r.ToMap()
+	if r.present&ripplestateBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if r.present&ripplestateBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -888,7 +888,17 @@ func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
 		return append([]byte(nil), {{ .Receiver }}.decodedBinary...), nil
 	}
 {{- end }}
-	return binarycodec.EncodeBytes({{ .Receiver }}.ToMap())
+	out := {{ .Receiver }}.ToMap()
+{{- range .Fields }}{{ if .DeferredRequired }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} == 0 {
+{{- if eq .Name "PreviousTxnID" }}
+		out[{{ printf "%q" .Name }}] = "0000000000000000000000000000000000000000000000000000000000000000"
+{{- else }}
+		out[{{ printf "%q" .Name }}] = uint32(0)
+{{- end }}
+	}
+{{- end }}{{ end }}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

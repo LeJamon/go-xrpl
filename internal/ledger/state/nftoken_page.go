@@ -174,12 +174,25 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 	return page, nil
 }
 
-// ParseNFTokenOffer parses an NFToken offer from binary data
+// ParseNFTokenOffer parses a canonical NFToken offer from binary data.
 func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 	entry := &ledgerfields.NFTokenOffer{}
 	if err := entry.Decode(data); err != nil {
 		return nil, err
 	}
+	return parseNFTokenOffer(entry)
+}
+
+// ParseNFTokenOfferLegacy parses a pre-canonicalization go-xrpl offer blob.
+func ParseNFTokenOfferLegacy(data []byte) (*NFTokenOfferData, error) {
+	entry := &ledgerfields.NFTokenOffer{}
+	if err := ledgerfields.DecodeLegacy(entry, data); err != nil {
+		return nil, err
+	}
+	return parseNFTokenOffer(entry)
+}
+
+func parseNFTokenOffer(entry *ledgerfields.NFTokenOffer) (*NFTokenOfferData, error) {
 	fields := entry.ToMap()
 	offer := &NFTokenOfferData{
 		Flags:          entry.Flags,

@@ -63,10 +63,8 @@ type Field struct {
 	// field is annotated explicitly from rippled's 3.2.0 ledger template.
 	Style Style
 
-	// DeferredRequired marks a required threading field that is populated by
-	// ApplyStateTable after an entry's creation serializer runs. Fresh writers
-	// may omit it without weakening validation of the entry's other required
-	// fields.
+	// DeferredRequired marks a required threading field whose default is
+	// materialized by Encode before ApplyStateTable replaces it.
 	DeferredRequired bool
 
 	// DecodeOnly marks a field that the decoder must tolerate on incoming

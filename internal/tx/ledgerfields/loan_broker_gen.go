@@ -731,7 +731,14 @@ func (l *LoanBroker) Encode() ([]byte, error) {
 	if err := l.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(l.ToMap())
+	out := l.ToMap()
+	if l.present&loanbrokerBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if l.present&loanbrokerBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

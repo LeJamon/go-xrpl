@@ -37,15 +37,17 @@ func TestSerializeVaultCanonicalFieldStyles(t *testing.T) {
 		}
 
 		assertVaultEncoding(t, got, map[string]any{
-			"LedgerEntryType":  "Vault",
-			"Flags":            uint32(0),
-			"Sequence":         uint32(0),
-			"OwnerNode":        "0",
-			"Owner":            ownerAddr,
-			"Account":          accountAddr,
-			"Asset":            map[string]any{"currency": "XRP"},
-			"ShareMPTID":       strings.Repeat("0", 48),
-			"WithdrawalPolicy": 0,
+			"LedgerEntryType":   "Vault",
+			"Flags":             uint32(0),
+			"Sequence":          uint32(0),
+			"OwnerNode":         "0",
+			"Owner":             ownerAddr,
+			"Account":           accountAddr,
+			"Asset":             map[string]any{"currency": "XRP"},
+			"ShareMPTID":        strings.Repeat("0", 48),
+			"WithdrawalPolicy":  0,
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
 		})
 	})
 

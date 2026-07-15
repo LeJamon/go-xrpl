@@ -428,7 +428,14 @@ func (d *Delegate) Encode() ([]byte, error) {
 	if err := d.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(d.ToMap())
+	out := d.ToMap()
+	if d.present&delegateBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if d.present&delegateBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -565,7 +565,14 @@ func (o *Offer) Encode() ([]byte, error) {
 	if err := o.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(o.ToMap())
+	out := o.ToMap()
+	if o.present&offerBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if o.present&offerBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

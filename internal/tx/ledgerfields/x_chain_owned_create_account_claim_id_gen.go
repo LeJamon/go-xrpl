@@ -443,7 +443,14 @@ func (x *XChainOwnedCreateAccountClaimID) Encode() ([]byte, error) {
 	if err := x.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(x.ToMap())
+	out := x.ToMap()
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if x.present&xchainownedcreateaccountclaimidBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -90,11 +90,8 @@ func serializeVaultForRules(v *vaultData, rules *amendment.Rules) ([]byte, error
 		entry.SetData(strings.ToUpper(v.Data))
 	}
 
-	var zeroHash [32]byte
-	if v.PreviousTxnID != zeroHash {
-		entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(v.PreviousTxnID[:])))
-		entry.SetPreviousTxnLgrSeq(v.PreviousTxnLgrSeq)
-	}
+	entry.SetPreviousTxnID(strings.ToUpper(hex.EncodeToString(v.PreviousTxnID[:])))
+	entry.SetPreviousTxnLgrSeq(v.PreviousTxnLgrSeq)
 
 	return encodeVaultObject(entry.ToMap(), vaultNumberScale(rules))
 }

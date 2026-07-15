@@ -402,7 +402,14 @@ func (p *PermissionedDomain) Encode() ([]byte, error) {
 	if err := p.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(p.ToMap())
+	out := p.ToMap()
+	if p.present&permissioneddomainBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if p.present&permissioneddomainBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

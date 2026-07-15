@@ -690,7 +690,14 @@ func (v *Vault) Encode() ([]byte, error) {
 	if err := v.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(v.ToMap())
+	out := v.ToMap()
+	if v.present&vaultBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if v.present&vaultBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

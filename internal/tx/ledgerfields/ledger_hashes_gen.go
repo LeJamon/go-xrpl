@@ -287,7 +287,8 @@ func (l *LedgerHashes) Encode() ([]byte, error) {
 	if err := l.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(l.ToMap())
+	out := l.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

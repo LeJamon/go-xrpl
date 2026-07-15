@@ -20,15 +20,17 @@ func TestWriterStyles(t *testing.T) {
 			t.Fatalf("Encode: %v", err)
 		}
 		want, err := binarycodec.EncodeBytes(map[string]any{
-			"LedgerEntryType": "Check",
-			"Account":         writerTestAccount,
-			"Destination":     writerTestAccount,
-			"SendMax":         "0",
-			"Sequence":        uint32(0),
-			"OwnerNode":       "0",
-			"DestinationNode": "0",
-			"Expiration":      uint32(0),
-			"Flags":           uint32(0),
+			"LedgerEntryType":   "Check",
+			"Account":           writerTestAccount,
+			"Destination":       writerTestAccount,
+			"SendMax":           "0",
+			"Sequence":          uint32(0),
+			"OwnerNode":         "0",
+			"DestinationNode":   "0",
+			"Expiration":        uint32(0),
+			"Flags":             uint32(0),
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
 		})
 		if err != nil {
 			t.Fatalf("encode expected map: %v", err)
@@ -88,8 +90,17 @@ func TestDecodedEncodeTolerance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Encode decoded fixture: %v", err)
 		}
-		if !bytes.Equal(roundTrip, encoded) {
-			t.Fatalf("round trip differs:\n got  %X\n want %X", roundTrip, encoded)
+		canonicalized, err := binarycodec.EncodeBytes(map[string]any{
+			"LedgerEntryType":   "Check",
+			"Flags":             uint32(0),
+			"PreviousTxnID":     strings.Repeat("0", 64),
+			"PreviousTxnLgrSeq": uint32(0),
+		})
+		if err != nil {
+			t.Fatalf("encode canonicalized fixture: %v", err)
+		}
+		if !bytes.Equal(roundTrip, canonicalized) {
+			t.Fatalf("canonicalized bytes differ:\n got  %X\n want %X", roundTrip, canonicalized)
 		}
 
 		check.SetExpiration(0)

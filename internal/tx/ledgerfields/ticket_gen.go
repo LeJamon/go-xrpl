@@ -365,7 +365,14 @@ func (t *Ticket) Encode() ([]byte, error) {
 	if err := t.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(t.ToMap())
+	out := t.ToMap()
+	if t.present&ticketBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if t.present&ticketBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -529,7 +529,14 @@ func (b *Bridge) Encode() ([]byte, error) {
 	if err := b.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(b.ToMap())
+	out := b.ToMap()
+	if b.present&bridgeBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if b.present&bridgeBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -344,7 +344,14 @@ func (n *NFTokenPage) Encode() ([]byte, error) {
 	if err := n.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(n.ToMap())
+	out := n.ToMap()
+	if n.present&nftokenpageBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if n.present&nftokenpageBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -429,7 +429,8 @@ func (f *FeeSettings) Encode() ([]byte, error) {
 	if err := f.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(f.ToMap())
+	out := f.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

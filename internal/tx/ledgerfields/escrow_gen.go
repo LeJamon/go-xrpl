@@ -617,7 +617,14 @@ func (e *Escrow) Encode() ([]byte, error) {
 	if err := e.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(e.ToMap())
+	out := e.ToMap()
+	if e.present&escrowBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if e.present&escrowBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

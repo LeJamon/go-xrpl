@@ -928,9 +928,9 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 //     same tx (e.g. a resting offer partially then fully consumed during
 //     crossing) holds the current tx as PreviousTxnID in Current — the correct
 //     FinalFields value is the prior pointer.
-//   - An entry whose serializer drops PreviousTxnID (e.g. NFTokenPage rebuilt
-//     during a page merge before deletion) holds no pointer in Current at all,
-//     so the field must be inserted, not just overwritten.
+//   - An entry whose serializer resets PreviousTxnID (e.g. NFTokenPage rebuilt
+//     during a page merge before deletion) holds the required zero default in
+//     Current, so the stored pointer must replace it.
 //
 // In both cases prevID/prevSeq come from the pre-tx Original, which equals the
 // stored pointer rippled's curNode reports (an erased node is never re-threaded,

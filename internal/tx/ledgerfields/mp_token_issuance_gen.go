@@ -621,7 +621,14 @@ func (m *MPTokenIssuance) Encode() ([]byte, error) {
 	if err := m.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(m.ToMap())
+	out := m.ToMap()
+	if m.present&mptokenissuanceBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if m.present&mptokenissuanceBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

@@ -130,6 +130,10 @@ func ammSLE(t *testing.T, account, lptValue string) []byte {
 		"LPTokenBalance": map[string]any{
 			"currency": "USD", "issuer": account, "value": lptValue,
 		},
+		"Asset":     map[string]any{"currency": "XRP"},
+		"Asset2":    map[string]any{"currency": "USD", "issuer": account},
+		"OwnerNode": "0",
+		"Flags":     uint32(0),
 	})
 }
 
@@ -181,6 +185,10 @@ func TestValidAMM_VoteRejectsLPTokenIssueChange(t *testing.T) {
 		"LPTokenBalance": map[string]any{
 			"currency": "USD", "issuer": addrHolderA, "value": "1000",
 		},
+		"Asset":     map[string]any{"currency": "XRP"},
+		"Asset2":    map[string]any{"currency": "USD", "issuer": addrIssuer},
+		"OwnerNode": "0",
+		"Flags":     uint32(0),
 	})
 	changed := []InvariantEntry{{EntryType: "AMM", Before: before, After: after}}
 	if v := checkValidAMM(tx, TesSUCCESS, changed, stubView{}, rules); v == nil {
@@ -447,8 +455,11 @@ func nftPage(t *testing.T, ids ...[32]byte) []byte {
 		})
 	}
 	return mustEncode(t, map[string]any{
-		"LedgerEntryType": "NFTokenPage",
-		"NFTokens":        arr,
+		"LedgerEntryType":   "NFTokenPage",
+		"NFTokens":          arr,
+		"Flags":             uint32(0),
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 	})
 }
 

@@ -3,14 +3,14 @@ package state
 import (
 	"bytes"
 	"encoding/hex"
+	"strings"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // TestSerializeSignerList_MacroFieldSet asserts the serialized SignerList blob
-// carries exactly the ltSIGNER_LIST template field set (SignerEntries,
-// SignerQuorum, SignerListID, Flags, OwnerNode) and is byte-identical to a
+// carries exactly the ltSIGNER_LIST template field set and is byte-identical to a
 // hand-built rippled-canonical blob. The SLE must NOT carry a top-level
 // Account: rippled's ltSIGNER_LIST has no sfAccount and template enforcement
 // would reject one, forking account_hash on the first SignerListSet.
@@ -51,11 +51,13 @@ func TestSerializeSignerList_MacroFieldSet(t *testing.T) {
 	// macro field set must equal the serializer output (binarycodec orders
 	// fields by code, matching rippled's canonical STObject serialization).
 	canonical := map[string]any{
-		"LedgerEntryType": "SignerList",
-		"Flags":           uint32(0),
-		"SignerQuorum":    uint32(3),
-		"SignerListID":    uint32(0),
-		"OwnerNode":       "0",
+		"LedgerEntryType":   "SignerList",
+		"Flags":             uint32(0),
+		"SignerQuorum":      uint32(3),
+		"SignerListID":      uint32(0),
+		"OwnerNode":         "0",
+		"PreviousTxnID":     strings.Repeat("0", 64),
+		"PreviousTxnLgrSeq": uint32(0),
 		"SignerEntries": []map[string]any{
 			{"SignerEntry": map[string]any{"Account": addrA, "SignerWeight": uint16(1)}},
 			{"SignerEntry": map[string]any{"Account": addrB, "SignerWeight": uint16(2)}},

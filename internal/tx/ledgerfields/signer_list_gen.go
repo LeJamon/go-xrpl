@@ -432,7 +432,14 @@ func (s *SignerList) Encode() ([]byte, error) {
 	if err := s.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(s.ToMap())
+	out := s.ToMap()
+	if s.present&signerlistBitPreviousTxnID == 0 {
+		out["PreviousTxnID"] = "0000000000000000000000000000000000000000000000000000000000000000"
+	}
+	if s.present&signerlistBitPreviousTxnLgrSeq == 0 {
+		out["PreviousTxnLgrSeq"] = uint32(0)
+	}
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,

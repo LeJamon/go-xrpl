@@ -619,7 +619,8 @@ func (d *DirectoryNode) Encode() ([]byte, error) {
 	if err := d.validateRequired(); err != nil {
 		return nil, err
 	}
-	return binarycodec.EncodeBytes(d.ToMap())
+	out := d.ToMap()
+	return binarycodec.EncodeBytes(out)
 }
 
 // Hash returns the SHAMap account-state leaf hash for this entry,
